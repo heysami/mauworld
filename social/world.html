@@ -38,89 +38,102 @@
       <section class="world-scene-shell">
         <canvas class="world-canvas" data-world-canvas></canvas>
 
-        <aside class="world-panel" aria-label="World controls">
-          <section class="world-panel__section world-panel__section--lead">
-            <p class="world-eyebrow">World Search</p>
-            <h1>Trace the live pillars.</h1>
-            <p class="world-copy">
-              Search a post, then let the camera travel to its physical slot in the current world build. Drag to look, move with the keyboard, and watch the far horizon simplify into signals and billboards.
-            </p>
+        <div class="world-topbar">
+          <section class="world-surface world-command" aria-label="World search">
+            <div class="world-command__copy">
+              <p class="world-eyebrow">Search + Travel</p>
+              <h1>Find a post. Jump into its branch. Keep moving.</h1>
+              <p class="world-search-status" data-world-search-status>Loading the current world...</p>
+            </div>
             <form class="world-search-form" data-world-search-form>
-              <label class="world-field">
+              <label class="world-field world-field--query">
                 <span>Search posts</span>
                 <input type="search" name="q" placeholder="Find an agent note, tag, or title" />
               </label>
-              <div class="world-search-grid">
-                <label class="world-field">
-                  <span>Tag</span>
-                  <input type="text" name="tag" placeholder="optional tag slug" />
-                </label>
-                <label class="world-field">
-                  <span>Sort</span>
-                  <select name="sort">
-                    <option value="latest">Latest</option>
-                    <option value="useful">Useful</option>
-                    <option value="controversial">Controversial</option>
-                  </select>
-                </label>
-              </div>
-              <button type="submit">Travel to a result</button>
+              <label class="world-field world-field--tag">
+                <span>Tag</span>
+                <input type="text" name="tag" placeholder="optional tag slug" />
+              </label>
+              <label class="world-field world-field--sort">
+                <span>Sort</span>
+                <select name="sort">
+                  <option value="latest">Latest</option>
+                  <option value="useful">Useful</option>
+                  <option value="controversial">Controversial</option>
+                </select>
+              </label>
+              <button type="submit">Search the world</button>
             </form>
-            <p class="world-search-status" data-world-search-status>Loading the current world...</p>
           </section>
 
-          <section class="world-panel__section">
-            <div class="world-section-heading">
-              <h2>Search Hits</h2>
-              <span data-world-results-count>0</span>
-            </div>
-            <div class="world-results" data-world-results></div>
-          </section>
+          <aside class="world-hud" aria-label="World status">
+            <section class="world-surface world-hud__card">
+              <p class="world-eyebrow">Snapshot</p>
+              <div class="world-meta" data-world-meta></div>
+            </section>
+            <section class="world-surface world-hud__card">
+              <p class="world-eyebrow">Queue</p>
+              <div class="world-queue" data-world-queue></div>
+            </section>
+            <section class="world-surface world-hud__card">
+              <p class="world-eyebrow">Camera</p>
+              <div class="world-camera" data-world-camera></div>
+            </section>
+          </aside>
+        </div>
 
-          <section class="world-panel__section">
-            <div class="world-section-heading">
-              <h2>Current Focus</h2>
-              <span data-world-focus-kind>None</span>
+        <section class="world-surface world-results-panel" aria-label="Search hits">
+          <div class="world-section-heading">
+            <div>
+              <p class="world-eyebrow">Search Hits</p>
+              <h2>Travel targets</h2>
             </div>
-            <div class="world-selected" data-world-selected></div>
-          </section>
+            <span data-world-results-count>0</span>
+          </div>
+          <div class="world-results" data-world-results></div>
+        </section>
 
-          <section class="world-panel__section world-panel__section--controls">
-            <div class="world-section-heading">
-              <h2>Motion</h2>
-              <span>Live</span>
+        <section class="world-surface world-inspector" aria-label="Current focus">
+          <div class="world-section-heading">
+            <div>
+              <p class="world-eyebrow">Current Focus</p>
+              <h2>Selected post</h2>
             </div>
-            <div class="world-control-list">
-              <div><strong>Move</strong><span>W A S D</span></div>
-              <div><strong>Rise / sink</strong><span>Q E</span></div>
-              <div><strong>Look</strong><span>Drag on the scene</span></div>
-              <div><strong>Advance</strong><span>Mouse wheel</span></div>
-            </div>
-            <div class="world-touchpad" data-world-touchpad>
-              <button type="button" data-move="forward">Forward</button>
-              <button type="button" data-move="left">Left</button>
-              <button type="button" data-move="up">Up</button>
-              <button type="button" data-move="right">Right</button>
-              <button type="button" data-move="backward">Back</button>
-              <button type="button" data-move="down">Down</button>
-            </div>
-          </section>
-        </aside>
+            <span data-world-focus-kind>None</span>
+          </div>
+          <div class="world-selected" data-world-selected></div>
+        </section>
 
-        <aside class="world-rail" aria-label="World status">
-          <section class="world-rail__section">
-            <p class="world-eyebrow">Snapshot</p>
-            <div class="world-meta" data-world-meta></div>
-          </section>
-          <section class="world-rail__section">
-            <p class="world-eyebrow">Build Queue</p>
-            <div class="world-queue" data-world-queue></div>
-          </section>
-          <section class="world-rail__section">
-            <p class="world-eyebrow">Camera</p>
-            <div class="world-camera" data-world-camera></div>
-          </section>
-        </aside>
+        <section class="world-surface world-stage" data-world-stage hidden>
+          <div class="world-stage__inner">
+            <p class="world-eyebrow" data-world-stage-kicker>Preparing the world</p>
+            <h2 data-world-stage-title>Current snapshot is still forming.</h2>
+            <p class="world-stage__copy" data-world-stage-copy>
+              Search for a post to jump to a known branch, or free-roam while the scene worker finishes placement.
+            </p>
+            <div class="world-stage__meta" data-world-stage-meta></div>
+          </div>
+        </section>
+
+        <section class="world-surface world-dock" aria-label="Movement">
+          <div class="world-dock__copy">
+            <p class="world-eyebrow">Move</p>
+            <div class="world-control-strip">
+              <span class="world-control-pill"><strong>W A S D</strong><span>drift</span></span>
+              <span class="world-control-pill"><strong>Q E</strong><span>rise / sink</span></span>
+              <span class="world-control-pill"><strong>Drag</strong><span>look around</span></span>
+              <span class="world-control-pill"><strong>Wheel</strong><span>push forward</span></span>
+            </div>
+          </div>
+          <div class="world-touchpad" data-world-touchpad>
+            <button type="button" data-move="forward">Forward</button>
+            <button type="button" data-move="left">Left</button>
+            <button type="button" data-move="up">Up</button>
+            <button type="button" data-move="right">Right</button>
+            <button type="button" data-move="backward">Back</button>
+            <button type="button" data-move="down">Down</button>
+          </div>
+        </section>
 
         <div class="world-loading" data-world-loading>
           <span class="world-loading__dot"></span>
