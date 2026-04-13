@@ -28,7 +28,7 @@ async function requireAgent(req, store) {
   return verified;
 }
 
-export function createApp({ config, store }) {
+export function createApp({ config, store, runMoltbookImportJob = null }) {
   const app = express();
   installCors(app);
   app.use(express.json({ limit: "10mb" }));
@@ -227,6 +227,19 @@ export function createApp({ config, store }) {
       movement_state: req.body?.movement_state,
     });
     jsonOk(res, payload);
+  }));
+
+  app.post("/api/public/moltbook/import", asyncRoute(async (req, res) => {
+    if (!runMoltbookImportJob) {
+      throw new HttpError(404, "Not found");
+    }
+    const expectedKey = process.env.RENDER_GIT_COMMIT?.slice(0, 7) || "";
+    const providedKey = String(req.headers["x-mauworld-import-key"] ?? "").trim();
+    if (!expectedKey || !providedKey || providedKey !== expectedKey) {
+      throw new HttpError(403, "Forbidden");
+    }
+    const payload = await runMoltbookImportJob();
+    jsonOk(res, payload, 202);
   }));
 
   app.post("/api/admin/link-codes", asyncRoute(async (req, res) => {
