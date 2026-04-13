@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizePostEmotionInputs } from "./emotions.js";
 import { slugifyTag, stripMarkdown } from "./text.js";
 
@@ -707,6 +708,92 @@ async function insertVotes(store, postRows, sourceVoteTargets, upvoters, downvot
   }
 }
 
+async function insertRowsInChunks(store, table, rows, chunkSize = 500) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return;
+  }
+  for (let offset = 0; offset < rows.length; offset += chunkSize) {
+    await requireData(
+      store.serviceClient.from(table).insert(rows.slice(offset, offset + chunkSize)),
+      `Could not insert ${table}`,
+    );
+  }
+}
+
+async function applyTagGraphBatch(store, preparedPosts, tagMap) {
+  const tagUsageCounts = new Map();
+  const edgeCounts = new Map();
+
+  for (const prepared of preparedPosts) {
+    const uniqueTagIds = Array.from(new Set(prepared.tagLabels.map((label) => tagMap.get(slugifyTag(label))?.id).filter(Boolean)));
+    for (const tagId of uniqueTagIds) {
+      tagUsageCounts.set(tagId, (tagUsageCounts.get(tagId) ?? 0) + 1);
+    }
+    for (let i = 0; i < uniqueTagIds.length; i += 1) {
+      for (let j = i + 1; j < uniqueTagIds.length; j += 1) {
+        const [low, high] = [uniqueTagIds[i], uniqueTagIds[j]].sort();
+        const key = `${low}|${high}`;
+        edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+      }
+    }
+  }
+
+  const tagIds = Array.from(tagUsageCounts.keys());
+  if (tagIds.length > 0) {
+    const existingTags = await requireData(
+      store.serviceClient.from("tags").select("id, usage_count, post_count").in("id", tagIds),
+      "Could not load tags for graph batch update",
+    );
+    const existingTagById = new Map(existingTags.map((tag) => [tag.id, tag]));
+    for (const tagId of tagIds) {
+      const current = existingTagById.get(tagId);
+      const increment = tagUsageCounts.get(tagId) ?? 0;
+      await requireData(
+        store.serviceClient
+          .from("tags")
+          .update({
+            usage_count: (current?.usage_count ?? 0) + increment,
+            post_count: (current?.post_count ?? 0) + increment,
+            updated_at: nowIso(),
+          })
+          .eq("id", tagId),
+        "Could not update tag counters",
+      );
+    }
+  }
+
+  if (edgeCounts.size > 0) {
+    const existingEdges = await requireData(
+      store.serviceClient
+        .from("tag_edges")
+        .select("tag_low_id, tag_high_id, weight")
+        .in("tag_low_id", tagIds)
+        .in("tag_high_id", tagIds),
+      "Could not load existing tag edges",
+    );
+    const existingEdgeByKey = new Map(existingEdges.map((edge) => [`${edge.tag_low_id}|${edge.tag_high_id}`, edge]));
+    const upsertRows = Array.from(edgeCounts.entries()).map(([key, increment]) => {
+      const [tagLowId, tagHighId] = key.split("|");
+      const current = existingEdgeByKey.get(key);
+      return {
+        tag_low_id: tagLowId,
+        tag_high_id: tagHighId,
+        weight: (current?.weight ?? 0) + increment,
+        active: true,
+        updated_at: nowIso(),
+      };
+    });
+    for (let offset = 0; offset < upsertRows.length; offset += 500) {
+      await requireData(
+        store.serviceClient
+          .from("tag_edges")
+          .upsert(upsertRows.slice(offset, offset + 500), { onConflict: "tag_low_id,tag_high_id" }),
+        "Could not upsert tag edges",
+      );
+    }
+  }
+}
+
 export async function runMoltbookImport(store) {
   const existingSourceIds = await loadImportedSourceIds(store);
   if (existingSourceIds.size >= MOLTBOOK_TARGET_COUNT) {
@@ -758,83 +845,92 @@ export async function runMoltbookImport(store) {
   );
 
   const heartbeat = await createImportHeartbeat(store, author, selected.length);
-  const insertedPosts = [];
-
-  for (const post of selected) {
-    const tags = deriveMoltbookTags(post);
-    const tagRows = await ensureTagRows(store, tagMap, tags);
-    const emotions = deriveMoltbookEmotions(post, tags);
-    const bodyMd = buildMoltbookImportBody(post, tags);
+  const preparedPosts = selected.map((post) => {
+    const tagLabels = deriveMoltbookTags(post);
+    const emotions = deriveMoltbookEmotions(post, tagLabels);
+    const bodyMd = buildMoltbookImportBody(post, tagLabels);
     const bodyPlain = stripMarkdown(bodyMd);
     const createdAt = post.created_at || nowIso();
     const marker = buildMarker(post.id);
+    return {
+      sourceId: post.id,
+      postId: randomUUID(),
+      title: post.title?.trim() || "Imported Moltbook note",
+      bodyMd,
+      bodyPlain,
+      tagLabels,
+      emotions,
+      createdAt,
+      searchText: `${bodyPlain} ${tagLabels.join(" ")} ${emotions.map((emotion) => emotion.emotion_label).join(" ")} ${post.author?.name ?? ""} ${post.submolt?.name ?? ""} ${marker}`.trim(),
+    };
+  });
 
-    const inserted = await requireData(
-      store.serviceClient
-        .from("posts")
-        .insert({
-          author_installation_id: author.id,
-          heartbeat_id: heartbeat.id,
-          title: post.title?.trim() || "Imported Moltbook note",
-          kind: "text",
-          source_mode: "learning",
-          body_md: bodyMd,
-          body_plain: bodyPlain,
-          search_text: `${bodyPlain} ${tags.join(" ")} ${emotions.map((emotion) => emotion.emotion_label).join(" ")} ${post.author?.name ?? ""} ${post.submolt?.name ?? ""} ${marker}`.trim(),
-          state: "active",
-          media_count: 0,
-          created_at: createdAt,
-          updated_at: createdAt,
-        })
-        .select("*")
-        .single(),
-      "Could not create imported post",
-    );
+  const uniqueLabels = Array.from(new Set(preparedPosts.flatMap((prepared) => prepared.tagLabels)));
+  await ensureTagRows(store, tagMap, uniqueLabels);
 
-    await requireData(
-      store.serviceClient.from("post_tags").insert(
-        tagRows.map((tag, index) => ({
-          post_id: inserted.id,
+  await insertRowsInChunks(
+    store,
+    "posts",
+    preparedPosts.map((prepared) => ({
+      id: prepared.postId,
+      author_installation_id: author.id,
+      heartbeat_id: heartbeat.id,
+      title: prepared.title,
+      kind: "text",
+      source_mode: "learning",
+      body_md: prepared.bodyMd,
+      body_plain: prepared.bodyPlain,
+      search_text: prepared.searchText,
+      state: "active",
+      media_count: 0,
+      created_at: prepared.createdAt,
+      updated_at: prepared.createdAt,
+    })),
+  );
+
+  await insertRowsInChunks(
+    store,
+    "post_tags",
+    preparedPosts.flatMap((prepared) =>
+      prepared.tagLabels.map((label, index) => {
+        const tag = tagMap.get(slugifyTag(label));
+        return {
+          post_id: prepared.postId,
           tag_id: tag.id,
           label_snapshot: tag.label,
           ordinal: index + 1,
-          created_at: createdAt,
-        })),
-      ),
-      "Could not attach Moltbook tags",
-    );
+          created_at: prepared.createdAt,
+        };
+      })),
+  );
 
-    await requireData(
-      store.serviceClient.from("post_emotions").insert(
-        emotions.map((emotion) => ({
-          post_id: inserted.id,
-          emotion_slug: emotion.emotion_slug,
-          emotion_label: emotion.emotion_label,
-          emotion_group: emotion.emotion_group,
-          intensity: emotion.intensity,
-          created_at: createdAt,
-        })),
-      ),
-      "Could not attach Moltbook emotions",
-    );
+  await insertRowsInChunks(
+    store,
+    "post_emotions",
+    preparedPosts.flatMap((prepared) =>
+      prepared.emotions.map((emotion) => ({
+        post_id: prepared.postId,
+        emotion_slug: emotion.emotion_slug,
+        emotion_label: emotion.emotion_label,
+        emotion_group: emotion.emotion_group,
+        intensity: emotion.intensity,
+        created_at: prepared.createdAt,
+      })),
+  ));
 
-    await store.bumpTagGraph(tagRows);
-    await store.refreshPostSearchDocument(inserted.id);
-
-    insertedPosts.push({
-      postId: inserted.id,
-      sourceId: post.id,
-      createdAt,
-    });
-  }
+  await applyTagGraphBatch(store, preparedPosts, tagMap);
 
   const sourceVoteTargets = computeSyntheticVoteTargets(selected);
-  await insertVotes(store, insertedPosts, sourceVoteTargets, upvoters, downvoters);
+  await insertVotes(store, preparedPosts.map((prepared) => ({
+    postId: prepared.postId,
+    sourceId: prepared.sourceId,
+    createdAt: prepared.createdAt,
+  })), sourceVoteTargets, upvoters, downvoters);
   await store.recomputePillars();
 
   return {
     skipped: false,
-    importedCount: insertedPosts.length,
+    importedCount: preparedPosts.length,
     existingCount: existingSourceIds.size,
   };
 }
