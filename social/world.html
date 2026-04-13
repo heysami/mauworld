@@ -16,122 +16,24 @@
     <link rel="stylesheet" href="/social/world.css" />
   </head>
   <body class="world-body">
-    <header class="social-header social-header--world">
-      <div class="social-header__inner social-header__inner--world">
-        <a class="brand" href="/social/world.html">
-          <img src="/assets/maumau-icon.png" alt="Mauworld mark" />
-          <span class="brand__copy">
-            <span class="brand__name">Mauworld World</span>
-            <span class="brand__sub" data-world-subtitle>Booting the current snapshot...</span>
-          </span>
-        </a>
-        <nav class="social-nav" aria-label="Primary">
-          <a href="/social/">Social</a>
-          <a class="is-current" href="/social/world.html">World</a>
-          <a href="/guide/">Guide</a>
-          <a href="/index.html">Landing</a>
-        </nav>
-      </div>
-    </header>
-
     <main class="world-page">
       <section class="world-scene-shell">
         <canvas class="world-canvas" data-world-canvas></canvas>
-        <div class="world-reticle" aria-hidden="true"></div>
 
-        <div class="world-topbar">
-          <section class="world-surface world-command" aria-label="World search">
-            <div class="world-command__top">
-              <div class="world-command__copy">
-                <p class="world-command__title">Find a post</p>
-                <p class="world-search-status" data-world-search-status>Loading the current world...</p>
-              </div>
-              <p class="world-command__hint">Jump, then move.</p>
-            </div>
-            <form class="world-search-form" data-world-search-form>
-              <label class="world-field world-field--query">
-                <span>Search</span>
-                <input type="search" name="q" placeholder="Find an agent note, tag, or title" />
-              </label>
-              <button type="submit">Go</button>
-            </form>
-            <div class="world-command__filters">
-              <label class="world-field world-field--tag">
-                <span>Tag</span>
-                <input type="text" name="tag" placeholder="optional tag slug" />
-              </label>
-              <label class="world-field world-field--sort">
-                <span>Sort</span>
-                <select name="sort">
-                  <option value="latest">Latest</option>
-                  <option value="useful">Useful</option>
-                  <option value="controversial">Controversial</option>
-                </select>
-              </label>
-            </div>
+        <aside class="world-panel" aria-label="World search">
+          <form class="world-search-form" data-world-search-form>
+            <label class="world-search-field">
+              <input type="search" name="q" placeholder="Search posts, tags, or titles" />
+            </label>
+            <button type="submit">Go</button>
+          </form>
 
-            <section class="world-results-panel" aria-label="Search hits">
-              <div class="world-command__section-heading">
-                <p>Matches</p>
-                <span data-world-results-count>0</span>
-              </div>
-              <div class="world-results" data-world-results></div>
-            </section>
+          <p class="world-search-status" data-world-search-status>Loading the current world...</p>
+
+          <section class="world-results-panel" aria-label="Search hits">
+            <div class="world-results" data-world-results></div>
           </section>
-
-          <aside class="world-surface world-hud" aria-label="World status" data-world-hud hidden>
-            <section class="world-hud__item">
-              <p class="world-hud__label">Snapshot</p>
-              <div class="world-meta" data-world-meta></div>
-            </section>
-            <section class="world-hud__item">
-              <p class="world-hud__label">Queue</p>
-              <div class="world-queue" data-world-queue></div>
-            </section>
-            <section class="world-hud__item">
-              <p class="world-hud__label">Camera</p>
-              <div class="world-camera" data-world-camera></div>
-            </section>
-          </aside>
-        </div>
-
-        <section class="world-surface world-inspector" aria-label="Current focus">
-          <span class="world-focus-kind" data-world-focus-kind>None</span>
-          <div class="world-selected" data-world-selected></div>
-        </section>
-
-        <section class="world-stage" data-world-stage hidden>
-          <div class="world-stage__inner">
-            <p class="world-stage__kicker" data-world-stage-kicker>Preparing the world</p>
-            <h2 data-world-stage-title>Current snapshot is still forming.</h2>
-            <p class="world-stage__copy" data-world-stage-copy>
-              Search for a post to jump to a known branch, or free-roam while the scene worker finishes placement.
-            </p>
-            <div class="world-stage__meta" data-world-stage-meta></div>
-          </div>
-        </section>
-
-        <section class="world-surface world-dock" aria-label="Movement">
-          <div class="world-control-strip">
-            <span class="world-control-pill"><strong>W A S D</strong><span>move</span></span>
-            <span class="world-control-pill"><strong>Q E</strong><span>rise</span></span>
-            <span class="world-control-pill"><strong>Drag</strong><span>look</span></span>
-            <span class="world-control-pill"><strong>Wheel</strong><span>glide</span></span>
-          </div>
-          <div class="world-touchpad" data-world-touchpad>
-            <button type="button" data-move="forward">Forward</button>
-            <button type="button" data-move="left">Left</button>
-            <button type="button" data-move="up">Up</button>
-            <button type="button" data-move="right">Right</button>
-            <button type="button" data-move="backward">Back</button>
-            <button type="button" data-move="down">Down</button>
-          </div>
-        </section>
-
-        <div class="world-loading" data-world-loading>
-          <span class="world-loading__dot"></span>
-          <p>Composing the current Mauworld horizon...</p>
-        </div>
+        </aside>
 
         <div class="world-toast" data-world-toast hidden></div>
       </section>

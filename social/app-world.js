@@ -1,15 +1,12 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
-const DEBUG_UI = new URLSearchParams(window.location.search).get("debug") === "1";
 
 const elements = {
   canvas: document.querySelector("[data-world-canvas]"),
-  subtitle: document.querySelector("[data-world-subtitle]"),
   searchForm: document.querySelector("[data-world-search-form]"),
   searchStatus: document.querySelector("[data-world-search-status]"),
   results: document.querySelector("[data-world-results]"),
-  resultsCount: document.querySelector("[data-world-results-count]"),
   selected: document.querySelector("[data-world-selected]"),
   focusKind: document.querySelector("[data-world-focus-kind]"),
   meta: document.querySelector("[data-world-meta]"),
@@ -25,7 +22,6 @@ const elements = {
   stageMeta: document.querySelector("[data-world-stage-meta]"),
   resultsPanel: document.querySelector(".world-results-panel"),
   inspector: document.querySelector(".world-inspector"),
-  hud: document.querySelector("[data-world-hud]"),
 };
 
 const WORLD_API = {
@@ -202,6 +198,9 @@ function clearGroup(group) {
 }
 
 function showToast(message, durationMs = 3600) {
+  if (!elements.toast) {
+    return;
+  }
   elements.toast.textContent = message;
   elements.toast.hidden = false;
   window.clearTimeout(showToast.timer);
@@ -211,12 +210,16 @@ function showToast(message, durationMs = 3600) {
 }
 
 function setSearchStatus(text) {
-  elements.searchStatus.textContent = text;
+  if (elements.searchStatus) {
+    elements.searchStatus.textContent = text;
+  }
 }
 
 function setLoading(isLoading) {
   state.loading = isLoading;
-  elements.loading.hidden = !isLoading;
+  if (elements.loading) {
+    elements.loading.hidden = !isLoading;
+  }
   updateStagePanel();
 }
 
@@ -702,9 +705,8 @@ function initScene() {
 }
 
 function resizeScene() {
-  const headerHeight = document.querySelector(".social-header")?.offsetHeight ?? 77;
   const width = window.innerWidth;
-  const height = Math.max(320, window.innerHeight - headerHeight);
+  const height = Math.max(320, window.innerHeight);
   sceneState.renderer.setSize(width, height, false);
   sceneState.camera.aspect = width / height;
   sceneState.camera.updateProjectionMatrix();
@@ -717,11 +719,6 @@ function updateCameraRotation() {
 
 function updateMetaPanel() {
   if (!elements.meta || !elements.queue) {
-    if (elements.subtitle) {
-      elements.subtitle.textContent = state.meta?.builtAt
-        ? `Snapshot built ${formatRelativeTime(state.meta.builtAt)}`
-        : "Current snapshot is still building.";
-    }
     updateStagePanel();
     return;
   }
@@ -732,10 +729,6 @@ function updateMetaPanel() {
     updateStagePanel();
     return;
   }
-
-  elements.subtitle.textContent = state.meta.builtAt
-    ? `Snapshot built ${formatRelativeTime(state.meta.builtAt)}`
-    : "Current snapshot is still building.";
 
   elements.meta.innerHTML = `
     <div class="world-meta-list">
@@ -831,6 +824,9 @@ function updateStagePanel() {
 }
 
 function renderSelected(result) {
+  if (!elements.selected || !elements.inspector || !elements.focusKind) {
+    return;
+  }
   if (!result) {
     elements.inspector?.classList.add("is-empty");
     elements.focusKind.textContent = "None";
@@ -903,7 +899,6 @@ function focusOnDestination(result) {
 
 function renderSearchResults() {
   const hits = state.searchPayload?.hits ?? [];
-  elements.resultsCount.textContent = String(hits.length);
   if (hits.length === 0) {
     if (!hasSearchIntent()) {
       elements.resultsPanel?.classList.add("is-empty");
@@ -920,16 +915,18 @@ function renderSearchResults() {
     .map((hit) => {
       const post = hit.post ?? {};
       const isActive = state.activeResultId === post.id;
+      const summary = summarizeBodyMarkdown(post.body_md, post.body_plain, 120);
+      const metaBits = [
+        post.tags?.slice(0, 2).map((tag) => `#${tag.label}`).join(" ") || post.pillar?.title || "",
+        post.created_at ? formatRelativeTime(post.created_at) : "now",
+      ].filter(Boolean);
       return `
         <button class="world-result ${isActive ? "is-active" : ""}" type="button" data-result-id="${htmlEscape(post.id)}">
-          <div class="world-result__meta">
-            <span class="world-chip">${htmlEscape(post.source_mode?.replaceAll("_", " ") || "post")}</span>
-            <span class="world-chip ${hit.worldQueueStatus === "ready" ? "world-chip--ready" : "world-chip--queue"}">${htmlEscape(formatQueueLabel(hit.worldQueueStatus))}</span>
-          </div>
           <div class="world-result__title">${htmlEscape(post.title || truncateText(post.body_plain || "Post", 90))}</div>
+          <p class="world-result__body">${htmlEscape(summary)}</p>
           <div class="world-result__meta">
-            <span>${htmlEscape(post.tags?.slice(0, 2).map((tag) => `#${tag.label}`).join(" ") || post.pillar?.title || "No tag context")}</span>
-            <span>${htmlEscape(post.created_at ? formatRelativeTime(post.created_at) : "now")}</span>
+            ${metaBits.map((entry) => `<span>${htmlEscape(entry)}</span>`).join("")}
+            ${hit.worldQueueStatus === "ready" ? "" : `<span class="world-chip world-chip--queue">${htmlEscape(formatQueueLabel(hit.worldQueueStatus))}</span>`}
           </div>
         </button>
       `;
@@ -1009,9 +1006,9 @@ async function runSearch() {
   try {
     const formData = new FormData(elements.searchForm);
     const payload = await fetchJson(WORLD_API.search, {
-      q: formData.get("q"),
-      tag: formData.get("tag"),
-      sort: formData.get("sort"),
+      q: formData.get("q") || "",
+      tag: formData.get("tag") || "",
+      sort: formData.get("sort") || "latest",
       limit: 12,
     });
     state.searchPayload = payload;
@@ -1020,7 +1017,7 @@ async function runSearch() {
       renderSelected(payload.hits[0]);
     }
     renderSearchResults();
-    setSearchStatus(payload.hits.length > 0 ? `${payload.hits.length} routes ready.` : "No routes in the current snapshot.");
+    setSearchStatus("");
   } catch (error) {
     state.searchPayload = { hits: [] };
     renderSearchResults();
@@ -1207,11 +1204,9 @@ function pickSceneObject(event) {
       worldQueueStatus: "ready",
     });
   } else if (payload.type === "pillar") {
-    const entry = payload.data;
-    showToast(`Pillar ${entry.pillar?.title || "pillar"} anchors ${entry.pillar?.tag_count ?? 0} tags.`);
+    return;
   } else if (payload.type === "tag") {
-    const entry = payload.data;
-    showToast(`Tag #${entry.tag?.label || "tag"} has ${entry.active_post_count} active posts in this cell window.`);
+    return;
   }
 }
 
@@ -1311,9 +1306,6 @@ function animate() {
 
 async function bootstrapWorld() {
   state.viewerSessionId = createViewerSessionId();
-  if (elements.hud) {
-    elements.hud.hidden = !DEBUG_UI;
-  }
   initScene();
   registerInput();
   renderSelected(null);
@@ -1321,7 +1313,7 @@ async function bootstrapWorld() {
   try {
     await loadMeta(true);
     await loadStream(true);
-    setSearchStatus("Search a title, tag, or excerpt. Move freely when you want to scout instead.");
+    setSearchStatus("");
   } catch (error) {
     setLoading(false);
     setSearchStatus(error.message);
