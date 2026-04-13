@@ -480,6 +480,31 @@ textarea {
   background: rgba(255, 253, 248, 0.88);
 }
 
+.hero-pocket__head {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.hero-pocket__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 239, 210, 0.84));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+.hero-pocket__glyph svg {
+  width: 20px;
+  height: 20px;
+  color: var(--accent-strong);
+}
+
 .hero-pocket strong,
 .guide-card h3,
 .section-heading h2,
@@ -536,6 +561,78 @@ textarea {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
 }
 
+.feature-card__head,
+.guide-card__head {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.feature-card__glyph,
+.guide-card__glyph,
+.point-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 239, 210, 0.84));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+.feature-card__glyph,
+.guide-card__glyph {
+  width: 52px;
+  height: 52px;
+}
+
+.feature-card__glyph svg,
+.guide-card__glyph svg,
+.point-icon svg {
+  width: 24px;
+  height: 24px;
+  color: var(--accent-strong);
+}
+
+.point-list {
+  display: grid;
+  gap: 10px;
+}
+
+.point-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.point-icon {
+  width: 34px;
+  height: 34px;
+}
+
+.point-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.point-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.point-copy strong {
+  font-size: 0.98rem;
+  line-height: 1.2;
+}
+
+.point-copy span {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
 .feature-card h3,
 .story-band__copy h2,
 .dashboard-preview__panel h3 {
@@ -588,6 +685,79 @@ textarea {
   border-radius: 6px;
   border: 1px solid rgba(98, 55, 23, 0.1);
   box-shadow: var(--shadow-soft);
+}
+
+.phone-mock {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 8px;
+  border: 1px solid rgba(52, 121, 164, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(245, 251, 255, 0.98) 100%);
+}
+
+.phone-mock__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.phone-mock__avatar {
+  width: 44px;
+  height: 44px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, #dff3ff 0%, #fff3d8 100%);
+}
+
+.phone-mock__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+
+.phone-mock__identity {
+  display: grid;
+  gap: 2px;
+}
+
+.phone-mock__identity strong {
+  font-size: 1rem;
+}
+
+.phone-mock__identity span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.phone-mock__thread {
+  display: grid;
+  gap: 10px;
+}
+
+.phone-bubble {
+  max-width: 86%;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+  font-size: 0.96rem;
+  line-height: 1.55;
+}
+
+.phone-bubble--in {
+  justify-self: start;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.phone-bubble--out {
+  justify-self: end;
+  background: rgba(214, 241, 255, 0.96);
+  border-color: rgba(68, 163, 230, 0.2);
 }
 
 .story-band__label-row,
@@ -822,13 +992,13 @@ textarea {
 
 .guide-cards {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 
 .guide-card {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
-  gap: 16px;
+  gap: 14px;
   padding: 18px;
   border: 1px solid var(--line);
   background: rgba(255, 252, 246, 0.9);
@@ -849,7 +1019,7 @@ textarea {
 
 .guide-card__body {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .guide-card h3 {
@@ -927,7 +1097,8 @@ textarea {
   }
 
   .stat-grid,
-  .feature-grid {
+  .feature-grid,
+  .guide-cards {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -971,16 +1142,21 @@ textarea {
   }
 
   .stat-grid,
-  .feature-grid {
+  .feature-grid,
+  .guide-cards {
     grid-template-columns: 1fr;
   }
 
-  .guide-card {
+  .feature-card__head,
+  .guide-card__head,
+  .point-item {
     grid-template-columns: 1fr;
   }
 
-  .guide-card__number {
-    justify-content: flex-start;
-    min-height: auto;
+  .feature-card__glyph,
+  .guide-card__glyph,
+  .point-icon {
+    width: 42px;
+    height: 42px;
   }
 }
