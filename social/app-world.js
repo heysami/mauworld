@@ -47,6 +47,7 @@ const state = {
   stream: null,
   searchPayload: null,
   activeResultId: null,
+  focusedResult: null,
   hoveredResultId: null,
   currentCellKey: "",
   loading: true,
@@ -55,6 +56,8 @@ const state = {
   searchSubmitted: false,
   focusAnimation: null,
   lastPresenceAt: 0,
+  lastStreamCheckAt: 0,
+  initialViewFramed: false,
   viewerSessionId: "",
   moveButtons: new Set(),
 };
@@ -124,6 +127,27 @@ function normalizeAngle(angle) {
 
 function shortestAngleDelta(from, to) {
   return normalizeAngle(to - from);
+}
+
+function getFlatForwardVector(yaw) {
+  return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+}
+
+function computeLookAngles(from, to) {
+  const delta = new THREE.Vector3().subVectors(to, from);
+  const horizontal = Math.max(0.0001, Math.hypot(delta.x, delta.z));
+  return {
+    yaw: normalizeAngle(Math.atan2(-delta.x, -delta.z)),
+    pitch: clamp(Math.atan2(delta.y, horizontal), CAMERA.lookMin, CAMERA.lookMax),
+  };
+}
+
+function aimCameraAt(position, target) {
+  sceneState.camera.position.copy(position);
+  const { yaw, pitch } = computeLookAngles(position, target);
+  inputState.yaw = yaw;
+  inputState.pitch = pitch;
+  updateCameraRotation();
 }
 
 function htmlEscape(value) {
@@ -292,15 +316,49 @@ function createLabelTexture(lines, options = {}) {
   return texture;
 }
 
-function createBillboard(texture, width, height) {
+function createCircleTexture(options = {}) {
+  const canvas = document.createElement("canvas");
+  const size = options.size ?? 256;
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  const fill = options.fill ?? "rgba(248, 252, 247, 0.72)";
+  const stroke = options.stroke ?? "rgba(46, 184, 184, 0.88)";
+  const glow = options.glow ?? "rgba(46, 184, 184, 0.22)";
+
+  context.clearRect(0, 0, size, size);
+  context.beginPath();
+  context.arc(size / 2, size / 2, size * 0.34, 0, Math.PI * 2);
+  context.fillStyle = glow;
+  context.fill();
+
+  context.beginPath();
+  context.arc(size / 2, size / 2, size * 0.22, 0, Math.PI * 2);
+  context.fillStyle = fill;
+  context.fill();
+
+  context.lineWidth = size * 0.04;
+  context.strokeStyle = stroke;
+  context.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createBillboard(texture, width, height, options = {}) {
   const material = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
+    depthTest: options.depthTest ?? true,
     depthWrite: false,
+    opacity: options.opacity ?? 1,
+    fog: options.fog ?? true,
   });
   const geometry = new THREE.PlaneGeometry(width, height);
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.renderOrder = 10;
+  mesh.renderOrder = options.renderOrder ?? 10;
   sceneState.billboards.push(mesh);
   return mesh;
 }
@@ -366,26 +424,53 @@ function buildTagObject(entry) {
 
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(4.6, 0.42, 10, 32),
-    new THREE.MeshStandardMaterial({
-      color: new THREE.Color("#2eb8b8"),
-      emissive: new THREE.Color("#1d9d9d"),
-      roughness: 0.34,
-      metalness: 0.18,
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#58d0c7"),
+      transparent: true,
+      opacity: 0.72,
+      fog: false,
     }),
   );
   ring.rotation.x = Math.PI / 2;
   group.add(ring);
 
+  const halo = new THREE.Mesh(
+    new THREE.RingGeometry(5.8, 6.9, 40),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#86e1da"),
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide,
+      fog: false,
+    }),
+  );
+  halo.rotation.x = Math.PI / 2;
+  halo.position.y = 0.1;
+  group.add(halo);
+
   const center = new THREE.Mesh(
-    new THREE.SphereGeometry(1.65, 18, 18),
-    new THREE.MeshStandardMaterial({
+    new THREE.SphereGeometry(2.2, 18, 18),
+    new THREE.MeshBasicMaterial({
       color: new THREE.Color("#f4f6f1"),
-      emissive: new THREE.Color("#b9f0e0"),
-      roughness: 0.22,
-      metalness: 0.04,
+      transparent: true,
+      opacity: 0.96,
+      fog: false,
     }),
   );
   group.add(center);
+
+  const beacon = createBillboard(
+    createCircleTexture(),
+    13.5,
+    13.5,
+    {
+      opacity: 0.24,
+      fog: false,
+      renderOrder: 8,
+    },
+  );
+  beacon.position.set(0, 0.2, 0);
+  group.add(beacon);
 
   const label = createBillboard(
     createLabelTexture(
@@ -400,14 +485,18 @@ function buildTagObject(entry) {
         accent: "#2eb8b8",
       },
     ),
-    24,
-    9.2,
+    20,
+    7.8,
   );
   label.position.set(0, 8.6, 0);
   group.add(label);
 
   sceneState.animatedTags.push({
+    anchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
     ring,
+    halo,
+    beacon,
+    label,
     speed: 0.18 + entry.branch_depth * 0.05,
   });
   sceneState.clickable.push({
@@ -430,23 +519,11 @@ function buildPostObject(entry) {
       : entry.display_tier === "standard"
         ? "#f1cb59"
         : "#c9e54f";
-  const width = 12 + entry.size_factor * 7;
-  const height = 8 + entry.size_factor * 4;
-  const depth = 1.6 + entry.size_factor * 0.65;
+  const width = 14 + entry.size_factor * 7.2;
+  const height = 8.8 + entry.size_factor * 4.1;
+  const elevation = height * 0.55;
 
-  const solid = new THREE.Mesh(
-    new THREE.BoxGeometry(width, height, depth),
-    new THREE.MeshStandardMaterial({
-      color: new THREE.Color(color),
-      emissive: new THREE.Color(color).multiplyScalar(0.18),
-      roughness: 0.36,
-      metalness: 0.08,
-    }),
-  );
-  solid.position.y = height * 0.42;
-  group.add(solid);
-
-  const label = createBillboard(
+  const detailCard = createBillboard(
     createLabelTexture(
       [
         post.title || truncateText(post.body_plain || "Post", 28),
@@ -459,13 +536,13 @@ function buildPostObject(entry) {
         accent: color,
       },
     ),
-    Math.max(18, width * 1.15),
-    Math.max(8.5, height * 0.95),
+    width,
+    height,
   );
-  label.position.set(0, height + 6, 0);
-  group.add(label);
+  detailCard.position.set(0, elevation, 0);
+  group.add(detailCard);
 
-  const billboard = createBillboard(
+  const hintCard = createBillboard(
     createLabelTexture(
       [
         post.title || truncateText(post.body_plain || "Post", 24),
@@ -479,33 +556,46 @@ function buildPostObject(entry) {
         background: "rgba(255, 255, 255, 0.88)",
       },
     ),
-    Math.max(15, width * 1.05),
-    7.4,
+    width * 0.96,
+    height * 0.84,
+    {
+      opacity: 0.16,
+      fog: false,
+      renderOrder: 9,
+    },
   );
-  billboard.position.set(0, height * 0.72, 0);
-  group.add(billboard);
+  hintCard.position.set(0, elevation, 0);
+  group.add(hintCard);
 
-  const orbitRadius = 1.2 + entry.size_factor * 1.2;
-  const orbitSpeed = 0.09 + (entry.rank_in_tag % 7) * 0.012;
+  const baseMarker = new THREE.Mesh(
+    new THREE.CircleGeometry(Math.max(2.4, width * 0.16), 28),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color),
+      transparent: true,
+      opacity: 0.12,
+      side: THREE.DoubleSide,
+      fog: false,
+    }),
+  );
+  baseMarker.rotation.x = -Math.PI / 2;
+  baseMarker.position.y = 0.18;
+  group.add(baseMarker);
+
   sceneState.animatedPosts.push({
     group,
-    solid,
-    label,
-    billboard,
+    detailCard,
+    hintCard,
     anchor,
-    orbitRadius,
-    orbitSpeed,
-    phase: (entry.rank_in_tag * Math.PI) / 5,
     displayTier: entry.display_tier,
   });
 
   const clickablePayload = {
-    mesh: solid,
+    mesh: detailCard,
     type: "post",
     data: entry,
   };
   sceneState.clickable.push(clickablePayload, {
-    mesh: billboard,
+    mesh: hintCard,
     type: "post",
     data: entry,
   });
@@ -558,12 +648,94 @@ function buildPresenceObject(entry) {
   return group;
 }
 
-function rebuildConnections(pillars, tags) {
+function clearFocusGhost() {
+  clearGroup(sceneState.effects);
+}
+
+function hasVisibleFocusedPost(result) {
+  if (!result?.destination || !state.stream?.postInstances) {
+    return false;
+  }
+  return state.stream.postInstances.some(
+    (entry) =>
+      entry.post_id === result.destination.post_id
+      && entry.tag_id === result.destination.tag_id,
+  );
+}
+
+function syncFocusedGhost() {
+  clearFocusGhost();
+  const result = state.focusedResult;
+  if (!result?.destination) {
+    return;
+  }
+  const shouldGhost =
+    result.worldQueueStatus !== "ready"
+    || result.destination.display_tier === "hidden"
+    || !hasVisibleFocusedPost(result);
+  if (!shouldGhost) {
+    return;
+  }
+
+  const post = result.post ?? {};
+  const accent = result.worldQueueStatus === "ready" ? "#2aa8ad" : "#d36c54";
+  const group = new THREE.Group();
+  group.position.set(
+    result.destination.position_x,
+    result.destination.position_y,
+    result.destination.position_z,
+  );
+
+  const card = createBillboard(
+    createLabelTexture(
+      [
+        post.title || truncateText(post.body_plain || "Post", 26),
+        post.tags?.slice(0, 2).map((tag) => `#${tag.label}`).join(" ") || "Focused post",
+        result.worldQueueStatus === "ready" ? "Revealed from hidden tier" : "Queued for world placement",
+      ],
+      {
+        width: 700,
+        height: 240,
+        accent,
+        background: "rgba(255, 255, 255, 0.94)",
+      },
+    ),
+    18,
+    6.6,
+    {
+      opacity: 0.94,
+      fog: false,
+      depthTest: false,
+      renderOrder: 11,
+    },
+  );
+  card.position.set(0, 15, 0);
+  group.add(card);
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(7.2, 8.8, 32),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(accent),
+      transparent: true,
+      opacity: 0.4,
+      side: THREE.DoubleSide,
+      fog: false,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.16;
+  group.add(ring);
+
+  sceneState.effects.add(group);
+}
+
+function rebuildConnections(pillars, tags, posts) {
   clearGroup(sceneState.lines);
   if (pillars.length === 0 || tags.length === 0) {
     return;
   }
   const pillarById = new Map(pillars.map((entry) => [entry.pillar_id, entry]));
+  const tagById = new Map(tags.map((entry) => [entry.tag_id, entry]));
   const positions = [];
   for (const tag of tags) {
     const pillar = pillarById.get(tag.pillar_id);
@@ -573,12 +745,21 @@ function rebuildConnections(pillars, tags) {
     positions.push(pillar.position_x, pillar.position_y + pillar.height, pillar.position_z);
     positions.push(tag.position_x, tag.position_y, tag.position_z);
   }
+  for (const post of posts) {
+    const tag = tagById.get(post.tag_id);
+    if (!tag) {
+      continue;
+    }
+    positions.push(tag.position_x, tag.position_y, tag.position_z);
+    positions.push(post.position_x, post.position_y, post.position_z);
+  }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   const material = new THREE.LineBasicMaterial({
     color: new THREE.Color("#7dcfcb"),
     transparent: true,
-    opacity: 0.44,
+    opacity: 0.22,
+    fog: false,
   });
   sceneState.lines.add(new THREE.LineSegments(geometry, material));
 }
@@ -607,7 +788,8 @@ function rebuildScene(streamPayload) {
   for (const presence of streamPayload.presence) {
     sceneState.presence.add(buildPresenceObject(presence));
   }
-  rebuildConnections(streamPayload.pillars, streamPayload.tags);
+  rebuildConnections(streamPayload.pillars, streamPayload.tags, streamPayload.postInstances);
+  syncFocusedGhost();
 }
 
 function initScene() {
@@ -629,7 +811,7 @@ function initScene() {
     0.1,
     2400,
   );
-  sceneState.camera.position.set(0, 88, 240);
+  sceneState.camera.position.set(0, 108, 128);
   sceneState.camera.rotation.order = "YXZ";
 
   const ambient = new THREE.HemisphereLight("#fffdf6", "#bed9ce", 1.26);
@@ -870,21 +1052,20 @@ function focusOnDestination(result) {
   const destination = result.destination;
   const target = new THREE.Vector3(destination.position_x, destination.position_y, destination.position_z);
   const offsetDistance = 34;
-  const heading = destination.heading_y ?? 0;
-  const cameraDestination = new THREE.Vector3(
-    destination.position_x - Math.sin(heading) * offsetDistance,
-    destination.position_y + 22,
-    destination.position_z - Math.cos(heading) * offsetDistance,
-  );
+  const approachHeading = Number.isFinite(destination.heading_y) ? destination.heading_y : inputState.yaw;
+  const approachVector = getFlatForwardVector(approachHeading);
+  const cameraDestination = target.clone().sub(approachVector.multiplyScalar(offsetDistance));
+  cameraDestination.y += 22;
+  const { yaw, pitch } = computeLookAngles(cameraDestination, target);
 
   state.focusAnimation = {
     startedAt: performance.now(),
     fromPosition: sceneState.camera.position.clone(),
     toPosition: cameraDestination,
     fromYaw: inputState.yaw,
-    toYaw: normalizeAngle(heading),
+    toYaw: yaw,
     fromPitch: inputState.pitch,
-    toPitch: -0.18,
+    toPitch: pitch,
     lookAt: target,
     durationMs: CAMERA.focusDurationMs,
   };
@@ -894,6 +1075,9 @@ function focusOnDestination(result) {
     sceneState.floorMarker.position.set(destination.position_x, 0.2, destination.position_z);
   }
 
+  state.focusedResult = result;
+  loadStreamForPosition(cameraDestination, true).catch((error) => showToast(error.message));
+  syncFocusedGhost();
   renderSelected(result);
 }
 
@@ -938,17 +1122,17 @@ function renderSearchResults() {
       const id = button.getAttribute("data-result-id");
       const result = hits.find((entry) => entry.post?.id === id);
       state.activeResultId = id;
-      renderSearchResults();
       focusOnDestination(result);
+      elements.resultsPanel?.classList.add("is-empty");
     });
   }
 }
 
-function buildCellWindow() {
+function buildCellWindow(position = sceneState.camera.position) {
   const cellSize = state.meta?.renderer?.lod?.cellSize ?? 64;
-  const range = window.innerWidth < 780 ? 2 : 3;
-  const centerX = Math.floor(sceneState.camera.position.x / Math.max(1, cellSize));
-  const centerZ = Math.floor(sceneState.camera.position.z / Math.max(1, cellSize));
+  const range = window.innerWidth < 780 ? 4 : 5;
+  const centerX = Math.floor(position.x / Math.max(1, cellSize));
+  const centerZ = Math.floor(position.z / Math.max(1, cellSize));
   return {
     cell_x_min: centerX - range,
     cell_x_max: centerX + range,
@@ -973,10 +1157,14 @@ async function loadMeta(force = false) {
 }
 
 async function loadStream(force = false) {
+  return loadStreamForPosition(sceneState.camera.position, force);
+}
+
+async function loadStreamForPosition(position, force = false) {
   if (!state.meta || state.streamLoading) {
     return;
   }
-  const nextWindow = buildCellWindow();
+  const nextWindow = buildCellWindow(position);
   if (!force && nextWindow.key === state.currentCellKey) {
     return;
   }
@@ -987,6 +1175,7 @@ async function loadStream(force = false) {
     state.stream = payload;
     state.currentCellKey = nextWindow.key;
     rebuildScene(payload);
+    frameInitialViewFromStream();
     updateStagePanel();
   } catch (error) {
     showToast(error.message);
@@ -1074,20 +1263,33 @@ function updateSnow(deltaSeconds) {
 function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   const billboardDistance = state.meta?.renderer?.fog?.billboardDistance ?? 420;
   const nearDistance = state.meta?.renderer?.fog?.lodNearDistance ?? 180;
+  const farDistance = state.meta?.renderer?.fog?.farDistance ?? 720;
 
   for (const entry of sceneState.animatedPosts) {
-    const orbitX = Math.cos(elapsedSeconds * entry.orbitSpeed + entry.phase) * entry.orbitRadius;
-    const orbitZ = Math.sin(elapsedSeconds * entry.orbitSpeed + entry.phase) * entry.orbitRadius;
-    entry.group.position.set(entry.anchor.x + orbitX, entry.anchor.y, entry.anchor.z + orbitZ);
+    const distance = entry.anchor.distanceTo(sceneState.camera.position);
+    const detailFade = 1 - clamp((distance - nearDistance * 0.72) / Math.max(1, nearDistance * 0.46), 0, 1);
+    const hintFade = clamp((distance - nearDistance * 0.38) / Math.max(1, farDistance - nearDistance * 0.38), 0, 1);
+    const hintMin =
+      entry.displayTier === "hero" ? 0.1 : entry.displayTier === "standard" ? 0.08 : 0.06;
+    const hintMax =
+      entry.displayTier === "hero" ? 0.24 : entry.displayTier === "standard" ? 0.18 : 0.13;
 
-    const distance = entry.group.position.distanceTo(sceneState.camera.position);
-    entry.solid.visible = entry.displayTier !== "hint" && distance <= billboardDistance;
-    entry.label.visible = entry.displayTier !== "hint" && distance <= nearDistance;
-    entry.billboard.visible = entry.displayTier === "hint" || distance > nearDistance * 0.92;
+    entry.detailCard.material.opacity = detailFade;
+    entry.detailCard.visible = detailFade > 0.03 && distance <= billboardDistance * 1.1;
+
+    entry.hintCard.material.opacity = hintMin + (hintMax - hintMin) * hintFade;
+    entry.hintCard.visible = distance <= farDistance * 1.25;
   }
 
   for (const entry of sceneState.animatedTags) {
     entry.ring.rotation.z += deltaSeconds * entry.speed;
+    entry.halo.rotation.z -= deltaSeconds * entry.speed * 0.62;
+    const distance = entry.anchor.distanceTo(sceneState.camera.position);
+    const farMix = clamp((distance - nearDistance * 0.8) / Math.max(1, farDistance - nearDistance * 0.8), 0, 1);
+    entry.label.visible = distance <= nearDistance * 1.22;
+    entry.beacon.material.opacity = 0.16 + farMix * 0.22;
+    entry.ring.material.opacity = 0.52 + farMix * 0.2;
+    entry.halo.material.opacity = 0.1 + farMix * 0.14;
   }
 
   for (const entry of sceneState.animatedPresence) {
@@ -1129,8 +1331,8 @@ function updateMovement(deltaSeconds) {
   if (state.focusAnimation) {
     return;
   }
-  const forward = new THREE.Vector3(Math.sin(inputState.yaw), 0, -Math.cos(inputState.yaw));
-  const right = new THREE.Vector3(Math.cos(inputState.yaw), 0, Math.sin(inputState.yaw));
+  const forward = getFlatForwardVector(inputState.yaw);
+  const right = new THREE.Vector3(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw));
   const velocity = new THREE.Vector3();
   const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
 
@@ -1210,6 +1412,72 @@ function pickSceneObject(event) {
   }
 }
 
+function positionCameraForWorldMeta() {
+  if (!state.meta || state.initialViewFramed) {
+    return;
+  }
+  const cellSize = state.meta.renderer?.lod?.cellSize ?? 64;
+  const centerX = (state.meta.bounds.minX + state.meta.bounds.maxX) / 2;
+  const centerZ = (state.meta.bounds.minZ + state.meta.bounds.maxZ) / 2;
+  const spanX = Math.max(1, state.meta.bounds.maxX - state.meta.bounds.minX);
+  const spanZ = Math.max(1, state.meta.bounds.maxZ - state.meta.bounds.minZ);
+  const cameraDistance = Math.min(cellSize * 2.7, Math.max(136, Math.max(spanX, spanZ) * 0.58));
+  const target = new THREE.Vector3(centerX, 84, centerZ);
+  const position = new THREE.Vector3(centerX + cameraDistance * 0.44, 132, centerZ + cameraDistance);
+  aimCameraAt(position, target);
+}
+
+function frameInitialViewFromStream() {
+  if (!state.stream || state.initialViewFramed) {
+    return;
+  }
+  const anchors = [
+    ...state.stream.pillars.map((entry) => new THREE.Vector3(entry.position_x, entry.position_y + entry.height * 0.4, entry.position_z)),
+    ...state.stream.tags.map((entry) => new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z)),
+  ];
+  if (anchors.length === 0) {
+    return;
+  }
+  const bounds = anchors.reduce(
+    (acc, point) => ({
+      minX: Math.min(acc.minX, point.x),
+      maxX: Math.max(acc.maxX, point.x),
+      minY: Math.min(acc.minY, point.y),
+      maxY: Math.max(acc.maxY, point.y),
+      minZ: Math.min(acc.minZ, point.z),
+      maxZ: Math.max(acc.maxZ, point.z),
+    }),
+    {
+      minX: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+      minZ: Number.POSITIVE_INFINITY,
+      maxZ: Number.NEGATIVE_INFINITY,
+    },
+  );
+  const center = new THREE.Vector3(
+    (bounds.minX + bounds.maxX) / 2,
+    (bounds.minY + bounds.maxY) / 2,
+    (bounds.minZ + bounds.maxZ) / 2,
+  );
+  const spanX = bounds.maxX - bounds.minX;
+  const spanY = bounds.maxY - bounds.minY;
+  const spanZ = bounds.maxZ - bounds.minZ;
+  const cameraDistance = Math.min(
+    (state.meta?.renderer?.lod?.cellSize ?? 64) * 2.8,
+    Math.max(138, Math.max(spanX, spanZ) * 0.56),
+  );
+  const target = new THREE.Vector3(center.x, center.y + Math.max(12, spanY * 0.14), center.z);
+  const position = new THREE.Vector3(
+    center.x + cameraDistance * 0.42,
+    Math.max(112, center.y + spanY * 0.44 + 56),
+    center.z + cameraDistance,
+  );
+  aimCameraAt(position, target);
+  state.initialViewFramed = true;
+}
+
 function onPointerDown(event) {
   inputState.pointerDown = true;
   inputState.dragDistance = 0;
@@ -1249,8 +1517,7 @@ function onWheel(event) {
   if (state.focusAnimation) {
     return;
   }
-  const direction = new THREE.Vector3();
-  sceneState.camera.getWorldDirection(direction);
+  const direction = getFlatForwardVector(inputState.yaw);
   sceneState.camera.position.addScaledVector(direction, -event.deltaY * CAMERA.wheelFactor * 0.1);
   sceneState.camera.position.y = clamp(sceneState.camera.position.y, CAMERA.minY, CAMERA.maxY);
 }
@@ -1292,6 +1559,7 @@ function registerInput() {
 function animate() {
   const deltaSeconds = Math.min(0.05, sceneState.clock.getDelta());
   const elapsedSeconds = sceneState.clock.elapsedTime;
+  const now = performance.now();
 
   applyFocusAnimation();
   updateMovement(deltaSeconds);
@@ -1299,6 +1567,10 @@ function animate() {
   updateAnimatedObjects(deltaSeconds, elapsedSeconds);
   updateCameraPanel();
   sendPresence();
+  if (now - state.lastStreamCheckAt > 450) {
+    state.lastStreamCheckAt = now;
+    loadStream().catch((error) => showToast(error.message));
+  }
 
   sceneState.renderer.render(sceneState.scene, sceneState.camera);
   window.requestAnimationFrame(animate);
@@ -1312,6 +1584,9 @@ async function bootstrapWorld() {
   renderSearchResults();
   try {
     await loadMeta(true);
+    positionCameraForWorldMeta();
+    await loadStream(true);
+    frameInitialViewFromStream();
     await loadStream(true);
     setSearchStatus("");
   } catch (error) {
