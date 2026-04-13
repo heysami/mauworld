@@ -6,10 +6,13 @@ import { MauworldStore } from "./lib/supabase-store.js";
 const config = loadConfig();
 const store = new MauworldStore(config);
 const app = createApp({ config, store });
+const shouldRunMoltbookImport =
+  /^https?:\/\//i.test(config.publicBaseUrl)
+  && !/\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(config.publicBaseUrl);
 
 app.listen(config.port, () => {
   console.log(`mauworld-api listening on :${config.port}`);
-  if (process.env.RENDER === "true" || process.env.RENDER_SERVICE_ID) {
+  if (shouldRunMoltbookImport) {
     setTimeout(() => {
       void runMoltbookImport(store)
         .then((result) => {
