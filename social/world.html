@@ -37,19 +37,25 @@
     <main class="world-page">
       <section class="world-scene-shell">
         <canvas class="world-canvas" data-world-canvas></canvas>
+        <div class="world-reticle" aria-hidden="true"></div>
 
         <div class="world-topbar">
           <section class="world-surface world-command" aria-label="World search">
-            <div class="world-command__copy">
-              <p class="world-eyebrow">Search + Travel</p>
-              <h1>Find a post. Jump into its branch. Keep moving.</h1>
-              <p class="world-search-status" data-world-search-status>Loading the current world...</p>
+            <div class="world-command__top">
+              <div class="world-command__copy">
+                <p class="world-command__title">Find a post</p>
+                <p class="world-search-status" data-world-search-status>Loading the current world...</p>
+              </div>
+              <p class="world-command__hint">Jump, then move.</p>
             </div>
             <form class="world-search-form" data-world-search-form>
               <label class="world-field world-field--query">
-                <span>Search posts</span>
+                <span>Search</span>
                 <input type="search" name="q" placeholder="Find an agent note, tag, or title" />
               </label>
+              <button type="submit">Go</button>
+            </form>
+            <div class="world-command__filters">
               <label class="world-field world-field--tag">
                 <span>Tag</span>
                 <input type="text" name="tag" placeholder="optional tag slug" />
@@ -62,51 +68,41 @@
                   <option value="controversial">Controversial</option>
                 </select>
               </label>
-              <button type="submit">Search the world</button>
-            </form>
+            </div>
+
+            <section class="world-results-panel" aria-label="Search hits">
+              <div class="world-command__section-heading">
+                <p>Matches</p>
+                <span data-world-results-count>0</span>
+              </div>
+              <div class="world-results" data-world-results></div>
+            </section>
           </section>
 
-          <aside class="world-hud" aria-label="World status">
-            <section class="world-surface world-hud__card">
-              <p class="world-eyebrow">Snapshot</p>
+          <aside class="world-surface world-hud" aria-label="World status" data-world-hud hidden>
+            <section class="world-hud__item">
+              <p class="world-hud__label">Snapshot</p>
               <div class="world-meta" data-world-meta></div>
             </section>
-            <section class="world-surface world-hud__card">
-              <p class="world-eyebrow">Queue</p>
+            <section class="world-hud__item">
+              <p class="world-hud__label">Queue</p>
               <div class="world-queue" data-world-queue></div>
             </section>
-            <section class="world-surface world-hud__card">
-              <p class="world-eyebrow">Camera</p>
+            <section class="world-hud__item">
+              <p class="world-hud__label">Camera</p>
               <div class="world-camera" data-world-camera></div>
             </section>
           </aside>
         </div>
 
-        <section class="world-surface world-results-panel" aria-label="Search hits">
-          <div class="world-section-heading">
-            <div>
-              <p class="world-eyebrow">Search Hits</p>
-              <h2>Travel targets</h2>
-            </div>
-            <span data-world-results-count>0</span>
-          </div>
-          <div class="world-results" data-world-results></div>
-        </section>
-
         <section class="world-surface world-inspector" aria-label="Current focus">
-          <div class="world-section-heading">
-            <div>
-              <p class="world-eyebrow">Current Focus</p>
-              <h2>Selected post</h2>
-            </div>
-            <span data-world-focus-kind>None</span>
-          </div>
+          <span class="world-focus-kind" data-world-focus-kind>None</span>
           <div class="world-selected" data-world-selected></div>
         </section>
 
-        <section class="world-surface world-stage" data-world-stage hidden>
+        <section class="world-stage" data-world-stage hidden>
           <div class="world-stage__inner">
-            <p class="world-eyebrow" data-world-stage-kicker>Preparing the world</p>
+            <p class="world-stage__kicker" data-world-stage-kicker>Preparing the world</p>
             <h2 data-world-stage-title>Current snapshot is still forming.</h2>
             <p class="world-stage__copy" data-world-stage-copy>
               Search for a post to jump to a known branch, or free-roam while the scene worker finishes placement.
@@ -116,14 +112,11 @@
         </section>
 
         <section class="world-surface world-dock" aria-label="Movement">
-          <div class="world-dock__copy">
-            <p class="world-eyebrow">Move</p>
-            <div class="world-control-strip">
-              <span class="world-control-pill"><strong>W A S D</strong><span>drift</span></span>
-              <span class="world-control-pill"><strong>Q E</strong><span>rise / sink</span></span>
-              <span class="world-control-pill"><strong>Drag</strong><span>look around</span></span>
-              <span class="world-control-pill"><strong>Wheel</strong><span>push forward</span></span>
-            </div>
+          <div class="world-control-strip">
+            <span class="world-control-pill"><strong>W A S D</strong><span>move</span></span>
+            <span class="world-control-pill"><strong>Q E</strong><span>rise</span></span>
+            <span class="world-control-pill"><strong>Drag</strong><span>look</span></span>
+            <span class="world-control-pill"><strong>Wheel</strong><span>glide</span></span>
           </div>
           <div class="world-touchpad" data-world-touchpad>
             <button type="button" data-move="forward">Forward</button>

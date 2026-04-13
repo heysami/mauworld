@@ -1,6 +1,7 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
+const DEBUG_UI = new URLSearchParams(window.location.search).get("debug") === "1";
 
 const elements = {
   canvas: document.querySelector("[data-world-canvas]"),
@@ -24,6 +25,7 @@ const elements = {
   stageMeta: document.querySelector("[data-world-stage-meta]"),
   resultsPanel: document.querySelector(".world-results-panel"),
   inspector: document.querySelector(".world-inspector"),
+  hud: document.querySelector("[data-world-hud]"),
 };
 
 const WORLD_API = {
@@ -54,6 +56,7 @@ const state = {
   loading: true,
   streamLoading: false,
   searchLoading: false,
+  searchSubmitted: false,
   focusAnimation: null,
   lastPresenceAt: 0,
   viewerSessionId: "",
@@ -215,6 +218,32 @@ function setLoading(isLoading) {
   state.loading = isLoading;
   elements.loading.hidden = !isLoading;
   updateStagePanel();
+}
+
+function summarizeBodyMarkdown(markdown, fallback = "", maxLength = 220) {
+  const source = String(markdown ?? "").trim();
+  if (!source) {
+    return truncateText(fallback, maxLength) || "No body text.";
+  }
+  const cleaned = source
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !/^(Source:|Author:|Community:|Imported:|Focus:)/i.test(line))
+    .join(" ")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+    .replace(/[#>*_~-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return truncateText(cleaned || fallback, maxLength) || "No body text.";
+}
+
+function hasSearchIntent() {
+  const formData = new FormData(elements.searchForm);
+  return Boolean(
+    state.searchSubmitted
+    || String(formData.get("q") ?? "").trim()
+    || String(formData.get("tag") ?? "").trim(),
+  );
 }
 
 function createLabelTexture(lines, options = {}) {
@@ -687,6 +716,16 @@ function updateCameraRotation() {
 }
 
 function updateMetaPanel() {
+  if (!elements.meta || !elements.queue) {
+    if (elements.subtitle) {
+      elements.subtitle.textContent = state.meta?.builtAt
+        ? `Snapshot built ${formatRelativeTime(state.meta.builtAt)}`
+        : "Current snapshot is still building.";
+    }
+    updateStagePanel();
+    return;
+  }
+
   if (!state.meta) {
     elements.meta.innerHTML = '<p class="world-empty">No current snapshot available.</p>';
     elements.queue.innerHTML = '<p class="world-empty">No queue data.</p>';
@@ -718,6 +757,9 @@ function updateMetaPanel() {
 }
 
 function updateCameraPanel() {
+  if (!elements.camera) {
+    return;
+  }
   const position = sceneState.camera.position;
   const cellSize = state.meta?.renderer?.lod?.cellSize ?? 64;
   const cellX = Math.floor(position.x / Math.max(1, cellSize));
@@ -760,12 +802,12 @@ function updateStagePanel() {
 
   if (!state.meta) {
     kicker = "Connecting";
-    title = "Pulling the current Mauworld snapshot.";
-    copy = "Loading the world meta, camera rules, and stream window now.";
+    title = "Connecting to the current snapshot.";
+    copy = "Loading the world map, the active cells, and the first set of placements.";
   } else if (state.loading || state.meta.status !== "ready") {
     kicker = "Snapshot building";
-    title = "The world graph is live. The 3D scene is still catching up.";
-    copy = "Posts can already be searchable while their physical placements continue materializing in the active snapshot.";
+    title = "Placements are still streaming in.";
+    copy = "Search is already live. Physical placements continue settling into the active world.";
     meta.push(`Status ${state.meta.status}`);
     meta.push(`${state.meta.queueLag.pendingCount} pending`);
     meta.push(`${Math.max(0, Math.round(state.meta.queueLag.estimatedDelayMs / 1000))}s scene delay`);
@@ -775,8 +817,8 @@ function updateStagePanel() {
     const cellX = Math.floor(position.x / Math.max(1, cellSize));
     const cellZ = Math.floor(position.z / Math.max(1, cellSize));
     kicker = "Quiet cell";
-    title = "This part of the world is empty right now.";
-    copy = "Use search to jump to an active post, or keep moving until another cluster streams into view.";
+    title = "This cell is quiet.";
+    copy = "Search for a post or keep moving until another cluster drifts into range.";
     meta.push(`${counts.presence} live visitors nearby`);
     meta.push(`Camera cell ${cellX}, ${cellZ}`);
   }
@@ -792,20 +834,15 @@ function renderSelected(result) {
   if (!result) {
     elements.inspector?.classList.add("is-empty");
     elements.focusKind.textContent = "None";
-    elements.selected.innerHTML = `
-      <p class="world-empty">Search above or click a visible post in space. The selected card will open here with its title, tags, image, and queue state.</p>
-      <div class="world-selected__meta">
-        <span class="world-chip">Search to travel</span>
-        <span class="world-chip">Click to inspect</span>
-        <span class="world-chip">Free-roam always on</span>
-      </div>
-    `;
+    elements.selected.innerHTML = "";
     return;
   }
 
   elements.inspector?.classList.remove("is-empty");
   const post = result.post ?? {};
   const media = post.media?.[0];
+  const bodySummary = summarizeBodyMarkdown(post.body_md, post.body_plain, 260);
+  const tagSummary = post.tags?.slice(0, 5).map((tag) => `#${tag.label}`).join(" ") || "No visible tags";
   elements.focusKind.textContent = result.destination ? "Post" : "Queued";
   elements.selected.innerHTML = `
     <div class="world-selected__meta">
@@ -813,11 +850,15 @@ function renderSelected(result) {
       <span class="world-chip ${result.worldQueueStatus === "ready" ? "world-chip--ready" : "world-chip--queue"}">${htmlEscape(formatQueueLabel(result.worldQueueStatus))}</span>
       <span class="world-chip">${htmlEscape(post.pillar?.title || "Unassigned pillar")}</span>
     </div>
-    <div class="world-selected__title">${htmlEscape(post.title || truncateText(post.body_plain || "Post", 80))}</div>
-    <p class="world-selected__body">${htmlEscape(truncateText(post.body_plain || "", 240) || "No body text.")}</p>
-    ${media ? `<img class="world-selected__media" src="${htmlEscape(media.url)}" alt="${htmlEscape(media.alt_text || post.title || "Post image")}" />` : ""}
+    <div class="world-selected__layout ${media ? "" : "is-single"}">
+      <div class="world-selected__copy">
+        <div class="world-selected__title">${htmlEscape(post.title || truncateText(post.body_plain || "Post", 80))}</div>
+        <p class="world-selected__body">${htmlEscape(bodySummary)}</p>
+      </div>
+      ${media ? `<img class="world-selected__media" src="${htmlEscape(media.url)}" alt="${htmlEscape(media.alt_text || post.title || "Post image")}" />` : ""}
+    </div>
     <div class="world-selected__meta">
-      <span>${htmlEscape(post.tags?.slice(0, 4).map((tag) => `#${tag.label}`).join(" ") || "No visible tags")}</span>
+      <span>${htmlEscape(tagSummary)}</span>
       <span>${htmlEscape(post.created_at ? formatRelativeTime(post.created_at) : "now")}</span>
     </div>
   `;
@@ -864,8 +905,13 @@ function renderSearchResults() {
   const hits = state.searchPayload?.hits ?? [];
   elements.resultsCount.textContent = String(hits.length);
   if (hits.length === 0) {
-    elements.resultsPanel?.classList.add("is-empty");
-    elements.results.innerHTML = '<p class="world-empty">Run a search to populate travel targets here. Clicking a hit moves the camera to that post branch.</p>';
+    if (!hasSearchIntent()) {
+      elements.resultsPanel?.classList.add("is-empty");
+      elements.results.innerHTML = "";
+      return;
+    }
+    elements.resultsPanel?.classList.remove("is-empty");
+    elements.results.innerHTML = '<p class="world-empty">No routes match this search in the current snapshot.</p>';
     return;
   }
 
@@ -882,7 +928,7 @@ function renderSearchResults() {
           </div>
           <div class="world-result__title">${htmlEscape(post.title || truncateText(post.body_plain || "Post", 90))}</div>
           <div class="world-result__meta">
-            <span>${htmlEscape(post.pillar?.title || "No pillar yet")}</span>
+            <span>${htmlEscape(post.tags?.slice(0, 2).map((tag) => `#${tag.label}`).join(" ") || post.pillar?.title || "No tag context")}</span>
             <span>${htmlEscape(post.created_at ? formatRelativeTime(post.created_at) : "now")}</span>
           </div>
         </button>
@@ -958,6 +1004,7 @@ async function runSearch() {
     return;
   }
   state.searchLoading = true;
+  state.searchSubmitted = true;
   setSearchStatus("Searching the current world...");
   try {
     const formData = new FormData(elements.searchForm);
@@ -973,7 +1020,7 @@ async function runSearch() {
       renderSelected(payload.hits[0]);
     }
     renderSearchResults();
-    setSearchStatus(`Loaded ${payload.hits.length} world hits.`);
+    setSearchStatus(payload.hits.length > 0 ? `${payload.hits.length} routes ready.` : "No routes in the current snapshot.");
   } catch (error) {
     state.searchPayload = { hits: [] };
     renderSearchResults();
@@ -1264,13 +1311,17 @@ function animate() {
 
 async function bootstrapWorld() {
   state.viewerSessionId = createViewerSessionId();
+  if (elements.hud) {
+    elements.hud.hidden = !DEBUG_UI;
+  }
   initScene();
   registerInput();
   renderSelected(null);
+  renderSearchResults();
   try {
     await loadMeta(true);
     await loadStream(true);
-    await runSearch();
+    setSearchStatus("Search a title, tag, or excerpt. Move freely when you want to scout instead.");
   } catch (error) {
     setLoading(false);
     setSearchStatus(error.message);
