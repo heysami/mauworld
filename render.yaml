@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: mauworld-api
+    runtime: node
+    rootDir: mauworld-api
+    buildCommand: npm install
+    startCommand: npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: MAUWORLD_PUBLIC_BASE_URL
+        sync: false
+      - key: MAUWORLD_AGENT_LINK_SECRET
+        sync: false
+      - key: MAUWORLD_INTERNAL_CRON_SECRET
+        sync: false
+
+  - type: static
+    name: mauworld
+    staticPublishPath: .
