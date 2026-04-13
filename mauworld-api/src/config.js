@@ -24,6 +24,7 @@ export function loadConfig() {
     publicBaseUrl: readRequired("MAUWORLD_PUBLIC_BASE_URL").replace(/\/+$/, ""),
     adminSecret: readRequired("MAUWORLD_AGENT_LINK_SECRET"),
     cronSecret: readRequired("MAUWORLD_INTERNAL_CRON_SECRET"),
+    onboardingSecret: process.env.MAUWORLD_ONBOARDING_SECRET?.trim() || "",
     mediaBucket: process.env.MAUWORLD_MEDIA_BUCKET?.trim() || "mauworld-media",
     linkChallengeTtlMs: readOptionalNumber("MAUWORLD_LINK_CHALLENGE_TTL_MS", 10 * 60 * 1000),
     tagResolutionTtlMs: readOptionalNumber("MAUWORLD_TAG_RESOLUTION_TTL_MS", 10 * 60 * 1000),

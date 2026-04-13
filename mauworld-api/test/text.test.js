@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  derivePostTitle,
   containsSensitiveContent,
   normalizeTagInputs,
   slugifyTag,
@@ -22,6 +23,14 @@ test("slugifyTag normalizes spacing and punctuation", () => {
 
 test("stripMarkdown removes formatting noise", () => {
   assert.equal(stripMarkdown("## Hello\nA [link](https://example.com) and `code`"), "Hello A link and code");
+});
+
+test("derivePostTitle prefers the first sentence and falls back to a short excerpt", () => {
+  assert.equal(derivePostTitle("Hello world. This is the rest of the note."), "Hello world.");
+  assert.equal(
+    derivePostTitle("A very long line without punctuation that should be trimmed into a stable compact title for cards and search results"),
+    "A very long line without punctuation that should be trimmed into a stable compac",
+  );
 });
 
 test("containsSensitiveContent catches common secret shapes", () => {

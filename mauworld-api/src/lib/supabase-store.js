@@ -11,6 +11,7 @@ import {
 import {
   assertSafePublicText,
   buildSearchText,
+  derivePostTitle,
   derivePostKind,
   normalizeTagInputs,
   slugifyTag,
@@ -18,6 +19,16 @@ import {
   summarizeMatch,
 } from "./text.js";
 import { computePillarGraph } from "./pillar-graph.js";
+import { listAllowedPostEmotionSlugs, normalizePostEmotionInputs } from "./emotions.js";
+import {
+  computeHeadingToPillar,
+  computeTagAnchorPosition,
+  computeTagPostInstancesForLayout,
+  computeWorldLayout,
+} from "./world-layout.js";
+
+const CURRENT_ORGANIZATION_SLOT = "current";
+const NEXT_ORGANIZATION_SLOT = "next";
 
 function nowIso() {
   return new Date().toISOString();
@@ -37,6 +48,14 @@ function clampLimit(value, fallback = 20, max = 100) {
 
 function isExpired(timestamp) {
   return !timestamp || new Date(timestamp).getTime() <= Date.now();
+}
+
+function isPromotionDue(version, intervalHours) {
+  const clampedHours = Math.max(1, Math.min(24 * 30, Math.floor(Number(intervalHours) || 24)));
+  if (!version?.promoted_at) {
+    return true;
+  }
+  return new Date(version.promoted_at).getTime() + clampedHours * 60 * 60 * 1000 <= Date.now();
 }
 
 function resolveSort(sort) {
@@ -95,6 +114,58 @@ async function maybeSingle(dataPromise, message) {
   return data ?? null;
 }
 
+function dedupeStringList(values) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function clampInteger(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(numeric)));
+}
+
+function resolveWorldEventPriority(eventType) {
+  if (eventType === "snapshot_promoted") {
+    return 200;
+  }
+  if (eventType === "post_created") {
+    return 120;
+  }
+  if (eventType === "post_metrics_changed") {
+    return 90;
+  }
+  return 80;
+}
+
+function estimateWorldSceneDelayMs(pendingCount, batchSize) {
+  const batches = Math.max(1, Math.ceil(Math.max(0, pendingCount) / Math.max(1, batchSize)));
+  return batches * 5000;
+}
+
+function buildWorldRendererConfig(settings) {
+  return {
+    snow: {
+      enabled: true,
+      density: 0.42,
+      drift: 0.7,
+      speed: 0.9,
+    },
+    fog: {
+      enabled: true,
+      lodNearDistance: settings.world_lod_near_distance,
+      billboardDistance: settings.world_billboard_distance,
+      farDistance: Math.round(settings.world_billboard_distance * 1.6),
+    },
+    lod: {
+      cellSize: settings.world_cell_size,
+      visiblePostsPerTag: settings.world_visible_posts_per_tag,
+      levelsPerPillar: settings.world_levels_per_pillar,
+    },
+  };
+}
+
 export class MauworldStore {
   constructor(config) {
     this.config = config;
@@ -137,10 +208,42 @@ export class MauworldStore {
     const next = {
       pillar_core_size:
         typeof input.pillar_core_size === "number" ? Math.max(1, Math.min(100, Math.floor(input.pillar_core_size))) : current.pillar_core_size,
+      pillar_promotion_interval_hours:
+        typeof input.pillar_promotion_interval_hours === "number"
+          ? Math.max(1, Math.min(24 * 30, Math.floor(input.pillar_promotion_interval_hours)))
+          : current.pillar_promotion_interval_hours,
       related_similarity_threshold:
         typeof input.related_similarity_threshold === "number"
           ? Math.max(0.01, Math.min(0.95, input.related_similarity_threshold))
           : current.related_similarity_threshold,
+      world_visible_posts_per_tag:
+        typeof input.world_visible_posts_per_tag === "number"
+          ? Math.max(1, Math.min(200, Math.floor(input.world_visible_posts_per_tag)))
+          : current.world_visible_posts_per_tag,
+      world_levels_per_pillar:
+        typeof input.world_levels_per_pillar === "number"
+          ? Math.max(1, Math.min(12, Math.floor(input.world_levels_per_pillar)))
+          : current.world_levels_per_pillar,
+      world_queue_batch_size:
+        typeof input.world_queue_batch_size === "number"
+          ? Math.max(1, Math.min(1000, Math.floor(input.world_queue_batch_size)))
+          : current.world_queue_batch_size,
+      world_presence_ttl_seconds:
+        typeof input.world_presence_ttl_seconds === "number"
+          ? Math.max(5, Math.min(3600, Math.floor(input.world_presence_ttl_seconds)))
+          : current.world_presence_ttl_seconds,
+      world_cell_size:
+        typeof input.world_cell_size === "number"
+          ? Math.max(16, Math.min(1024, Math.floor(input.world_cell_size)))
+          : current.world_cell_size,
+      world_lod_near_distance:
+        typeof input.world_lod_near_distance === "number"
+          ? Math.max(16, Math.min(4096, Math.floor(input.world_lod_near_distance)))
+          : current.world_lod_near_distance,
+      world_billboard_distance:
+        typeof input.world_billboard_distance === "number"
+          ? Math.max(16, Math.min(8192, Math.floor(input.world_billboard_distance)))
+          : current.world_billboard_distance,
       updated_at: nowIso(),
     };
     const updated = await must(
@@ -148,6 +251,843 @@ export class MauworldStore {
       "Could not update app settings",
     );
     return updated;
+  }
+
+  async ensureOrganizationVersions() {
+    const existing = await must(
+      this.serviceClient.from("organization_versions").select("*"),
+      "Could not load organization versions",
+    );
+    const bySlot = new Map(existing.map((row) => [row.slot, row]));
+
+    const missingRows = [];
+    if (!bySlot.has(CURRENT_ORGANIZATION_SLOT)) {
+      missingRows.push({
+        slot: CURRENT_ORGANIZATION_SLOT,
+        snapshot_at: nowIso(),
+        promoted_at: nowIso(),
+      });
+    }
+    if (!bySlot.has(NEXT_ORGANIZATION_SLOT)) {
+      missingRows.push({
+        slot: NEXT_ORGANIZATION_SLOT,
+        snapshot_at: nowIso(),
+      });
+    }
+
+    if (missingRows.length > 0) {
+      const inserted = await must(
+        this.serviceClient.from("organization_versions").insert(missingRows).select("*"),
+        "Could not initialize organization versions",
+      );
+      for (const row of inserted) {
+        bySlot.set(row.slot, row);
+      }
+    }
+
+    return {
+      current: bySlot.get(CURRENT_ORGANIZATION_SLOT),
+      next: bySlot.get(NEXT_ORGANIZATION_SLOT),
+    };
+  }
+
+  async getOrganizationSummary() {
+    const versions = await this.ensureOrganizationVersions();
+    return {
+      current: versions.current ?? null,
+      next: versions.next ?? null,
+    };
+  }
+
+  async ensureWorldSnapshotsForVersions(versions) {
+    const versionIds = dedupeStringList([versions.current?.id, versions.next?.id]);
+    if (versionIds.length === 0) {
+      return new Map();
+    }
+    const existing = await must(
+      this.serviceClient.from("world_snapshots").select("*").in("organization_version_id", versionIds),
+      "Could not load world snapshots",
+    );
+    const byVersionId = new Map(existing.map((row) => [row.organization_version_id, row]));
+    const missingRows = versionIds
+      .filter((versionId) => !byVersionId.has(versionId))
+      .map((organization_version_id) => ({
+        organization_version_id,
+        status: "building",
+      }));
+    if (missingRows.length > 0) {
+      const inserted = await must(
+        this.serviceClient.from("world_snapshots").insert(missingRows).select("*"),
+        "Could not initialize world snapshots",
+      );
+      for (const row of inserted) {
+        byVersionId.set(row.organization_version_id, row);
+      }
+    }
+    return byVersionId;
+  }
+
+  async getWorldSnapshotForVersion(versionId) {
+    if (!versionId) {
+      return null;
+    }
+    return await maybeSingle(
+      this.serviceClient
+        .from("world_snapshots")
+        .select("*")
+        .eq("organization_version_id", versionId)
+        .maybeSingle(),
+      "Could not load world snapshot",
+    );
+  }
+
+  async getWorldSummary() {
+    const organization = await this.getOrganizationSummary();
+    const snapshots = await this.ensureWorldSnapshotsForVersions(organization);
+    return {
+      current: organization.current ? snapshots.get(organization.current.id) ?? null : null,
+      next: organization.next ? snapshots.get(organization.next.id) ?? null : null,
+    };
+  }
+
+  async ensureCurrentWorldContext() {
+    const [settings, organization, worldSummary] = await Promise.all([
+      this.getSettings(),
+      this.getOrganizationSummary(),
+      this.getWorldSummary(),
+    ]);
+    if (!organization.current) {
+      throw new HttpError(404, "Current organization version not found");
+    }
+    const worldSnapshot = worldSummary.current;
+    if (!worldSnapshot) {
+      throw new HttpError(404, "Current world snapshot not found");
+    }
+    return {
+      settings,
+      organization,
+      worldSummary,
+      currentVersion: organization.current,
+      worldSnapshot,
+    };
+  }
+
+  async refreshPostSearchDocument(postId) {
+    if (!postId) {
+      return;
+    }
+    const { error } = await this.serviceClient.rpc("refresh_post_search_document", {
+      target_post_id: postId,
+    });
+    if (error) {
+      throw new HttpError(500, "Could not refresh post search document", error.message);
+    }
+  }
+
+  async markWorldSnapshotFailed(worldSnapshotId, errorMessage) {
+    if (!worldSnapshotId) {
+      return;
+    }
+    await must(
+      this.serviceClient
+        .from("world_snapshots")
+        .update({
+          status: "failed",
+          metrics: {
+            error: errorMessage,
+          },
+        })
+        .eq("id", worldSnapshotId),
+      "Could not mark world snapshot as failed",
+    );
+  }
+
+  async refreshWorldSnapshotMetadata(worldSnapshotId) {
+    const [pillarLayouts, tagLayouts, postInstances] = await Promise.all([
+      must(
+        this.serviceClient
+          .from("world_pillar_layouts")
+          .select("pillar_id, position_x, position_y, position_z")
+          .eq("world_snapshot_id", worldSnapshotId),
+        "Could not load world pillar layouts for metadata refresh",
+      ),
+      must(
+        this.serviceClient
+          .from("world_tag_layouts")
+          .select("pillar_id, orbit_angle, orbit_radius, y_offset")
+          .eq("world_snapshot_id", worldSnapshotId),
+        "Could not load world tag layouts for metadata refresh",
+      ),
+      must(
+        this.serviceClient
+          .from("world_post_instances")
+          .select("position_x, position_z, display_tier")
+          .eq("world_snapshot_id", worldSnapshotId),
+        "Could not load world post instances for metadata refresh",
+      ),
+    ]);
+    const pillarLayoutById = new Map(pillarLayouts.map((row) => [row.pillar_id, row]));
+    const points = [];
+    points.push(...pillarLayouts.map((row) => ({ x: row.position_x, z: row.position_z })));
+    for (const tagLayout of tagLayouts) {
+      const pillarLayout = pillarLayoutById.get(tagLayout.pillar_id);
+      if (!pillarLayout) {
+        continue;
+      }
+      const anchor = computeTagAnchorPosition(pillarLayout, tagLayout);
+      points.push({ x: anchor.x, z: anchor.z });
+    }
+    points.push(...postInstances.map((row) => ({ x: row.position_x, z: row.position_z })));
+    const bounds =
+      points.length === 0
+        ? {
+            minX: 0,
+            maxX: 0,
+            minZ: 0,
+            maxZ: 0,
+          }
+        : points.reduce(
+            (accumulator, point) => ({
+              minX: Math.min(accumulator.minX, point.x),
+              maxX: Math.max(accumulator.maxX, point.x),
+              minZ: Math.min(accumulator.minZ, point.z),
+              maxZ: Math.max(accumulator.maxZ, point.z),
+            }),
+            {
+              minX: points[0].x,
+              maxX: points[0].x,
+              minZ: points[0].z,
+              maxZ: points[0].z,
+            },
+          );
+
+    const metrics = {
+      pillarCount: pillarLayouts.length,
+      tagCount: tagLayouts.length,
+      postInstanceCount: postInstances.length,
+      visiblePostInstanceCount: postInstances.filter((row) => row.display_tier !== "hidden").length,
+    };
+
+    await must(
+      this.serviceClient
+        .from("world_snapshots")
+        .update({
+          bounds_x_min: Number(bounds.minX.toFixed(4)),
+          bounds_x_max: Number(bounds.maxX.toFixed(4)),
+          bounds_z_min: Number(bounds.minZ.toFixed(4)),
+          bounds_z_max: Number(bounds.maxZ.toFixed(4)),
+          metrics,
+          built_at: nowIso(),
+          status: "ready",
+        })
+        .eq("id", worldSnapshotId),
+      "Could not update world snapshot metadata",
+    );
+  }
+
+  async rebuildWorldSnapshotForVersion({ version, settings }) {
+    const worldSnapshots = await this.ensureWorldSnapshotsForVersions({ current: version, next: null });
+    const worldSnapshot = worldSnapshots.get(version.id);
+    const searchableStates = ["active", "flagged"];
+
+    await must(
+      this.serviceClient
+        .from("world_snapshots")
+        .update({
+          status: "building",
+        })
+        .eq("id", worldSnapshot.id),
+      "Could not mark world snapshot as building",
+    );
+
+    try {
+      const pillars = await must(
+        this.serviceClient
+          .from("pillars")
+          .select("*")
+          .eq("organization_version_id", version.id)
+          .eq("active", true)
+          .order("tag_count", { ascending: false }),
+        "Could not load version pillars for world snapshot rebuild",
+      );
+      const pillarIds = pillars.map((row) => row.id);
+      const [pillarTags, posts] = await Promise.all([
+        pillarIds.length > 0
+          ? must(
+              this.serviceClient.from("pillar_tags").select("*").in("pillar_id", pillarIds),
+              "Could not load pillar tags for world snapshot rebuild",
+            )
+          : [],
+        must(
+          this.serviceClient
+            .from("posts")
+            .select("id, title, body_plain, created_at, state, score, comment_count, primary_tag_id")
+            .in("state", searchableStates),
+          "Could not load posts for world snapshot rebuild",
+        ),
+      ]);
+      const postIds = posts.map((row) => row.id);
+      const postTags =
+        postIds.length > 0
+          ? await must(
+              this.serviceClient.from("post_tags").select("*").in("post_id", postIds),
+              "Could not load post tags for world snapshot rebuild",
+            )
+          : [];
+
+      const layout = computeWorldLayout({
+        worldSnapshotId: worldSnapshot.id,
+        pillars,
+        pillarTags,
+        posts,
+        postTags,
+        settings,
+        referenceTime: new Date(),
+      });
+
+      await Promise.all([
+        must(
+          this.serviceClient.from("world_post_instances").delete().eq("world_snapshot_id", worldSnapshot.id),
+          "Could not clear world post instances",
+        ),
+        must(
+          this.serviceClient.from("live_presence_sessions").delete().eq("world_snapshot_id", worldSnapshot.id).lt("expires_at", nowIso()),
+          "Could not clear expired live presence sessions",
+        ),
+      ]);
+      await Promise.all([
+        must(
+          this.serviceClient.from("world_tag_layouts").delete().eq("world_snapshot_id", worldSnapshot.id),
+          "Could not clear world tag layouts",
+        ),
+        must(
+          this.serviceClient.from("world_pillar_layouts").delete().eq("world_snapshot_id", worldSnapshot.id),
+          "Could not clear world pillar layouts",
+        ),
+      ]);
+
+      if (layout.pillarLayouts.length > 0) {
+        await must(
+          this.serviceClient.from("world_pillar_layouts").insert(layout.pillarLayouts),
+          "Could not insert world pillar layouts",
+        );
+      }
+      if (layout.tagLayouts.length > 0) {
+        await must(
+          this.serviceClient.from("world_tag_layouts").insert(layout.tagLayouts),
+          "Could not insert world tag layouts",
+        );
+      }
+      if (layout.postInstances.length > 0) {
+        await must(
+          this.serviceClient.from("world_post_instances").insert(layout.postInstances),
+          "Could not insert world post instances",
+        );
+      }
+
+      const updated = await must(
+        this.serviceClient
+          .from("world_snapshots")
+          .update({
+            status: "ready",
+            bounds_x_min: layout.bounds.minX,
+            bounds_x_max: layout.bounds.maxX,
+            bounds_z_min: layout.bounds.minZ,
+            bounds_z_max: layout.bounds.maxZ,
+            built_at: nowIso(),
+            metrics: layout.metrics,
+          })
+          .eq("id", worldSnapshot.id)
+          .select("*")
+          .single(),
+        "Could not persist world snapshot metadata",
+      );
+
+      return {
+        worldSnapshot: updated,
+        layout,
+      };
+    } catch (error) {
+      await this.markWorldSnapshotFailed(worldSnapshot.id, error.message);
+      throw error;
+    }
+  }
+
+  async enqueueWorldIngestEvent({ eventType, postId = null, worldSnapshotId = null, payload = {} }) {
+    if (!worldSnapshotId) {
+      return {
+        event: null,
+        queue: {
+          pendingCount: 0,
+          processingCount: 0,
+          estimatedDelayMs: 0,
+        },
+      };
+    }
+
+    const event = await must(
+      this.serviceClient
+        .from("world_ingest_events")
+        .insert({
+          event_type: eventType,
+          post_id: postId,
+          world_snapshot_id: worldSnapshotId,
+          status: "queued",
+          priority: resolveWorldEventPriority(eventType),
+          available_at: nowIso(),
+          payload,
+        })
+        .select("*")
+        .single(),
+      "Could not enqueue world ingest event",
+    );
+    const queue = await this.getWorldQueueLag(worldSnapshotId);
+    return {
+      event,
+      queue,
+    };
+  }
+
+  async getWorldQueueLag(worldSnapshotId = undefined, settings = undefined) {
+    const effectiveSettings = settings ?? await this.getSettings();
+    const baseQuery = this.serviceClient
+      .from("world_ingest_events")
+      .select("id", { count: "exact", head: true })
+      .in("status", ["queued", "processing"]);
+    const processingQuery = this.serviceClient
+      .from("world_ingest_events")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "processing");
+
+    const scopedBaseQuery = worldSnapshotId ? baseQuery.eq("world_snapshot_id", worldSnapshotId) : baseQuery;
+    const scopedProcessingQuery = worldSnapshotId ? processingQuery.eq("world_snapshot_id", worldSnapshotId) : processingQuery;
+    const [pendingCount, processingCount] = await Promise.all([
+      countRows(scopedBaseQuery, "Could not count world ingest events"),
+      countRows(scopedProcessingQuery, "Could not count processing world ingest events"),
+    ]);
+
+    return {
+      pendingCount,
+      processingCount,
+      estimatedDelayMs: estimateWorldSceneDelayMs(pendingCount, effectiveSettings.world_queue_batch_size),
+    };
+  }
+
+  async refreshWorldTagInstances(worldSnapshotId, tagIds, settings) {
+    const scopedTagIds = dedupeStringList(tagIds);
+    if (scopedTagIds.length === 0) {
+      return {
+        tagCount: 0,
+        instanceCount: 0,
+      };
+    }
+
+    const tagLayouts = await must(
+      this.serviceClient
+        .from("world_tag_layouts")
+        .select("*")
+        .eq("world_snapshot_id", worldSnapshotId)
+        .in("tag_id", scopedTagIds),
+      "Could not load world tag layouts for refresh",
+    );
+    if (tagLayouts.length === 0) {
+      return {
+        tagCount: 0,
+        instanceCount: 0,
+      };
+    }
+
+    const pillarIds = dedupeStringList(tagLayouts.map((row) => row.pillar_id));
+    const [pillarLayouts, postTags] = await Promise.all([
+      pillarIds.length > 0
+        ? must(
+            this.serviceClient
+              .from("world_pillar_layouts")
+              .select("*")
+              .eq("world_snapshot_id", worldSnapshotId)
+              .in("pillar_id", pillarIds),
+            "Could not load world pillar layouts for refresh",
+          )
+        : [],
+      must(
+        this.serviceClient.from("post_tags").select("*").in("tag_id", scopedTagIds),
+        "Could not load post tags for world tag refresh",
+      ),
+    ]);
+    const postIds = dedupeStringList(postTags.map((row) => row.post_id));
+    const posts =
+      postIds.length > 0
+        ? await must(
+            this.serviceClient
+              .from("posts")
+              .select("id, title, body_plain, created_at, state, score, comment_count, primary_tag_id")
+              .in("id", postIds),
+            "Could not load posts for world tag refresh",
+          )
+        : [];
+
+    const searchablePosts = posts.filter((post) => ["active", "flagged"].includes(post.state));
+    const searchablePostIds = new Set(searchablePosts.map((post) => post.id));
+    const filteredPostTags = postTags.filter((row) => searchablePostIds.has(row.post_id));
+    const postTagsByTagId = filteredPostTags.reduce((map, row) => {
+      if (!map.has(row.tag_id)) {
+        map.set(row.tag_id, []);
+      }
+      map.get(row.tag_id).push(row);
+      return map;
+    }, new Map());
+    const postTagsByPostId = filteredPostTags.reduce((map, row) => {
+      if (!map.has(row.post_id)) {
+        map.set(row.post_id, []);
+      }
+      map.get(row.post_id).push(row);
+      return map;
+    }, new Map());
+    for (const rows of postTagsByTagId.values()) {
+      rows.sort((left, right) => (left.ordinal ?? 0) - (right.ordinal ?? 0) || String(left.tag_id).localeCompare(String(right.tag_id)));
+    }
+    for (const rows of postTagsByPostId.values()) {
+      rows.sort((left, right) => (left.ordinal ?? 0) - (right.ordinal ?? 0) || String(left.tag_id).localeCompare(String(right.tag_id)));
+    }
+
+    const postById = new Map(searchablePosts.map((post) => [post.id, post]));
+    const pillarLayoutById = new Map(pillarLayouts.map((row) => [row.pillar_id, row]));
+    const canonicalTagByPostId = new Map(
+      searchablePosts
+        .map((post) => {
+          const rows = postTagsByPostId.get(post.id) ?? [];
+          const canonicalRow = rows.find((row) => row.tag_id === post.primary_tag_id) ?? rows[0] ?? null;
+          return canonicalRow ? [post.id, canonicalRow.tag_id] : null;
+        })
+        .filter(Boolean),
+    );
+
+    const nextTagLayouts = [];
+    const nextInstances = [];
+    for (const tagLayout of tagLayouts) {
+      const pillarLayout = pillarLayoutById.get(tagLayout.pillar_id);
+      if (!pillarLayout) {
+        continue;
+      }
+      const rows = postTagsByTagId.get(tagLayout.tag_id) ?? [];
+      const tagPosts = rows.map((row) => postById.get(row.post_id)).filter(Boolean);
+      const instances = computeTagPostInstancesForLayout({
+        worldSnapshotId,
+        tagLayout,
+        pillarLayout,
+        posts: tagPosts,
+        settings,
+        canonicalTagByPostId,
+        referenceTime: new Date(),
+      });
+      nextTagLayouts.push({
+        ...tagLayout,
+        active_post_count: instances.length,
+        visible_post_count: instances.filter((row) => row.display_tier !== "hidden").length,
+      });
+      nextInstances.push(...instances);
+    }
+
+    await must(
+      this.serviceClient
+        .from("world_post_instances")
+        .delete()
+        .eq("world_snapshot_id", worldSnapshotId)
+        .in("tag_id", scopedTagIds),
+      "Could not clear world post instances for tag refresh",
+    );
+
+    if (nextInstances.length > 0) {
+      await must(
+        this.serviceClient.from("world_post_instances").insert(nextInstances),
+        "Could not insert world post instances for tag refresh",
+      );
+    }
+    if (nextTagLayouts.length > 0) {
+      await must(
+        this.serviceClient.from("world_tag_layouts").upsert(nextTagLayouts, {
+          onConflict: "world_snapshot_id,pillar_id,tag_id",
+        }),
+        "Could not update world tag layouts for refresh",
+      );
+    }
+    await this.refreshWorldSnapshotMetadata(worldSnapshotId);
+
+    return {
+      tagCount: nextTagLayouts.length,
+      instanceCount: nextInstances.length,
+    };
+  }
+
+  async processWorldIngestQueue(limit = undefined) {
+    const { settings, worldSnapshot } = await this.ensureCurrentWorldContext();
+    const batchSize = clampInteger(limit, settings.world_queue_batch_size, 1, 1000);
+    const events = await must(
+      this.serviceClient
+        .from("world_ingest_events")
+        .select("*")
+        .eq("world_snapshot_id", worldSnapshot.id)
+        .eq("status", "queued")
+        .lte("available_at", nowIso())
+        .order("priority", { ascending: false })
+        .order("created_at", { ascending: true })
+        .limit(batchSize),
+      "Could not load queued world ingest events",
+    );
+
+    if (events.length === 0) {
+      return {
+        processedCount: 0,
+        refreshedTagCount: 0,
+        queue: await this.getWorldQueueLag(worldSnapshot.id, settings),
+      };
+    }
+
+    const eventIds = events.map((row) => row.id);
+    await must(
+      this.serviceClient
+        .from("world_ingest_events")
+        .update({
+          status: "processing",
+          claimed_at: nowIso(),
+          error: null,
+        })
+        .in("id", eventIds),
+      "Could not claim world ingest events",
+    );
+
+    try {
+      const postIds = dedupeStringList(events.map((row) => row.post_id));
+      let refreshedTagCount = 0;
+      if (postIds.length > 0) {
+        const postTags = await must(
+          this.serviceClient.from("post_tags").select("tag_id").in("post_id", postIds),
+          "Could not load tags for queued world ingest events",
+        );
+        const tagIds = dedupeStringList(postTags.map((row) => row.tag_id));
+        const refreshResult = await this.refreshWorldTagInstances(worldSnapshot.id, tagIds, settings);
+        refreshedTagCount = refreshResult.tagCount;
+      } else {
+        await this.refreshWorldSnapshotMetadata(worldSnapshot.id);
+      }
+
+      await must(
+        this.serviceClient
+          .from("world_ingest_events")
+          .update({
+            status: "processed",
+            processed_at: nowIso(),
+            error: null,
+          })
+          .in("id", eventIds),
+        "Could not mark world ingest events as processed",
+      );
+
+      return {
+        processedCount: events.length,
+        refreshedTagCount,
+        queue: await this.getWorldQueueLag(worldSnapshot.id, settings),
+      };
+    } catch (error) {
+      await must(
+        this.serviceClient
+          .from("world_ingest_events")
+          .update({
+            status: "failed",
+            error: error.message,
+          })
+          .in("id", eventIds),
+        "Could not mark world ingest events as failed",
+      );
+      throw error;
+    }
+  }
+
+  async loadPillarsForVersion(versionId) {
+    return await must(
+      this.serviceClient.from("pillars").select("*").eq("organization_version_id", versionId),
+      "Could not load version pillars",
+    );
+  }
+
+  async persistGraphToVersion({ version, existingPillars, graph, snapshotAt, promotedAt = undefined }) {
+    const existingPillarIds = existingPillars.map((pillar) => pillar.id);
+
+    if (graph.pillars.length === 0) {
+      if (existingPillarIds.length > 0) {
+        await Promise.all([
+          must(
+            this.serviceClient.from("pillar_tags").delete().in("pillar_id", existingPillarIds),
+            "Could not clear pillar tag rows",
+          ),
+          must(
+            this.serviceClient.from("pillar_related").delete().in("pillar_id", existingPillarIds),
+            "Could not clear pillar relation rows",
+          ),
+          must(
+            this.serviceClient.from("pillars").update({ active: false, updated_at: nowIso() }).in("id", existingPillarIds),
+            "Could not deactivate empty version pillars",
+          ),
+        ]);
+      }
+
+      const versionUpdate = {
+        snapshot_at: snapshotAt,
+        updated_at: nowIso(),
+      };
+      if (promotedAt !== undefined) {
+        versionUpdate.promoted_at = promotedAt;
+      }
+      const updatedVersion = await must(
+        this.serviceClient.from("organization_versions").update(versionUpdate).eq("id", version.id).select("*").single(),
+        "Could not update organization version metadata",
+      );
+
+      return {
+        version: updatedVersion,
+        pillars: [],
+        graph,
+        placeholderToPersistedId: new Map(),
+      };
+    }
+
+    const upsertedPillars = [];
+    const placeholderToPersistedId = new Map();
+    for (const pillar of graph.pillars) {
+      const row = await must(
+        this.serviceClient
+          .from("pillars")
+          .upsert(
+            {
+              id: typeof pillar.id === "string" && pillar.id.startsWith("generated-") ? undefined : pillar.id,
+              organization_version_id: version.id,
+              component_key: pillar.component_key,
+              slug: pillar.slug,
+              title: pillar.title,
+              core_size: pillar.core_size,
+              tag_count: pillar.tag_count,
+              edge_count: pillar.edge_count,
+              active: true,
+              updated_at: nowIso(),
+            },
+            { onConflict: "organization_version_id,component_key" },
+          )
+          .select("*")
+          .single(),
+        "Could not upsert pillar",
+      );
+      upsertedPillars.push(row);
+      placeholderToPersistedId.set(pillar.id, row.id);
+    }
+
+    const activeIds = upsertedPillars.map((pillar) => pillar.id);
+    const staleIds = existingPillars
+      .filter((pillar) => !activeIds.includes(pillar.id))
+      .map((pillar) => pillar.id);
+    if (staleIds.length > 0) {
+      await must(
+        this.serviceClient.from("pillars").update({ active: false, updated_at: nowIso() }).in("id", staleIds),
+        "Could not deactivate stale pillars",
+      );
+    }
+
+    const versionPillarIds = dedupeStringList([...existingPillarIds, ...activeIds]);
+    if (versionPillarIds.length > 0) {
+      await Promise.all([
+        must(
+          this.serviceClient.from("pillar_tags").delete().in("pillar_id", versionPillarIds),
+          "Could not clear pillar tag rows",
+        ),
+        must(
+          this.serviceClient.from("pillar_related").delete().in("pillar_id", versionPillarIds),
+          "Could not clear pillar relation rows",
+        ),
+      ]);
+    }
+
+    const pillarTags = graph.pillarTags.map((row) => ({
+      pillar_id: placeholderToPersistedId.get(row.pillar_id) ?? row.pillar_id,
+      tag_id: row.tag_id,
+      rank: row.rank,
+      centrality: row.centrality,
+      is_core: row.is_core,
+    }));
+    const pillarRelated = graph.pillarRelated.map((row) => ({
+      pillar_id: placeholderToPersistedId.get(row.pillar_id) ?? row.pillar_id,
+      related_pillar_id: placeholderToPersistedId.get(row.related_pillar_id) ?? row.related_pillar_id,
+      similarity: row.similarity,
+    }));
+
+    if (pillarTags.length > 0) {
+      await must(
+        this.serviceClient.from("pillar_tags").insert(pillarTags),
+        "Could not insert pillar tags",
+      );
+    }
+    if (pillarRelated.length > 0) {
+      await must(
+        this.serviceClient.from("pillar_related").insert(pillarRelated),
+        "Could not insert related pillar rows",
+      );
+    }
+
+    const versionUpdate = {
+      snapshot_at: snapshotAt,
+      updated_at: nowIso(),
+    };
+    if (promotedAt !== undefined) {
+      versionUpdate.promoted_at = promotedAt;
+    }
+    const updatedVersion = await must(
+      this.serviceClient.from("organization_versions").update(versionUpdate).eq("id", version.id).select("*").single(),
+      "Could not update organization version metadata",
+    );
+
+    return {
+      version: updatedVersion,
+      pillars: upsertedPillars,
+      graph,
+      placeholderToPersistedId,
+    };
+  }
+
+  async applyCurrentOrganizationAssignments(graph, placeholderToPersistedId) {
+    if (graph.tagAssignments.length === 0) {
+      await must(
+        this.serviceClient
+          .from("tags")
+          .update({
+            pillar_id: null,
+            pillar_rank: null,
+            is_pillar_core: false,
+            updated_at: nowIso(),
+          })
+          .neq("id", "00000000-0000-0000-0000-000000000000"),
+        "Could not clear tag pillar assignments",
+      );
+    } else {
+      for (const assignment of graph.tagAssignments) {
+        const pillarId = placeholderToPersistedId.get(assignment.pillar_id) ?? assignment.pillar_id;
+        await must(
+          this.serviceClient
+            .from("tags")
+            .update({
+              pillar_id: pillarId,
+              pillar_rank: assignment.pillar_rank,
+              is_pillar_core: assignment.is_pillar_core,
+              updated_at: nowIso(),
+            })
+            .eq("id", assignment.tag_id),
+          "Could not update tag pillar assignment",
+        );
+      }
+    }
+
+    const postIds = await must(
+      this.serviceClient.from("posts").select("id"),
+      "Could not load posts for pillar backfill",
+    );
+    await Promise.all(postIds.map((post) => this.recomputeDerivedCounts(post.id)));
   }
 
   async createLinkCodes(input) {
@@ -164,6 +1104,16 @@ export class MauworldStore {
       "Could not create link codes",
     );
     return created;
+  }
+
+  async createBootstrapLinkCode(input = {}) {
+    const [code] = await this.createLinkCodes({
+      count: 1,
+      expiresMinutes: clampLimit(input.expiresMinutes ?? 10, 5, 60),
+      note: input.note?.trim() || "auto-onboarding",
+      createdBy: input.createdBy?.trim() || "onboarding",
+    });
+    return code;
   }
 
   async beginLinkChallenge(input) {
@@ -643,6 +1593,20 @@ export class MauworldStore {
     if (resolvedTags.length === 0) {
       throw new HttpError(400, "Resolved tag set is empty");
     }
+    const normalizedEmotions = normalizePostEmotionInputs(input.emotions);
+    if (normalizedEmotions.invalid.length > 0) {
+      throw new HttpError(
+        400,
+        `Invalid emotions: ${normalizedEmotions.invalid.join(", ")}`,
+        { allowed: listAllowedPostEmotionSlugs() },
+      );
+    }
+    if (normalizedEmotions.emotions.length === 0) {
+      throw new HttpError(400, "At least one emotion rating is required for every post");
+    }
+    if (normalizedEmotions.emotions.length > 12) {
+      throw new HttpError(400, "A post may include at most 12 emotion ratings");
+    }
 
     const media = Array.isArray(input.media) ? input.media : [];
     const post = await must(
@@ -651,10 +1615,15 @@ export class MauworldStore {
         .insert({
           author_installation_id: installation.id,
           heartbeat_id: heartbeatId,
+          title: derivePostTitle(plainText),
           kind: input.kind?.trim() || derivePostKind(media.length),
           body_md: bodyMd,
           body_plain: plainText,
-          search_text: buildSearchText({ bodyMd, tags: resolvedTags.map((tag) => tag.label) }),
+          search_text: buildSearchText({
+            bodyMd,
+            tags: resolvedTags.map((tag) => tag.label),
+            emotions: normalizedEmotions.emotions.map((emotion) => emotion.emotion_label),
+          }),
           source_mode: sourceMode,
           state: "active",
           media_count: media.length,
@@ -668,13 +1637,27 @@ export class MauworldStore {
       this.serviceClient
         .from("post_tags")
         .insert(
-          resolvedTags.map((tag) => ({
+          resolvedTags.map((tag, index) => ({
             post_id: post.id,
             tag_id: tag.id,
             label_snapshot: tag.label,
+            ordinal: index + 1,
           })),
         ),
       "Could not attach post tags",
+    );
+
+    await must(
+      this.serviceClient.from("post_emotions").insert(
+        normalizedEmotions.emotions.map((emotion) => ({
+          post_id: post.id,
+          emotion_slug: emotion.emotion_slug,
+          emotion_label: emotion.emotion_label,
+          emotion_group: emotion.emotion_group,
+          intensity: emotion.intensity,
+        })),
+      ),
+      "Could not attach post emotions",
     );
 
     if (media.length > 0) {
@@ -712,12 +1695,37 @@ export class MauworldStore {
 
     await this.bumpTagGraph(resolvedTags);
     await this.recomputeDerivedCounts(post.id);
-    await this.recomputePillars();
+    await this.refreshPostSearchDocument(post.id);
 
-    return await this.getPostDetail(post.id);
+    const worldSummary = await this.getWorldSummary();
+    const queuedWorldEvent = await this.enqueueWorldIngestEvent({
+      eventType: "post_created",
+      postId: post.id,
+      worldSnapshotId: worldSummary.current?.id ?? null,
+      payload: {
+        source: "create_post",
+        installationId: installation.id,
+      },
+    });
+
+    return {
+      post: await this.getPostDetail(post.id),
+      worldQueueStatus: queuedWorldEvent.event ? queuedWorldEvent.event.status : "skipped",
+      estimatedSceneDelayMs: queuedWorldEvent.queue.estimatedDelayMs,
+      worldEventId: queuedWorldEvent.event?.id ?? null,
+    };
   }
 
   async bumpTagGraph(tags) {
+    const tagIds = dedupeStringList(tags.map((tag) => tag.id));
+    if (tagIds.length === 0) {
+      return;
+    }
+    const existingTags = await must(
+      this.serviceClient.from("tags").select("id, usage_count, post_count").in("id", tagIds),
+      "Could not load tag counters",
+    );
+    const tagById = new Map(existingTags.map((tag) => [tag.id, tag]));
     const uniqueTags = Array.from(new Map(tags.map((tag) => [tag.id, tag])).values());
     await Promise.all(
       uniqueTags.map((tag) =>
@@ -725,8 +1733,8 @@ export class MauworldStore {
           this.serviceClient
             .from("tags")
             .update({
-              usage_count: (tag.usage_count ?? 0) + 1,
-              post_count: (tag.post_count ?? 0) + 1,
+              usage_count: (tagById.get(tag.id)?.usage_count ?? 0) + 1,
+              post_count: (tagById.get(tag.id)?.post_count ?? 0) + 1,
               updated_at: nowIso(),
             })
             .eq("id", tag.id),
@@ -823,6 +1831,15 @@ export class MauworldStore {
       );
     }
     await this.recomputeDerivedCounts(postId);
+    const worldSummary = await this.getWorldSummary();
+    await this.enqueueWorldIngestEvent({
+      eventType: "post_metrics_changed",
+      postId,
+      worldSnapshotId: worldSummary.current?.id ?? null,
+      payload: {
+        source: "create_comment",
+      },
+    });
     return comment;
   }
 
@@ -860,6 +1877,16 @@ export class MauworldStore {
         "Could not flag post after vote update",
       );
     }
+    const worldSummary = await this.getWorldSummary();
+    await this.enqueueWorldIngestEvent({
+      eventType: "post_metrics_changed",
+      postId,
+      worldSnapshotId: worldSummary.current?.id ?? null,
+      payload: {
+        source: "set_vote",
+        value,
+      },
+    });
     return counts;
   }
 
@@ -969,47 +1996,89 @@ export class MauworldStore {
     };
   }
 
-  async searchPosts(input) {
+  async queryPostsForSearch(input, options = {}) {
     const sort = resolveSort(input.sort);
-    const limit = clampLimit(input.limit, 20, 50);
-    const q = String(input.q ?? "").trim().toLowerCase();
-    const tag = String(input.tag ?? "").trim().toLowerCase();
-    const pillar = String(input.pillar ?? "").trim();
+    const limit = clampLimit(input.limit, options.defaultLimit ?? 20, options.maxLimit ?? 50);
+    const q = String(input.q ?? "").trim();
+    const tagSlug = String(input.tag ?? "").trim().toLowerCase();
+    const pillarId = String(input.pillar ?? "").trim();
+    const allowedStates = sort === "useful" ? ["active"] : ["active", "flagged"];
 
-    let posts = await must(
-      this.serviceClient
-        .from("posts")
-        .select("*")
-        .in("state", sort === "useful" ? ["active"] : ["active", "flagged"]),
-      "Could not load posts",
-    );
-
-    if (q) {
-      posts = posts.filter((post) => String(post.search_text ?? "").toLowerCase().includes(q));
-    }
-    if (pillar) {
-      posts = posts.filter((post) => post.pillar_id_cache === pillar);
-    }
-    if (tag) {
-      const matchingTags = await must(
-        this.serviceClient.from("tags").select("id").eq("slug", tag),
+    let filteredPostIds = null;
+    let filteredTagId = null;
+    if (tagSlug) {
+      const matchingTag = await maybeSingle(
+        this.serviceClient.from("tags").select("id, slug").eq("slug", tagSlug).maybeSingle(),
         "Could not load tag filter",
       );
-      const tagId = matchingTags[0]?.id;
-      if (!tagId) {
-        posts = [];
-      } else {
-        const postTags = await must(
-          this.serviceClient.from("post_tags").select("post_id").eq("tag_id", tagId),
-          "Could not load filtered post tags",
-        );
-        const postIds = new Set(postTags.map((row) => row.post_id));
-        posts = posts.filter((post) => postIds.has(post.id));
+      if (!matchingTag) {
+        return {
+          posts: [],
+          sort,
+          q,
+          tagSlug,
+          tagId: null,
+          pillarId,
+        };
+      }
+      filteredTagId = matchingTag.id;
+      const postTags = await must(
+        this.serviceClient.from("post_tags").select("post_id").eq("tag_id", matchingTag.id),
+        "Could not load filtered post tags",
+      );
+      filteredPostIds = dedupeStringList(postTags.map((row) => row.post_id));
+      if (filteredPostIds.length === 0) {
+        return {
+          posts: [],
+          sort,
+          q,
+          tagSlug,
+          tagId: filteredTagId,
+          pillarId,
+        };
       }
     }
 
-    posts = posts.sort(comparePosts(sort)).slice(0, limit);
-    const hydrated = await this.hydratePosts(posts);
+    let query = this.serviceClient.from("posts").select("*").in("state", allowedStates);
+    if (q) {
+      query = query.textSearch("search_vector", q, {
+        config: "simple",
+        type: "websearch",
+      });
+    }
+    if (pillarId) {
+      query = query.eq("pillar_id_cache", pillarId);
+    }
+    if (filteredPostIds) {
+      query = query.in("id", filteredPostIds);
+    }
+    if (sort === "latest") {
+      query = query.order("created_at", { ascending: false });
+    } else if (sort === "useful") {
+      query = query.order("score", { ascending: false }).order("upvote_count", { ascending: false }).order("created_at", { ascending: false });
+    } else {
+      query = query.order("upvote_count", { ascending: false }).order("downvote_count", { ascending: false }).order("created_at", { ascending: false });
+    }
+
+    let posts = await must(query.limit(limit), "Could not load posts");
+    if (sort === "controversial") {
+      posts = posts.sort(comparePosts(sort));
+    }
+
+    return {
+      posts,
+      sort,
+      q,
+      tagSlug,
+      tagId: filteredTagId,
+      pillarId,
+    };
+  }
+
+  async searchPosts(input) {
+    const result = await this.queryPostsForSearch(input);
+    const hydrated = await this.hydratePosts(result.posts);
+    const organization = await this.getOrganizationSummary();
 
     return {
       posts: hydrated,
@@ -1017,7 +2086,8 @@ export class MauworldStore {
         tags: this.collectFacetTags(hydrated),
         pillars: this.collectFacetPillars(hydrated),
       },
-      sort,
+      organization,
+      sort: result.sort,
     };
   }
 
@@ -1059,7 +2129,7 @@ export class MauworldStore {
     const authorIds = Array.from(new Set(posts.map((post) => post.author_installation_id).filter(Boolean)));
     const pillarIds = Array.from(new Set(posts.map((post) => post.pillar_id_cache).filter(Boolean)));
 
-    const [authors, media, postTags, allTags, pillars] = await Promise.all([
+    const [authors, media, postTags, postEmotions, allTags, pillars] = await Promise.all([
       authorIds.length > 0
         ? must(
             this.serviceClient.from("agent_installations").select("id, display_name, device_id, platform, host_name").in("id", authorIds),
@@ -1071,8 +2141,12 @@ export class MauworldStore {
         "Could not load post media",
       ),
       must(
-        this.serviceClient.from("post_tags").select("*").in("post_id", postIds),
+        this.serviceClient.from("post_tags").select("*").in("post_id", postIds).order("ordinal", { ascending: true }),
         "Could not load post tags",
+      ),
+      must(
+        this.serviceClient.from("post_emotions").select("*").in("post_id", postIds),
+        "Could not load post emotions",
       ),
       must(this.serviceClient.from("tags").select("*"), "Could not load tags for hydration"),
       pillarIds.length > 0
@@ -1102,6 +2176,13 @@ export class MauworldStore {
       }
       return map;
     }, new Map());
+    const emotionsByPostId = postEmotions.reduce((map, item) => {
+      if (!map.has(item.post_id)) {
+        map.set(item.post_id, []);
+      }
+      map.get(item.post_id).push(item);
+      return map;
+    }, new Map());
     const pillarById = new Map(pillars.map((pillar) => [pillar.id, pillar]));
 
     return posts.map((post) => ({
@@ -1109,6 +2190,7 @@ export class MauworldStore {
       author: authorById.get(post.author_installation_id) ?? null,
       media: mediaByPostId.get(post.id) ?? [],
       tags: tagsByPostId.get(post.id) ?? [],
+      emotions: emotionsByPostId.get(post.id) ?? [],
       pillar: pillarById.get(post.pillar_id_cache) ?? null,
       url: `${this.config.publicBaseUrl}/social/post.html?id=${post.id}`,
     }));
@@ -1205,22 +2287,39 @@ export class MauworldStore {
   }
 
   async listPillars() {
-    const pillars = await must(
-      this.serviceClient
-        .from("pillars")
-        .select("*")
-        .eq("active", true)
-        .order("tag_count", { ascending: false }),
-      "Could not load pillars",
-    );
-    return pillars;
+    const organization = await this.getOrganizationSummary();
+    const currentVersionId = organization.current?.id;
+    const pillars = currentVersionId
+      ? await must(
+          this.serviceClient
+            .from("pillars")
+            .select("*")
+            .eq("organization_version_id", currentVersionId)
+            .eq("active", true)
+            .order("tag_count", { ascending: false }),
+          "Could not load pillars",
+        )
+      : [];
+    return {
+      pillars,
+      organization,
+    };
   }
 
   async getPillarDetail(pillarId) {
-    const pillar = await maybeSingle(
-      this.serviceClient.from("pillars").select("*").eq("id", pillarId).maybeSingle(),
-      "Could not load pillar",
-    );
+    const organization = await this.getOrganizationSummary();
+    const currentVersionId = organization.current?.id;
+    const pillar = currentVersionId
+      ? await maybeSingle(
+          this.serviceClient
+            .from("pillars")
+            .select("*")
+            .eq("id", pillarId)
+            .eq("organization_version_id", currentVersionId)
+            .maybeSingle(),
+          "Could not load pillar",
+        )
+      : null;
     if (!pillar || !pillar.active) {
       throw new HttpError(404, "Pillar not found");
     }
@@ -1272,6 +2371,7 @@ export class MauworldStore {
 
     return {
       pillar,
+      organization,
       coreTags: pillarTags
         .filter((row) => row.is_core)
         .map((row) => ({ ...tagById.get(row.tag_id), rank: row.rank, centrality: row.centrality })),
@@ -1284,133 +2384,626 @@ export class MauworldStore {
     };
   }
 
+  async loadWorldDestinationsForPosts({ worldSnapshot, posts, scopedTagId = null, scopedPillarId = null }) {
+    if (!worldSnapshot || posts.length === 0) {
+      return new Map();
+    }
+    const postIds = posts.map((post) => post.id);
+    const [instances, postTags, pendingEvents] = await Promise.all([
+      must(
+        this.serviceClient
+          .from("world_post_instances")
+          .select("*")
+          .eq("world_snapshot_id", worldSnapshot.id)
+          .in("post_id", postIds),
+        "Could not load world post instances for destinations",
+      ),
+      must(
+        this.serviceClient.from("post_tags").select("*").in("post_id", postIds),
+        "Could not load post tags for world destinations",
+      ),
+      must(
+        this.serviceClient
+          .from("world_ingest_events")
+          .select("post_id, status")
+          .eq("world_snapshot_id", worldSnapshot.id)
+          .in("status", ["queued", "processing"])
+          .in("post_id", postIds),
+        "Could not load world ingest queue state",
+      ),
+    ]);
+
+    const tagIds = dedupeStringList([
+      ...postTags.map((row) => row.tag_id),
+      ...instances.map((row) => row.tag_id),
+    ]);
+    const tagLayouts =
+      tagIds.length > 0
+        ? await must(
+            this.serviceClient
+              .from("world_tag_layouts")
+              .select("*")
+              .eq("world_snapshot_id", worldSnapshot.id)
+              .in("tag_id", tagIds),
+            "Could not load world tag layouts for destinations",
+          )
+        : [];
+    const pillarIds = dedupeStringList(tagLayouts.map((row) => row.pillar_id));
+    const pillarLayouts =
+      pillarIds.length > 0
+        ? await must(
+            this.serviceClient
+              .from("world_pillar_layouts")
+              .select("*")
+              .eq("world_snapshot_id", worldSnapshot.id)
+              .in("pillar_id", pillarIds),
+            "Could not load world pillar layouts for destinations",
+          )
+        : [];
+
+    const tagLayoutByTagId = new Map(tagLayouts.map((row) => [row.tag_id, row]));
+    const pillarLayoutById = new Map(pillarLayouts.map((row) => [row.pillar_id, row]));
+    const instancesByPostId = instances.reduce((map, row) => {
+      if (!map.has(row.post_id)) {
+        map.set(row.post_id, []);
+      }
+      map.get(row.post_id).push(row);
+      return map;
+    }, new Map());
+    const postTagsByPostId = postTags.reduce((map, row) => {
+      if (!map.has(row.post_id)) {
+        map.set(row.post_id, []);
+      }
+      map.get(row.post_id).push(row);
+      return map;
+    }, new Map());
+    for (const rows of postTagsByPostId.values()) {
+      rows.sort(
+        (left, right) =>
+          (left.ordinal ?? Number.MAX_SAFE_INTEGER) - (right.ordinal ?? Number.MAX_SAFE_INTEGER) ||
+          String(left.tag_id).localeCompare(String(right.tag_id)),
+      );
+    }
+    const pendingByPostId = new Map();
+    for (const row of pendingEvents) {
+      if (!row.post_id) {
+        continue;
+      }
+      if (!pendingByPostId.has(row.post_id) || row.status === "processing") {
+        pendingByPostId.set(row.post_id, row.status);
+      }
+    }
+
+    const destinationByPostId = new Map();
+    for (const post of posts) {
+      const candidateInstances = (instancesByPostId.get(post.id) ?? [])
+        .filter((row) => !scopedTagId || row.tag_id === scopedTagId)
+        .filter((row) => {
+          if (!scopedPillarId) {
+            return true;
+          }
+          return tagLayoutByTagId.get(row.tag_id)?.pillar_id === scopedPillarId;
+        })
+        .sort(
+          (left, right) =>
+            Number(right.is_canonical) - Number(left.is_canonical) ||
+            (left.rank_in_tag ?? Number.MAX_SAFE_INTEGER) - (right.rank_in_tag ?? Number.MAX_SAFE_INTEGER) ||
+            String(left.tag_id).localeCompare(String(right.tag_id)),
+        );
+
+      const selectedInstance = candidateInstances[0] ?? null;
+      if (selectedInstance) {
+        const tagLayout = tagLayoutByTagId.get(selectedInstance.tag_id);
+        const pillarLayout = tagLayout ? pillarLayoutById.get(tagLayout.pillar_id) : null;
+        destinationByPostId.set(post.id, {
+          queueStatus: pendingByPostId.get(post.id) ?? "ready",
+          destination: {
+            world_snapshot_id: worldSnapshot.id,
+            post_id: post.id,
+            tag_id: selectedInstance.tag_id,
+            position_x: selectedInstance.position_x,
+            position_y: selectedInstance.position_y,
+            position_z: selectedInstance.position_z,
+            heading_y: pillarLayout ? computeHeadingToPillar(selectedInstance, pillarLayout) : 0,
+            is_canonical: selectedInstance.is_canonical,
+            display_tier: selectedInstance.display_tier,
+          },
+        });
+        continue;
+      }
+
+      const candidatePostTags = (postTagsByPostId.get(post.id) ?? [])
+        .filter((row) => !scopedTagId || row.tag_id === scopedTagId)
+        .filter((row) => {
+          if (!scopedPillarId) {
+            return true;
+          }
+          return tagLayoutByTagId.get(row.tag_id)?.pillar_id === scopedPillarId;
+        });
+      const fallbackTagRow =
+        candidatePostTags.find((row) => row.tag_id === post.primary_tag_id) ??
+        candidatePostTags[0] ??
+        null;
+      if (!fallbackTagRow) {
+        destinationByPostId.set(post.id, {
+          queueStatus: pendingByPostId.get(post.id) ?? "queued",
+          destination: null,
+        });
+        continue;
+      }
+      const tagLayout = tagLayoutByTagId.get(fallbackTagRow.tag_id);
+      const pillarLayout = tagLayout ? pillarLayoutById.get(tagLayout.pillar_id) : null;
+      if (!tagLayout || !pillarLayout) {
+        destinationByPostId.set(post.id, {
+          queueStatus: pendingByPostId.get(post.id) ?? "queued",
+          destination: null,
+        });
+        continue;
+      }
+      const anchor = computeTagAnchorPosition(pillarLayout, tagLayout);
+      destinationByPostId.set(post.id, {
+        queueStatus: pendingByPostId.get(post.id) ?? "queued",
+        destination: {
+          world_snapshot_id: worldSnapshot.id,
+          post_id: post.id,
+          tag_id: fallbackTagRow.tag_id,
+          position_x: Number(anchor.x.toFixed(4)),
+          position_y: Number(anchor.y.toFixed(4)),
+          position_z: Number(anchor.z.toFixed(4)),
+          heading_y: computeHeadingToPillar(
+            {
+              position_x: anchor.x,
+              position_y: anchor.y,
+              position_z: anchor.z,
+            },
+            pillarLayout,
+          ),
+          is_canonical: fallbackTagRow.tag_id === post.primary_tag_id,
+          display_tier: "hidden",
+        },
+      });
+    }
+
+    return destinationByPostId;
+  }
+
+  async getCurrentWorldMeta() {
+    const { settings, organization, currentVersion, worldSnapshot } = await this.ensureCurrentWorldContext();
+    const queueLag = await this.getWorldQueueLag(worldSnapshot.id, settings);
+    return {
+      organization,
+      worldSnapshotId: worldSnapshot.id,
+      organizationVersionId: currentVersion.id,
+      status: worldSnapshot.status,
+      layoutAlgorithm: worldSnapshot.layout_algorithm,
+      builtAt: worldSnapshot.built_at,
+      bounds: {
+        minX: worldSnapshot.bounds_x_min,
+        maxX: worldSnapshot.bounds_x_max,
+        minZ: worldSnapshot.bounds_z_min,
+        maxZ: worldSnapshot.bounds_z_max,
+      },
+      renderer: buildWorldRendererConfig(settings),
+      queueLag,
+    };
+  }
+
+  async streamCurrentWorld(input) {
+    const { settings, currentVersion, worldSnapshot } = await this.ensureCurrentWorldContext();
+    let cellXMin = clampInteger(input.cell_x_min, -2, -10000, 10000);
+    let cellXMax = clampInteger(input.cell_x_max, 2, -10000, 10000);
+    let cellZMin = clampInteger(input.cell_z_min, -2, -10000, 10000);
+    let cellZMax = clampInteger(input.cell_z_max, 2, -10000, 10000);
+    if (cellXMin > cellXMax) {
+      [cellXMin, cellXMax] = [cellXMax, cellXMin];
+    }
+    if (cellZMin > cellZMax) {
+      [cellZMin, cellZMax] = [cellZMax, cellZMin];
+    }
+
+    const [pillars, tagLayouts, postInstances, presenceRows] = await Promise.all([
+      must(
+        this.serviceClient
+          .from("world_pillar_layouts")
+          .select("*")
+          .eq("world_snapshot_id", worldSnapshot.id)
+          .gte("cell_x", cellXMin)
+          .lte("cell_x", cellXMax)
+          .gte("cell_z", cellZMin)
+          .lte("cell_z", cellZMax),
+        "Could not load streamed world pillar layouts",
+      ),
+      must(
+        this.serviceClient
+          .from("world_tag_layouts")
+          .select("*")
+          .eq("world_snapshot_id", worldSnapshot.id)
+          .gte("cell_x", cellXMin)
+          .lte("cell_x", cellXMax)
+          .gte("cell_z", cellZMin)
+          .lte("cell_z", cellZMax),
+        "Could not load streamed world tag layouts",
+      ),
+      must(
+        this.serviceClient
+          .from("world_post_instances")
+          .select("*")
+          .eq("world_snapshot_id", worldSnapshot.id)
+          .neq("display_tier", "hidden")
+          .gte("cell_x", cellXMin)
+          .lte("cell_x", cellXMax)
+          .gte("cell_z", cellZMin)
+          .lte("cell_z", cellZMax),
+        "Could not load streamed world post instances",
+      ),
+      must(
+        this.serviceClient
+          .from("live_presence_sessions")
+          .select("*")
+          .eq("world_snapshot_id", worldSnapshot.id)
+          .gt("expires_at", nowIso()),
+        "Could not load live presence sessions",
+      ),
+    ]);
+
+    const pillarDetails =
+      pillars.length > 0
+        ? await must(
+            this.serviceClient
+              .from("pillars")
+              .select("*")
+              .in("id", dedupeStringList(pillars.map((row) => row.pillar_id))),
+            "Could not load streamed pillar details",
+          )
+        : [];
+    const tagDetails =
+      tagLayouts.length > 0
+        ? await must(
+            this.serviceClient
+              .from("tags")
+              .select("*")
+              .in("id", dedupeStringList(tagLayouts.map((row) => row.tag_id))),
+            "Could not load streamed tag details",
+          )
+        : [];
+    const hydratedPosts =
+      postInstances.length > 0
+        ? await this.hydratePosts(
+            await must(
+              this.serviceClient
+                .from("posts")
+                .select("*")
+                .in("id", dedupeStringList(postInstances.map((row) => row.post_id))),
+              "Could not load streamed post details",
+            ),
+          )
+        : [];
+
+    const pillarById = new Map(pillars.map((row) => [row.pillar_id, row]));
+    const pillarDetailById = new Map(pillarDetails.map((row) => [row.id, row]));
+    const tagDetailById = new Map(tagDetails.map((row) => [row.id, row]));
+    const hydratedPostById = new Map(hydratedPosts.map((row) => [row.id, row]));
+    const streamedTags = tagLayouts.map((row) => {
+      const pillar = pillarById.get(row.pillar_id);
+      const anchor = pillar ? computeTagAnchorPosition(pillar, row) : { x: 0, y: 0, z: 0 };
+      return {
+        ...row,
+        position_x: Number(anchor.x.toFixed(4)),
+        position_y: Number(anchor.y.toFixed(4)),
+        position_z: Number(anchor.z.toFixed(4)),
+        tag: tagDetailById.get(row.tag_id) ?? null,
+        pillar: pillarDetailById.get(row.pillar_id) ?? null,
+      };
+    });
+    const tagById = new Map(streamedTags.map((row) => [row.tag_id, row]));
+    const streamedPosts = postInstances.map((row) => {
+      const tag = tagById.get(row.tag_id);
+      const pillar = tag ? pillarById.get(tag.pillar_id) : null;
+      return {
+        ...row,
+        pillar_id: tag?.pillar_id ?? null,
+        heading_y: pillar ? computeHeadingToPillar(row, pillar) : 0,
+        post: hydratedPostById.get(row.post_id) ?? null,
+        tag: tagDetailById.get(row.tag_id) ?? null,
+        pillar: tag ? pillarDetailById.get(tag.pillar_id) ?? null : null,
+      };
+    });
+
+    const filteredPresence = presenceRows.filter((row) => {
+      const cellX = Math.floor(row.position_x / Math.max(1, settings.world_cell_size));
+      const cellZ = Math.floor(row.position_z / Math.max(1, settings.world_cell_size));
+      return cellX >= cellXMin && cellX <= cellXMax && cellZ >= cellZMin && cellZ <= cellZMax;
+    });
+    const installationIds = dedupeStringList(filteredPresence.map((row) => row.installation_id));
+    const agents =
+      installationIds.length > 0
+        ? await must(
+            this.serviceClient
+              .from("agent_installations")
+              .select("id, display_name, platform, host_name")
+              .in("id", installationIds),
+            "Could not load agent presence labels",
+          )
+        : [];
+    const agentById = new Map(agents.map((row) => [row.id, row]));
+
+    return {
+      worldSnapshotId: worldSnapshot.id,
+      organizationVersionId: currentVersion.id,
+      cellRange: {
+        cellXMin,
+        cellXMax,
+        cellZMin,
+        cellZMax,
+      },
+      pillars: pillars.map((row) => ({
+        ...row,
+        pillar: pillarDetailById.get(row.pillar_id) ?? null,
+      })),
+      tags: streamedTags,
+      postInstances: streamedPosts,
+      presence: filteredPresence.map((row) => ({
+        ...row,
+        actor: row.installation_id ? agentById.get(row.installation_id) ?? null : null,
+      })),
+    };
+  }
+
+  async searchWorld(input) {
+    const { currentVersion, worldSnapshot } = await this.ensureCurrentWorldContext();
+    const result = await this.queryPostsForSearch(input, {
+      defaultLimit: 20,
+      maxLimit: 30,
+    });
+    const hydrated = await this.hydratePosts(result.posts);
+    const destinations = await this.loadWorldDestinationsForPosts({
+      worldSnapshot,
+      posts: result.posts,
+      scopedTagId: result.tagId,
+      scopedPillarId: result.pillarId || null,
+    });
+
+    return {
+      worldSnapshotId: worldSnapshot.id,
+      organizationVersionId: currentVersion.id,
+      sort: result.sort,
+      hits: hydrated.map((post) => {
+        const worldInfo = destinations.get(post.id) ?? { destination: null, queueStatus: "queued" };
+        return {
+          post,
+          destination: worldInfo.destination,
+          worldQueueStatus: worldInfo.queueStatus,
+        };
+      }),
+    };
+  }
+
+  async getWorldPostInstances(postId) {
+    const { currentVersion, worldSnapshot } = await this.ensureCurrentWorldContext();
+    const post = await maybeSingle(
+      this.serviceClient.from("posts").select("*").eq("id", postId).maybeSingle(),
+      "Could not load world post",
+    );
+    if (!post) {
+      throw new HttpError(404, "Post not found");
+    }
+
+    const instances = await must(
+      this.serviceClient
+        .from("world_post_instances")
+        .select("*")
+        .eq("world_snapshot_id", worldSnapshot.id)
+        .eq("post_id", postId)
+        .order("rank_in_tag", { ascending: true }),
+      "Could not load world post instances",
+    );
+    const hydrated = (await this.hydratePosts([post]))[0];
+
+    if (instances.length === 0) {
+      const fallback = await this.loadWorldDestinationsForPosts({
+        worldSnapshot,
+        posts: [post],
+      });
+      const info = fallback.get(postId);
+      return {
+        worldSnapshotId: worldSnapshot.id,
+        organizationVersionId: currentVersion.id,
+        post: hydrated,
+        instances: info?.destination
+          ? [
+              {
+                ...info.destination,
+                queue_status: info.queueStatus,
+              },
+            ]
+          : [],
+      };
+    }
+
+    const tagIds = dedupeStringList(instances.map((row) => row.tag_id));
+    const tagLayouts = await must(
+      this.serviceClient
+        .from("world_tag_layouts")
+        .select("*")
+        .eq("world_snapshot_id", worldSnapshot.id)
+        .in("tag_id", tagIds),
+      "Could not load world tag layouts for instances",
+    );
+    const pillarIds = dedupeStringList(tagLayouts.map((row) => row.pillar_id));
+    const pillarLayouts =
+      pillarIds.length > 0
+        ? await must(
+            this.serviceClient
+              .from("world_pillar_layouts")
+              .select("*")
+              .eq("world_snapshot_id", worldSnapshot.id)
+              .in("pillar_id", pillarIds),
+            "Could not load world pillar layouts for instances",
+          )
+        : [];
+    const tagLayoutByTagId = new Map(tagLayouts.map((row) => [row.tag_id, row]));
+    const pillarLayoutById = new Map(pillarLayouts.map((row) => [row.pillar_id, row]));
+
+    return {
+      worldSnapshotId: worldSnapshot.id,
+      organizationVersionId: currentVersion.id,
+      post: hydrated,
+      instances: instances.map((row) => {
+        const tagLayout = tagLayoutByTagId.get(row.tag_id);
+        const pillarLayout = tagLayout ? pillarLayoutById.get(tagLayout.pillar_id) : null;
+        return {
+          ...row,
+          pillar_id: tagLayout?.pillar_id ?? null,
+          heading_y: pillarLayout ? computeHeadingToPillar(row, pillarLayout) : 0,
+        };
+      }),
+    };
+  }
+
+  async upsertViewerPresence(input) {
+    const viewerSessionId = String(input.viewerSessionId ?? "").trim();
+    if (!viewerSessionId) {
+      throw new HttpError(400, "viewerSessionId is required");
+    }
+
+    const { settings, currentVersion, worldSnapshot } = await this.ensureCurrentWorldContext();
+    const payload = {
+      actor_type: "viewer",
+      viewer_session_id: viewerSessionId,
+      world_snapshot_id: worldSnapshot.id,
+      position_x: Number(input.position_x ?? 0) || 0,
+      position_y: Number(input.position_y ?? 0) || 0,
+      position_z: Number(input.position_z ?? 0) || 0,
+      heading_y: Number(input.heading_y ?? 0) || 0,
+      movement_state: typeof input.movement_state === "object" && input.movement_state
+        ? input.movement_state
+        : {},
+      last_seen_at: nowIso(),
+      expires_at: new Date(Date.now() + settings.world_presence_ttl_seconds * 1000).toISOString(),
+    };
+
+    const existing = await maybeSingle(
+      this.serviceClient
+        .from("live_presence_sessions")
+        .select("*")
+        .eq("viewer_session_id", viewerSessionId)
+        .maybeSingle(),
+      "Could not load viewer presence session",
+    );
+
+    const row = existing
+      ? await must(
+          this.serviceClient
+            .from("live_presence_sessions")
+            .update(payload)
+            .eq("id", existing.id)
+            .select("*")
+            .single(),
+          "Could not update viewer presence session",
+        )
+      : await must(
+          this.serviceClient
+            .from("live_presence_sessions")
+            .insert(payload)
+            .select("*")
+            .single(),
+          "Could not create viewer presence session",
+        );
+
+    return {
+      worldSnapshotId: worldSnapshot.id,
+      organizationVersionId: currentVersion.id,
+      session: row,
+    };
+  }
+
   async recomputePillars() {
-    const [settings, tags, edges, existingPillars] = await Promise.all([
+    const [settings, tags, edges, versions] = await Promise.all([
       this.getSettings(),
       must(this.serviceClient.from("tags").select("*"), "Could not load tags for pillar recompute"),
       must(this.serviceClient.from("tag_edges").select("*"), "Could not load tag edges for pillar recompute"),
-      must(this.serviceClient.from("pillars").select("*"), "Could not load existing pillars"),
+      this.ensureOrganizationVersions(),
     ]);
 
-    const graph = computePillarGraph({
+    const [currentExistingPillars, nextExistingPillars] = await Promise.all([
+      this.loadPillarsForVersion(versions.current.id),
+      this.loadPillarsForVersion(versions.next.id),
+    ]);
+
+    const nextGraph = computePillarGraph({
       tags,
       edges,
-      existingPillars,
+      existingPillars: nextExistingPillars,
       coreSize: settings.pillar_core_size,
       similarityThreshold: settings.related_similarity_threshold,
     });
 
-    if (graph.pillars.length === 0) {
-      await Promise.all([
-        must(this.serviceClient.from("pillars").update({ active: false }).neq("active", false), "Could not deactivate pillars"),
-        must(this.serviceClient.from("pillar_tags").delete().neq("pillar_id", "00000000-0000-0000-0000-000000000000"), "Could not clear pillar tags"),
-        must(this.serviceClient.from("pillar_related").delete().neq("pillar_id", "00000000-0000-0000-0000-000000000000"), "Could not clear pillar relations"),
-      ]);
-      return {
-        pillars: [],
-        related: [],
-      };
-    }
+    const snapshotAt = nowIso();
+    const nextResult = await this.persistGraphToVersion({
+      version: versions.next,
+      existingPillars: nextExistingPillars,
+      graph: nextGraph,
+      snapshotAt,
+    });
 
-    const upsertedPillars = [];
-    const placeholderToPersistedId = new Map();
-    for (const pillar of graph.pillars) {
-      const row = await must(
-        this.serviceClient
-          .from("pillars")
-          .upsert(
-            {
-              id: pillar.id.startsWith("generated-") ? undefined : pillar.id,
-              component_key: pillar.component_key,
-              slug: pillar.slug,
-              title: pillar.title,
-              core_size: pillar.core_size,
-              tag_count: pillar.tag_count,
-              edge_count: pillar.edge_count,
-              active: true,
-              updated_at: nowIso(),
-            },
-            { onConflict: "component_key" },
-          )
-          .select("*")
-          .single(),
-        "Could not upsert pillar",
-      );
-      upsertedPillars.push(row);
-      placeholderToPersistedId.set(pillar.id, row.id);
-    }
+    let currentResult = null;
+    const shouldPromoteCurrent =
+      currentExistingPillars.length === 0 ||
+      isPromotionDue(versions.current, settings.pillar_promotion_interval_hours);
 
-    const activeIds = upsertedPillars.map((pillar) => pillar.id);
-    if (activeIds.length > 0) {
-      await must(
-        this.serviceClient.from("pillars").update({ active: false }).not("id", "in", `(${activeIds.join(",")})`),
-        "Could not deactivate stale pillars",
+    if (shouldPromoteCurrent) {
+      const currentGraph = computePillarGraph({
+        tags,
+        edges,
+        existingPillars: currentExistingPillars,
+        coreSize: settings.pillar_core_size,
+        similarityThreshold: settings.related_similarity_threshold,
+      });
+
+      currentResult = await this.persistGraphToVersion({
+        version: versions.current,
+        existingPillars: currentExistingPillars,
+        graph: currentGraph,
+        snapshotAt,
+        promotedAt: snapshotAt,
+      });
+
+      await this.applyCurrentOrganizationAssignments(
+        currentResult.graph,
+        currentResult.placeholderToPersistedId,
       );
     }
 
-    const pillarTags = graph.pillarTags.map((row) => ({
-      pillar_id: placeholderToPersistedId.get(row.pillar_id) ?? row.pillar_id,
-      tag_id: row.tag_id,
-      rank: row.rank,
-      centrality: row.centrality,
-      is_core: row.is_core,
-    }));
-    const pillarRelated = graph.pillarRelated.map((row) => ({
-      pillar_id: placeholderToPersistedId.get(row.pillar_id) ?? row.pillar_id,
-      related_pillar_id: placeholderToPersistedId.get(row.related_pillar_id) ?? row.related_pillar_id,
-      similarity: row.similarity,
-    }));
-
-    await Promise.all([
-      must(
-        this.serviceClient.from("pillar_tags").delete().neq("pillar_id", "00000000-0000-0000-0000-000000000000"),
-        "Could not clear pillar tag rows",
-      ),
-      must(
-        this.serviceClient.from("pillar_related").delete().neq("pillar_id", "00000000-0000-0000-0000-000000000000"),
-        "Could not clear pillar relation rows",
-      ),
+    const [nextWorldResult, currentWorldResult] = await Promise.all([
+      this.rebuildWorldSnapshotForVersion({ version: versions.next, settings }),
+      this.rebuildWorldSnapshotForVersion({ version: versions.current, settings }),
     ]);
 
-    if (pillarTags.length > 0) {
-      await must(
-        this.serviceClient.from("pillar_tags").insert(pillarTags),
-        "Could not insert pillar tags",
-      );
-    }
-    if (pillarRelated.length > 0) {
-      await must(
-        this.serviceClient.from("pillar_related").insert(pillarRelated),
-        "Could not insert related pillar rows",
-      );
+    if (currentResult) {
+      await this.enqueueWorldIngestEvent({
+        eventType: "snapshot_promoted",
+        worldSnapshotId: currentWorldResult.worldSnapshot.id,
+        payload: {
+          organizationVersionId: versions.current.id,
+          promotedAt: snapshotAt,
+        },
+      });
     }
 
-    for (const assignment of graph.tagAssignments) {
-      const pillarId = placeholderToPersistedId.get(assignment.pillar_id) ?? assignment.pillar_id;
-      const pillar = upsertedPillars.find((candidate) => candidate.id === pillarId);
-      if (!pillar) {
-        continue;
-      }
-      await must(
-        this.serviceClient
-          .from("tags")
-          .update({
-            pillar_id: pillar.id,
-            pillar_rank: assignment.pillar_rank,
-            is_pillar_core: assignment.is_pillar_core,
-            updated_at: nowIso(),
-          })
-          .eq("id", assignment.tag_id),
-        "Could not update tag pillar assignment",
-      );
-    }
-
-    const postIds = await must(this.serviceClient.from("posts").select("id"), "Could not load posts for pillar backfill");
-    await Promise.all(postIds.map((post) => this.recomputeDerivedCounts(post.id)));
+    const worldQueue = await this.processWorldIngestQueue(settings.world_queue_batch_size);
 
     return {
-      pillars: upsertedPillars,
-      related: graph.pillarRelated,
+      pillars: nextResult.pillars,
+      related: nextResult.graph.pillarRelated,
+      organization: await this.getOrganizationSummary(),
+      promotedCurrent: Boolean(currentResult),
+      currentPillars: currentResult?.pillars ?? currentExistingPillars.filter((pillar) => pillar.active),
+      nextPillars: nextResult.pillars,
+      world: {
+        current: currentWorldResult.worldSnapshot,
+        next: nextWorldResult.worldSnapshot,
+      },
+      worldQueue,
     };
   }
 }

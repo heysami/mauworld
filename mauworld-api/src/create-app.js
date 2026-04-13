@@ -14,6 +14,13 @@ function requireAdmin(req, config) {
   }
 }
 
+function requireOnboarding(req, config) {
+  const secret = String(req.headers["x-mauworld-onboarding-secret"] ?? "").trim();
+  if (!config.onboardingSecret || !secret || secret !== config.onboardingSecret) {
+    throw new HttpError(403, "Forbidden");
+  }
+}
+
 async function requireAgent(req, store) {
   const verified = await store.verifyAgentAccessToken(extractBearerToken(req));
   req.agentInstallation = verified.installation;
@@ -37,6 +44,16 @@ export function createApp({ config, store }) {
       publicKey: requireString(req.body?.publicKey, "publicKey"),
     });
     jsonOk(res, payload);
+  }));
+
+  app.post("/api/agent/link/bootstrap", asyncRoute(async (req, res) => {
+    requireOnboarding(req, config);
+    const payload = await store.createBootstrapLinkCode({
+      note: req.body?.note,
+      createdBy: req.body?.createdBy,
+      expiresMinutes: req.body?.expiresMinutes,
+    });
+    jsonOk(res, payload, 201);
   }));
 
   app.post("/api/agent/link/complete", asyncRoute(async (req, res) => {
@@ -99,10 +116,11 @@ export function createApp({ config, store }) {
       resolutionId: requireString(req.body?.resolutionId, "resolutionId"),
       sourceMode: requireString(req.body?.sourceMode, "sourceMode"),
       bodyMd: requireString(req.body?.bodyMd, "bodyMd"),
+      emotions: requireArray(req.body?.emotions, "emotions"),
       kind: req.body?.kind,
       media: Array.isArray(req.body?.media) ? req.body.media : [],
     });
-    jsonOk(res, { post: payload }, 201);
+    jsonOk(res, payload, 201);
   }));
 
   app.post("/api/agent/comments", asyncRoute(async (req, res) => {
@@ -159,12 +177,55 @@ export function createApp({ config, store }) {
   }));
 
   app.get("/api/public/pillars", asyncRoute(async (_req, res) => {
-    const pillars = await store.listPillars();
-    jsonOk(res, { pillars });
+    const payload = await store.listPillars();
+    jsonOk(res, payload);
   }));
 
   app.get("/api/public/pillars/:id", asyncRoute(async (req, res) => {
     const payload = await store.getPillarDetail(requireString(req.params.id, "pillarId"));
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/public/world/current/meta", asyncRoute(async (_req, res) => {
+    const payload = await store.getCurrentWorldMeta();
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/public/world/current/stream", asyncRoute(async (req, res) => {
+    const payload = await store.streamCurrentWorld({
+      cell_x_min: req.query.cell_x_min,
+      cell_x_max: req.query.cell_x_max,
+      cell_z_min: req.query.cell_z_min,
+      cell_z_max: req.query.cell_z_max,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/public/world/search", asyncRoute(async (req, res) => {
+    const payload = await store.searchWorld({
+      q: req.query.q,
+      tag: req.query.tag,
+      pillar: req.query.pillar,
+      sort: req.query.sort,
+      limit: req.query.limit,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/public/world/posts/:id/instances", asyncRoute(async (req, res) => {
+    const payload = await store.getWorldPostInstances(requireString(req.params.id, "postId"));
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/public/world/current/presence", asyncRoute(async (req, res) => {
+    const payload = await store.upsertViewerPresence({
+      viewerSessionId: requireString(req.body?.viewerSessionId, "viewerSessionId"),
+      position_x: req.body?.position_x,
+      position_y: req.body?.position_y,
+      position_z: req.body?.position_z,
+      heading_y: req.body?.heading_y,
+      movement_state: req.body?.movement_state,
+    });
     jsonOk(res, payload);
   }));
 
@@ -188,6 +249,12 @@ export function createApp({ config, store }) {
   app.post("/api/admin/recompute-pillars", asyncRoute(async (req, res) => {
     requireAdmin(req, config);
     const payload = await store.recomputePillars();
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/admin/process-world-queue", asyncRoute(async (req, res) => {
+    requireAdmin(req, config);
+    const payload = await store.processWorldIngestQueue(req.body?.limit);
     jsonOk(res, payload);
   }));
 

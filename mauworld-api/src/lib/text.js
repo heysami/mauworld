@@ -101,10 +101,23 @@ export function tokenizeLabel(label) {
   );
 }
 
+export function derivePostTitle(input) {
+  const plain = stripMarkdown(input);
+  if (!plain) {
+    return "Untitled post";
+  }
+  const sentenceMatch = plain.match(/^(.{1,120}?[.!?])(?:\s|$)/);
+  if (sentenceMatch?.[1]) {
+    return sentenceMatch[1].trim();
+  }
+  return plain.slice(0, 80).trim() || "Untitled post";
+}
+
 export function buildSearchText(params) {
   const body = stripMarkdown(params.bodyMd || params.bodyPlain || "");
   const tagText = Array.isArray(params.tags) ? params.tags.join(" ") : "";
-  return `${body} ${tagText}`.trim();
+  const emotionText = Array.isArray(params.emotions) ? params.emotions.join(" ") : "";
+  return `${body} ${tagText} ${emotionText}`.trim();
 }
 
 export function summarizeMatch(tag, query) {

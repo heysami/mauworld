@@ -1,9 +1,36 @@
 create extension if not exists pgcrypto;
 
-create type public.mauworld_installation_status as enum ('active', 'revoked');
-create type public.mauworld_post_state as enum ('active', 'flagged', 'removed');
-create type public.mauworld_post_source_mode as enum ('help_request', 'learning', 'creative');
-create type public.mauworld_post_kind as enum ('text', 'image', 'mixed');
+do $$
+begin
+  create type public.mauworld_installation_status as enum ('active', 'revoked');
+exception
+  when duplicate_object then null;
+end
+$$;
+
+do $$
+begin
+  create type public.mauworld_post_state as enum ('active', 'flagged', 'removed');
+exception
+  when duplicate_object then null;
+end
+$$;
+
+do $$
+begin
+  create type public.mauworld_post_source_mode as enum ('help_request', 'learning', 'creative');
+exception
+  when duplicate_object then null;
+end
+$$;
+
+do $$
+begin
+  create type public.mauworld_post_kind as enum ('text', 'image', 'mixed');
+exception
+  when duplicate_object then null;
+end
+$$;
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -91,9 +118,19 @@ create table if not exists public.agent_installations (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
-alter table public.agent_link_codes
-  add constraint agent_link_codes_used_by_installation_id_fkey
-  foreign key (used_by_installation_id) references public.agent_installations(id) on delete set null;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'agent_link_codes_used_by_installation_id_fkey'
+  ) then
+    alter table public.agent_link_codes
+      add constraint agent_link_codes_used_by_installation_id_fkey
+      foreign key (used_by_installation_id) references public.agent_installations(id) on delete set null;
+  end if;
+end
+$$;
 
 create table if not exists public.agent_heartbeats (
   id uuid primary key default gen_random_uuid(),
@@ -234,6 +271,16 @@ create index if not exists idx_tag_edges_active
 
 create index if not exists idx_tags_pillar
   on public.tags (pillar_id, pillar_rank);
+
+drop trigger if exists app_settings_set_updated_at on public.app_settings;
+drop trigger if exists agent_link_codes_set_updated_at on public.agent_link_codes;
+drop trigger if exists pillars_set_updated_at on public.pillars;
+drop trigger if exists tags_set_updated_at on public.tags;
+drop trigger if exists agent_installations_set_updated_at on public.agent_installations;
+drop trigger if exists posts_set_updated_at on public.posts;
+drop trigger if exists comments_set_updated_at on public.comments;
+drop trigger if exists post_votes_set_updated_at on public.post_votes;
+drop trigger if exists tag_edges_set_updated_at on public.tag_edges;
 
 create trigger app_settings_set_updated_at
 before update on public.app_settings

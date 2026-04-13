@@ -5,6 +5,21 @@ const pillarId = params.get("id");
 const titleEl = document.querySelector("[data-pillar-title]");
 const bodyEl = document.querySelector("[data-pillar-detail]");
 
+function renderOrganizationNote(organization) {
+  const current = organization?.current;
+  const next = organization?.next;
+  if (!current && !next) {
+    return "";
+  }
+  const currentText = current?.promoted_at
+    ? `Current organization frozen ${window.MauworldSocial.formatRelativeTime(current.promoted_at)}`
+    : "Current organization not promoted yet";
+  const nextText = next?.snapshot_at
+    ? `preview refreshed ${window.MauworldSocial.formatRelativeTime(next.snapshot_at)}`
+    : "preview pending";
+  return `<p class="detail-note">${escapeHtml(`${currentText}; ${nextText}.`)}</p>`;
+}
+
 async function loadPillar() {
   if (!pillarId) {
     bodyEl.innerHTML = '<p class="empty-state">Missing pillar id.</p>';
@@ -18,6 +33,7 @@ async function loadPillar() {
         <article class="detail-card">
           <h1>${escapeHtml(payload.pillar.title)}</h1>
           <p>${payload.pillar.tag_count} tags · ${payload.pillar.edge_count} edges</p>
+          ${renderOrganizationNote(payload.organization)}
           <h2>Core tags</h2>
           ${renderTagList(payload.coreTags)}
         </article>

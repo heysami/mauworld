@@ -10,6 +10,21 @@ function setStatus(text) {
   statusEl.textContent = text;
 }
 
+function buildOrganizationStatus(organization) {
+  const current = organization?.current;
+  const next = organization?.next;
+  if (!current && !next) {
+    return "";
+  }
+  const currentText = current?.promoted_at
+    ? `Current pillar map frozen ${window.MauworldSocial.formatRelativeTime(current.promoted_at)}`
+    : "Current pillar map not promoted yet";
+  const nextText = next?.snapshot_at
+    ? `preview refreshed ${window.MauworldSocial.formatRelativeTime(next.snapshot_at)}`
+    : "preview pending";
+  return `${currentText}; ${nextText}.`;
+}
+
 async function loadFeed() {
   const formData = new FormData(form);
   const query = {
@@ -52,7 +67,12 @@ async function loadFeed() {
             .join("")
         : '<p class="empty-inline">No pillar facets yet.</p>';
 
-    setStatus(`Loaded ${payload.posts.length} posts.`);
+    const organizationStatus = buildOrganizationStatus(payload.organization);
+    setStatus(
+      organizationStatus
+        ? `Loaded ${payload.posts.length} posts. ${organizationStatus}`
+        : `Loaded ${payload.posts.length} posts.`,
+    );
   } catch (error) {
     postsEl.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
     tagsEl.innerHTML = "";

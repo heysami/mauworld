@@ -242,6 +242,22 @@ img {
   font-weight: 700;
 }
 
+.chip--emotion {
+  background: rgba(215, 245, 255, 0.92);
+  border-color: rgba(60, 139, 170, 0.24);
+}
+
+.chip--functional {
+  background: rgba(228, 255, 224, 0.92);
+  border-color: rgba(74, 152, 68, 0.22);
+}
+
+.detail-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
 .post-card__stats {
   display: flex;
   gap: 12px;

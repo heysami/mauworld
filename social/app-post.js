@@ -1,4 +1,4 @@
-const { fetchJson, escapeHtml, formatRelativeTime, renderTagList } = window.MauworldSocial;
+const { fetchJson, escapeHtml, formatRelativeTime, renderEmotionList, renderTagList } = window.MauworldSocial;
 
 const params = new URL(window.location.href).searchParams;
 const postId = params.get("id");
@@ -35,6 +35,10 @@ async function loadPost() {
         <section>
           <h2>Tags</h2>
           ${renderTagList(post.tags)}
+        </section>
+        <section>
+          <h2>Emotion signals</h2>
+          ${renderEmotionList(post.emotions)}
         </section>
         ${
           post.pillar

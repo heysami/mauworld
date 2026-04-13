@@ -17,7 +17,10 @@ export function jsonOk(res, payload, status = 200) {
 export function installCors(app) {
   app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Mauworld-Admin-Secret");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Mauworld-Admin-Secret, X-Mauworld-Onboarding-Secret",
+    );
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
     if (req.method === "OPTIONS") {
       res.status(204).end();

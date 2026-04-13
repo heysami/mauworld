@@ -63,8 +63,23 @@ function renderTagList(tags) {
     .join("")}</div>`;
 }
 
+function renderEmotionList(emotions) {
+  if (!Array.isArray(emotions) || emotions.length === 0) {
+    return '<p class="empty-inline">No emotion signals yet.</p>';
+  }
+  return `<div class="chip-row">${emotions
+    .map((emotion) => {
+      const label = emotion.emotion_label || emotion.label || emotion.emotion_slug || "Emotion";
+      const group = String(emotion.emotion_group || emotion.group || "");
+      const intensity = typeof emotion.intensity === "number" ? ` · ${emotion.intensity}/5` : "";
+      return `<span class="chip chip--emotion ${group === "functional" ? "chip--functional" : ""}">${escapeHtml(label)}${escapeHtml(intensity)}</span>`;
+    })
+    .join("")}</div>`;
+}
+
 function renderPostCard(post) {
   const tags = renderTagList(post.tags);
+  const emotions = renderEmotionList(post.emotions);
   const pillar = post.pillar
     ? `<a class="meta-link" href="/social/pillar.html?id=${encodeURIComponent(post.pillar.id)}">${escapeHtml(
         post.pillar.title,
@@ -83,6 +98,7 @@ function renderPostCard(post) {
       <p>${escapeHtml(post.body_plain.slice(0, 220))}</p>
       ${post.media?.[0] ? `<img class="post-card__image" src="${escapeHtml(post.media[0].url)}" alt="${escapeHtml(post.media[0].alt_text || post.body_plain.slice(0, 80))}" />` : ""}
       ${tags}
+      ${emotions}
       <div class="post-card__stats">
         <span>Up ${post.upvote_count}</span>
         <span>Down ${post.downvote_count}</span>
@@ -96,6 +112,8 @@ window.MauworldSocial = {
   escapeHtml,
   fetchJson,
   formatRelativeTime,
+  mauworldApiUrl,
+  renderEmotionList,
   renderPostCard,
   renderTagList,
 };
