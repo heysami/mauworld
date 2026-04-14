@@ -57,6 +57,7 @@ const WORLD_STREAM = {
   mobileRange: 5,
   desktopRange: 6,
   retainPadding: 8,
+  renderPadding: 1,
   fogMultiplier: 2.4,
 };
 
@@ -469,12 +470,31 @@ function filterPresenceRows(presence = []) {
 }
 
 function getCachedWorldPayload(presence = []) {
+  const window = state.activeCellWindow;
+  const minX = window ? window.cell_x_min - WORLD_STREAM.renderPadding : Number.NEGATIVE_INFINITY;
+  const maxX = window ? window.cell_x_max + WORLD_STREAM.renderPadding : Number.POSITIVE_INFINITY;
+  const minZ = window ? window.cell_z_min - WORLD_STREAM.renderPadding : Number.NEGATIVE_INFINITY;
+  const maxZ = window ? window.cell_z_max + WORLD_STREAM.renderPadding : Number.POSITIVE_INFINITY;
+  const shouldRender = (entry) =>
+    !window
+    || !Number.isFinite(entry?.cell_x)
+    || !Number.isFinite(entry?.cell_z)
+    || (
+      entry.cell_x >= minX
+      && entry.cell_x <= maxX
+      && entry.cell_z >= minZ
+      && entry.cell_z <= maxZ
+    );
+
   return {
     pillars: [...state.worldCache.pillars.values()]
+      .filter(shouldRender)
       .sort((left, right) => (right.importance_score ?? 0) - (left.importance_score ?? 0)),
     tags: [...state.worldCache.tags.values()]
+      .filter(shouldRender)
       .sort((left, right) => (right.active_post_count ?? 0) - (left.active_post_count ?? 0)),
     postInstances: [...state.worldCache.posts.values()]
+      .filter(shouldRender)
       .sort((left, right) => (right.popularity_score ?? 0) - (left.popularity_score ?? 0)),
     presence: filterPresenceRows(presence),
   };
@@ -2901,6 +2921,9 @@ function initScene() {
     halo: viewerAvatar.halo,
     orb: viewerAvatar.orb,
     orbBaseY: viewerAvatar.orb.position.y,
+    opacity: 1,
+    targetOpacity: 1,
+    bobPhase: Math.random() * Math.PI * 2,
     lastPosition: getNavigationPosition().clone(),
     lastSyncElapsed: 0,
     leanX: 0,
@@ -3188,11 +3211,29 @@ function renderSearchResults() {
   }
 }
 
-function buildCellWindow(position = getNavigationPosition()) {
+function buildCellWindow(position = getNavigationPosition(), options = {}) {
   const cellSize = state.meta?.renderer?.lod?.cellSize ?? 64;
   const range = window.innerWidth < 780 ? WORLD_STREAM.mobileRange : WORLD_STREAM.desktopRange;
   const centerX = Math.floor(position.x / Math.max(1, cellSize));
   const centerZ = Math.floor(position.z / Math.max(1, cellSize));
+  const stickyMargin = Math.max(1, Math.min(2, range - 1));
+  const sticky = options.sticky !== false;
+
+  if (sticky && state.activeCellWindow) {
+    const keepMinX = state.activeCellWindow.cell_x_min + stickyMargin;
+    const keepMaxX = state.activeCellWindow.cell_x_max - stickyMargin;
+    const keepMinZ = state.activeCellWindow.cell_z_min + stickyMargin;
+    const keepMaxZ = state.activeCellWindow.cell_z_max - stickyMargin;
+    if (
+      centerX >= keepMinX
+      && centerX <= keepMaxX
+      && centerZ >= keepMinZ
+      && centerZ <= keepMaxZ
+    ) {
+      return state.activeCellWindow;
+    }
+  }
+
   return {
     cell_x_min: centerX - range,
     cell_x_max: centerX + range,
@@ -3225,7 +3266,7 @@ async function loadStreamForPosition(position, force = false) {
   if (!state.meta || state.streamLoading) {
     return;
   }
-  const nextWindow = buildCellWindow(position);
+  const nextWindow = buildCellWindow(position, { sticky: !force });
   if (!force && nextWindow.key === state.currentCellKey) {
     return;
   }

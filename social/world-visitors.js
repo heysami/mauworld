@@ -347,13 +347,18 @@ export function updateMascotMotion(actor, options = {}) {
   const actorPosition = actor.position ?? actor.group.position;
   const nextPosition = options.nextPosition ?? actorPosition;
   const maxSpeed = Math.max(0.0001, options.maxSpeed ?? 12);
+  const currentFacingYaw = Number.isFinite(actor.facingYaw) ? actor.facingYaw : 0;
+  const currentLeanX = Number.isFinite(actor.leanX) ? actor.leanX : 0;
+  const currentLeanZ = Number.isFinite(actor.leanZ) ? actor.leanZ : 0;
+  const bobPhase = Number.isFinite(actor.bobPhase) ? actor.bobPhase : 0;
+  const visibleOpacity = Number.isFinite(actor.opacity) ? actor.opacity : 1;
   const movement =
     actor.lastPosition == null
       ? new THREE.Vector3()
       : nextPosition.clone().sub(actor.lastPosition);
   const movementLength = movement.length();
   const normalizedSpeed = clamp(movementLength / Math.max(deltaSeconds, 0.0001) / maxSpeed, 0, 1);
-  let facingTarget = Number.isFinite(options.idleFacingYaw) ? options.idleFacingYaw : actor.facingYaw ?? 0;
+  let facingTarget = Number.isFinite(options.idleFacingYaw) ? options.idleFacingYaw : currentFacingYaw;
 
   if (movementLength > 0.000001 && options.faceMovement !== false) {
     facingTarget = normalizeAngle(yawFromVector(movement) + Math.PI);
@@ -374,11 +379,11 @@ export function updateMascotMotion(actor, options = {}) {
   const leanMix = 1 - Math.exp(-deltaSeconds * (options.leanResponse ?? 9));
   actor.targetLeanX = forwardAmount * (options.leanXFactor ?? 0.26);
   actor.targetLeanZ = sideAmount * (options.leanZFactor ?? 0.22);
-  actor.leanX += (actor.targetLeanX - actor.leanX) * leanMix;
-  actor.leanZ += (actor.targetLeanZ - actor.leanZ) * leanMix;
+  actor.leanX = currentLeanX + (actor.targetLeanX - currentLeanX) * leanMix;
+  actor.leanZ = currentLeanZ + (actor.targetLeanZ - currentLeanZ) * leanMix;
 
   actor.facingYaw = normalizeAngle(
-    actor.facingYaw + shortestAngleDelta(actor.facingYaw, facingTarget) * (1 - Math.exp(-deltaSeconds * (options.facingResponse ?? 9))),
+    currentFacingYaw + shortestAngleDelta(currentFacingYaw, facingTarget) * (1 - Math.exp(-deltaSeconds * (options.facingResponse ?? 9))),
   );
   actor.group.rotation.y = actor.facingYaw;
 
@@ -388,7 +393,7 @@ export function updateMascotMotion(actor, options = {}) {
     actor.position.copy(nextPosition);
   }
   actor.group.position.copy(nextPosition);
-  actor.group.position.y += Math.sin(elapsedSeconds * bobSpeed + actor.bobPhase) * bobAmplitude * Math.max(actor.opacity, 0.25);
+  actor.group.position.y += Math.sin(elapsedSeconds * bobSpeed + bobPhase) * bobAmplitude * Math.max(visibleOpacity, 0.25);
 
   if (actor.poseRoot) {
     actor.poseRoot.rotation.x = actor.leanX;
@@ -398,7 +403,7 @@ export function updateMascotMotion(actor, options = {}) {
     actor.halo.rotation.z += deltaSeconds * 1.12;
   }
   if (actor.orb) {
-    actor.orb.position.y = actor.orbBaseY + Math.sin(elapsedSeconds * 1.8 + actor.bobPhase) * 0.26;
+    actor.orb.position.y = actor.orbBaseY + Math.sin(elapsedSeconds * 1.8 + bobPhase) * 0.26;
   }
   actor.lastPosition = actor.lastPosition ?? nextPosition.clone();
   actor.lastPosition.copy(nextPosition);
