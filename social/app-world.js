@@ -859,6 +859,47 @@ function createCircleTexture(options = {}) {
   return texture;
 }
 
+function createConfettiTexture(options = {}) {
+  const canvas = document.createElement("canvas");
+  const size = options.size ?? 192;
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  const fill = options.fill ?? "rgba(255, 255, 255, 0.98)";
+  const stroke = options.stroke ?? "rgba(255, 255, 255, 0.46)";
+  const fold = options.fold ?? "rgba(255, 255, 255, 0.3)";
+  const width = size * 0.23;
+  const height = size * 0.42;
+
+  context.clearRect(0, 0, size, size);
+  context.save();
+  context.translate(size / 2, size / 2);
+  context.rotate(Math.PI / 4);
+  context.beginPath();
+  context.moveTo(-width, -height * 0.78);
+  context.lineTo(width, -height);
+  context.lineTo(width * 1.06, height * 0.82);
+  context.lineTo(-width * 0.94, height);
+  context.closePath();
+  context.fillStyle = fill;
+  context.fill();
+  context.lineWidth = size * 0.028;
+  context.strokeStyle = stroke;
+  context.stroke();
+  context.beginPath();
+  context.moveTo(-width * 0.7, -height * 0.16);
+  context.lineTo(width * 0.74, height * 0.1);
+  context.strokeStyle = fold;
+  context.lineWidth = size * 0.02;
+  context.stroke();
+  context.restore();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function createBillboard(texture, width, height, options = {}) {
   const material = new THREE.MeshBasicMaterial({
     map: texture,
@@ -2005,47 +2046,34 @@ function computeApproachAnchor(destination, distance = 12, lift = -6, sourcePosi
 function spawnTrailPuff(position, travelVector) {
   const group = new THREE.Group();
   group.position.copy(position);
-  group.position.y += 1.8;
-  const pieceCount = 10;
+  group.position.y += 1.35;
+  const pieceCount = 8;
   const pieces = Array.from({ length: pieceCount }, (_, index) => {
-    const color = new THREE.Color(pickAccent(`trail-${Date.now()}-${index}`))
-      .lerp(new THREE.Color("#ffffff"), 0.08 + Math.random() * 0.16);
-    const width = 0.34 + Math.random() * 0.42;
-    const height = 0.16 + Math.random() * 0.28;
+    const radius = 0.14 + Math.random() * 0.22;
     const mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(width, height),
+      new THREE.SphereGeometry(radius, 10, 10),
       new THREE.MeshBasicMaterial({
-        color,
+        color: "#ffffff",
         transparent: true,
-        opacity: 0.92,
-        side: THREE.DoubleSide,
+        opacity: 0.94,
         depthWrite: false,
         fog: false,
       }),
     );
     mesh.position.set(
-      (Math.random() - 0.5) * 1.8,
-      Math.random() * 1.3,
-      (Math.random() - 0.5) * 1.8,
-    );
-    mesh.rotation.set(
-      Math.random() * Math.PI,
-      Math.random() * Math.PI,
-      Math.random() * Math.PI,
+      (Math.random() - 0.5) * 1.2,
+      Math.random() * 0.68,
+      (Math.random() - 0.5) * 1.2,
     );
     group.add(mesh);
     return {
       mesh,
       velocity: new THREE.Vector3(
-        (Math.random() - 0.5) * 4.6 - travelVector.x * 0.022,
-        0.7 + Math.random() * 1.2,
-        (Math.random() - 0.5) * 4.6 - travelVector.z * 0.022,
+        (Math.random() - 0.5) * 1.4 - travelVector.x * 0.012,
+        0.18 + Math.random() * 0.42,
+        (Math.random() - 0.5) * 1.4 - travelVector.z * 0.012,
       ),
-      spin: new THREE.Vector3(
-        (Math.random() - 0.5) * 5.4,
-        (Math.random() - 0.5) * 5.4,
-        (Math.random() - 0.5) * 5.4,
-      ),
+      growth: 0.34 + Math.random() * 0.62,
     };
   });
   sceneState.trails.add(group);
@@ -2053,11 +2081,11 @@ function spawnTrailPuff(position, travelVector) {
     group,
     pieces,
     age: 0,
-    lifetime: 1.35 + Math.random() * 0.35,
+    lifetime: 1.1 + Math.random() * 0.28,
     drift: new THREE.Vector3(
-      -travelVector.x * 0.012,
-      0.36 + Math.random() * 0.22,
-      -travelVector.z * 0.012,
+      -travelVector.x * 0.006,
+      0.08 + Math.random() * 0.08,
+      -travelVector.z * 0.006,
     ),
   });
 }
@@ -2483,7 +2511,7 @@ function initScene() {
   const snowColors = new Float32Array(snowCount * 3);
   sceneState.snowData = Array.from({ length: snowCount }, (_, index) => {
     const color = new THREE.Color(pickAccent(`confetti-${index}`))
-      .lerp(new THREE.Color("#ffffff"), 0.16 + Math.random() * 0.26);
+      .lerp(new THREE.Color("#ffffff"), 0.03 + Math.random() * 0.08);
     snowColors[index * 3] = color.r;
     snowColors[index * 3 + 1] = color.g;
     snowColors[index * 3 + 2] = color.b;
@@ -2506,19 +2534,19 @@ function initScene() {
   sceneState.snow = new THREE.Points(
     snowGeometry,
     new THREE.PointsMaterial({
-      map: createCircleTexture({
-        fill: "rgba(255, 255, 255, 0.96)",
-        stroke: "rgba(255, 255, 255, 0.24)",
-        glow: "rgba(255, 255, 255, 0.14)",
-        size: 72,
+      map: createConfettiTexture({
+        fill: "rgba(255, 255, 255, 0.98)",
+        stroke: "rgba(255, 255, 255, 0.42)",
+        fold: "rgba(255, 255, 255, 0.28)",
+        size: 92,
       }),
-      size: 1.9,
+      size: 1.7,
       transparent: true,
-      opacity: 0.92,
+      opacity: 0.98,
       depthWrite: false,
       sizeAttenuation: true,
-      alphaTest: 0.02,
-      blending: THREE.AdditiveBlending,
+      alphaTest: 0.12,
+      blending: THREE.NormalBlending,
       fog: false,
       vertexColors: true,
     }),
@@ -3077,10 +3105,9 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     entry.group.position.y += deltaSeconds * 0.08;
     for (const piece of entry.pieces) {
       piece.mesh.position.addScaledVector(piece.velocity, deltaSeconds);
-      piece.mesh.rotation.x += piece.spin.x * deltaSeconds;
-      piece.mesh.rotation.y += piece.spin.y * deltaSeconds;
-      piece.mesh.rotation.z += piece.spin.z * deltaSeconds;
-      piece.mesh.material.opacity = (1 - life) * 0.86;
+      const scale = 1 + life * piece.growth;
+      piece.mesh.scale.setScalar(scale);
+      piece.mesh.material.opacity = (1 - life) * 0.88;
     }
     if (life >= 1) {
       sceneState.trails.remove(entry.group);
