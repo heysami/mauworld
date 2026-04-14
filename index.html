@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Maumau | Download and setup</title>
     <meta
+      data-slot-attr="meta_description"
       name="description"
       content="A polished landing page for Maumau's guided setup, multilingual operation, telephony-ready automation, specialist teams, and downloadable macOS app."
     />
@@ -27,21 +28,39 @@
             <img src="assets/maumau-icon.png" alt="Maumau cat mascot icon" />
           </span>
           <span class="brand__copy">
-            <span class="brand__eyebrow">Maumau app</span>
+            <span class="brand__eyebrow" data-slot="brand_eyebrow">Maumau app</span>
             <span class="brand__name">Maumau</span>
-            <span class="brand__sub">Download, setup, and control.</span>
+            <span class="brand__sub" data-slot="brand_sub">Download, setup, and control.</span>
           </span>
         </a>
 
         <nav class="site-nav" aria-label="Primary">
-          <a class="site-nav__link site-nav__link--active" href="index.html">Landing</a>
-          <a class="site-nav__link" href="guide/">Dashboard guide</a>
+          <a class="site-nav__link site-nav__link--active" href="index.html" data-slot="nav_landing">Landing</a>
+          <a class="site-nav__link" href="guide/" data-slot="nav_guide">Dashboard guide</a>
+          <label class="language-picker" for="language-picker">
+            <span class="sr-only">Language</span>
+            <select id="language-picker" data-language-selector aria-label="Language">
+              <option value="en">English</option>
+              <option value="zh">Chinese</option>
+              <option value="id">Bahasa Indonesia</option>
+              <option value="ms">Bahasa Melayu</option>
+              <option value="th">Thai</option>
+              <option value="vi">Vietnamese</option>
+              <option value="my">Burmese</option>
+              <option value="fil">Filipino</option>
+              <option value="jv">Javanese</option>
+              <option value="su">Sundanese</option>
+              <option value="btk">Batak</option>
+              <option value="min">Minangkabau</option>
+              <option value="ban">Balinese</option>
+            </select>
+          </label>
           <a
             class="button button--primary"
             href="downloads/Maumau-2026.3.28-beta.2.dmg"
             download
           >
-            Download macOS app
+            <span data-slot="nav_download">Download macOS app</span>
             <span class="button__tail" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                 <path d="M12 4v12"></path>
@@ -56,16 +75,16 @@
     <main class="page-main" id="content">
       <section class="hero">
         <div class="hero__copy" data-reveal>
-          <p class="section-kicker">Guided from install to first real run</p>
+          <p class="section-kicker" data-slot="hero_kicker">Guided from install to first real run</p>
           <h1>Maumau</h1>
-          <p class="hero__lede">Personal AI team</p>
+          <p class="hero__lede" data-slot="hero_lede">Personal AI team</p>
           <div class="hero__actions">
             <a
               class="button button--primary"
               href="downloads/Maumau-2026.3.28-beta.2.dmg"
               download
             >
-              Download Maumau for macOS
+              <span data-slot="hero_download">Download Maumau for macOS</span>
               <span class="button__tail" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                   <path d="M12 4v12"></path>
@@ -74,7 +93,7 @@
               </span>
             </a>
             <a class="button button--soft" href="guide/">
-              Open operations dashboard guide
+              <span data-slot="hero_guide">Open operations dashboard guide</span>
               <span class="button__tail" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                   <path d="M7 12h10"></path>
@@ -88,7 +107,7 @@
         <div class="hero-panel__shell" data-reveal>
           <div class="hero-panel__core">
             <div class="hero-panel__topline">
-              <span>Latest macOS installer ready</span>
+              <span data-slot="hero_panel_topline">Latest macOS installer ready</span>
               <span class="pill">Maumau-2026.3.28-beta.2.dmg</span>
             </div>
 
@@ -107,8 +126,8 @@
                       </svg>
                     </span>
                     <div>
-                      <strong>Guided setup</strong>
-                      <span>Install, connect, onboard.</span>
+                      <strong data-slot="hero_pocket_setup_title">Guided setup</strong>
+                      <span data-slot="hero_pocket_setup_desc">Install, connect, onboard.</span>
                     </div>
                   </div>
                 </article>
@@ -120,8 +139,8 @@
                       </svg>
                     </span>
                     <div>
-                      <strong>Voice ready</strong>
-                      <span>Telephony, speech, voice defaults.</span>
+                      <strong data-slot="hero_pocket_voice_title">Voice ready</strong>
+                      <span data-slot="hero_pocket_voice_desc">Telephony, speech, voice defaults.</span>
                     </div>
                   </div>
                 </article>
@@ -136,8 +155,8 @@
                       </svg>
                     </span>
                     <div>
-                      <strong>Specialist teams</strong>
-                      <span>Build, design, business, life.</span>
+                      <strong data-slot="hero_pocket_teams_title">Specialist teams</strong>
+                      <span data-slot="hero_pocket_teams_desc">Build, design, business, life.</span>
                     </div>
                   </div>
                 </article>
@@ -149,12 +168,12 @@
 
       <section class="section-block" data-reveal>
         <div class="section-heading">
-          <p class="section-kicker">Why Maumau</p>
-          <h2>Get to a real run without setup fatigue.</h2>
-          <p>Guided onboarding first. Defaults stay filled in. Teams, memory, and dashboards are already part of the system.</p>
+          <p class="section-kicker" data-slot="why_kicker">Why Maumau</p>
+          <h2 data-slot="why_title">Get to a real run without setup fatigue.</h2>
+          <p data-slot="why_desc">Guided onboarding first. Defaults stay filled in. Teams, memory, and dashboards are already part of the system.</p>
         </div>
 
-        <div class="feature-grid">
+        <div class="feature-grid" data-feature-grid>
           <article class="feature-card">
             <div class="feature-card__head">
               <span class="feature-card__glyph" aria-hidden="true">
@@ -503,12 +522,12 @@
 
       <section class="section-block" data-reveal>
         <div class="section-heading">
-          <p class="section-kicker">How to start</p>
-          <h2>Five steps to your first run.</h2>
-          <p>Set up the accounts and connections once, then download Maumau and follow the guide inside the app.</p>
+          <p class="section-kicker" data-slot="start_kicker">How to start</p>
+          <h2 data-slot="start_title">Five steps to your first run.</h2>
+          <p data-slot="start_desc">Set up the accounts and connections once, then download Maumau and follow the guide inside the app.</p>
         </div>
 
-        <div class="start-grid">
+        <div class="start-grid" data-start-grid>
           <article class="start-step">
             <div class="start-step__topline">
               <span class="start-step__num">01</span>
@@ -553,9 +572,9 @@
 
       <section class="story-band" data-reveal>
         <div class="story-band__copy">
-          <p class="section-kicker">Life already happens in chat</p>
-          <h2>Stay where people already talk.</h2>
-          <p>WhatsApp, Telegram, Slack, Discord, Matrix, Teams, iMessage, and more.</p>
+          <p class="section-kicker" data-slot="story_kicker">Life already happens in chat</p>
+          <h2 data-slot="story_title">Stay where people already talk.</h2>
+          <p data-slot="story_desc">WhatsApp, Telegram, Slack, Discord, Matrix, Teams, iMessage, and more.</p>
           <div class="point-list">
             <div class="point-item">
               <span class="point-icon" aria-hidden="true">
@@ -564,8 +583,8 @@
                 </svg>
               </span>
               <div class="point-copy">
-                <strong>Inbox light</strong>
-                <span>Fast touch. Familiar surfaces.</span>
+                <strong data-slot="story_point1_title">Inbox light</strong>
+                <span data-slot="story_point1_desc">Fast touch. Familiar surfaces.</span>
               </div>
             </div>
             <div class="point-item">
@@ -576,8 +595,8 @@
                 </svg>
               </span>
               <div class="point-copy">
-                <strong>Dashboard deep</strong>
-                <span>Full context when you need the operating picture.</span>
+                <strong data-slot="story_point2_title">Dashboard deep</strong>
+                <span data-slot="story_point2_desc">Full context when you need the operating picture.</span>
               </div>
             </div>
           </div>
@@ -586,8 +605,8 @@
         <div class="story-band__frame">
           <div class="story-band__frame-inner">
             <div class="story-band__label-row">
-              <strong>Maumau chat mock</strong>
-              <span class="pill">Brand-safe mock</span>
+              <strong data-slot="mock_label">Maumau chat mock</strong>
+              <span class="pill" data-slot="mock_badge">Brand-safe mock</span>
             </div>
             <div class="phone-mock" aria-label="Illustrated Maumau chat example">
               <div class="phone-mock__header">
@@ -596,14 +615,14 @@
                 </span>
                 <div class="phone-mock__identity">
                   <strong>Maumau</strong>
-                  <span>online</span>
+                  <span data-slot="mock_status">online</span>
                 </div>
               </div>
               <div class="phone-mock__thread">
-                <div class="phone-bubble phone-bubble--out">Need the short version before the call.</div>
-                <div class="phone-bubble phone-bubble--in">Done. Notes, priorities, and next step are ready.</div>
-                <div class="phone-bubble phone-bubble--out">Also remind me tonight.</div>
-                <div class="phone-bubble phone-bubble--in">Added to your routine.</div>
+                <div class="phone-bubble phone-bubble--out" data-slot="mock_chat_1">Need the short version before the call.</div>
+                <div class="phone-bubble phone-bubble--in" data-slot="mock_chat_2">Done. Notes, priorities, and next step are ready.</div>
+                <div class="phone-bubble phone-bubble--out" data-slot="mock_chat_3">Also remind me tonight.</div>
+                <div class="phone-bubble phone-bubble--in" data-slot="mock_chat_4">Added to your routine.</div>
               </div>
             </div>
           </div>
@@ -614,11 +633,11 @@
 
     <footer class="site-footer">
       <div class="site-footer__inner">
-        <div>Landing page for the current Maumau local build. <span data-current-year></span></div>
+        <div><span data-slot="footer_note">Landing page for the current Maumau local build.</span> <span data-current-year></span></div>
         <div class="site-footer__links">
-          <a href="index.html">Landing</a>
-          <a href="guide/">Dashboard guide</a>
-          <a href="downloads/Maumau-2026.3.28-beta.2.dmg" download>Download macOS app</a>
+          <a href="index.html" data-slot="footer_landing">Landing</a>
+          <a href="guide/" data-slot="footer_guide">Dashboard guide</a>
+          <a href="downloads/Maumau-2026.3.28-beta.2.dmg" download data-slot="footer_download">Download macOS app</a>
         </div>
       </div>
     </footer>
