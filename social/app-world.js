@@ -1894,6 +1894,7 @@ function buildTagObject(entry) {
   group.add(beacon);
 
   const labelWidth = clamp(15 + ((tag.label ?? "").length * 0.5), 18, 30);
+  const labelHeight = labelWidth * (160 / 768);
   const label = createBillboard(
     createTagTextTexture(
       tag.label || "tag",
@@ -1903,7 +1904,7 @@ function buildTagObject(entry) {
       },
     ),
     labelWidth,
-    4.2,
+    labelHeight,
     {
       opacity: 0.76,
       fog: false,
@@ -1956,17 +1957,19 @@ function buildPostObject(entry) {
       : entry.display_tier === "standard"
         ? accents.secondary
         : accents.tertiary;
-  const width = 8.6 + entry.size_factor * 4.8 + (entry.display_tier === "hero" ? 1.6 : 0);
-  const height = 5.3 + entry.size_factor * 2.5 + (entry.display_tier === "hero" ? 0.9 : 0);
-  const elevation = height * 0.62;
+  const cardTextureWidth = 700;
+  const cardTextureHeight = entry.display_tier === "hero" ? 272 : 248;
+  const cardWidth = 8.6 + entry.size_factor * 4.8 + (entry.display_tier === "hero" ? 1.6 : 0);
+  const cardHeight = cardWidth * (cardTextureHeight / cardTextureWidth);
+  const elevation = cardHeight * 0.62;
 
   const card = createBillboard(
     createCompactCardTexture(
       post.title || truncateText(post.body_plain || "Post", 28),
       "",
       {
-        width: 700,
-        height: entry.display_tier === "hero" ? 272 : 248,
+        width: cardTextureWidth,
+        height: cardTextureHeight,
         accent: color,
         border: accents.primary,
         titleLines: entry.display_tier === "hero" ? 3 : 2,
@@ -1974,8 +1977,8 @@ function buildPostObject(entry) {
         titleLineHeight: entry.display_tier === "hero" ? 48 : 44,
       },
     ),
-    width,
-    height,
+    cardWidth,
+    cardHeight,
     {
       opacity: 0.9,
       renderOrder: 10,
@@ -1985,7 +1988,7 @@ function buildPostObject(entry) {
   group.add(card);
 
   const baseMarker = new THREE.Mesh(
-    new THREE.CircleGeometry(Math.max(2.4, width * 0.16), 28),
+    new THREE.CircleGeometry(Math.max(2.4, cardWidth * 0.16), 28),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color(color),
       transparent: true,
@@ -2004,8 +2007,8 @@ function buildPostObject(entry) {
       stroke: accents.primary,
       glow: `${accents.secondary}33`,
     }),
-    Math.max(3.8, width * 0.42),
-    Math.max(3.8, width * 0.42),
+    Math.max(3.8, cardWidth * 0.42),
+    Math.max(3.8, cardWidth * 0.42),
     {
       opacity: 0.16,
       fog: false,
@@ -2050,6 +2053,7 @@ function buildPresenceObject(entry) {
   group.add(mascot.group);
 
   const labelWidth = clamp(12 + String(actor.display_name || entry.actor_type || "agent").length * 0.28, 14, 24);
+  const labelHeight = labelWidth * (160 / 768);
   const label = createBillboard(
     createTagTextTexture(
       actor.display_name || (entry.actor_type === "agent" ? "agent" : "visitor"),
@@ -2059,7 +2063,7 @@ function buildPresenceObject(entry) {
       },
     ),
     labelWidth,
-    3.2,
+    labelHeight,
     {
       opacity: 0.92,
       fog: false,
@@ -2379,6 +2383,8 @@ function syncFocusedGhost() {
     result.destination.position_z,
   );
 
+  const ghostCardWidth = 15.5;
+  const ghostCardHeight = ghostCardWidth * (200 / 640);
   const card = createBillboard(
     createCompactCardTexture(
       post.title || truncateText(post.body_plain || "Post", 26),
@@ -2390,8 +2396,8 @@ function syncFocusedGhost() {
         background: "rgba(255, 255, 255, 0.94)",
       },
     ),
-    15.5,
-    5.3,
+    ghostCardWidth,
+    ghostCardHeight,
     {
       opacity: 0.94,
       fog: false,
