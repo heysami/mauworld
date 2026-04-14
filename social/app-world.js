@@ -2081,7 +2081,10 @@ function buildTagObject(entry) {
 
   sceneState.animatedTags.push({
     tagId: entry.tag_id,
+    group,
     anchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
+    homeAnchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
+    displayAnchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
     outline,
     center,
     ring,
@@ -2597,6 +2600,47 @@ function syncFocusedGhost() {
   sceneState.focusGhosts.add(group);
 }
 
+function computeOpenTagDisplayAnchor(entry) {
+  const homeAnchor = entry.homeAnchor ?? entry.anchor;
+  const focusedDestination = state.focusedResult?.destination;
+  if (
+    focusedDestination?.tag_id === entry.tagId
+    && Number.isFinite(focusedDestination.position_x)
+    && Number.isFinite(focusedDestination.position_z)
+  ) {
+    return homeAnchor.clone().lerp(
+      new THREE.Vector3(
+        focusedDestination.position_x,
+        homeAnchor.y,
+        focusedDestination.position_z,
+      ),
+      0.52,
+    );
+  }
+
+  const tagPosts = sceneState.animatedPosts.filter(
+    (post) => post.tagId === entry.tagId && post.displayTier !== "hidden",
+  );
+  if (tagPosts.length === 0) {
+    return homeAnchor.clone();
+  }
+
+  const centroid = tagPosts.reduce(
+    (accumulator, post) =>
+      accumulator.add(new THREE.Vector3(post.anchor.x, homeAnchor.y, post.anchor.z)),
+    new THREE.Vector3(),
+  ).multiplyScalar(1 / tagPosts.length);
+  return homeAnchor.clone().lerp(centroid, 0.38);
+}
+
+function getRenderedTagAnchor(tag) {
+  const animated = sceneState.animatedTags.find((entry) => entry.tagId === tag.tag_id);
+  if (animated?.displayAnchor) {
+    return animated.displayAnchor;
+  }
+  return new THREE.Vector3(tag.position_x, tag.position_y, tag.position_z);
+}
+
 function syncExpandedTagState() {
   for (const entry of sceneState.animatedPosts) {
     entry.targetVisible = state.openTagId === entry.tagId;
@@ -2609,6 +2653,8 @@ function syncExpandedTagState() {
     const isOpen = state.openTagId === entry.tagId;
     entry.isOpen = isOpen;
     entry.center.scale.setScalar(isOpen ? 1.18 : 1);
+    entry.displayAnchor.copy(isOpen ? computeOpenTagDisplayAnchor(entry) : entry.homeAnchor);
+    entry.group.position.copy(entry.displayAnchor);
   }
 
   if (state.stream) {
@@ -2756,8 +2802,9 @@ function rebuildConnections(pillars, tags, posts) {
     if (!pillar) {
       continue;
     }
+    const renderedTagAnchor = getRenderedTagAnchor(tag);
     positions.push(pillar.position_x, pillar.position_y + pillar.height, pillar.position_z);
-    positions.push(tag.position_x, tag.position_y, tag.position_z);
+    positions.push(renderedTagAnchor.x, renderedTagAnchor.y, renderedTagAnchor.z);
   }
   for (const post of posts) {
     if (state.openTagId !== post.tag_id) {
@@ -2767,7 +2814,8 @@ function rebuildConnections(pillars, tags, posts) {
     if (!tag) {
       continue;
     }
-    positions.push(tag.position_x, tag.position_y, tag.position_z);
+    const renderedTagAnchor = getRenderedTagAnchor(tag);
+    positions.push(renderedTagAnchor.x, renderedTagAnchor.y, renderedTagAnchor.z);
     positions.push(post.position_x, post.position_y, post.position_z);
   }
   const geometry = new THREE.BufferGeometry();
@@ -2791,7 +2839,12 @@ function rebuildConnections(pillars, tags, posts) {
       continue;
     }
     const { elevation } = getPostCardLayout(post);
-    const start = new THREE.Vector3(tag.position_x, tag.position_y + 0.18, tag.position_z);
+    const renderedTagAnchor = getRenderedTagAnchor(tag);
+    const start = new THREE.Vector3(
+      renderedTagAnchor.x,
+      renderedTagAnchor.y + 0.18,
+      renderedTagAnchor.z,
+    );
     const end = new THREE.Vector3(post.position_x, post.position_y + elevation * 0.76, post.position_z);
     const accents = pickAccentSet(post.post_id || post.post?.title || `${post.tag_id}:${post.post_id}`);
     const branch = createBranchConnection(start, end, {
@@ -3553,7 +3606,7 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   for (const entry of sceneState.animatedTags) {
     entry.ring.rotation.z += deltaSeconds * entry.speed;
     entry.halo.rotation.z -= deltaSeconds * entry.speed * 0.62;
-    const distance = entry.anchor.distanceTo(sceneState.camera.position);
+    const distance = (entry.displayAnchor ?? entry.anchor).distanceTo(sceneState.camera.position);
     const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
     const farMix = clamp((distance - nearDistance * 0.8) / Math.max(1, retainedDistance - nearDistance * 0.8), 0, 1);
     entry.label.visible = true;
