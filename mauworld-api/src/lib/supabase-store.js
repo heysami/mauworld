@@ -3136,9 +3136,19 @@ export class MauworldStore {
     });
 
     if (tagUpdates.length > 0) {
-      await must(
-        this.serviceClient.from("tags").upsert(tagUpdates).select("id"),
-        "Could not rebuild tag counters",
+      await Promise.all(
+        tagUpdates.map((row) =>
+          must(
+            this.serviceClient
+              .from("tags")
+              .update({
+                usage_count: row.usage_count,
+                post_count: row.post_count,
+                updated_at: row.updated_at,
+              })
+              .eq("id", row.id),
+            "Could not rebuild tag counters",
+          )),
       );
     }
 
