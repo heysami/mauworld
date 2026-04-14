@@ -55,6 +55,31 @@ body.world-body {
   cursor: grabbing;
 }
 
+.world-focus-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.world-focus-veil__piece {
+  position: absolute;
+  background: rgba(247, 251, 255, 0.14);
+  backdrop-filter: blur(26px) saturate(0.72) brightness(0.84);
+}
+
+.world-focus-veil__frame {
+  position: absolute;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow:
+    0 0 0 1px rgba(61, 87, 182, 0.14),
+    0 24px 48px rgba(18, 31, 78, 0.16);
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .world-panel,
 .world-inspector,
 .world-toast {

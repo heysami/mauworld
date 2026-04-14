@@ -5,6 +5,8 @@ const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 
 const elements = {
   canvas: document.querySelector("[data-world-canvas]"),
+  focusVeil: document.querySelector("[data-world-focus-veil]"),
+  focusFrame: document.querySelector("[data-world-focus-frame]"),
   searchForm: document.querySelector("[data-world-search-form]"),
   searchStatus: document.querySelector("[data-world-search-status]"),
   results: document.querySelector("[data-world-results]"),
@@ -24,6 +26,13 @@ const elements = {
   resultsPanel: document.querySelector(".world-results-panel"),
   inspector: document.querySelector(".world-inspector"),
   inspectorClose: document.querySelector("[data-world-inspector-close]"),
+};
+
+elements.focusPieces = {
+  top: document.querySelector('[data-world-focus-piece="top"]'),
+  left: document.querySelector('[data-world-focus-piece="left"]'),
+  right: document.querySelector('[data-world-focus-piece="right"]'),
+  bottom: document.querySelector('[data-world-focus-piece="bottom"]'),
 };
 
 const WORLD_API = {
@@ -106,6 +115,10 @@ const state = {
   navigationPosition: new THREE.Vector3(0, 96, 112),
   cameraRadius: PLAYER_VIEW.defaultRadius,
   travelAnimation: null,
+  postFocusTagId: null,
+  postFocusMix: 0,
+  postFocusMixTarget: 0,
+  focusReturnRadius: PLAYER_VIEW.defaultRadius,
   trailAccumulator: 0,
   worldCache: {
     pillars: new Map(),
@@ -277,6 +290,41 @@ function getPlayerLookTarget(position = state.navigationPosition) {
   return position.clone().add(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
 }
 
+function getCameraForwardVector(yaw = inputState.yaw, pitch = inputState.pitch) {
+  const cosPitch = Math.cos(pitch);
+  return new THREE.Vector3(
+    -Math.sin(yaw) * cosPitch,
+    Math.sin(pitch),
+    -Math.cos(yaw) * cosPitch,
+  ).normalize();
+}
+
+function isPostFocusModeActive() {
+  return state.postFocusMixTarget > 0.001 || state.postFocusMix > 0.001;
+}
+
+function setPostFocusMode(active, tagId = null) {
+  if (active) {
+    if (state.postFocusMixTarget < 0.5) {
+      state.focusReturnRadius = state.cameraRadius;
+    }
+    state.postFocusTagId = tagId ?? state.focusedResult?.destination?.tag_id ?? state.postFocusTagId;
+    state.postFocusMixTarget = 1;
+    return;
+  }
+  state.postFocusMixTarget = 0;
+  state.postFocusTagId = null;
+  state.cameraRadius = clamp(
+    state.focusReturnRadius || state.cameraRadius,
+    PLAYER_VIEW.minRadius,
+    PLAYER_VIEW.maxRadius,
+  );
+}
+
+function shouldPreservePostFocusForTag(tagId) {
+  return !state.postFocusTagId || state.postFocusTagId === tagId || state.postFocusMixTarget < 0.5;
+}
+
 function syncCameraToFollowTarget() {
   if (!sceneState.camera) {
     return;
@@ -284,12 +332,16 @@ function syncCameraToFollowTarget() {
   const target = getPlayerLookTarget();
   const radius = clamp(state.cameraRadius, PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius);
   const cosPitch = Math.cos(inputState.pitch);
-  sceneState.camera.position.set(
+  const thirdPersonPosition = new THREE.Vector3(
     target.x + Math.sin(inputState.yaw) * cosPitch * radius,
     target.y - Math.sin(inputState.pitch) * radius,
     target.z + Math.cos(inputState.yaw) * cosPitch * radius,
   );
-  sceneState.camera.lookAt(target);
+  const firstPersonPosition = target.clone();
+  const firstPersonLookTarget = target.clone().addScaledVector(getCameraForwardVector(), 48);
+  const focusMix = clamp(state.postFocusMix, 0, 1);
+  sceneState.camera.position.copy(thirdPersonPosition.lerp(firstPersonPosition, focusMix));
+  sceneState.camera.lookAt(target.clone().lerp(firstPersonLookTarget, focusMix));
 }
 
 function aimCameraAt(position, target) {
@@ -2315,6 +2367,7 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
     return;
   }
   const avatar = sceneState.playerAvatar;
+  avatar.group.visible = state.postFocusMix < 0.55;
   const position = getNavigationPosition();
   const deltaSeconds = Math.max(1 / 240, avatar.lastSyncElapsed == null ? 1 / 60 : elapsedSeconds - avatar.lastSyncElapsed);
   avatar.lastSyncElapsed = elapsedSeconds;
@@ -2501,6 +2554,10 @@ function startGuidedTravel(result) {
   const curve = buildTravelCurve(start, end);
   const distance = start.distanceTo(end);
   const routeColor = pickAccent(result.destination.post_id || result.post?.title || "route");
+  const enablePostFocus = shouldPreservePostFocusForTag(result.destination.tag_id);
+  if (!enablePostFocus) {
+    setPostFocusMode(false);
+  }
   showRouteGuide(curve, routeColor);
 
   state.activeResultId = result.post?.id ?? state.activeResultId;
@@ -2519,6 +2576,7 @@ function startGuidedTravel(result) {
     toYaw: approach.yaw,
     toPitch: clamp(0.18, CAMERA.lookMin, CAMERA.lookMax),
     result,
+    enablePostFocus,
   };
   renderSelected(result);
   if (sceneState.floorMarker) {
@@ -2823,6 +2881,170 @@ function computeOpenPostDisplayAnchors(tagId) {
   return positions;
 }
 
+function computeFocusedPostView(result, sourcePosition = getNavigationPosition()) {
+  if (!result?.destination) {
+    return null;
+  }
+
+  const animated = getAnimatedPostEntry(result.destination.post_id, result.destination.tag_id);
+  const anchor = animated?.displayAnchor?.clone()
+    ?? new THREE.Vector3(
+      result.destination.position_x,
+      result.destination.position_y ?? 0,
+      result.destination.position_z,
+    );
+  const cardElevation = animated?.cardElevation ?? 5.2;
+  const cardWidth = animated?.cardWidth ?? 12;
+  const focusTarget = anchor.clone().add(new THREE.Vector3(0, cardElevation * 0.86, 0));
+  const eyeOrigin = getPlayerLookTarget(sourcePosition);
+  const planarApproach = new THREE.Vector3(
+    focusTarget.x - eyeOrigin.x,
+    0,
+    focusTarget.z - eyeOrigin.z,
+  );
+  if (planarApproach.lengthSq() < 0.0001) {
+    planarApproach.copy(getFlatForwardVector(result.destination.heading_y ?? inputState.yaw)).multiplyScalar(-1);
+  } else {
+    planarApproach.normalize();
+  }
+  const eyeDistance = Math.max(5.8, cardWidth * 0.48);
+  const eyePosition = focusTarget.clone().sub(planarApproach.multiplyScalar(eyeDistance));
+  eyePosition.y = focusTarget.y - 0.7;
+  const navigationTarget = eyePosition.clone().sub(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
+  navigationTarget.y = clamp(navigationTarget.y, CAMERA.minY, CAMERA.maxY);
+  const { yaw, pitch } = computeLookAngles(eyePosition, focusTarget);
+  return {
+    position: navigationTarget,
+    yaw,
+    pitch,
+  };
+}
+
+function getFocusedAnimatedPost() {
+  const destination = state.focusedResult?.destination;
+  if (!destination?.post_id) {
+    return null;
+  }
+  return getAnimatedPostEntry(destination.post_id, destination.tag_id);
+}
+
+function projectWorldPointToCanvas(point) {
+  if (!sceneState.camera || !elements.canvas) {
+    return null;
+  }
+  const projected = point.clone().project(sceneState.camera);
+  if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || projected.z < -1.2 || projected.z > 1.2) {
+    return null;
+  }
+  const width = elements.canvas.clientWidth || window.innerWidth;
+  const height = elements.canvas.clientHeight || window.innerHeight;
+  return {
+    x: (projected.x * 0.5 + 0.5) * width,
+    y: (-projected.y * 0.5 + 0.5) * height,
+    z: projected.z,
+  };
+}
+
+function computeFocusedPostScreenRect() {
+  const entry = getFocusedAnimatedPost();
+  if (!entry || !entry.group.visible) {
+    return null;
+  }
+
+  const scale = entry.group.scale?.x ?? 1;
+  const center = entry.group.position.clone().add(new THREE.Vector3(0, entry.cardElevation * scale, 0));
+  const right = new THREE.Vector3(1, 0, 0)
+    .applyQuaternion(sceneState.camera.quaternion)
+    .multiplyScalar((entry.cardWidth * scale) / 2);
+  const up = new THREE.Vector3(0, 1, 0)
+    .applyQuaternion(sceneState.camera.quaternion)
+    .multiplyScalar((entry.cardHeight * scale) / 2);
+  const corners = [
+    center.clone().add(right).add(up),
+    center.clone().add(right).sub(up),
+    center.clone().sub(right).add(up),
+    center.clone().sub(right).sub(up),
+  ].map(projectWorldPointToCanvas).filter(Boolean);
+  if (corners.length < 4) {
+    return null;
+  }
+
+  const width = elements.canvas.clientWidth || window.innerWidth;
+  const height = elements.canvas.clientHeight || window.innerHeight;
+  const paddingX = 28;
+  const paddingY = 24;
+  const left = clamp(Math.min(...corners.map((corner) => corner.x)) - paddingX, 0, width);
+  const rightEdge = clamp(Math.max(...corners.map((corner) => corner.x)) + paddingX, 0, width);
+  const top = clamp(Math.min(...corners.map((corner) => corner.y)) - paddingY, 0, height);
+  const bottom = clamp(Math.max(...corners.map((corner) => corner.y)) + paddingY, 0, height);
+  if (rightEdge - left < 12 || bottom - top < 12) {
+    return null;
+  }
+  return {
+    left,
+    top,
+    right: rightEdge,
+    bottom,
+    width: rightEdge - left,
+    height: bottom - top,
+  };
+}
+
+function hideFocusVeil() {
+  if (!elements.focusVeil) {
+    return;
+  }
+  elements.focusVeil.style.opacity = "0";
+  elements.focusVeil.hidden = true;
+  if (elements.focusFrame) {
+    elements.focusFrame.style.opacity = "0";
+  }
+}
+
+function updateFocusVeil() {
+  if (!elements.focusVeil || !elements.focusFrame || !elements.focusPieces) {
+    return;
+  }
+  const mix = clamp(state.postFocusMix, 0, 1);
+  const rect = mix > 0.02 ? computeFocusedPostScreenRect() : null;
+  if (!rect) {
+    hideFocusVeil();
+    return;
+  }
+
+  const width = elements.canvas.clientWidth || window.innerWidth;
+  const height = elements.canvas.clientHeight || window.innerHeight;
+  elements.focusVeil.hidden = false;
+  elements.focusVeil.style.opacity = String(mix);
+
+  const pieces = elements.focusPieces;
+  pieces.top.style.left = "0px";
+  pieces.top.style.top = "0px";
+  pieces.top.style.width = `${width}px`;
+  pieces.top.style.height = `${rect.top}px`;
+
+  pieces.left.style.left = "0px";
+  pieces.left.style.top = `${rect.top}px`;
+  pieces.left.style.width = `${rect.left}px`;
+  pieces.left.style.height = `${rect.height}px`;
+
+  pieces.right.style.left = `${rect.right}px`;
+  pieces.right.style.top = `${rect.top}px`;
+  pieces.right.style.width = `${Math.max(0, width - rect.right)}px`;
+  pieces.right.style.height = `${rect.height}px`;
+
+  pieces.bottom.style.left = "0px";
+  pieces.bottom.style.top = `${rect.bottom}px`;
+  pieces.bottom.style.width = `${width}px`;
+  pieces.bottom.style.height = `${Math.max(0, height - rect.bottom)}px`;
+
+  elements.focusFrame.style.left = `${rect.left}px`;
+  elements.focusFrame.style.top = `${rect.top}px`;
+  elements.focusFrame.style.width = `${rect.width}px`;
+  elements.focusFrame.style.height = `${rect.height}px`;
+  elements.focusFrame.style.opacity = String(0.38 + mix * 0.44);
+}
+
 function syncFocusedFloorMarker() {
   if (!sceneState.floorMarker) {
     return;
@@ -2880,6 +3102,7 @@ function syncExpandedTagState() {
 
 function closeSelectedPost() {
   cancelTravelAnimation();
+  setPostFocusMode(false);
   state.activeResultId = null;
   state.focusedResult = null;
   state.openTagId = null;
@@ -2893,6 +3116,7 @@ function closeSelectedPost() {
 
 function openTagCloud(entry) {
   cancelTravelAnimation();
+  setPostFocusMode(false);
   const isSameTag = state.openTagId === entry.tag_id;
   if (isSameTag) {
     state.openTagId = null;
@@ -2981,7 +3205,16 @@ function openPostDetail(entry) {
     return;
   }
   const currentPosition = getNavigationPosition().clone();
-  const approach = computeApproachAnchor(result.destination, 9.5, -6.5, currentPosition);
+  const enablePostFocus = shouldPreservePostFocusForTag(result.destination.tag_id);
+  if (enablePostFocus) {
+    setPostFocusMode(true, result.destination.tag_id);
+  } else {
+    setPostFocusMode(false);
+  }
+  const focusView = enablePostFocus ? computeFocusedPostView(result, currentPosition) : null;
+  const approach = focusView
+    ? { anchor: focusView.position, yaw: focusView.yaw, pitch: focusView.pitch }
+    : computeApproachAnchor(result.destination, 9.5, -6.5, currentPosition);
   const focusDistance = currentPosition.distanceTo(approach.anchor);
   state.activeResultId = result.destination.post_id;
   state.focusedResult = result;
@@ -3000,11 +3233,11 @@ function openPostDetail(entry) {
     fromPosition: currentPosition,
     toPosition: approach.anchor,
     fromRadius: state.cameraRadius,
-    toRadius: clamp(18, PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius),
+    toRadius: focusView ? state.cameraRadius : clamp(18, PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius),
     fromYaw: inputState.yaw,
     toYaw: approach.yaw,
     fromPitch: inputState.pitch,
-    toPitch: clamp(0.16, CAMERA.lookMin, CAMERA.lookMax),
+    toPitch: focusView ? approach.pitch : clamp(0.16, CAMERA.lookMin, CAMERA.lookMax),
   };
   syncExpandedTagState();
   syncFocusedGhost();
@@ -3916,6 +4149,21 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   }
 }
 
+function updatePostFocusTransition(deltaSeconds) {
+  const previousMix = state.postFocusMix;
+  const mix = 1 - Math.exp(-deltaSeconds * 7.5);
+  state.postFocusMix += (state.postFocusMixTarget - state.postFocusMix) * mix;
+  if (Math.abs(state.postFocusMixTarget - state.postFocusMix) < 0.001) {
+    state.postFocusMix = state.postFocusMixTarget;
+  }
+  if (sceneState.playerAvatar?.group) {
+    sceneState.playerAvatar.group.visible = state.postFocusMix < 0.55;
+  }
+  if (Math.abs(previousMix - state.postFocusMix) > 0.0001 && !state.focusAnimation && !state.travelAnimation) {
+    syncCameraToFollowTarget();
+  }
+}
+
 function applyFocusAnimation() {
   if (!state.focusAnimation) {
     return;
@@ -3987,6 +4235,27 @@ function applyTravelAnimation(deltaSeconds) {
     state.openTagId = result.destination?.tag_id ?? null;
     state.focusedResult = result;
     syncExpandedTagState();
+    if (animation.enablePostFocus && result.destination?.tag_id) {
+      setPostFocusMode(true, result.destination.tag_id);
+      const focusView = computeFocusedPostView(result, getNavigationPosition());
+      if (focusView) {
+        const currentPosition = getNavigationPosition().clone();
+        state.focusAnimation = {
+          startedAt: performance.now(),
+          durationMs: 900,
+          fromPosition: currentPosition,
+          toPosition: focusView.position,
+          fromRadius: state.cameraRadius,
+          toRadius: state.cameraRadius,
+          fromYaw: inputState.yaw,
+          toYaw: focusView.yaw,
+          fromPitch: inputState.pitch,
+          toPitch: focusView.pitch,
+        };
+      }
+    } else {
+      setPostFocusMode(false);
+    }
     syncFocusedGhost();
     renderSearchResults();
     renderSelected(result);
@@ -3994,6 +4263,15 @@ function applyTravelAnimation(deltaSeconds) {
 }
 
 function updateMovement(deltaSeconds) {
+  const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
+  const hasMovementIntent = ["w", "a", "s", "d", "q", "e", "forward", "backward", "left", "right", "up", "down"]
+    .some((key) => activeKeys.has(key));
+
+  if (hasMovementIntent && (state.focusAnimation || state.travelAnimation) && isPostFocusModeActive()) {
+    state.focusAnimation = null;
+    cancelTravelAnimation();
+  }
+
   if (state.focusAnimation || state.travelAnimation) {
     return;
   }
@@ -4001,7 +4279,6 @@ function updateMovement(deltaSeconds) {
   const { forward, right } = getCameraMovementBasis();
   const velocity = new THREE.Vector3();
   let vertical = 0;
-  const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
 
   if (activeKeys.has("w") || activeKeys.has("forward")) {
     velocity.add(forward);
@@ -4024,6 +4301,10 @@ function updateMovement(deltaSeconds) {
 
   if (velocity.lengthSq() === 0 && vertical === 0) {
     return;
+  }
+
+  if (isPostFocusModeActive()) {
+    closeSelectedPost();
   }
 
   const speedMultiplier = inputState.keys.has("shift") ? 2.1 : 1;
@@ -4242,11 +4523,13 @@ function animate() {
   const elapsedSeconds = sceneState.clock.elapsedTime;
   const now = performance.now();
 
+  updatePostFocusTransition(deltaSeconds);
   applyFocusAnimation();
   applyTravelAnimation(deltaSeconds);
   updateMovement(deltaSeconds);
   updateSnow(deltaSeconds, elapsedSeconds);
   updateAnimatedObjects(deltaSeconds, elapsedSeconds);
+  updateFocusVeil();
   updateCameraPanel();
   sendPresence();
   if (now - state.lastStreamCheckAt > 450) {
