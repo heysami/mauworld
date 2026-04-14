@@ -110,6 +110,31 @@ function extractSourceIdMarker(text) {
   return String(text ?? "").match(IMPORT_MARKER_RE)?.[1] ?? "";
 }
 
+function normalizeRemovedImportBranding(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/#/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function matchesRemovedImportBranding(value) {
+  const normalized = normalizeRemovedImportBranding(value);
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized.includes("moltbook")
+    || normalized.includes("curated import")
+    || normalized.includes("openclaw")
+    || normalized.includes("open claw")
+  ) {
+    return true;
+  }
+  return /(^|\s)claw(?=\s|$)/.test(normalized);
+}
+
 function normalizeScrubbedText(value) {
   return String(value ?? "")
     .replace(/\r/g, "")
@@ -157,6 +182,14 @@ export function sanitizeImportedTagLabels(labels) {
   }
 
   return Array.from(new Map(sanitized.map((label) => [slugifyTag(label), label])).values()).slice(0, 10);
+}
+
+export function shouldRecomputeCuratedCorpusLayout(scrubbed, imported) {
+  return (scrubbed?.scrubbedPostCount ?? 0) > 0
+    || (scrubbed?.scrubbedInstallationCount ?? 0) > 0
+    || (scrubbed?.prunedTagCount ?? 0) > 0
+    || (scrubbed?.stalePillarCount ?? 0) > 0
+    || (imported?.importedCount ?? 0) > 0;
 }
 
 function sanitizeImportedExcerpt(value) {
@@ -860,7 +893,7 @@ async function applyTagGraphBatch(store, preparedPosts, tagMap) {
 }
 
 async function scrubLegacyImportedContent(store) {
-  const [posts, postTags, tags, emotions, installations] = await Promise.all([
+  const [posts, postTags, tags, emotions, installations, pillars] = await Promise.all([
     requireData(
       store.serviceClient
         .from("posts")
@@ -882,6 +915,10 @@ async function scrubLegacyImportedContent(store) {
     requireData(
       store.serviceClient.from("agent_installations").select("id, device_id, display_name, auth_email, metadata"),
       "Could not load installations for import scrubbing",
+    ),
+    requireData(
+      store.serviceClient.from("pillars").select("id, slug, title, active"),
+      "Could not load pillars for import scrubbing",
     ),
   ]);
 
@@ -1059,6 +1096,12 @@ async function scrubLegacyImportedContent(store) {
   const removableTagIds = tags
     .filter((tag) => REMOVED_IMPORT_TAG_SLUGS.has(tag.slug))
     .map((tag) => tag.id);
+  const stalePillarCount = pillars.filter((pillar) =>
+    pillar?.active !== false
+    && (
+      matchesRemovedImportBranding(pillar?.title)
+      || matchesRemovedImportBranding(pillar?.slug)
+    )).length;
 
   const tagGraph = await store.rebuildTagGraphState([...candidateTagIds, ...removableTagIds]);
 
@@ -1066,19 +1109,28 @@ async function scrubLegacyImportedContent(store) {
     scrubbedPostCount: postsToUpdate.length,
     scrubbedInstallationCount: installationUpdates.length,
     prunedTagCount: tagGraph.prunedTagCount,
+    stalePillarCount,
   };
 }
 
 export async function runCuratedCorpusSync(store) {
   const scrubbed = await scrubLegacyImportedContent(store);
   const imported = await runMoltbookImport(store);
+  const recompute =
+    shouldRecomputeCuratedCorpusLayout(scrubbed, imported) && (imported.importedCount ?? 0) === 0
+      ? await store.recomputePillars({ forcePromoteCurrent: true })
+      : null;
   return {
     scrubbedPostCount: scrubbed.scrubbedPostCount,
     scrubbedInstallationCount: scrubbed.scrubbedInstallationCount,
     prunedTagCount: scrubbed.prunedTagCount,
+    stalePillarCount: scrubbed.stalePillarCount,
     importedCount: imported.importedCount ?? 0,
     existingCount: imported.existingCount ?? 0,
     skipped: Boolean(imported.skipped),
+    recomputed: Boolean(recompute),
+    world: recompute?.world ?? null,
+    worldQueue: recompute?.worldQueue ?? null,
   };
 }
 
@@ -1219,7 +1271,7 @@ export async function runMoltbookImport(store) {
     sourceId: prepared.sourceId,
     createdAt: prepared.createdAt,
   })), sourceVoteTargets, upvoters, downvoters);
-  await store.recomputePillars();
+  await store.recomputePillars({ forcePromoteCurrent: true });
 
   return {
     skipped: false,

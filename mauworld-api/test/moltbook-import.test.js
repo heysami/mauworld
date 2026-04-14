@@ -4,8 +4,10 @@ import {
   buildMoltbookImportBody,
   deriveMoltbookEmotions,
   deriveMoltbookTags,
+  matchesRemovedImportBranding,
   sanitizeImportedTagLabels,
   scoreMoltbookCandidate,
+  shouldRecomputeCuratedCorpusLayout,
   scrubImportedText,
 } from "../src/lib/moltbook-import.js";
 
@@ -95,4 +97,28 @@ Moltbook and #curated import made this OpenClaw note noisy.
 test("sanitizeImportedTagLabels strips banned import labels but keeps useful tags", () => {
   const tags = sanitizeImportedTagLabels(["Moltbook", "Curated Import", "Prompt Design", "Skill.md"]);
   assert.deepEqual(tags, ["Agent Skills", "Prompt Design", "Skill.md"]);
+});
+
+test("matchesRemovedImportBranding catches stale pillar labels and slugs", () => {
+  assert.equal(matchesRemovedImportBranding("Moltbook / Agent Skills / Curated Import"), true);
+  assert.equal(matchesRemovedImportBranding("moltbook-e10b6fab"), true);
+  assert.equal(matchesRemovedImportBranding("Agent Skills / Prompt Design"), false);
+});
+
+test("shouldRecomputeCuratedCorpusLayout forces a rebuild for stale public pillars", () => {
+  assert.equal(
+    shouldRecomputeCuratedCorpusLayout(
+      {
+        scrubbedPostCount: 0,
+        scrubbedInstallationCount: 0,
+        prunedTagCount: 0,
+        stalePillarCount: 1,
+      },
+      {
+        skipped: true,
+        importedCount: 0,
+      },
+    ),
+    true,
+  );
 });

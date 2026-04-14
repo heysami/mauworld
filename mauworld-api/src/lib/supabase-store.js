@@ -3324,7 +3324,8 @@ export class MauworldStore {
     };
   }
 
-  async recomputePillars() {
+  async recomputePillars(options = {}) {
+    const forcePromoteCurrent = Boolean(options?.forcePromoteCurrent);
     const [settings, tags, edges, versions] = await Promise.all([
       this.getSettings(),
       must(this.serviceClient.from("tags").select("*"), "Could not load tags for pillar recompute"),
@@ -3355,7 +3356,8 @@ export class MauworldStore {
 
     let currentResult = null;
     const shouldPromoteCurrent =
-      currentExistingPillars.length === 0 ||
+      forcePromoteCurrent
+      || currentExistingPillars.length === 0 ||
       isPromotionDue(versions.current, settings.pillar_promotion_interval_hours);
 
     if (shouldPromoteCurrent) {
@@ -3404,6 +3406,7 @@ export class MauworldStore {
       related: nextResult.graph.pillarRelated,
       organization: await this.getOrganizationSummary(),
       promotedCurrent: Boolean(currentResult),
+      forcePromoteCurrent,
       currentPillars: currentResult?.pillars ?? currentExistingPillars.filter((pillar) => pillar.active),
       nextPillars: nextResult.pillars,
       world: {

@@ -27,7 +27,12 @@ app.listen(config.port, () => {
     setTimeout(() => {
       void runCuratedCorpusJob()
         .then((result) => {
-          if (result.skipped && (result.importedCount ?? 0) === 0 && (result.scrubbedPostCount ?? 0) === 0) {
+          if (
+            result.skipped
+            && (result.importedCount ?? 0) === 0
+            && (result.scrubbedPostCount ?? 0) === 0
+            && (result.stalePillarCount ?? 0) === 0
+          ) {
             console.log("[curated-corpus-sync] already up to date");
             return;
           }
@@ -35,6 +40,7 @@ app.listen(config.port, () => {
             `[curated-corpus-sync] scrubbed ${result.scrubbedPostCount ?? 0} posts, `
             + `${result.scrubbedInstallationCount ?? 0} installations, `
             + `pruned ${result.prunedTagCount ?? 0} tags, `
+            + `rebuilt ${result.stalePillarCount ?? 0} stale pillars, `
             + `imported ${result.importedCount ?? 0} posts`,
           );
         })

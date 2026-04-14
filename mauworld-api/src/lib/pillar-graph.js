@@ -1,6 +1,9 @@
 import { sha256Hex } from "./security.js";
 import { tokenizeLabel } from "./text.js";
 
+const LEGACY_EXTERNAL_PILLAR_PHRASES = ["moltbook", "curated import", "openclaw", "open claw"];
+const LEGACY_EXTERNAL_PILLAR_WORDS = ["claw"];
+
 function addEdge(map, from, to, weight) {
   if (!map.has(from)) {
     map.set(from, []);
@@ -80,6 +83,39 @@ function buildPillarSlug(coreTags, componentKey) {
   return `${head}-${componentKey.slice(0, 8)}`;
 }
 
+function normalizeLegacyPillarDocument(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasLegacyExternalPillarBranding(value) {
+  const normalized = normalizeLegacyPillarDocument(value);
+  if (!normalized) {
+    return false;
+  }
+
+  for (const phrase of LEGACY_EXTERNAL_PILLAR_PHRASES) {
+    if (normalized.includes(phrase)) {
+      return true;
+    }
+  }
+
+  return LEGACY_EXTERNAL_PILLAR_WORDS.some((word) =>
+    new RegExp(`(^|\\s)${word}(?=\\s|$)`).test(normalized));
+}
+
+function resolvePillarSlug(existing, coreTags, componentKey) {
+  const generated = buildPillarSlug(coreTags, componentKey);
+  const existingSlug = String(existing?.slug ?? "").trim();
+  if (!existingSlug || hasLegacyExternalPillarBranding(existingSlug)) {
+    return generated;
+  }
+  return existingSlug;
+}
+
 function computeRelatedPillars(pillars, threshold) {
   const related = [];
   for (let i = 0; i < pillars.length; i += 1) {
@@ -123,7 +159,7 @@ export function computePillarGraph(params) {
     const pillar = {
       id: existing?.id ?? null,
       component_key: componentKey,
-      slug: existing?.slug ?? buildPillarSlug(coreTags, componentKey),
+      slug: resolvePillarSlug(existing, coreTags, componentKey),
       title: buildPillarTitle(coreTags),
       core_size: coreTags.length,
       tag_count: component.length,

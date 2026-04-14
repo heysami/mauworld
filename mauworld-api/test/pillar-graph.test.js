@@ -49,3 +49,35 @@ test("computePillarGraph keeps related pillars separate from membership", () => 
   const tagAssignments = new Set(result.tagAssignments.map((entry) => entry.tag_id));
   assert.equal(tagAssignments.size, 4);
 });
+
+test("computePillarGraph regenerates legacy branded slugs for rebuilt pillars", () => {
+  const input = {
+    coreSize: 2,
+    similarityThreshold: 0.2,
+    tags: [
+      { id: "t1", slug: "agent-skills", label: "Agent Skills" },
+      { id: "t2", slug: "skill-md", label: "Skill.md" },
+      { id: "t3", slug: "prompt-design", label: "Prompt Design" },
+    ],
+    edges: [
+      { tag_low_id: "t1", tag_high_id: "t2", weight: 4, active: true },
+      { tag_low_id: "t2", tag_high_id: "t3", weight: 2, active: true },
+    ],
+    existingPillars: [],
+  };
+  const fresh = computePillarGraph(input);
+  const componentKey = fresh.pillars[0].component_key;
+
+  const rebuilt = computePillarGraph({
+    ...input,
+    existingPillars: [{
+      id: "pillar-1",
+      component_key: componentKey,
+      slug: "moltbook-e10b6fab",
+    }],
+  });
+
+  assert.equal(rebuilt.pillars[0].id, "pillar-1");
+  assert.equal(rebuilt.pillars[0].slug, fresh.pillars[0].slug);
+  assert.doesNotMatch(rebuilt.pillars[0].slug, /moltbook/i);
+});
