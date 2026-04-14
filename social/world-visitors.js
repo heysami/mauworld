@@ -6,6 +6,8 @@ const GROUP_CALM_EMOJIS = ["...", "🙂", "😐", "🤔", "💬"];
 const GROUP_HIGH_ENERGY_EMOJIS = ["😆", "🤩", "😡"];
 const HIGH_ENERGY_EMOJIS = new Set(GROUP_HIGH_ENERGY_EMOJIS);
 const HIGH_ENERGY_EMOTIONS = new Set(["joy", "ecstasy", "anger", "rage", "surprise", "amazement"]);
+const CHASE_PAIR_ROUTINE = "chasePair";
+const CHASE_GROUP_ROUTINE = "chaseGroup";
 const QUEUED_EMOTION_EMOJIS = new Map([
   ["joy", ["😄", "🙂"]],
   ["ecstasy", ["🤩", "😆"]],
@@ -69,6 +71,54 @@ function randomChoice(values) {
     return "";
   }
   return values[Math.floor(Math.random() * values.length)];
+}
+
+function isChaseRoutineType(routineType) {
+  return routineType === CHASE_PAIR_ROUTINE || routineType === CHASE_GROUP_ROUTINE;
+}
+
+function pickAmbientRoutineType(slotKey) {
+  if (slotKey === "pair") {
+    return randomChoice(["pair", CHASE_PAIR_ROUTINE]);
+  }
+  if (slotKey === "group") {
+    return randomChoice(["group", CHASE_GROUP_ROUTINE]);
+  }
+  return "solo";
+}
+
+function pickLoopCount(routine) {
+  if (routine.sourceKind === "queued") {
+    return randomInteger(1, 3);
+  }
+  if (routine.routineType === "solo") {
+    return randomInteger(1, 4);
+  }
+  if (routine.routineType === "pair") {
+    return randomInteger(1, 3);
+  }
+  if (routine.routineType === "group") {
+    return randomInteger(1, 2);
+  }
+  if (routine.routineType === CHASE_PAIR_ROUTINE) {
+    return randomInteger(2, 4);
+  }
+  if (routine.routineType === CHASE_GROUP_ROUTINE) {
+    return randomInteger(2, 3);
+  }
+  return 1;
+}
+
+function pickRoutineActorOutlineColor(system, routineType, sourceKind, index, input) {
+  if (sourceKind === "queued") {
+    return system.pickAccent(`${input.focusKey ?? input.targetTagId ?? "queued"}-actor`, 0);
+  }
+  if (isChaseRoutineType(routineType)) {
+    return index === 0
+      ? system.pickAccent(`${routineType}-runner`, 0)
+      : system.pickAccent(`${routineType}-chaser-${index}`, 4);
+  }
+  return system.pickAccent(`${routineType}-${index}`, 2);
 }
 
 function disposeMaterial(material) {
@@ -330,6 +380,7 @@ function buildActor(system, seed, root, options = {}) {
     lastPosition: null,
     bobPhase: Math.random() * Math.PI * 2,
     bubbleLift: 13.4 + Math.random() * 0.8,
+    chaseWavePhase: Math.random() * Math.PI * 2,
   };
   applyMaterialOpacity(actor.materialEntries, 0);
   return actor;
@@ -506,12 +557,17 @@ function buildRoutine(system, input) {
         ? 1
         : routineType === "pair"
           ? 2
-          : randomChoice([3, 4]);
+          : routineType === CHASE_PAIR_ROUTINE
+            ? 2
+            : routineType === CHASE_GROUP_ROUTINE
+              ? 4
+              : randomChoice([3, 4]);
   const root = sourceKind === "queued" ? system.queuedRoot : system.ambientRoot;
   const routine = {
     id: `routine-${system.routineCounter += 1}`,
     sourceKind,
     routineType,
+    slotKey: input.slotKey ?? routineType,
     phase: "idle",
     members: Array.from({ length: memberCount }, (_, index) =>
       buildActor(
@@ -520,10 +576,7 @@ function buildRoutine(system, input) {
         root,
         {
           scale: sourceKind === "queued" ? 0.82 : 0.72,
-          outlineColor:
-            sourceKind === "queued"
-              ? system.pickAccent(`${input.focusKey ?? input.targetTagId ?? "queued"}-actor`, 0)
-              : system.pickAccent(`${routineType}-${index}`, 2),
+          outlineColor: pickRoutineActorOutlineColor(system, routineType, sourceKind, index, input),
         },
       )),
     slots: [],
@@ -542,6 +595,7 @@ function buildRoutine(system, input) {
     randomPhase: Math.random() * Math.PI * 2,
     thoughtPassIndex: 0,
     interrupted: false,
+    chase: null,
   };
   for (const actor of routine.members) {
     actor.group.visible = false;
@@ -550,7 +604,67 @@ function buildRoutine(system, input) {
   return routine;
 }
 
+function createChaseState(routine, anchor, options = {}) {
+  const pairChase = routine.routineType === CHASE_PAIR_ROUTINE;
+  const radius = options.radius ?? (pairChase ? randomBetween(8.8, 10.4) : randomBetween(9.8, 11.8));
+  const gap = options.gap ?? (pairChase ? randomBetween(0.56, 0.72) : randomBetween(0.3, 0.42));
+  const totalGap = gap * Math.max(0, routine.members.length - 1);
+  const arcSpan = options.arcSpan ?? Math.max(
+    totalGap * 2 + (pairChase ? 0.85 : 1.05),
+    pairChase ? randomBetween(2.15, 2.8) : randomBetween(3.15, 4.15),
+  );
+  const baseAngle = options.baseAngle ?? randomBetween(0, Math.PI * 2);
+  const arcStart = baseAngle - arcSpan / 2;
+  const arcEnd = baseAngle + arcSpan / 2;
+  const leadMin = arcStart + totalGap;
+  const leadMax = arcEnd - totalGap;
+  const leadAngle = clamp(
+    options.leadAngle ?? randomBetween(leadMin, leadMax),
+    leadMin,
+    leadMax,
+  );
+  return {
+    radius,
+    gap,
+    arcStart,
+    arcEnd,
+    leadMin,
+    leadMax,
+    leadAngle,
+    direction: Math.random() < 0.5 ? 1 : -1,
+    angularSpeed: pairChase ? randomBetween(0.92, 1.26) : randomBetween(1.08, 1.42),
+    radialOffsets: pairChase ? [0, 0.4] : [0, 0.25, 0.6, 0.95],
+    waveAmplitude: pairChase ? randomBetween(1.2, 1.7) : randomBetween(1.45, 2.05),
+    waveSpeed: pairChase ? randomBetween(1.8, 2.35) : randomBetween(2.1, 2.75),
+    centerY: anchor.y,
+  };
+}
+
+function computeChasePositions(routine, options = {}) {
+  if (!routine.chase) {
+    return [];
+  }
+  const includeWave = options.includeWave ?? false;
+  const elapsedSeconds = options.elapsedSeconds ?? 0;
+  const fallbackOffset = routine.chase.radialOffsets[routine.chase.radialOffsets.length - 1] ?? 0;
+  return routine.members.map((actor, index) => {
+    const angle = routine.chase.leadAngle - routine.chase.direction * routine.chase.gap * index;
+    const radius = routine.chase.radius + (routine.chase.radialOffsets[index] ?? fallbackOffset);
+    const wave = includeWave
+      ? Math.sin(elapsedSeconds * routine.chase.waveSpeed + actor.chaseWavePhase) * routine.chase.waveAmplitude
+      : 0;
+    return new THREE.Vector3(
+      routine.targetAnchor.x + Math.cos(angle) * radius,
+      routine.chase.centerY + wave,
+      routine.targetAnchor.z + Math.sin(angle) * radius,
+    );
+  });
+}
+
 function computeSlotsForRoutine(routine, anchor, options = {}) {
+  if (isChaseRoutineType(routine.routineType)) {
+    return computeChasePositions(routine, { includeWave: false });
+  }
   const radius = options.radius ?? randomBetween(7.2, 9.4);
   const baseAngle = options.baseAngle ?? randomBetween(0, Math.PI * 2);
   if (routine.routineType === "solo" || routine.sourceKind === "queued") {
@@ -693,6 +807,12 @@ function chooseAmbientTarget(system, routine) {
 function beginMove(routine, anchorInfo, options = {}) {
   routine.targetTagId = anchorInfo?.id ?? routine.targetTagId;
   routine.targetAnchor.copy(anchorInfo?.position ?? routine.targetAnchor);
+  if (isChaseRoutineType(routine.routineType) && options.fadeOut !== true) {
+    routine.chase = createChaseState(routine, routine.targetAnchor, {
+      radius: options.radius,
+      baseAngle: options.baseAngle,
+    });
+  }
   routine.slots = computeSlotsForRoutine(routine, routine.targetAnchor, {
     radius: options.radius,
     baseAngle: options.baseAngle,
@@ -730,6 +850,13 @@ function beginMove(routine, anchorInfo, options = {}) {
 }
 
 function beginPause(routine) {
+  if (isChaseRoutineType(routine.routineType)) {
+    routine.phase = "chase";
+    routine.pauseRemaining = 0;
+    routine.bubbleTurnsRemaining = 0;
+    routine.bubbleTurnIndex = 0;
+    return;
+  }
   routine.phase = "pause";
   routine.pauseRemaining =
     routine.sourceKind === "queued"
@@ -740,6 +867,12 @@ function beginPause(routine) {
 }
 
 function beginBubbleSequence(routine) {
+  if (isChaseRoutineType(routine.routineType)) {
+    routine.phase = "chase";
+    routine.bubbleTurnsRemaining = 0;
+    routine.bubbleTurnIndex = 0;
+    return;
+  }
   routine.phase = "bubble";
   routine.bubbleTurnsRemaining =
     routine.sourceKind === "queued"
@@ -783,13 +916,7 @@ function beginRetarget(routine, system) {
     reason: "retarget",
     moveSpeed: routine.sourceKind === "queued" ? 15 : 13,
   });
-  routine.loopsRemaining = routine.sourceKind === "queued"
-    ? randomInteger(1, 3)
-    : routine.routineType === "solo"
-      ? randomInteger(1, 4)
-      : routine.routineType === "pair"
-        ? randomInteger(1, 3)
-        : randomInteger(1, 2);
+  routine.loopsRemaining = pickLoopCount(routine);
 }
 
 function beginExit(routine) {
@@ -820,7 +947,7 @@ function ensureRoutineStarted(routine, system) {
     if (!routine.targetTagId) {
       return;
     }
-    routine.loopsRemaining = randomInteger(1, 3);
+    routine.loopsRemaining = pickLoopCount(routine);
     beginMove(
       routine,
       {
@@ -840,12 +967,7 @@ function ensureRoutineStarted(routine, system) {
   if (!target) {
     return;
   }
-  routine.loopsRemaining =
-    routine.routineType === "solo"
-      ? randomInteger(1, 4)
-      : routine.routineType === "pair"
-        ? randomInteger(1, 3)
-        : randomInteger(1, 2);
+  routine.loopsRemaining = pickLoopCount(routine);
   beginMove(routine, target, {
     reason: "spawn",
     spawnOutside: true,
@@ -854,6 +976,17 @@ function ensureRoutineStarted(routine, system) {
 }
 
 function updateRoutineFacing(routine) {
+  if (isChaseRoutineType(routine.routineType) && routine.chase) {
+    return routine.members.map((actor, index) => {
+      const angle = routine.chase.leadAngle - routine.chase.direction * routine.chase.gap * index;
+      const tangent = new THREE.Vector3(
+        -Math.sin(angle) * routine.chase.direction,
+        0,
+        Math.cos(angle) * routine.chase.direction,
+      );
+      return normalizeAngle(yawFromVector(tangent) + Math.PI);
+    });
+  }
   if (routine.routineType === "solo" || routine.sourceKind === "queued") {
     return routine.members.map(() => yawFromVector(routine.targetAnchor.clone().sub(routine.members[0].position)) + Math.PI);
   }
@@ -872,26 +1005,34 @@ function updateRoutineFacing(routine) {
 
 function updateRoutineMotion(routine, deltaSeconds, elapsedSeconds) {
   const facingTargets = updateRoutineFacing(routine);
+  const chaseTargets =
+    isChaseRoutineType(routine.routineType) && routine.phase === "chase"
+      ? computeChasePositions(routine, { includeWave: true, elapsedSeconds })
+      : null;
   for (let index = 0; index < routine.members.length; index += 1) {
     const actor = routine.members[index];
-    const target = actor.moveTarget ?? actor.position;
-    const delta = target.clone().sub(actor.position);
-    const distance = delta.length();
-    if (distance > 0.001) {
-      const step = Math.min(distance, deltaSeconds * actor.moveSpeed);
-      actor.position.addScaledVector(delta.normalize(), step);
-    } else {
+    const target = chaseTargets?.[index] ?? actor.moveTarget ?? actor.position;
+    if (chaseTargets) {
       actor.position.copy(target);
+    } else {
+      const delta = target.clone().sub(actor.position);
+      const distance = delta.length();
+      if (distance > 0.001) {
+        const step = Math.min(distance, deltaSeconds * actor.moveSpeed);
+        actor.position.addScaledVector(delta.normalize(), step);
+      } else {
+        actor.position.copy(target);
+      }
     }
     updateActorFade(actor, deltaSeconds);
     updateMascotMotion(actor, {
       deltaSeconds,
       elapsedSeconds,
       nextPosition: actor.position,
-      maxSpeed: actor.moveSpeed,
+      maxSpeed: chaseTargets ? 18 : actor.moveSpeed,
       idleFacingYaw: facingTargets[index] ?? actor.facingYaw,
-      bobAmplitude: 0.16,
-      bobSpeed: 1.6,
+      bobAmplitude: chaseTargets ? 0.08 : 0.16,
+      bobSpeed: chaseTargets ? 2.1 : 1.6,
     });
     updateBubble(actor, deltaSeconds);
   }
@@ -923,6 +1064,10 @@ function advanceRoutineState(routine, system, deltaSeconds) {
         routine.phase = "done";
         return;
       }
+      if (routine.sourceKind === "ambient" && (routine.slotKey === "pair" || routine.slotKey === "group")) {
+        routine.phase = "done";
+        return;
+      }
       routine.phase = "cooldown";
       routine.cooldownRemaining = randomBetween(0.6, 1.4);
       return;
@@ -936,6 +1081,31 @@ function advanceRoutineState(routine, system, deltaSeconds) {
     if (routine.pauseRemaining <= 0) {
       beginBubbleSequence(routine);
     }
+    return;
+  }
+
+  if (routine.phase === "chase") {
+    if (!routine.chase) {
+      beginRetarget(routine, system);
+      return;
+    }
+    routine.chase.leadAngle += routine.chase.direction * routine.chase.angularSpeed * deltaSeconds;
+    const reachedUpper = routine.chase.direction > 0 && routine.chase.leadAngle >= routine.chase.leadMax;
+    const reachedLower = routine.chase.direction < 0 && routine.chase.leadAngle <= routine.chase.leadMin;
+    if (!(reachedUpper || reachedLower)) {
+      return;
+    }
+    routine.chase.leadAngle = clamp(routine.chase.leadAngle, routine.chase.leadMin, routine.chase.leadMax);
+    routine.loopsRemaining = Math.max(0, routine.loopsRemaining - 1);
+    if (routine.loopsRemaining > 0) {
+      routine.chase.direction *= -1;
+      return;
+    }
+    if (Math.random() < routine.exitChance) {
+      beginExit(routine);
+      return;
+    }
+    beginRetarget(routine, system);
     return;
   }
 
@@ -983,7 +1153,7 @@ function advanceRoutineState(routine, system, deltaSeconds) {
     if (routine.cooldownRemaining <= 0) {
       routine.phase = "idle";
       if (routine.sourceKind === "queued") {
-        routine.loopsRemaining = randomInteger(1, 3);
+        routine.loopsRemaining = pickLoopCount(routine);
       }
     }
   }
@@ -1005,14 +1175,15 @@ export function createWorldVisitorSystem(options = {}) {
     actorCounter: 0,
   };
 
-  function ensureAmbientRoutine(type) {
-    if (!system.ambientRoutines.has(type)) {
-      system.ambientRoutines.set(type, buildRoutine(system, {
+  function ensureAmbientRoutine(slot) {
+    if (!system.ambientRoutines.has(slot.key)) {
+      system.ambientRoutines.set(slot.key, buildRoutine(system, {
         sourceKind: "ambient",
-        routineType: type,
+        routineType: pickAmbientRoutineType(slot.key),
+        slotKey: slot.key,
       }));
     }
-    return system.ambientRoutines.get(type);
+    return system.ambientRoutines.get(slot.key);
   }
 
   return {
@@ -1030,17 +1201,18 @@ export function createWorldVisitorSystem(options = {}) {
           ]),
       );
 
-      const desiredTypes =
+      const desiredSlots =
         system.tagAnchors.size === 0
           ? []
           : system.tagAnchors.size < 3
-            ? ["solo"]
+            ? [{ key: "solo" }]
             : system.tagAnchors.size < 6
-              ? ["solo", "pair"]
-              : ["solo", "pair", "group"];
+              ? [{ key: "solo" }, { key: "pair" }]
+              : [{ key: "solo" }, { key: "pair" }, { key: "group" }];
+      const desiredSlotKeys = new Set(desiredSlots.map((entry) => entry.key));
 
-      for (const [type, routine] of system.ambientRoutines.entries()) {
-        routine.requestedActive = desiredTypes.includes(type);
+      for (const [slotKey, routine] of system.ambientRoutines.entries()) {
+        routine.requestedActive = desiredSlotKeys.has(slotKey);
         const targetMissing = routine.targetTagId && !system.tagAnchors.has(routine.targetTagId);
         if (!routine.requestedActive) {
           if (routine.phase === "idle" && routine.members.every((actor) => actor.opacity < 0.02)) {
@@ -1057,8 +1229,8 @@ export function createWorldVisitorSystem(options = {}) {
         }
       }
 
-      for (const type of desiredTypes) {
-        const routine = ensureAmbientRoutine(type);
+      for (const slot of desiredSlots) {
+        const routine = ensureAmbientRoutine(slot);
         routine.requestedActive = true;
       }
     },
@@ -1115,7 +1287,7 @@ export function createWorldVisitorSystem(options = {}) {
         return;
       }
       if (focusChanged) {
-        routine.loopsRemaining = randomInteger(1, 3);
+        routine.loopsRemaining = pickLoopCount(routine);
         routine.thoughtPassIndex = 0;
         beginMove(
           routine,
@@ -1131,19 +1303,19 @@ export function createWorldVisitorSystem(options = {}) {
           },
         );
       } else if (routine.phase === "idle") {
-        routine.loopsRemaining = randomInteger(1, 3);
+        routine.loopsRemaining = pickLoopCount(routine);
       }
     },
 
     update(deltaSeconds, elapsedSeconds) {
-      for (const [type, routine] of [...system.ambientRoutines.entries()]) {
+      for (const [slotKey, routine] of [...system.ambientRoutines.entries()]) {
         advanceRoutineState(routine, system, deltaSeconds);
         updateRoutineMotion(routine, deltaSeconds, elapsedSeconds);
         if (routine.phase === "done") {
           for (const actor of routine.members) {
             disposeActor(system, actor);
           }
-          system.ambientRoutines.delete(type);
+          system.ambientRoutines.delete(slotKey);
         }
       }
 
