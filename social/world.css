@@ -102,54 +102,77 @@ body.world-body {
   align-items: center;
   justify-content: center;
   position: relative;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
-  padding: 0;
-  border: 1px solid var(--world-line-strong);
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+  padding: 4px;
+  border: 1px solid rgba(61, 87, 182, 0.18);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.96);
+  background: linear-gradient(180deg, #eef8ff 0%, #fff3da 100%);
   color: var(--world-ink);
-  box-shadow: 0 1px 0 rgba(61, 87, 182, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 10px 24px rgba(93, 109, 186, 0.12);
   overflow: visible;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    filter 180ms ease;
 }
 
 .world-panel__home::after {
   content: attr(aria-label);
   position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  padding: 6px 10px;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  padding: 7px 10px;
+  border: 1px solid rgba(61, 87, 182, 0.16);
   border-radius: 8px;
-  background: rgba(36, 51, 109, 0.94);
-  color: #ffffff;
-  font-size: 0.76rem;
-  font-weight: 700;
+  background: rgba(255, 255, 255, 0.98);
+  color: var(--world-ink);
+  font-size: 0.72rem;
+  font-weight: 800;
   line-height: 1;
   white-space: nowrap;
   opacity: 0;
-  transform: translateY(-4px);
+  transform: translate(-50%, 6px);
   pointer-events: none;
+  box-shadow: 0 12px 24px rgba(93, 109, 186, 0.14);
   transition: opacity 160ms ease, transform 160ms ease;
 }
 
 .world-panel__home-icon {
-  width: 28px;
-  height: 28px;
+  width: 100%;
+  height: 100%;
   display: block;
-  object-fit: contain;
+  object-fit: cover;
+  border-radius: 6px;
+  image-rendering: pixelated;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
 }
 
 .world-panel__home:hover,
 .world-panel__home:focus-visible {
-  border-color: rgba(61, 87, 182, 0.42);
-  background: rgba(255, 255, 255, 1);
+  border-color: rgba(61, 87, 182, 0.32);
+  transform: translateY(-1px);
+  filter: saturate(1.04);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 14px 28px rgba(93, 109, 186, 0.16);
 }
 
 .world-panel__home:hover::after,
 .world-panel__home:focus-visible::after {
   opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.world-panel__home:active {
   transform: translateY(0);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 8px 18px rgba(93, 109, 186, 0.12);
 }
 
 .world-search-form {
