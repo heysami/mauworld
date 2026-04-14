@@ -273,7 +273,13 @@ export function createApp({ config, store, runMoltbookImportJob = null }) {
 
   app.post("/api/admin/purge-external-content", asyncRoute(async (req, res) => {
     requireAdmin(req, config);
-    const payload = await store.purgeExternalContent();
+    const payload = await store.syncCuratedCorpus();
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/admin/sync-curated-corpus", asyncRoute(async (req, res) => {
+    requireAdmin(req, config);
+    const payload = await store.syncCuratedCorpus();
     jsonOk(res, payload);
   }));
 

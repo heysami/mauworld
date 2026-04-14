@@ -1,17 +1,30 @@
 import { randomUUID } from "node:crypto";
 import { normalizePostEmotionInputs } from "./emotions.js";
-import { slugifyTag, stripMarkdown } from "./text.js";
+import { buildSearchText, derivePostTitle, slugifyTag, stripMarkdown } from "./text.js";
 
 const MOLTBOOK_BASE_URL = "https://www.moltbook.com";
 const MOLTBOOK_TARGET_COUNT = 200;
 const MOLTBOOK_SEARCH_PAGE_SIZE = 50;
 const MOLTBOOK_MAX_PAGES_PER_QUERY = 2;
 const MOLTBOOK_DETAIL_SHORTLIST_SIZE = 240;
-const MOLTBOOK_IMPORT_MARKER_PREFIX = "moltbook_post_id:";
-const MOLTBOOK_AUTHOR_DEVICE_ID = "moltbook-curator-importer";
-const MOLTBOOK_VOTER_PREFIX = "moltbook-voter";
+const CURATED_IMPORT_MARKER_PREFIX = "curated_source_id:";
+const LEGACY_IMPORT_MARKER_PREFIX = "moltbook_post_id:";
+const CURATED_AUTHOR_DEVICE_ID = "curated-corpus-importer";
+const LEGACY_AUTHOR_DEVICE_ID = "moltbook-curator-importer";
+const CURATED_VOTER_PREFIX = "curated-signal";
+const LEGACY_VOTER_PREFIX = "moltbook-voter";
 const MOLTBOOK_UPVOTER_COUNT = 10;
 const MOLTBOOK_DOWNVOTER_COUNT = 2;
+const REMOVED_IMPORT_TAG_SLUGS = new Set(["moltbook", "curated-import", "openclaw", "open-claw", "claw"]);
+const IMPORT_MARKER_RE = /(?:moltbook_post_id|curated_source_id):([0-9a-f-]+)/i;
+const EXTERNAL_BRAND_PATTERNS = [
+  { pattern: /#\s*moltbook\b/gi, replace: "" },
+  { pattern: /#\s*curated\s+import\b/gi, replace: "" },
+  { pattern: /\bopen\s*claw\b/gi, replace: "" },
+  { pattern: /\bmoltbook\b/gi, replace: "" },
+  { pattern: /\bclaw\b/gi, replace: "" },
+  { pattern: /\bcurated\s+import\b/gi, replace: "" },
+];
 
 const MOLTBOOK_QUERIES = [
   "skill.md",
@@ -93,6 +106,67 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function extractSourceIdMarker(text) {
+  return String(text ?? "").match(IMPORT_MARKER_RE)?.[1] ?? "";
+}
+
+function normalizeScrubbedText(value) {
+  return String(value ?? "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ ]{2,}/g, " ")
+    .trim();
+}
+
+export function scrubImportedText(value) {
+  let text = String(value ?? "");
+  text = text
+    .replace(/^Source:.*$/gim, "")
+    .replace(/^Imported:.*$/gim, "");
+
+  for (const rule of EXTERNAL_BRAND_PATTERNS) {
+    text = text.replace(rule.pattern, rule.replace);
+  }
+
+  text = text
+    .replace(/\(\s*\)/g, "")
+    .replace(/\[\s*\]\([^)]*\)/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n");
+
+  return normalizeScrubbedText(text);
+}
+
+export function sanitizeImportedTagLabels(labels) {
+  const sanitized = [];
+  for (const label of labels ?? []) {
+    const cleaned = scrubImportedText(label).replace(/^#+/, "").trim();
+    if (!cleaned) {
+      continue;
+    }
+    const slug = slugifyTag(cleaned);
+    if (REMOVED_IMPORT_TAG_SLUGS.has(slug)) {
+      continue;
+    }
+    sanitized.push(cleaned);
+  }
+
+  if (!sanitized.some((label) => slugifyTag(label) === "agent-skills")) {
+    sanitized.unshift("Agent Skills");
+  }
+
+  return Array.from(new Map(sanitized.map((label) => [slugifyTag(label), label])).values()).slice(0, 10);
+}
+
+function sanitizeImportedExcerpt(value) {
+  return scrubImportedText(value)
+    .split("\n")
+    .filter((line) => !/^(Author|Community|Focus):/i.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -105,7 +179,7 @@ function clampInteger(value, min, max) {
 }
 
 function buildMarker(postId) {
-  return `${MOLTBOOK_IMPORT_MARKER_PREFIX}${postId}`;
+  return `${CURATED_IMPORT_MARKER_PREFIX}${postId}`;
 }
 
 function normalizeWhitespace(value) {
@@ -292,7 +366,7 @@ function trimContent(content, maxChars = 2200) {
 
 export function deriveMoltbookTags(post) {
   const text = extractNeedleText(post);
-  const labels = new Set(["Moltbook", "Curated Import", "Agent Skills"]);
+  const labels = new Set(["Agent Skills"]);
   for (const rule of TAG_RULES) {
     if (rule.pattern.test(text)) {
       labels.add(rule.label);
@@ -307,7 +381,7 @@ export function deriveMoltbookTags(post) {
   if (labels.has("Context Engineering") || labels.has("Memory")) {
     labels.add("User Understanding");
   }
-  return Array.from(labels).slice(0, 10);
+  return sanitizeImportedTagLabels(Array.from(labels));
 }
 
 export function deriveMoltbookEmotions(post, tags = undefined) {
@@ -352,18 +426,11 @@ export function deriveMoltbookEmotions(post, tags = undefined) {
 }
 
 export function buildMoltbookImportBody(post, tags) {
-  const url = `${MOLTBOOK_BASE_URL}/post/${post.id}`;
-  const author = post.author?.name ? `u/${post.author.name}` : "unknown author";
-  const submolt = post.submolt?.name ? `m/${post.submolt.name}` : "general";
-  const focus = tags.filter((label) => !["Moltbook", "Curated Import"].includes(label)).slice(0, 4).join(", ");
-  const excerpt = trimContent(post.content ?? "");
+  const focus = sanitizeImportedTagLabels(tags).filter((label) => label !== "Agent Skills").slice(0, 4).join(", ");
+  const excerpt = sanitizeImportedExcerpt(trimContent(post.content ?? ""));
+  const safeExcerpt = excerpt || scrubImportedText(post.title ?? "") || "Curated research note";
   return normalizeWhitespace(`
-Source: [${post.title}](${url})
-Author: ${author}
-Community: ${submolt}
-Imported: ${nowIso().slice(0, 10)}
-
-${excerpt}
+${safeExcerpt}
 
 Focus: ${focus || "Agent Skills"}
 `);
@@ -595,9 +662,9 @@ async function ensureInstallationRow(store, params) {
         display_name: params.displayName,
         platform: "render-import",
         host_name: "mauworld-api",
-        client_version: "moltbook-import-v1",
+        client_version: "curated-import-v2",
         metadata: {
-          source: "moltbook-import",
+          source: "curated-import",
         },
       })
       .select("*")
@@ -635,16 +702,14 @@ async function loadImportedSourceIds(store) {
   const posts = await requireData(
     store.serviceClient
       .from("posts")
-      .select("id, search_text")
-      .like("search_text", `%${MOLTBOOK_IMPORT_MARKER_PREFIX}%`),
-    "Could not load existing Moltbook imports",
+      .select("id, search_text"),
+    "Could not load existing curated imports",
   );
   const sourceIds = new Set();
   for (const post of posts) {
-    const text = String(post.search_text ?? "");
-    const match = text.match(/moltbook_post_id:([0-9a-f-]+)/i);
-    if (match?.[1]) {
-      sourceIds.add(match[1]);
+    const sourceId = extractSourceIdMarker(post.search_text);
+    if (sourceId) {
+      sourceIds.add(sourceId);
     }
   }
   return sourceIds;
@@ -656,11 +721,11 @@ function createImportHeartbeat(store, installation, postCount) {
       .from("agent_heartbeats")
       .insert({
         installation_id: installation.id,
-        trigger: "moltbook_import",
-        objective: "Curate useful Moltbook posts for skill and markdown research",
-        summary: `Importing ${postCount} curated Moltbook posts`,
+        trigger: "curated_import",
+        objective: "Curate useful research posts for skill and markdown work",
+        summary: `Importing ${postCount} curated research posts`,
         metadata: {
-          source: "moltbook-import",
+          source: "curated-import",
           targetCount: postCount,
         },
       })
@@ -794,6 +859,229 @@ async function applyTagGraphBatch(store, preparedPosts, tagMap) {
   }
 }
 
+async function scrubLegacyImportedContent(store) {
+  const [posts, postTags, tags, emotions, installations] = await Promise.all([
+    requireData(
+      store.serviceClient
+        .from("posts")
+        .select("id, author_installation_id, title, body_md, body_plain, search_text"),
+      "Could not load posts for import scrubbing",
+    ),
+    requireData(
+      store.serviceClient.from("post_tags").select("post_id, tag_id, label_snapshot, ordinal"),
+      "Could not load post tags for import scrubbing",
+    ),
+    requireData(
+      store.serviceClient.from("tags").select("id, slug, label"),
+      "Could not load tags for import scrubbing",
+    ),
+    requireData(
+      store.serviceClient.from("post_emotions").select("post_id, emotion_label"),
+      "Could not load post emotions for import scrubbing",
+    ),
+    requireData(
+      store.serviceClient.from("agent_installations").select("id, device_id, display_name, auth_email, metadata"),
+      "Could not load installations for import scrubbing",
+    ),
+  ]);
+
+  const tagById = new Map(tags.map((tag) => [tag.id, tag]));
+  const postTagsByPostId = postTags.reduce((map, row) => {
+    if (!map.has(row.post_id)) {
+      map.set(row.post_id, []);
+    }
+    map.get(row.post_id).push(row);
+    return map;
+  }, new Map());
+  const emotionLabelsByPostId = emotions.reduce((map, row) => {
+    if (!map.has(row.post_id)) {
+      map.set(row.post_id, []);
+    }
+    map.get(row.post_id).push(row.emotion_label);
+    return map;
+  }, new Map());
+
+  const postsToUpdate = [];
+  const postTagUpdates = [];
+  const postTagDeletes = [];
+  const candidateTagIds = new Set();
+
+  for (const post of posts) {
+    const rows = postTagsByPostId.get(post.id) ?? [];
+    const sourceId = extractSourceIdMarker(post.search_text);
+    const shouldScrub = Boolean(sourceId)
+      || rows.some((row) => REMOVED_IMPORT_TAG_SLUGS.has(tagById.get(row.tag_id)?.slug ?? ""))
+      || EXTERNAL_BRAND_PATTERNS.some((rule) => rule.pattern.test(post.title ?? ""))
+      || EXTERNAL_BRAND_PATTERNS.some((rule) => rule.pattern.test(post.body_plain ?? ""));
+
+    if (!shouldScrub) {
+      continue;
+    }
+
+    const sanitizedTags = sanitizeImportedTagLabels(
+      rows.map((row) => row.label_snapshot || tagById.get(row.tag_id)?.label || ""),
+    );
+    const allowedTagSlugs = new Set(sanitizedTags.map((label) => slugifyTag(label)));
+
+    for (const row of rows) {
+      candidateTagIds.add(row.tag_id);
+      const currentTag = tagById.get(row.tag_id);
+      if (!currentTag || !allowedTagSlugs.has(currentTag.slug)) {
+        postTagDeletes.push({ post_id: row.post_id, tag_id: row.tag_id });
+        continue;
+      }
+      postTagUpdates.push({
+        post_id: row.post_id,
+        tag_id: row.tag_id,
+        label_snapshot: sanitizedTags.find((label) => slugifyTag(label) === currentTag.slug) ?? currentTag.label,
+        ordinal: sanitizedTags.findIndex((label) => slugifyTag(label) === currentTag.slug) + 1,
+      });
+    }
+
+    const sanitizedBodyMd = buildMoltbookImportBody({
+      id: sourceId || post.id,
+      title: post.title,
+      content: sanitizeImportedExcerpt(post.body_md || post.body_plain || ""),
+    }, sanitizedTags);
+    const sanitizedBodyPlain = stripMarkdown(sanitizedBodyMd);
+    const titleFallback = sanitizeImportedExcerpt(post.body_md || post.body_plain || "");
+    postsToUpdate.push({
+      id: post.id,
+      title: scrubImportedText(post.title) || derivePostTitle(titleFallback) || "Curated research note",
+      body_md: sanitizedBodyMd,
+      body_plain: sanitizedBodyPlain,
+      search_text: `${buildSearchText({
+        bodyMd: sanitizedBodyMd,
+        tags: sanitizedTags,
+        emotions: emotionLabelsByPostId.get(post.id) ?? [],
+      })} ${sourceId ? buildMarker(sourceId) : ""}`.trim(),
+      updated_at: nowIso(),
+    });
+  }
+
+  if (postTagDeletes.length > 0) {
+    for (const row of postTagDeletes) {
+      await requireData(
+        store.serviceClient
+          .from("post_tags")
+          .delete()
+          .eq("post_id", row.post_id)
+          .eq("tag_id", row.tag_id),
+        "Could not delete stripped import tags",
+      );
+    }
+  }
+
+  if (postTagUpdates.length > 0) {
+    for (const row of postTagUpdates) {
+      await requireData(
+        store.serviceClient
+          .from("post_tags")
+          .update({
+            label_snapshot: row.label_snapshot,
+            ordinal: row.ordinal,
+          })
+          .eq("post_id", row.post_id)
+          .eq("tag_id", row.tag_id),
+        "Could not scrub import tag snapshots",
+      );
+    }
+  }
+
+  if (postsToUpdate.length > 0) {
+    for (const row of postsToUpdate) {
+      await requireData(
+        store.serviceClient
+          .from("posts")
+          .update({
+            title: row.title,
+            body_md: row.body_md,
+            body_plain: row.body_plain,
+            search_text: row.search_text,
+            updated_at: row.updated_at,
+          })
+          .eq("id", row.id),
+        "Could not scrub imported post text",
+      );
+    }
+  }
+
+  const installationUpdates = [];
+  for (const installation of installations) {
+    if (installation.device_id === LEGACY_AUTHOR_DEVICE_ID) {
+      installationUpdates.push({
+        id: installation.id,
+        device_id: CURATED_AUTHOR_DEVICE_ID,
+        display_name: "Curated Research",
+        auth_email: "curated-importer@mauworld.agent",
+        metadata: {
+          ...(installation.metadata ?? {}),
+          source: "curated-import",
+        },
+      });
+      continue;
+    }
+
+    const upMatch = installation.device_id?.match(/^moltbook-voter-up-(\d{2})$/i);
+    const downMatch = installation.device_id?.match(/^moltbook-voter-down-(\d{2})$/i);
+    if (upMatch || downMatch) {
+      const lane = upMatch ? "up" : "down";
+      const index = upMatch?.[1] ?? downMatch?.[1];
+      installationUpdates.push({
+        id: installation.id,
+        device_id: `${CURATED_VOTER_PREFIX}-${lane}-${index}`,
+        display_name: lane === "up" ? `Curated Signal ${Number(index)}` : `Curated Counterweight ${Number(index)}`,
+        auth_email: `curated-${lane}-${Number(index)}@mauworld.agent`,
+        metadata: {
+          ...(installation.metadata ?? {}),
+          source: "curated-import",
+        },
+      });
+    }
+  }
+
+  for (const row of installationUpdates) {
+    await requireData(
+      store.serviceClient
+        .from("agent_installations")
+        .update({
+          device_id: row.device_id,
+          display_name: row.display_name,
+          auth_email: row.auth_email,
+          client_version: "curated-import-v2",
+          metadata: row.metadata,
+        })
+        .eq("id", row.id),
+      "Could not scrub import installation labels",
+    );
+  }
+
+  const removableTagIds = tags
+    .filter((tag) => REMOVED_IMPORT_TAG_SLUGS.has(tag.slug))
+    .map((tag) => tag.id);
+
+  const tagGraph = await store.rebuildTagGraphState([...candidateTagIds, ...removableTagIds]);
+
+  return {
+    scrubbedPostCount: postsToUpdate.length,
+    scrubbedInstallationCount: installationUpdates.length,
+    prunedTagCount: tagGraph.prunedTagCount,
+  };
+}
+
+export async function runCuratedCorpusSync(store) {
+  const scrubbed = await scrubLegacyImportedContent(store);
+  const imported = await runMoltbookImport(store);
+  return {
+    scrubbedPostCount: scrubbed.scrubbedPostCount,
+    scrubbedInstallationCount: scrubbed.scrubbedInstallationCount,
+    prunedTagCount: scrubbed.prunedTagCount,
+    importedCount: imported.importedCount ?? 0,
+    existingCount: imported.existingCount ?? 0,
+    skipped: Boolean(imported.skipped),
+  };
+}
+
 export async function runMoltbookImport(store) {
   const existingSourceIds = await loadImportedSourceIds(store);
   if (existingSourceIds.size >= MOLTBOOK_TARGET_COUNT) {
@@ -820,27 +1108,27 @@ export async function runMoltbookImport(store) {
   const tagMap = new Map(allTags.map((tag) => [tag.slug, tag]));
 
   const author = await ensureInstallationRow(store, {
-    deviceId: MOLTBOOK_AUTHOR_DEVICE_ID,
-    publicKey: "moltbook-import-author",
-    authEmail: "moltbook-importer@mauworld.agent",
-    displayName: "Moltbook Curator",
+    deviceId: CURATED_AUTHOR_DEVICE_ID,
+    publicKey: "curated-import-author",
+    authEmail: "curated-importer@mauworld.agent",
+    displayName: "Curated Research",
   });
   const upvoters = await Promise.all(
     Array.from({ length: MOLTBOOK_UPVOTER_COUNT }, (_, index) =>
       ensureInstallationRow(store, {
-        deviceId: `${MOLTBOOK_VOTER_PREFIX}-up-${String(index + 1).padStart(2, "0")}`,
-        publicKey: `moltbook-up-${index + 1}`,
-        authEmail: `moltbook-up-${index + 1}@mauworld.agent`,
-        displayName: `Moltbook Signal ${index + 1}`,
+        deviceId: `${CURATED_VOTER_PREFIX}-up-${String(index + 1).padStart(2, "0")}`,
+        publicKey: `curated-up-${index + 1}`,
+        authEmail: `curated-up-${index + 1}@mauworld.agent`,
+        displayName: `Curated Signal ${index + 1}`,
       })),
   );
   const downvoters = await Promise.all(
     Array.from({ length: MOLTBOOK_DOWNVOTER_COUNT }, (_, index) =>
       ensureInstallationRow(store, {
-        deviceId: `${MOLTBOOK_VOTER_PREFIX}-down-${String(index + 1).padStart(2, "0")}`,
-        publicKey: `moltbook-down-${index + 1}`,
-        authEmail: `moltbook-down-${index + 1}@mauworld.agent`,
-        displayName: `Moltbook Counterweight ${index + 1}`,
+        deviceId: `${CURATED_VOTER_PREFIX}-down-${String(index + 1).padStart(2, "0")}`,
+        publicKey: `curated-down-${index + 1}`,
+        authEmail: `curated-down-${index + 1}@mauworld.agent`,
+        displayName: `Curated Counterweight ${index + 1}`,
       })),
   );
 
@@ -852,16 +1140,21 @@ export async function runMoltbookImport(store) {
     const bodyPlain = stripMarkdown(bodyMd);
     const createdAt = post.created_at || nowIso();
     const marker = buildMarker(post.id);
+    const title = scrubImportedText(post.title?.trim()) || derivePostTitle(bodyPlain) || "Curated research note";
     return {
       sourceId: post.id,
       postId: randomUUID(),
-      title: post.title?.trim() || "Imported Moltbook note",
+      title,
       bodyMd,
       bodyPlain,
       tagLabels,
       emotions,
       createdAt,
-      searchText: `${bodyPlain} ${tagLabels.join(" ")} ${emotions.map((emotion) => emotion.emotion_label).join(" ")} ${post.author?.name ?? ""} ${post.submolt?.name ?? ""} ${marker}`.trim(),
+      searchText: `${title} ${buildSearchText({
+        bodyPlain,
+        tags: tagLabels,
+        emotions: emotions.map((emotion) => emotion.emotion_label),
+      })} ${marker}`.trim(),
     };
   });
 

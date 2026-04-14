@@ -20,6 +20,7 @@ import {
 } from "./text.js";
 import { computePillarGraph } from "./pillar-graph.js";
 import { listAllowedPostEmotionSlugs, normalizePostEmotionInputs } from "./emotions.js";
+import { runCuratedCorpusSync } from "./moltbook-import.js";
 import {
   computeHeadingToPillar,
   computeTagAnchorPosition,
@@ -3190,6 +3191,10 @@ export class MauworldStore {
       edgeCount: edgeRows.length,
       prunedTagCount: removableTagIds.length,
     };
+  }
+
+  async syncCuratedCorpus() {
+    return await runCuratedCorpusSync(this);
   }
 
   async purgeExternalContent() {

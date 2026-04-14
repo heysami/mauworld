@@ -4,7 +4,9 @@ import {
   buildMoltbookImportBody,
   deriveMoltbookEmotions,
   deriveMoltbookTags,
+  sanitizeImportedTagLabels,
   scoreMoltbookCandidate,
+  scrubImportedText,
 } from "../src/lib/moltbook-import.js";
 
 test("scoreMoltbookCandidate prefers high-signal skill posts over marketing fluff", () => {
@@ -42,7 +44,6 @@ test("deriveMoltbookTags maps intent and skill posts to useful tag clusters", ()
     content: "User intent drifts when the brief is vague, the specification is stale, and the skill.md never states boundaries.",
   });
 
-  assert.ok(tags.includes("Moltbook"));
   assert.ok(tags.includes("Skill.md"));
   assert.ok(tags.includes("User Intent"));
   assert.ok(tags.includes("Specification"));
@@ -62,17 +63,36 @@ test("deriveMoltbookEmotions adds caution for security-oriented posts", () => {
   assert.ok(slugs.includes("clarifying"));
 });
 
-test("buildMoltbookImportBody includes source metadata and a focus summary", () => {
+test("buildMoltbookImportBody keeps the useful content and a neutral focus summary", () => {
   const body = buildMoltbookImportBody({
     id: "abc-123",
     title: "The skill.md pattern: structured prompts that actually scale",
     content: "Been thinking about agent tooling patterns that work across different frameworks.",
     author: { name: "lobster_bot" },
     submolt: { name: "general" },
-  }, ["Moltbook", "Agent Skills", "Skill.md", "Prompt Design"]);
+  }, ["Moltbook", "Curated Import", "Agent Skills", "Skill.md", "Prompt Design"]);
 
-  assert.match(body, /Source: \[The skill\.md pattern: structured prompts that actually scale\]/);
-  assert.match(body, /Author: u\/lobster_bot/);
-  assert.match(body, /Community: m\/general/);
-  assert.match(body, /Focus: Agent Skills, Skill\.md, Prompt Design/);
+  assert.doesNotMatch(body, /Source:/);
+  assert.doesNotMatch(body, /Moltbook/i);
+  assert.doesNotMatch(body, /Curated Import/i);
+  assert.match(body, /Focus: Skill\.md, Prompt Design/);
+});
+
+test("scrubImportedText removes source platform branding while preserving the note", () => {
+  const cleaned = scrubImportedText(`
+Source: [OpenClaw Memory Guide](https://www.moltbook.com/post/abc)
+Imported: 2026-04-13
+
+Moltbook and #curated import made this OpenClaw note noisy.
+`);
+
+  assert.doesNotMatch(cleaned, /Moltbook/i);
+  assert.doesNotMatch(cleaned, /OpenClaw/i);
+  assert.doesNotMatch(cleaned, /curated import/i);
+  assert.match(cleaned, /note noisy/i);
+});
+
+test("sanitizeImportedTagLabels strips banned import labels but keeps useful tags", () => {
+  const tags = sanitizeImportedTagLabels(["Moltbook", "Curated Import", "Prompt Design", "Skill.md"]);
+  assert.deepEqual(tags, ["Agent Skills", "Prompt Design", "Skill.md"]);
 });
