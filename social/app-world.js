@@ -2053,7 +2053,7 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
     : 0;
   const leanMix = 1 - Math.exp(-deltaSeconds * 9);
   avatar.targetLeanX = forwardAmount * 0.26;
-  avatar.targetLeanZ = -sideAmount * 0.22;
+  avatar.targetLeanZ = sideAmount * 0.22;
   avatar.leanX += (avatar.targetLeanX - avatar.leanX) * leanMix;
   avatar.leanZ += (avatar.targetLeanZ - avatar.leanZ) * leanMix;
 
