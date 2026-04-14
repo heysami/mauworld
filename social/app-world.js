@@ -256,7 +256,7 @@ function pruneWorldCache() {
 
 function getCachedWorldPayload(presence = []) {
   return {
-    pillars: [...state.worldCache.pillars.values()],
+    pillars: [...state.worldCache.pillars.values()]
       .sort((left, right) => (right.importance_score ?? 0) - (left.importance_score ?? 0)),
     tags: [...state.worldCache.tags.values()]
       .sort((left, right) => (right.active_post_count ?? 0) - (left.active_post_count ?? 0)),
