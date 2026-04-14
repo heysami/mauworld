@@ -72,6 +72,11 @@ const WORLD_STYLE = {
   accents: ["#ff4fa8", "#2dd8ff", "#ffd84d", "#7ce85b", "#ff9548", "#7ed7ff"],
 };
 
+const SKYLINE_BAND_ASSETS = {
+  "skyline-band-primary": new URL("./assets/skyline-band-primary.svg", import.meta.url).href,
+  "skyline-band-secondary": new URL("./assets/skyline-band-secondary.svg", import.meta.url).href,
+};
+
 const skylineTextureCache = new Map();
 let toonGradientTexture = null;
 
@@ -1137,16 +1142,26 @@ function createOutlineShell(geometry, color, scale = 1.08) {
   return shell;
 }
 
-function createSkylineBandTexture(seed, options = {}) {
+function configureSkylineBandTexture(texture, repeatX) {
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.repeat.set(repeatX, 1);
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  if (sceneState.renderer?.capabilities?.getMaxAnisotropy) {
+    texture.anisotropy = sceneState.renderer.capabilities.getMaxAnisotropy();
+  }
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function buildSkylineBandSvg(seed, options = {}) {
   const accent = options.accent ?? pickAccent(seed, 0);
   const secondary = options.secondary ?? pickAccent(seed, 2);
-  const repeatX = options.repeatX ?? 6;
   const width = options.width ?? 6144;
   const height = options.height ?? 1024;
-  const cacheKey = `${seed}:${accent}:${secondary}:${repeatX}:${width}:${height}`;
-  if (skylineTextureCache.has(cacheKey)) {
-    return skylineTextureCache.get(cacheKey);
-  }
 
   const baseY = Math.round(height * 0.72);
   let cursor = 0;
@@ -1188,19 +1203,27 @@ function createSkylineBandTexture(seed, options = {}) {
       <path d="M 0 ${baseY} H ${width}" stroke="${secondary}" stroke-width="8" stroke-opacity="0.28" />
     </svg>
   `;
+  return svg;
+}
 
-  const texture = new THREE.TextureLoader().load(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.ClampToEdgeWrapping;
-  texture.repeat.set(repeatX, 1);
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearFilter;
-  texture.generateMipmaps = false;
-  if (sceneState.renderer?.capabilities?.getMaxAnisotropy) {
-    texture.anisotropy = sceneState.renderer.capabilities.getMaxAnisotropy();
+function createSkylineBandTexture(seed, options = {}) {
+  const accent = options.accent ?? pickAccent(seed, 0);
+  const secondary = options.secondary ?? pickAccent(seed, 2);
+  const repeatX = options.repeatX ?? 6;
+  const width = options.width ?? 6144;
+  const height = options.height ?? 1024;
+  const assetUrl = SKYLINE_BAND_ASSETS[seed];
+  const cacheKey = assetUrl
+    ? `${seed}:${assetUrl}:${repeatX}`
+    : `${seed}:${accent}:${secondary}:${repeatX}:${width}:${height}`;
+  if (skylineTextureCache.has(cacheKey)) {
+    return skylineTextureCache.get(cacheKey);
   }
-  texture.needsUpdate = true;
+
+  const source = assetUrl
+    ? assetUrl
+    : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(buildSkylineBandSvg(seed, { accent, secondary, width, height }))}`;
+  const texture = configureSkylineBandTexture(new THREE.TextureLoader().load(source), repeatX);
   skylineTextureCache.set(cacheKey, texture);
   return texture;
 }
