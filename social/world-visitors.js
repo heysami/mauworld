@@ -344,7 +344,8 @@ function setActorOpacity(actor, opacity) {
 export function updateMascotMotion(actor, options = {}) {
   const deltaSeconds = options.deltaSeconds ?? 1 / 60;
   const elapsedSeconds = options.elapsedSeconds ?? 0;
-  const nextPosition = options.nextPosition ?? actor.position ?? actor.group.position;
+  const actorPosition = actor.position ?? actor.group.position;
+  const nextPosition = options.nextPosition ?? actorPosition;
   const maxSpeed = Math.max(0.0001, options.maxSpeed ?? 12);
   const movement =
     actor.lastPosition == null
@@ -383,7 +384,9 @@ export function updateMascotMotion(actor, options = {}) {
 
   const bobAmplitude = options.bobAmplitude ?? 0.14;
   const bobSpeed = options.bobSpeed ?? 1.6;
-  actor.position.copy(nextPosition);
+  if (actor.position) {
+    actor.position.copy(nextPosition);
+  }
   actor.group.position.copy(nextPosition);
   actor.group.position.y += Math.sin(elapsedSeconds * bobSpeed + actor.bobPhase) * bobAmplitude * Math.max(actor.opacity, 0.25);
 

@@ -2896,6 +2896,7 @@ function initScene() {
   sceneState.player.add(viewerAvatar.group);
   sceneState.playerAvatar = {
     group: viewerAvatar.group,
+    position: getNavigationPosition().clone(),
     poseRoot: viewerAvatar.poseRoot,
     halo: viewerAvatar.halo,
     orb: viewerAvatar.orb,
