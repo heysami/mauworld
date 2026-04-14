@@ -422,6 +422,13 @@ function pruneWorldCache() {
   }
 }
 
+function filterPresenceRows(presence = []) {
+  return presence.filter((entry) => {
+    const viewerSessionId = entry?.viewer_session_id ?? entry?.viewerSessionId;
+    return !viewerSessionId || viewerSessionId !== state.viewerSessionId;
+  });
+}
+
 function getCachedWorldPayload(presence = []) {
   return {
     pillars: [...state.worldCache.pillars.values()]
@@ -430,7 +437,7 @@ function getCachedWorldPayload(presence = []) {
       .sort((left, right) => (right.active_post_count ?? 0) - (left.active_post_count ?? 0)),
     postInstances: [...state.worldCache.posts.values()]
       .sort((left, right) => (right.popularity_score ?? 0) - (left.popularity_score ?? 0)),
-    presence,
+    presence: filterPresenceRows(presence),
   };
 }
 
