@@ -474,6 +474,16 @@ function setSearchStatus(text) {
   }
 }
 
+function clearSearchResults() {
+  state.searchPayload = null;
+  state.searchSubmitted = false;
+  elements.resultsPanel?.classList.add("is-empty");
+  if (elements.results) {
+    elements.results.innerHTML = "";
+  }
+  setSearchStatus("");
+}
+
 function setLoading(isLoading) {
   state.loading = isLoading;
   if (elements.loading) {
@@ -2699,14 +2709,20 @@ async function runSearch() {
   if (state.searchLoading) {
     return;
   }
+  const formData = new FormData(elements.searchForm);
+  const query = String(formData.get("q") ?? "").trim();
+  const tag = String(formData.get("tag") ?? "").trim();
+  if (!query && !tag) {
+    clearSearchResults();
+    return;
+  }
   state.searchLoading = true;
   state.searchSubmitted = true;
   setSearchStatus("Searching the current world...");
   try {
-    const formData = new FormData(elements.searchForm);
     const payload = await fetchJson(WORLD_API.search, {
-      q: formData.get("q") || "",
-      tag: formData.get("tag") || "",
+      q: query,
+      tag,
       sort: formData.get("sort") || "latest",
       limit: 12,
     });
@@ -3314,6 +3330,14 @@ function registerInput() {
 
   elements.inspectorClose?.addEventListener("click", () => {
     closeSelectedPost();
+  });
+
+  const searchInput = elements.searchForm?.querySelector('input[name="q"]');
+  searchInput?.addEventListener("input", () => {
+    if (String(searchInput.value ?? "").trim()) {
+      return;
+    }
+    clearSearchResults();
   });
 }
 
