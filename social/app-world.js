@@ -43,6 +43,13 @@ const CAMERA = {
   focusDurationMs: 1400,
 };
 
+const PLAYER_VIEW = {
+  lookHeight: 7.6,
+  minRadius: 16,
+  maxRadius: 110,
+  defaultRadius: 28,
+};
+
 const MOVEMENT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "shift"]);
 
 const WORLD_STREAM = {
@@ -85,6 +92,10 @@ const state = {
   initialViewFramed: false,
   viewerSessionId: "",
   moveButtons: new Set(),
+  navigationPosition: new THREE.Vector3(0, 96, 112),
+  cameraRadius: PLAYER_VIEW.defaultRadius,
+  travelAnimation: null,
+  trailAccumulator: 0,
   worldCache: {
     pillars: new Map(),
     tags: new Map(),
@@ -105,6 +116,9 @@ const sceneState = {
   posts: new THREE.Group(),
   presence: new THREE.Group(),
   effects: new THREE.Group(),
+  routes: new THREE.Group(),
+  trails: new THREE.Group(),
+  player: new THREE.Group(),
   billboards: [],
   animatedDecor: [],
   animatedPillars: [],
@@ -114,6 +128,10 @@ const sceneState = {
   clickable: [],
   snow: null,
   snowData: [],
+  playerAvatar: null,
+  trailPuffs: [],
+  trailTexture: null,
+  routeGuide: null,
   raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(),
   floorMarker: null,
@@ -167,6 +185,10 @@ function getFlatForwardVector(yaw) {
   return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
 }
 
+function yawFromVector(vector) {
+  return normalizeAngle(Math.atan2(-vector.x, -vector.z));
+}
+
 function computeLookAngles(from, to) {
   const delta = new THREE.Vector3().subVectors(to, from);
   const horizontal = Math.max(0.0001, Math.hypot(delta.x, delta.z));
@@ -176,12 +198,40 @@ function computeLookAngles(from, to) {
   };
 }
 
+function getNavigationPosition() {
+  return state.navigationPosition;
+}
+
+function getPlayerLookTarget(position = state.navigationPosition) {
+  return position.clone().add(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
+}
+
+function syncCameraToFollowTarget() {
+  if (!sceneState.camera) {
+    return;
+  }
+  const target = getPlayerLookTarget();
+  const radius = clamp(state.cameraRadius, PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius);
+  const cosPitch = Math.cos(inputState.pitch);
+  sceneState.camera.position.set(
+    target.x + Math.sin(inputState.yaw) * cosPitch * radius,
+    target.y - Math.sin(inputState.pitch) * radius,
+    target.z + Math.cos(inputState.yaw) * cosPitch * radius,
+  );
+  sceneState.camera.lookAt(target);
+}
+
 function aimCameraAt(position, target) {
-  sceneState.camera.position.copy(position);
+  state.navigationPosition.copy(target).add(new THREE.Vector3(0, -PLAYER_VIEW.lookHeight, 0));
+  state.cameraRadius = clamp(
+    position.distanceTo(target),
+    PLAYER_VIEW.minRadius,
+    PLAYER_VIEW.maxRadius,
+  );
   const { yaw, pitch } = computeLookAngles(position, target);
   inputState.yaw = yaw;
   inputState.pitch = pitch;
-  updateCameraRotation();
+  syncCameraToFollowTarget();
 }
 
 function htmlEscape(value) {
@@ -1730,6 +1780,208 @@ function buildPresenceObject(entry) {
   return group;
 }
 
+function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
+  if (!sceneState.playerAvatar) {
+    return;
+  }
+  const avatar = sceneState.playerAvatar;
+  avatar.group.position.copy(getNavigationPosition());
+  avatar.group.rotation.y = normalizeAngle(inputState.yaw + Math.PI);
+  avatar.group.position.y += Math.sin(elapsedSeconds * 1.6) * 0.16;
+  if (avatar.halo) {
+    avatar.halo.rotation.z += 0.008;
+  }
+  if (avatar.orb) {
+    avatar.orb.position.y = avatar.orbBaseY + Math.sin(elapsedSeconds * 2.1) * 0.24;
+  }
+}
+
+function clearRouteGuide() {
+  if (!sceneState.routeGuide) {
+    return;
+  }
+  sceneState.routes.remove(sceneState.routeGuide.group);
+  sceneState.routeGuide = null;
+}
+
+function cancelTravelAnimation() {
+  state.travelAnimation = null;
+  clearRouteGuide();
+}
+
+function buildTravelCurve(start, end) {
+  const midpoint = start.clone().lerp(end, 0.5);
+  midpoint.y += Math.min(22, 8 + start.distanceTo(end) * 0.06);
+  return new THREE.CatmullRomCurve3([start.clone(), midpoint, end.clone()]);
+}
+
+function showRouteGuide(curve, color = WORLD_STYLE.accents[0]) {
+  clearRouteGuide();
+  const points = curve.getPoints(140);
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color(color),
+      transparent: true,
+      opacity: 0.54,
+      fog: false,
+    }),
+  );
+  const startMarker = new THREE.Mesh(
+    new THREE.RingGeometry(2.6, 3.4, 28),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color),
+      transparent: true,
+      opacity: 0.32,
+      side: THREE.DoubleSide,
+      fog: false,
+    }),
+  );
+  startMarker.rotation.x = -Math.PI / 2;
+  startMarker.position.copy(points[0]);
+  const endMarker = new THREE.Mesh(
+    new THREE.RingGeometry(3.2, 4.2, 32),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color),
+      transparent: true,
+      opacity: 0.44,
+      side: THREE.DoubleSide,
+      fog: false,
+    }),
+  );
+  endMarker.rotation.x = -Math.PI / 2;
+  endMarker.position.copy(points[points.length - 1]);
+
+  const group = new THREE.Group();
+  group.add(line);
+  group.add(startMarker);
+  group.add(endMarker);
+  sceneState.routes.add(group);
+  sceneState.routeGuide = {
+    group,
+    line,
+    startMarker,
+    endMarker,
+  };
+}
+
+function computeApproachAnchor(destination, distance = 12, lift = -6, sourcePosition = getNavigationPosition()) {
+  const target = new THREE.Vector3(
+    destination.position_x,
+    destination.position_y,
+    destination.position_z,
+  );
+  const approachVector = new THREE.Vector3(
+    target.x - sourcePosition.x,
+    0,
+    target.z - sourcePosition.z,
+  );
+  if (approachVector.lengthSq() < 0.0001) {
+    approachVector.copy(getFlatForwardVector(
+      Number.isFinite(destination.heading_y) ? destination.heading_y : inputState.yaw,
+    ));
+  } else {
+    approachVector.normalize();
+  }
+  const anchor = target.clone().sub(approachVector.multiplyScalar(distance));
+  anchor.y = Math.max(CAMERA.minY, target.y + lift);
+  return {
+    anchor,
+    yaw: yawFromVector(approachVector),
+  };
+}
+
+function spawnTrailPuff(position, travelVector) {
+  if (!sceneState.trailTexture) {
+    sceneState.trailTexture = createCloudTexture({
+      width: 300,
+      height: 180,
+      fill: "rgba(255, 255, 255, 0.94)",
+      stroke: "rgba(236, 246, 255, 0.98)",
+    });
+  }
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: sceneState.trailTexture,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  sprite.position.copy(position);
+  sprite.position.y += 1.4;
+  const scale = 7.5 + Math.min(6, travelVector.length() * 0.08);
+  sprite.scale.set(scale, scale * 0.56, 1);
+  sceneState.trails.add(sprite);
+  sceneState.trailPuffs.push({
+    sprite,
+    age: 0,
+    lifetime: 1.6,
+    drift: new THREE.Vector3(
+      -travelVector.x * 0.022,
+      1.1 + Math.random() * 0.5,
+      -travelVector.z * 0.022,
+    ),
+    growth: 1.1 + Math.random() * 0.35,
+  });
+}
+
+function leaveMovementTrail(previousPosition, nextPosition, deltaSeconds) {
+  const delta = new THREE.Vector3().subVectors(nextPosition, previousPosition);
+  const distance = delta.length();
+  if (distance < 0.02) {
+    state.trailAccumulator = 0;
+    return;
+  }
+  state.trailAccumulator += distance;
+  if (state.trailAccumulator < 2.2 || deltaSeconds <= 0) {
+    return;
+  }
+  state.trailAccumulator = 0;
+  spawnTrailPuff(previousPosition.clone(), delta);
+}
+
+function startGuidedTravel(result) {
+  if (!result?.destination) {
+    renderSelected(result);
+    showToast("This post is still queued for placement. The world route will appear once placement is ready.");
+    return;
+  }
+
+  const start = getNavigationPosition().clone();
+  const approach = computeApproachAnchor(result.destination, 11, -7, start);
+  const end = approach.anchor;
+  const curve = buildTravelCurve(start, end);
+  const distance = start.distanceTo(end);
+  const routeColor = pickAccent(result.destination.post_id || result.post?.title || "route");
+  showRouteGuide(curve, routeColor);
+
+  state.activeResultId = result.post?.id ?? state.activeResultId;
+  state.focusedResult = result;
+  state.openTagId = null;
+  syncExpandedTagState();
+  state.travelAnimation = {
+    phase: "preview",
+    previewStartedAt: performance.now(),
+    travelStartedAt: 0,
+    previewMs: 850,
+    travelMs: clamp(Math.round(distance * 58), 2600, 7200),
+    curve,
+    fromRadius: state.cameraRadius,
+    toRadius: clamp(20 + Math.min(8, distance * 0.03), PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius),
+    toYaw: approach.yaw,
+    toPitch: clamp(0.18, CAMERA.lookMin, CAMERA.lookMax),
+    result,
+  };
+  renderSelected(result);
+  if (sceneState.floorMarker) {
+    sceneState.floorMarker.visible = true;
+    sceneState.floorMarker.position.set(result.destination.position_x, 0.2, result.destination.position_z);
+  }
+  loadStreamForPosition(end, true).catch((error) => showToast(error.message));
+}
+
 function clearFocusGhost() {
   clearGroup(sceneState.effects);
 }
@@ -1829,6 +2081,7 @@ function syncExpandedTagState() {
 }
 
 function closeSelectedPost() {
+  cancelTravelAnimation();
   state.activeResultId = null;
   state.focusedResult = null;
   state.openTagId = null;
@@ -1841,6 +2094,7 @@ function closeSelectedPost() {
 }
 
 function openTagCloud(entry) {
+  cancelTravelAnimation();
   const isSameTag = state.openTagId === entry.tag_id;
   if (isSameTag) {
     state.openTagId = null;
@@ -1867,25 +2121,31 @@ function openTagCloud(entry) {
   syncExpandedTagState();
 
   const target = new THREE.Vector3(entry.position_x, entry.position_y + 7, entry.position_z);
-  const orbitDistance = clamp((entry.orbit_radius ?? 22) + 18, 32, 52);
-  const approachVector = getFlatForwardVector(inputState.yaw);
-  const cameraDestination = target.clone().sub(approachVector.multiplyScalar(orbitDistance));
-  cameraDestination.y += 18;
-  const { yaw, pitch } = computeLookAngles(cameraDestination, target);
+  const approach = computeApproachAnchor(
+    {
+      position_x: entry.position_x,
+      position_y: entry.position_y + 2,
+      position_z: entry.position_z,
+      heading_y: inputState.yaw,
+    },
+    clamp((entry.orbit_radius ?? 22) * 0.32 + 10, 12, 18),
+    -2,
+  );
 
   state.focusAnimation = {
     startedAt: performance.now(),
-    fromPosition: sceneState.camera.position.clone(),
-    toPosition: cameraDestination,
+    fromPosition: getNavigationPosition().clone(),
+    toPosition: approach.anchor,
     fromYaw: inputState.yaw,
-    toYaw: yaw,
+    toYaw: approach.yaw,
     fromPitch: inputState.pitch,
-    toPitch: pitch,
-    lookAt: target,
+    toPitch: clamp(0.16, CAMERA.lookMin, CAMERA.lookMax),
+    fromRadius: state.cameraRadius,
+    toRadius: clamp(20, PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius),
     durationMs: 900,
   };
 
-  loadStreamForPosition(cameraDestination, true).catch((error) => showToast(error.message));
+  loadStreamForPosition(approach.anchor, true).catch((error) => showToast(error.message));
 }
 
 function buildSceneSelectionResult(entry) {
@@ -1908,6 +2168,7 @@ function buildSceneSelectionResult(entry) {
 }
 
 function openPostDetail(entry) {
+  cancelTravelAnimation();
   const result = buildSceneSelectionResult(entry);
   if (!result?.destination?.post_id) {
     return;
@@ -2062,8 +2323,24 @@ function initScene() {
   sceneState.root.add(sceneState.tags);
   sceneState.root.add(sceneState.posts);
   sceneState.root.add(sceneState.presence);
+  sceneState.root.add(sceneState.player);
+  sceneState.root.add(sceneState.trails);
+  sceneState.root.add(sceneState.routes);
   sceneState.root.add(sceneState.effects);
   sceneState.scene.add(sceneState.root);
+
+  const viewerAvatar = createMascotFigure("viewer-self", {
+    scale: 0.92,
+    outlineColor: WORLD_STYLE.accents[0],
+  });
+  sceneState.player.add(viewerAvatar.group);
+  sceneState.playerAvatar = {
+    group: viewerAvatar.group,
+    halo: viewerAvatar.halo,
+    orb: viewerAvatar.orb,
+    orbBaseY: viewerAvatar.orb.position.y,
+  };
+  syncLocalAvatar(0);
 
   const snowGeometry = new THREE.BufferGeometry();
   const snowCount = 2200;
@@ -2127,8 +2404,7 @@ function resizeScene() {
 }
 
 function updateCameraRotation() {
-  sceneState.camera.rotation.y = inputState.yaw;
-  sceneState.camera.rotation.x = inputState.pitch;
+  syncCameraToFollowTarget();
 }
 
 function updateMetaPanel() {
@@ -2167,7 +2443,7 @@ function updateCameraPanel() {
   if (!elements.camera) {
     return;
   }
-  const position = sceneState.camera.position;
+  const position = getNavigationPosition();
   const cellSize = state.meta?.renderer?.lod?.cellSize ?? 64;
   const cellX = Math.floor(position.x / Math.max(1, cellSize));
   const cellZ = Math.floor(position.z / Math.max(1, cellSize));
@@ -2219,7 +2495,7 @@ function updateStagePanel() {
     meta.push(`${state.meta.queueLag.pendingCount} pending`);
     meta.push(`${Math.max(0, Math.round(state.meta.queueLag.estimatedDelayMs / 1000))}s scene delay`);
   } else {
-    const position = sceneState.camera?.position ?? { x: 0, z: 0 };
+    const position = getNavigationPosition() ?? { x: 0, z: 0 };
     const cellSize = state.meta?.renderer?.lod?.cellSize ?? 64;
     const cellX = Math.floor(position.x / Math.max(1, cellSize));
     const cellZ = Math.floor(position.z / Math.max(1, cellSize));
@@ -2277,44 +2553,7 @@ function renderSelected(result) {
 }
 
 function focusOnDestination(result) {
-  if (!result?.destination) {
-    renderSelected(result);
-    showToast("This post is still queued for placement. The camera will hold near its branch once the queue drains.");
-    return;
-  }
-
-  const destination = result.destination;
-  const target = new THREE.Vector3(destination.position_x, destination.position_y, destination.position_z);
-  const offsetDistance = 34;
-  const approachHeading = Number.isFinite(destination.heading_y) ? destination.heading_y : inputState.yaw;
-  const approachVector = getFlatForwardVector(approachHeading);
-  const cameraDestination = target.clone().sub(approachVector.multiplyScalar(offsetDistance));
-  cameraDestination.y += 22;
-  const { yaw, pitch } = computeLookAngles(cameraDestination, target);
-
-  state.focusAnimation = {
-    startedAt: performance.now(),
-    fromPosition: sceneState.camera.position.clone(),
-    toPosition: cameraDestination,
-    fromYaw: inputState.yaw,
-    toYaw: yaw,
-    fromPitch: inputState.pitch,
-    toPitch: pitch,
-    lookAt: target,
-    durationMs: CAMERA.focusDurationMs,
-  };
-
-  if (sceneState.floorMarker) {
-    sceneState.floorMarker.visible = true;
-    sceneState.floorMarker.position.set(destination.position_x, 0.2, destination.position_z);
-  }
-
-  state.openTagId = destination.tag_id ?? null;
-  state.focusedResult = result;
-  syncExpandedTagState();
-  loadStreamForPosition(cameraDestination, true).catch((error) => showToast(error.message));
-  syncFocusedGhost();
-  renderSelected(result);
+  startGuidedTravel(result);
 }
 
 function renderSearchResults() {
@@ -2364,7 +2603,7 @@ function renderSearchResults() {
   }
 }
 
-function buildCellWindow(position = sceneState.camera.position) {
+function buildCellWindow(position = getNavigationPosition()) {
   const cellSize = state.meta?.renderer?.lod?.cellSize ?? 64;
   const range = window.innerWidth < 780 ? WORLD_STREAM.mobileRange : WORLD_STREAM.desktopRange;
   const centerX = Math.floor(position.x / Math.max(1, cellSize));
@@ -2393,7 +2632,7 @@ async function loadMeta(force = false) {
 }
 
 async function loadStream(force = false) {
-  return loadStreamForPosition(sceneState.camera.position, force);
+  return loadStreamForPosition(getNavigationPosition(), force);
 }
 
 async function loadStreamForPosition(position, force = false) {
@@ -2466,17 +2705,17 @@ async function sendPresence() {
   state.lastPresenceAt = now;
 
   const forward = new THREE.Vector3();
-  sceneState.camera.getWorldDirection(forward);
+  forward.copy(getFlatForwardVector(inputState.yaw));
   try {
     await postJson(WORLD_API.presence, {
       viewerSessionId: state.viewerSessionId,
-      position_x: Number(sceneState.camera.position.x.toFixed(4)),
-      position_y: Number(sceneState.camera.position.y.toFixed(4)),
-      position_z: Number(sceneState.camera.position.z.toFixed(4)),
+      position_x: Number(state.navigationPosition.x.toFixed(4)),
+      position_y: Number(state.navigationPosition.y.toFixed(4)),
+      position_z: Number(state.navigationPosition.z.toFixed(4)),
       heading_y: Number(inputState.yaw.toFixed(4)),
       movement_state: {
         forward: Number(forward.x.toFixed(4)),
-        lift: Number(sceneState.camera.position.y.toFixed(4)),
+        lift: Number(state.navigationPosition.y.toFixed(4)),
       },
     });
   } catch (_error) {
@@ -2693,6 +2932,30 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     }
   }
 
+  if (sceneState.routeGuide) {
+    sceneState.routeGuide.startMarker.rotation.z += deltaSeconds * 0.9;
+    sceneState.routeGuide.endMarker.rotation.z -= deltaSeconds * 1.1;
+    const pulse = 1 + Math.sin(elapsedSeconds * 2.2) * 0.08;
+    sceneState.routeGuide.endMarker.scale.setScalar(pulse);
+  }
+
+  for (let index = sceneState.trailPuffs.length - 1; index >= 0; index -= 1) {
+    const entry = sceneState.trailPuffs[index];
+    entry.age += deltaSeconds;
+    const life = clamp(entry.age / entry.lifetime, 0, 1);
+    entry.sprite.position.addScaledVector(entry.drift, deltaSeconds);
+    entry.sprite.material.opacity = (1 - life) * 0.32;
+    const scale = entry.sprite.scale.x * (1 + entry.growth * deltaSeconds * 0.12);
+    entry.sprite.scale.set(scale, scale * 0.56, 1);
+    if (life >= 1) {
+      sceneState.trails.remove(entry.sprite);
+      entry.sprite.material.dispose();
+      sceneState.trailPuffs.splice(index, 1);
+    }
+  }
+
+  syncLocalAvatar(elapsedSeconds);
+
   for (const mesh of sceneState.billboards) {
     mesh.quaternion.copy(sceneState.camera.quaternion);
   }
@@ -2707,31 +2970,81 @@ function applyFocusAnimation() {
   const t = clamp(elapsed / state.focusAnimation.durationMs, 0, 1);
   const eased = easeInOutCubic(t);
 
-  sceneState.camera.position.lerpVectors(
+  state.navigationPosition.lerpVectors(
     state.focusAnimation.fromPosition,
     state.focusAnimation.toPosition,
     eased,
   );
+  state.cameraRadius =
+    (state.focusAnimation.fromRadius ?? state.cameraRadius) +
+    ((state.focusAnimation.toRadius ?? state.cameraRadius) - (state.focusAnimation.fromRadius ?? state.cameraRadius)) * eased;
 
   inputState.yaw = normalizeAngle(
     state.focusAnimation.fromYaw + shortestAngleDelta(state.focusAnimation.fromYaw, state.focusAnimation.toYaw) * eased,
   );
   inputState.pitch = state.focusAnimation.fromPitch + (state.focusAnimation.toPitch - state.focusAnimation.fromPitch) * eased;
-  updateCameraRotation();
+  syncCameraToFollowTarget();
 
   if (t >= 1) {
     state.focusAnimation = null;
   }
 }
 
-function updateMovement(deltaSeconds) {
-  if (state.focusAnimation) {
+function applyTravelAnimation(deltaSeconds) {
+  if (!state.travelAnimation) {
     return;
   }
-  const forward = new THREE.Vector3();
-  sceneState.camera.getWorldDirection(forward);
-  forward.normalize();
-  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(sceneState.camera.quaternion).normalize();
+  const animation = state.travelAnimation;
+  const now = performance.now();
+  if (animation.phase === "preview") {
+    const previewT = clamp((now - animation.previewStartedAt) / animation.previewMs, 0, 1);
+    if (sceneState.routeGuide) {
+      sceneState.routeGuide.line.material.opacity = 0.24 + previewT * 0.42;
+    }
+    if (previewT >= 1) {
+      animation.phase = "travel";
+      animation.travelStartedAt = now;
+    }
+    return;
+  }
+
+  const previousPosition = getNavigationPosition().clone();
+  const t = clamp((now - animation.travelStartedAt) / animation.travelMs, 0, 1);
+  const eased = easeInOutCubic(t);
+  const nextPosition = animation.curve.getPoint(eased);
+  state.navigationPosition.copy(nextPosition);
+  state.cameraRadius = animation.fromRadius + (animation.toRadius - animation.fromRadius) * eased;
+  inputState.yaw = normalizeAngle(
+    inputState.yaw + shortestAngleDelta(inputState.yaw, animation.toYaw) * Math.min(1, deltaSeconds * 2.4),
+  );
+  inputState.pitch = inputState.pitch + (animation.toPitch - inputState.pitch) * Math.min(1, deltaSeconds * 2.2);
+  syncCameraToFollowTarget();
+  leaveMovementTrail(previousPosition, nextPosition, deltaSeconds);
+
+  if (sceneState.routeGuide) {
+    sceneState.routeGuide.line.material.opacity = 0.16 + (1 - eased) * 0.34;
+  }
+
+  if (t >= 1) {
+    const result = animation.result;
+    state.travelAnimation = null;
+    clearRouteGuide();
+    state.openTagId = result.destination?.tag_id ?? null;
+    state.focusedResult = result;
+    syncExpandedTagState();
+    syncFocusedGhost();
+    renderSearchResults();
+    renderSelected(result);
+  }
+}
+
+function updateMovement(deltaSeconds) {
+  if (state.focusAnimation || state.travelAnimation) {
+    return;
+  }
+  const previousPosition = getNavigationPosition().clone();
+  const forward = getFlatForwardVector(inputState.yaw);
+  const right = new THREE.Vector3(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw));
   const velocity = new THREE.Vector3();
   let vertical = 0;
   const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
@@ -2762,16 +3075,18 @@ function updateMovement(deltaSeconds) {
   const speedMultiplier = inputState.keys.has("shift") ? 2.1 : 1;
   if (velocity.lengthSq() > 0) {
     velocity.normalize();
-    sceneState.camera.position.addScaledVector(
+    state.navigationPosition.addScaledVector(
       velocity,
       deltaSeconds * CAMERA.movementSpeed * speedMultiplier,
     );
   }
-  sceneState.camera.position.y = clamp(
-    sceneState.camera.position.y + vertical * deltaSeconds * CAMERA.verticalSpeed * speedMultiplier,
+  state.navigationPosition.y = clamp(
+    state.navigationPosition.y + vertical * deltaSeconds * CAMERA.verticalSpeed * speedMultiplier,
     CAMERA.minY,
     CAMERA.maxY,
   );
+  syncCameraToFollowTarget();
+  leaveMovementTrail(previousPosition, getNavigationPosition(), deltaSeconds);
 }
 
 function pickSceneObject(event) {
@@ -2875,7 +3190,7 @@ function onPointerDown(event) {
 }
 
 function onPointerMove(event) {
-  if (!inputState.pointerDown) {
+  if (!inputState.pointerDown || state.travelAnimation) {
     return;
   }
   const deltaX = event.clientX - inputState.lastPointerX;
@@ -2901,14 +3216,15 @@ function onPointerUp(event) {
 
 function onWheel(event) {
   event.preventDefault();
-  if (state.focusAnimation) {
+  if (state.focusAnimation || state.travelAnimation) {
     return;
   }
-  sceneState.camera.position.y = clamp(
-    sceneState.camera.position.y + (-event.deltaY * CAMERA.wheelFactor),
+  state.navigationPosition.y = clamp(
+    state.navigationPosition.y + (-event.deltaY * CAMERA.wheelFactor),
     CAMERA.minY,
     CAMERA.maxY,
   );
+  syncCameraToFollowTarget();
 }
 
 function registerInput() {
@@ -2965,6 +3281,7 @@ function animate() {
   const now = performance.now();
 
   applyFocusAnimation();
+  applyTravelAnimation(deltaSeconds);
   updateMovement(deltaSeconds);
   updateSnow(deltaSeconds, elapsedSeconds);
   updateAnimatedObjects(deltaSeconds, elapsedSeconds);
