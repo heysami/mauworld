@@ -162,11 +162,11 @@ textarea {
 }
 
 .brand__copy {
-  display: block;
+  display: flex;
+  align-items: center;
   min-width: 0;
 }
 
-.brand__eyebrow,
 .section-kicker,
 .guide-card__group {
   display: block;
@@ -182,16 +182,9 @@ textarea {
   display: block;
   margin: 0;
   font-family: "Outfit", system-ui, sans-serif;
-  font-size: 1.14rem;
+  font-size: 1.2rem;
   font-weight: 700;
   line-height: 1;
-}
-
-.brand__sub {
-  display: block;
-  margin: 2px 0 0;
-  color: var(--muted);
-  font-size: 0.9rem;
 }
 
 .site-nav {
@@ -389,6 +382,26 @@ textarea {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   max-width: 760px;
+}
+
+.hero-icon-stage {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  padding: 8px 0;
+}
+
+.hero-icon {
+  width: min(100%, 520px);
+  margin: 0;
+}
+
+.hero-icon img {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 24px 34px rgba(167, 95, 21, 0.18));
 }
 
 .hero-note {
@@ -604,8 +617,8 @@ textarea {
 
 .feature-card__head {
   display: grid;
-  grid-template-columns: 40px 52px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
 }
 
@@ -881,26 +894,13 @@ textarea {
 }
 
 .feature-card__meta {
-  margin: 0 0 0 106px;
+  margin: 0;
   padding-top: 12px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 0.84rem;
   font-weight: 700;
   line-height: 1.6;
-}
-
-.feature-card__index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  min-height: 52px;
-  color: rgba(114, 130, 185, 0.66);
-  font-family: "Outfit", system-ui, sans-serif;
-  font-size: 0.92rem;
-  font-weight: 700;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
 }
 
 .section-block--why .feature-card:nth-child(even) {
@@ -915,9 +915,7 @@ textarea {
   order: 1;
 }
 
-.feature-card__glyph,
-.guide-card__glyph,
-.point-icon {
+.guide-card__glyph {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -927,52 +925,15 @@ textarea {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96);
 }
 
-.feature-card__glyph,
 .guide-card__glyph {
   width: 52px;
   height: 52px;
 }
 
-.feature-card__glyph svg,
-.guide-card__glyph svg,
-.point-icon svg {
+.guide-card__glyph svg {
   width: 24px;
   height: 24px;
   color: var(--accent-strong);
-}
-
-.point-list {
-  display: grid;
-  gap: 12px;
-}
-
-.point-item {
-  display: grid;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.point-copy {
-  display: grid;
-  gap: 6px;
-}
-
-.point-copy strong {
-  color: rgba(114, 130, 185, 0.9);
-  font-family: "Outfit", system-ui, sans-serif;
-  font-size: 0.8rem;
-  font-weight: 700;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.point-copy span {
-  color: var(--text);
-  font-size: 0.96rem;
-  line-height: 1.55;
 }
 
 .feature-card h3 {
@@ -1003,7 +964,7 @@ textarea {
   display: grid;
   grid-template-columns: 1fr;
   gap: 0;
-  max-width: 1120px;
+  width: 100%;
   padding: 0;
   border-top: 1px solid var(--line);
   background: transparent;
@@ -1013,8 +974,8 @@ textarea {
 
 .start-step {
   display: grid;
-  grid-template-columns: minmax(260px, 0.62fr) minmax(0, 1fr) auto;
-  gap: 18px;
+  grid-template-columns: minmax(320px, 0.7fr) minmax(0, 1fr) auto;
+  gap: 24px;
   padding: 16px 0;
   position: relative;
   align-items: center;
@@ -1037,7 +998,7 @@ textarea {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr);
   gap: 12px;
-  align-items: start;
+  align-items: center;
 }
 
 .start-step__num {
@@ -1061,6 +1022,7 @@ textarea {
 .start-step p {
   margin: 0;
   grid-column: auto;
+  align-self: center;
   max-width: none;
   color: var(--muted);
   font-size: 0.96rem;
@@ -1071,6 +1033,7 @@ textarea {
   grid-column: auto;
   grid-row: auto;
   align-self: center;
+  justify-self: end;
   width: fit-content;
   margin-left: 0;
   min-width: 158px;
@@ -1358,6 +1321,10 @@ textarea {
     gap: 12px;
   }
 
+  .hero-icon {
+    width: min(100%, 440px);
+  }
+
   .hero-notes {
     grid-template-columns: 1fr;
   }
@@ -1452,17 +1419,12 @@ textarea {
   }
 
   .feature-card,
-  .guide-card__head,
-  .point-item {
+  .guide-card__head {
     grid-template-columns: 1fr;
   }
 
   .feature-card__head {
-    grid-template-columns: 36px 42px minmax(0, 1fr);
-  }
-
-  .feature-card__index {
-    min-height: 42px;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .feature-card__meta {
@@ -1491,8 +1453,7 @@ textarea {
   }
 
   .feature-card__glyph,
-  .guide-card__glyph,
-  .point-icon {
+  .guide-card__glyph {
     width: 42px;
     height: 42px;
   }
