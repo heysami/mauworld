@@ -2699,99 +2699,125 @@ function getRenderedPostAnchorById(postId, tagId, fallback = null) {
   return null;
 }
 
+function getPostLayoutBasis(tagId, tagAnchor) {
+  const tag = state.stream?.tags?.find((entry) => entry.tag_id === tagId) ?? null;
+  const pillar = tag
+    ? state.stream?.pillars?.find((entry) => entry.pillar_id === tag.pillar_id) ?? null
+    : null;
+  const outward = new THREE.Vector3();
+  if (pillar) {
+    outward.set(tagAnchor.x - pillar.position_x, 0, tagAnchor.z - pillar.position_z);
+  }
+  if (outward.lengthSq() < 0.0001) {
+    const angle = ((hashString(tagId) % 360) * Math.PI) / 180;
+    outward.set(Math.cos(angle), 0, Math.sin(angle));
+  } else {
+    outward.normalize();
+  }
+  const right = new THREE.Vector3(-outward.z, 0, outward.x).normalize();
+  return { outward, right };
+}
+
+function buildPackedPostRows(posts) {
+  const horizontalGap = 2.6;
+  const verticalGap = 3.2;
+  const maxCardWidth = Math.max(...posts.map((post) => post.cardWidth ?? 12));
+  const totalArea = posts.reduce(
+    (sum, post) => sum + ((post.cardWidth ?? 12) + horizontalGap) * ((post.cardHeight ?? 4.5) + verticalGap),
+    0,
+  );
+  const targetRowWidth = clamp(
+    Math.sqrt(totalArea * 1.35),
+    maxCardWidth * 1.35,
+    Math.max(maxCardWidth * 3.6, 56),
+  );
+
+  const rows = [];
+  let currentRow = null;
+  for (const post of posts) {
+    const width = post.cardWidth ?? 12;
+    const height = post.cardHeight ?? 4.5;
+    const nextWidth = currentRow ? currentRow.width + horizontalGap + width : width;
+    if (currentRow && currentRow.items.length > 0 && nextWidth > targetRowWidth) {
+      rows.push(currentRow);
+      currentRow = null;
+    }
+    if (!currentRow) {
+      currentRow = {
+        items: [],
+        width: 0,
+        height: 0,
+      };
+    }
+    const item = { post, width, height };
+    currentRow.items.push(item);
+    currentRow.width = currentRow.items.length === 1 ? width : currentRow.width + horizontalGap + width;
+    currentRow.height = Math.max(currentRow.height, height);
+  }
+  if (currentRow && currentRow.items.length > 0) {
+    rows.push(currentRow);
+  }
+
+  return {
+    rows,
+    horizontalGap,
+    verticalGap,
+    maxCardWidth,
+    maxCardHeight: Math.max(...posts.map((post) => post.cardHeight ?? 4.5)),
+  };
+}
+
 function computeOpenPostDisplayAnchors(tagId) {
   const tagAnchor = getRenderedTagAnchorById(tagId);
   if (!tagAnchor) {
     return new Map();
   }
 
-  const focusedPostId = state.focusedResult?.destination?.tag_id === tagId
-    ? state.focusedResult.destination.post_id
-    : null;
   const posts = sceneState.animatedPosts
     .filter((entry) => entry.tagId === tagId && entry.displayTier !== "hidden")
     .sort((left, right) =>
-      Number(right.postId === focusedPostId) - Number(left.postId === focusedPostId)
-      || (left.rankInTag ?? Number.MAX_SAFE_INTEGER) - (right.rankInTag ?? Number.MAX_SAFE_INTEGER)
+      (left.rankInTag ?? Number.MAX_SAFE_INTEGER) - (right.rankInTag ?? Number.MAX_SAFE_INTEGER)
       || String(left.postId).localeCompare(String(right.postId)));
 
   if (posts.length === 0) {
     return new Map();
   }
 
-  const cameraOffset = new THREE.Vector3(
-    sceneState.camera.position.x - tagAnchor.x,
-    0,
-    sceneState.camera.position.z - tagAnchor.z,
-  );
-  const frontAngle = cameraOffset.lengthSq() > 0.01
-    ? Math.atan2(cameraOffset.z, cameraOffset.x)
-    : 0;
+  const { outward, right } = getPostLayoutBasis(tagId, tagAnchor);
+  const {
+    rows,
+    horizontalGap,
+    verticalGap,
+    maxCardWidth,
+    maxCardHeight,
+  } = buildPackedPostRows(posts);
   const positions = new Map();
-  let cursor = 0;
-  const lanePattern = [0, 1, -1, 2, -2, 3, -3];
 
-  if (focusedPostId) {
-    const focused = posts.find((entry) => entry.postId === focusedPostId);
-    if (focused) {
-      const focusRadius = Math.max(8.4, (focused.cardWidth ?? 12) * 0.62);
+  const totalHeight =
+    rows.reduce((sum, row) => sum + row.height, 0) + Math.max(0, rows.length - 1) * verticalGap;
+  const baseDistance = Math.max(16, 8 + maxCardWidth * 0.72);
+  const rowDepthStep = Math.max(5.2, maxCardHeight * 1.05);
+
+  let currentTop = totalHeight / 2;
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    let cursorX = -row.width / 2;
+    const rowDistance = baseDistance + rowIndex * rowDepthStep;
+    const rowCenterBase = tagAnchor.clone().addScaledVector(outward, rowDistance);
+
+    for (const item of row.items) {
+      const centerX = cursorX + item.width / 2;
+      const centerY = currentTop - item.height / 2;
       positions.set(
-        focused.postId,
-        new THREE.Vector3(
-          tagAnchor.x + Math.cos(frontAngle) * focusRadius,
-          tagAnchor.y - focused.cardElevation * 0.22 + 0.8,
-          tagAnchor.z + Math.sin(frontAngle) * focusRadius,
-        ),
+        item.post.postId,
+        rowCenterBase.clone()
+          .addScaledVector(right, centerX)
+          .add(new THREE.Vector3(0, centerY, 0)),
       );
-      cursor = 1;
-    }
-  }
-
-  let ringIndex = 0;
-  while (cursor < posts.length) {
-    const ringCapacity = ringIndex === 0 ? 3 : ringIndex === 1 ? 4 : 6;
-    const ringPosts = posts.slice(cursor, cursor + ringCapacity);
-    const maxCardWidth = Math.max(...ringPosts.map((post) => post.cardWidth ?? 12));
-    const maxCardHeight = Math.max(...ringPosts.map((post) => post.cardHeight ?? 4.5));
-    const span = ringPosts.length <= 1
-      ? 0
-      : ringIndex === 0
-        ? Math.PI * 0.92
-        : ringIndex === 1
-          ? Math.PI * 1.18
-          : Math.PI * 1.34;
-    const angleStep = ringPosts.length <= 1 ? span : span / Math.max(1, ringPosts.length - 1);
-    const minChord = maxCardWidth * 0.9;
-    const chordRadius = ringPosts.length <= 1
-      ? minChord * 0.68
-      : minChord / Math.max(0.18, 2 * Math.sin(angleStep / 2));
-    const ringRadius = Math.max(14 + ringIndex * 6.4, chordRadius + 1.4);
-    const laneStep = Math.max(3.6, maxCardHeight * 0.82);
-    const shelfBase = tagAnchor.y - 1.1 + ringIndex * 2.4;
-
-    for (let slot = 0; slot < ringPosts.length; slot += 1) {
-      const post = ringPosts[slot];
-      const offset = ringPosts.length <= 1 ? 0 : (slot / (ringPosts.length - 1)) - 0.5;
-      const angle = frontAngle + offset * span;
-      const radius = ringRadius + (post.displayTier === "hero" ? -0.9 : post.displayTier === "hint" ? 1.2 : 0);
-      const laneOffset = lanePattern[slot] ?? (slot - Math.floor(ringPosts.length / 2));
-      const verticalOffset =
-        shelfBase
-        + laneOffset * laneStep
-        - post.cardElevation * 0.18
-        + (post.displayTier === "hero" ? 1.2 : post.displayTier === "hint" ? -0.6 : 0);
-      positions.set(
-        post.postId,
-        new THREE.Vector3(
-          tagAnchor.x + Math.cos(angle) * radius,
-          verticalOffset,
-          tagAnchor.z + Math.sin(angle) * radius,
-        ),
-      );
+      cursorX += item.width + horizontalGap;
     }
 
-    cursor += ringCapacity;
-    ringIndex += 1;
+    currentTop -= row.height + verticalGap;
   }
 
   return positions;
