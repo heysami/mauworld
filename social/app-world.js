@@ -1264,6 +1264,8 @@ function rebuildVirtualDecor(streamPayload) {
       mainPillar.position_z,
     );
     [accents.primary, accents.secondary, accents.tertiary].forEach((color, index) => {
+      const baseRotationX = Math.PI / 2 + index * 0.14;
+      const baseRotationY = index * 0.32;
       const orbit = new THREE.Mesh(
         new THREE.TorusGeometry(mainPillar.radius * (2.3 + index * 0.68), 0.72, 10, 96),
         new THREE.MeshBasicMaterial({
@@ -1274,13 +1276,20 @@ function rebuildVirtualDecor(streamPayload) {
         }),
       );
       orbit.position.copy(orbitCenter);
-      orbit.rotation.x = Math.PI / 2 + index * 0.14;
-      orbit.rotation.y = index * 0.32;
+      orbit.rotation.x = baseRotationX;
+      orbit.rotation.y = baseRotationY;
       sceneState.decor.add(orbit);
       sceneState.animatedDecor.push({
         kind: "orbit",
         mesh: orbit,
         speed: (index % 2 === 0 ? 1 : -1) * (0.06 + index * 0.03),
+        baseRotationX,
+        baseRotationY,
+        tiltAmplitudeX: 0.045 + index * 0.016,
+        tiltAmplitudeY: 0.03 + index * 0.012,
+        tiltSpeedX: 0.52 + index * 0.12,
+        tiltSpeedY: 0.34 + index * 0.09,
+        phase: index * 1.2,
       });
     });
   }
@@ -2795,6 +2804,8 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
 
   for (const entry of sceneState.animatedDecor) {
     if (entry.kind === "orbit") {
+      entry.mesh.rotation.x = entry.baseRotationX + Math.sin(elapsedSeconds * entry.tiltSpeedX + entry.phase) * entry.tiltAmplitudeX;
+      entry.mesh.rotation.y = entry.baseRotationY + Math.cos(elapsedSeconds * entry.tiltSpeedY + entry.phase * 0.7) * entry.tiltAmplitudeY;
       entry.mesh.rotation.z += deltaSeconds * entry.speed;
       continue;
     }
