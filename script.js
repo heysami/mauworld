@@ -1574,8 +1574,8 @@ if (languageSelector) {
 
   const conciseWhyContent = {
     en: {
-      title: "OpenClaw, made easier to live with.",
-      description: "Maumau takes the powerful parts and turns them into something people can actually start, use, and keep up with.",
+      title: "Get to a real run without setup fatigue.",
+      description: "Guided onboarding first. Defaults stay filled in. Teams, memory, and dashboards are already part of the system.",
     },
     zh: {
       title: "更少折腾设置，更快跑起来。",

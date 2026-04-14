@@ -103,6 +103,21 @@
               </span>
             </a>
           </div>
+
+          <div class="hero-notes">
+            <article class="hero-note">
+              <strong data-slot="hero_pocket_setup_title">Guided setup</strong>
+              <span data-slot="hero_pocket_setup_desc">Install, connect, onboard.</span>
+            </article>
+            <article class="hero-note">
+              <strong data-slot="hero_pocket_voice_title">Voice ready</strong>
+              <span data-slot="hero_pocket_voice_desc">Telephony, speech, voice defaults.</span>
+            </article>
+            <article class="hero-note">
+              <strong data-slot="hero_pocket_teams_title">Specialist teams</strong>
+              <span data-slot="hero_pocket_teams_desc">Build, design, business, life.</span>
+            </article>
+          </div>
         </div>
 
         <div class="hero-panel__shell" data-reveal>
@@ -113,58 +128,12 @@
             </div>
 
             <div class="hero-showcase__stage">
-              <figure class="hero-shot hero-shot--primary">
-                <img src="assets/dashboard-shots/today.png" alt="Maumau Today dashboard screenshot" />
-              </figure>
-              <figure class="hero-shot hero-shot--secondary">
+              <figure class="hero-shot hero-shot--cat">
                 <img src="assets/maumau-icon.png" alt="Maumau pixel mascot on a sky-blue tile" />
               </figure>
-
-              <article class="hero-pocket hero-pocket--setup">
-                <div class="hero-pocket__head">
-                  <span class="hero-pocket__glyph" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                      <path d="M12 3 4 7v5c0 5 3.4 7.8 8 9 4.6-1.2 8-4 8-9V7l-8-4Z"></path>
-                      <path d="m9 12 2 2 4-4"></path>
-                    </svg>
-                  </span>
-                  <div>
-                    <strong data-slot="hero_pocket_setup_title">Guided setup</strong>
-                    <span data-slot="hero_pocket_setup_desc">Install, connect, onboard.</span>
-                  </div>
-                </div>
-              </article>
-
-              <article class="hero-pocket hero-pocket--voice">
-                <div class="hero-pocket__head">
-                  <span class="hero-pocket__glyph" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                      <path d="M5 4h5l2 5-3 2a14 14 0 0 0 4 4l2-3 5 2v5a2 2 0 0 1-2 2c-8 0-15-7-15-15a2 2 0 0 1 2-2Z"></path>
-                    </svg>
-                  </span>
-                  <div>
-                    <strong data-slot="hero_pocket_voice_title">Voice ready</strong>
-                    <span data-slot="hero_pocket_voice_desc">Telephony, speech, voice defaults.</span>
-                  </div>
-                </div>
-              </article>
-
-              <article class="hero-pocket hero-pocket--teams">
-                <div class="hero-pocket__head">
-                  <span class="hero-pocket__glyph" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                      <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                      <circle cx="10" cy="7" r="4"></circle>
-                      <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
-                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                    </svg>
-                  </span>
-                  <div>
-                    <strong data-slot="hero_pocket_teams_title">Specialist teams</strong>
-                    <span data-slot="hero_pocket_teams_desc">Build, design, business, life.</span>
-                  </div>
-                </div>
-              </article>
+              <figure class="hero-shot hero-shot--panel">
+                <img src="assets/dashboard-shots/today.png" alt="Maumau Today dashboard screenshot" />
+              </figure>
             </div>
           </div>
         </div>
@@ -173,8 +142,8 @@
       <section class="section-block section-block--why" data-reveal>
         <div class="section-heading section-heading--narrow">
           <p class="section-kicker" data-slot="why_kicker">Why Maumau</p>
-          <h2 data-slot="why_title">OpenClaw, made easier to live with.</h2>
-          <p data-slot="why_desc">Maumau takes the powerful parts and turns them into something people can actually start, use, and keep up with.</p>
+          <h2 data-slot="why_title">Get to a real run without setup fatigue.</h2>
+          <p data-slot="why_desc">Guided onboarding first. Defaults stay filled in. Teams, memory, and dashboards are already part of the system.</p>
         </div>
 
         <div class="feature-grid" data-feature-grid>
@@ -210,6 +179,7 @@
             </div>
             <div class="feature-card__body">
               <div class="feature-card__head">
+                <span class="feature-card__index">01</span>
                 <span class="feature-card__glyph" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                     <path d="M12 3 4 7v5c0 5 3.4 7.8 8 9 4.6-1.2 8-4 8-9V7l-8-4Z"></path>
@@ -231,6 +201,7 @@
             </figure>
             <div class="feature-card__body">
               <div class="feature-card__head">
+                <span class="feature-card__index">02</span>
                 <span class="feature-card__glyph" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                     <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
@@ -274,6 +245,7 @@
             </div>
             <div class="feature-card__body">
               <div class="feature-card__head">
+                <span class="feature-card__index">03</span>
                 <span class="feature-card__glyph" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                     <path d="M4 20h16"></path>
@@ -297,6 +269,7 @@
             </figure>
             <div class="feature-card__body">
               <div class="feature-card__head">
+                <span class="feature-card__index">04</span>
                 <span class="feature-card__glyph" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                     <rect x="3" y="4" width="18" height="14" rx="2"></rect>
