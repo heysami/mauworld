@@ -967,8 +967,8 @@ function createSkylineBandTexture(seed, options = {}) {
   const accent = options.accent ?? pickAccent(seed, 0);
   const secondary = options.secondary ?? pickAccent(seed, 2);
   const repeatX = options.repeatX ?? 6;
-  const width = options.width ?? 3072;
-  const height = options.height ?? 768;
+  const width = options.width ?? 6144;
+  const height = options.height ?? 1024;
   const cacheKey = `${seed}:${accent}:${secondary}:${repeatX}:${width}:${height}`;
   if (skylineTextureCache.has(cacheKey)) {
     return skylineTextureCache.get(cacheKey);
@@ -1001,17 +1001,17 @@ function createSkylineBandTexture(seed, options = {}) {
           <stop offset="100%" stop-color="#ffffff" stop-opacity="0.76" />
         </linearGradient>
         <linearGradient id="skylineGlow-${seed}" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="${secondary}" stop-opacity="0.55" />
-          <stop offset="100%" stop-color="${accent}" stop-opacity="0.12" />
+          <stop offset="0%" stop-color="${secondary}" stop-opacity="0.34" />
+          <stop offset="100%" stop-color="${accent}" stop-opacity="0.08" />
         </linearGradient>
         <filter id="skylineBlur-${seed}" x="-10%" y="-10%" width="120%" height="120%">
-          <feGaussianBlur stdDeviation="5" />
+          <feGaussianBlur stdDeviation="2.2" />
         </filter>
       </defs>
       <rect width="${width}" height="${height}" fill="transparent" />
-      <path d="${path}" fill="url(#skylineGlow-${seed})" opacity="0.32" filter="url(#skylineBlur-${seed})" transform="translate(0,-8)" />
-      <path d="${path}" fill="url(#skylineFill-${seed})" stroke="${accent}" stroke-width="8" stroke-linejoin="round" />
-      <path d="M 0 ${baseY} H ${width}" stroke="${secondary}" stroke-width="10" stroke-opacity="0.34" />
+      <path d="${path}" fill="url(#skylineGlow-${seed})" opacity="0.16" filter="url(#skylineBlur-${seed})" transform="translate(0,-4)" />
+      <path d="${path}" fill="url(#skylineFill-${seed})" stroke="${accent}" stroke-width="6" stroke-linejoin="round" shape-rendering="geometricPrecision" />
+      <path d="M 0 ${baseY} H ${width}" stroke="${secondary}" stroke-width="8" stroke-opacity="0.28" />
     </svg>
   `;
 
@@ -1020,6 +1020,12 @@ function createSkylineBandTexture(seed, options = {}) {
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
   texture.repeat.set(repeatX, 1);
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  if (sceneState.renderer?.capabilities?.getMaxAnisotropy) {
+    texture.anisotropy = sceneState.renderer.capabilities.getMaxAnisotropy();
+  }
   texture.needsUpdate = true;
   skylineTextureCache.set(cacheKey, texture);
   return texture;
@@ -1345,24 +1351,50 @@ function rebuildVirtualDecor(streamPayload) {
     sceneState.decor.add(line);
   }
 
+  for (let index = 0; index < 16; index += 1) {
+    const angle = index * ((Math.PI * 2) / 16) + (index % 2) * 0.12;
+    const radiusX = span * (1.5 + (index % 4) * 0.08);
+    const radiusZ = span * (1.72 + (index % 3) * 0.1);
+    const x = centerX + Math.cos(angle) * radiusX;
+    const z = centerZ + Math.sin(angle) * radiusZ;
+    const baseY = 44 + (index % 5) * 16;
+    const tower = createFloatingTower(`skyline-${index}`, {
+      width: 14 + (index % 4) * 3.5,
+      depth: 12 + ((index + 1) % 3) * 3.2,
+      height: 92 + (index % 6) * 24,
+    });
+    tower.group.position.set(x, baseY, z);
+    tower.group.rotation.y = -angle + Math.PI / 2 + ((index % 3) - 1) * 0.08;
+    sceneState.decor.add(tower.group);
+    sceneState.animatedDecor.push({
+      kind: "skyline",
+      ...tower,
+      anchor: new THREE.Vector3(x, baseY, z),
+      baseY,
+      bob: 0.18 + (index % 4) * 0.04,
+      phase: index * 0.44,
+      spin: ((index % 2 === 0 ? 1 : -1) * (0.006 + (index % 3) * 0.002)),
+    });
+  }
+
   [
     {
       seed: "skyline-band-primary",
-      radius: span * 2.36,
-      height: 410,
-      y: 172,
-      opacity: 0.2,
-      repeatX: 5.6,
+      radius: Math.max(span * 5.8, 1200),
+      height: 900,
+      yOffset: 120,
+      opacity: 0.18,
+      repeatX: 6.8,
       drift: 0.18,
       scrollSpeed: 0.0022,
     },
     {
       seed: "skyline-band-secondary",
-      radius: span * 2.62,
-      height: 460,
-      y: 190,
-      opacity: 0.14,
-      repeatX: 4.2,
+      radius: Math.max(span * 6.7, 1450),
+      height: 1040,
+      yOffset: 156,
+      opacity: 0.11,
+      repeatX: 5.4,
       drift: 0.14,
       scrollSpeed: -0.0012,
     },
@@ -1384,14 +1416,17 @@ function rebuildVirtualDecor(streamPayload) {
       new THREE.CylinderGeometry(layer.radius, layer.radius, layer.height, 96, 1, true),
       material,
     );
-    mesh.position.set(centerX, layer.y, centerZ);
+    mesh.position.set(centerX, layer.yOffset + 180, centerZ);
     mesh.rotation.y = index * 0.18;
+    mesh.frustumCulled = false;
     sceneState.decor.add(mesh);
     sceneState.animatedDecor.push({
       kind: "skyline-band",
       mesh,
       texture,
-      baseY: layer.y,
+      radius: layer.radius,
+      height: layer.height,
+      yOffset: layer.yOffset,
       baseRotationY: mesh.rotation.y,
       baseOpacity: layer.opacity,
       drift: layer.drift,
@@ -2961,12 +2996,36 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
       continue;
     }
     if (entry.kind === "skyline-band") {
-      entry.mesh.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.drift + entry.phase) * 4.2;
+      entry.mesh.position.x = sceneState.camera.position.x;
+      entry.mesh.position.z = sceneState.camera.position.z;
+      entry.mesh.position.y = sceneState.camera.position.y + entry.yOffset + Math.sin(elapsedSeconds * entry.drift + entry.phase) * 4.2;
       entry.mesh.rotation.y = entry.baseRotationY + Math.sin(elapsedSeconds * entry.drift * 0.72 + entry.phase) * 0.018;
       entry.mesh.material.opacity = entry.baseOpacity + Math.sin(elapsedSeconds * entry.drift + entry.phase) * 0.02;
       if (entry.texture) {
         entry.texture.offset.x = ((elapsedSeconds * entry.scrollSpeed) % 1 + 1) % 1;
       }
+      continue;
+    }
+    if (entry.kind === "skyline") {
+      const distance = entry.anchor.distanceTo(sceneState.camera.position);
+      const fade = 1 - clamp(
+        (distance - nearDistance * 1.6) / Math.max(1, retainedDistance * 1.18 - nearDistance * 1.6),
+        0,
+        1,
+      );
+      entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 2.8;
+      entry.group.rotation.y += deltaSeconds * entry.spin;
+      for (const body of entry.bodies) {
+        body.material.opacity = 0.04 + fade * 0.18;
+      }
+      for (const outline of entry.outlines) {
+        outline.material.opacity = 0.08 + fade * 0.26;
+      }
+      for (const band of entry.bands) {
+        band.material.opacity = 0.06 + fade * 0.16;
+        band.rotation.z += deltaSeconds * 0.08;
+      }
+      entry.halo.material.opacity = 0.03 + fade * 0.1;
       continue;
     }
     if (entry.kind === "mascot") {
