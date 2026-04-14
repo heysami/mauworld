@@ -48,6 +48,7 @@ const state = {
   searchPayload: null,
   activeResultId: null,
   focusedResult: null,
+  openTagId: null,
   hoveredResultId: null,
   currentCellKey: "",
   loading: true,
@@ -316,6 +317,80 @@ function createLabelTexture(lines, options = {}) {
   return texture;
 }
 
+function createCompactCardTexture(title, subtitle = "", options = {}) {
+  const canvas = document.createElement("canvas");
+  const width = options.width ?? 720;
+  const height = options.height ?? 220;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const background = options.background ?? "rgba(255, 255, 255, 0.95)";
+  const border = options.border ?? "rgba(20, 35, 29, 0.14)";
+  const accent = options.accent ?? "#2eb8b8";
+  const bodyColor = options.bodyColor ?? "#182821";
+  const mutedColor = options.mutedColor ?? "#6c7d73";
+
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = background;
+  context.fillRect(0, 0, width, height);
+  context.lineWidth = 4;
+  context.strokeStyle = border;
+  context.strokeRect(2, 2, width - 4, height - 4);
+  context.fillStyle = accent;
+  context.fillRect(0, 0, width, 10);
+
+  context.fillStyle = bodyColor;
+  context.font = "700 44px Manrope, sans-serif";
+  context.textBaseline = "top";
+  context.fillText(truncateText(title, 28), 30, 38);
+
+  context.fillStyle = mutedColor;
+  context.font = "600 28px Manrope, sans-serif";
+  context.fillText(truncateText(subtitle, 42), 30, 112);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createTagTextTexture(label, options = {}) {
+  const canvas = document.createElement("canvas");
+  const width = options.width ?? 768;
+  const height = options.height ?? 160;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const accent = options.accent ?? "#2eb8b8";
+  const bodyColor = options.bodyColor ?? "#163129";
+  const glowColor = options.glowColor ?? "rgba(255, 255, 255, 0.92)";
+  const text = `#${truncateText(label || "tag", 24)}`;
+
+  context.clearRect(0, 0, width, height);
+  context.textBaseline = "middle";
+  context.textAlign = "center";
+
+  context.save();
+  context.shadowColor = glowColor;
+  context.shadowBlur = 30;
+  context.fillStyle = "rgba(255, 255, 255, 0.78)";
+  context.font = "800 72px Manrope, sans-serif";
+  context.fillText(text, width / 2, height / 2 - 8);
+  context.restore();
+
+  context.fillStyle = bodyColor;
+  context.font = "800 72px Manrope, sans-serif";
+  context.fillText(text, width / 2, height / 2 - 8);
+
+  context.fillStyle = accent;
+  context.fillRect(width * 0.24, height - 28, width * 0.52, 8);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function createCircleTexture(options = {}) {
   const canvas = document.createElement("canvas");
   const size = options.size ?? 256;
@@ -392,22 +467,19 @@ function buildPillarObject(entry) {
   group.add(cap);
 
   const label = createBillboard(
-    createLabelTexture(
-      [
-        pillar.title || "Pillar",
-        `${pillar.tag_count ?? 0} tags`,
-        `${pillar.edge_count ?? 0} active edges`,
-      ],
+    createCompactCardTexture(
+      pillar.title || "Pillar",
+      `${pillar.tag_count ?? 0} tags`,
       {
-        width: 720,
-        height: 260,
+        width: 660,
+        height: 190,
         accent: "#f1cb59",
       },
     ),
-    38,
-    13.5,
+    24,
+    6.9,
   );
-  label.position.set(0, entry.height + 18, 0);
+  label.position.set(0, entry.height + 14, 0);
   group.add(label);
   sceneState.clickable.push({
     mesh: pillarMesh,
@@ -423,11 +495,11 @@ function buildTagObject(entry) {
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
 
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(4.6, 0.42, 10, 32),
+    new THREE.TorusGeometry(3.2, 0.28, 10, 32),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color("#58d0c7"),
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.44,
       fog: false,
     }),
   );
@@ -435,11 +507,11 @@ function buildTagObject(entry) {
   group.add(ring);
 
   const halo = new THREE.Mesh(
-    new THREE.RingGeometry(5.8, 6.9, 40),
+    new THREE.RingGeometry(4.4, 5.5, 40),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color("#86e1da"),
       transparent: true,
-      opacity: 0.18,
+      opacity: 0.08,
       side: THREE.DoubleSide,
       fog: false,
     }),
@@ -449,11 +521,11 @@ function buildTagObject(entry) {
   group.add(halo);
 
   const center = new THREE.Mesh(
-    new THREE.SphereGeometry(2.2, 18, 18),
+    new THREE.SphereGeometry(1.45, 18, 18),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color("#f4f6f1"),
       transparent: true,
-      opacity: 0.96,
+      opacity: 0.94,
       fog: false,
     }),
   );
@@ -461,10 +533,10 @@ function buildTagObject(entry) {
 
   const beacon = createBillboard(
     createCircleTexture(),
-    13.5,
-    13.5,
+    12,
+    12,
     {
-      opacity: 0.24,
+      opacity: 0.2,
       fog: false,
       renderOrder: 8,
     },
@@ -472,38 +544,48 @@ function buildTagObject(entry) {
   beacon.position.set(0, 0.2, 0);
   group.add(beacon);
 
+  const labelWidth = clamp(15 + ((tag.label ?? "").length * 0.5), 18, 30);
   const label = createBillboard(
-    createLabelTexture(
-      [
-        `#${tag.label || "tag"}`,
-        `${entry.active_post_count} active posts`,
-        `Depth ${entry.branch_depth}`,
-      ],
+    createTagTextTexture(
+      tag.label || "tag",
       {
-        width: 620,
-        height: 240,
         accent: "#2eb8b8",
       },
     ),
-    20,
-    7.8,
+    labelWidth,
+    4.2,
+    {
+      opacity: 0.76,
+      fog: false,
+      depthTest: false,
+      renderOrder: 9,
+    },
   );
-  label.position.set(0, 8.6, 0);
+  label.position.set(0, 7.9, 0);
   group.add(label);
 
   sceneState.animatedTags.push({
+    tagId: entry.tag_id,
     anchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
+    center,
     ring,
     halo,
     beacon,
     label,
     speed: 0.18 + entry.branch_depth * 0.05,
   });
-  sceneState.clickable.push({
-    mesh: center,
-    type: "tag",
-    data: entry,
-  });
+  sceneState.clickable.push(
+    {
+      mesh: center,
+      type: "tag",
+      data: entry,
+    },
+    {
+      mesh: label,
+      type: "tag",
+      data: entry,
+    },
+  );
   return group;
 }
 
@@ -512,6 +594,7 @@ function buildPostObject(entry) {
   const group = new THREE.Group();
   const anchor = new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z);
   group.position.copy(anchor);
+  group.visible = false;
 
   const color =
     entry.display_tier === "hero"
@@ -519,60 +602,39 @@ function buildPostObject(entry) {
       : entry.display_tier === "standard"
         ? "#f1cb59"
         : "#c9e54f";
-  const width = 14 + entry.size_factor * 7.2;
-  const height = 8.8 + entry.size_factor * 4.1;
-  const elevation = height * 0.55;
+  const width = 8.6 + entry.size_factor * 4.8 + (entry.display_tier === "hero" ? 1.6 : 0);
+  const height = 4.8 + entry.size_factor * 2.2 + (entry.display_tier === "hero" ? 0.7 : 0);
+  const elevation = height * 0.62;
+  const subtitle = post.created_at
+    ? formatRelativeTime(post.created_at)
+    : (entry.tag?.label ? `#${entry.tag.label}` : "Post");
 
-  const detailCard = createBillboard(
-    createLabelTexture(
-      [
-        post.title || truncateText(post.body_plain || "Post", 28),
-        `${post.source_mode?.replaceAll("_", " ") || "signal"} · ${formatRelativeTime(post.created_at || Date.now())}`,
-        `Score ${post.score ?? 0} · Comments ${post.comment_count ?? 0}`,
-      ],
+  const card = createBillboard(
+    createCompactCardTexture(
+      post.title || truncateText(post.body_plain || "Post", 28),
+      subtitle,
       {
-        width: 760,
-        height: 300,
+        width: 700,
+        height: 220,
         accent: color,
       },
     ),
     width,
     height,
-  );
-  detailCard.position.set(0, elevation, 0);
-  group.add(detailCard);
-
-  const hintCard = createBillboard(
-    createLabelTexture(
-      [
-        post.title || truncateText(post.body_plain || "Post", 24),
-        post.tags?.slice(0, 2).map((tag) => `#${tag.label}`).join(" ") || (entry.tag?.label ? `#${entry.tag.label}` : "Post"),
-        formatQueueLabel("ready"),
-      ],
-      {
-        width: 660,
-        height: 220,
-        accent: color,
-        background: "rgba(255, 255, 255, 0.88)",
-      },
-    ),
-    width * 0.96,
-    height * 0.84,
     {
-      opacity: 0.16,
-      fog: false,
-      renderOrder: 9,
+      opacity: 0.9,
+      renderOrder: 10,
     },
   );
-  hintCard.position.set(0, elevation, 0);
-  group.add(hintCard);
+  card.position.set(0, elevation, 0);
+  group.add(card);
 
   const baseMarker = new THREE.Mesh(
     new THREE.CircleGeometry(Math.max(2.4, width * 0.16), 28),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color(color),
       transparent: true,
-      opacity: 0.12,
+      opacity: 0.09,
       side: THREE.DoubleSide,
       fog: false,
     }),
@@ -582,23 +644,21 @@ function buildPostObject(entry) {
   group.add(baseMarker);
 
   sceneState.animatedPosts.push({
+    tagId: entry.tag_id,
+    postId: entry.post_id,
     group,
-    detailCard,
-    hintCard,
+    card,
+    baseMarker,
     anchor,
     displayTier: entry.display_tier,
   });
 
   const clickablePayload = {
-    mesh: detailCard,
+    mesh: card,
     type: "post",
     data: entry,
   };
-  sceneState.clickable.push(clickablePayload, {
-    mesh: hintCard,
-    type: "post",
-    data: entry,
-  });
+  sceneState.clickable.push(clickablePayload);
   return group;
 }
 
@@ -656,6 +716,9 @@ function hasVisibleFocusedPost(result) {
   if (!result?.destination || !state.stream?.postInstances) {
     return false;
   }
+  if (state.openTagId !== result.destination.tag_id) {
+    return false;
+  }
   return state.stream.postInstances.some(
     (entry) =>
       entry.post_id === result.destination.post_id
@@ -687,21 +750,18 @@ function syncFocusedGhost() {
   );
 
   const card = createBillboard(
-    createLabelTexture(
-      [
-        post.title || truncateText(post.body_plain || "Post", 26),
-        post.tags?.slice(0, 2).map((tag) => `#${tag.label}`).join(" ") || "Focused post",
-        result.worldQueueStatus === "ready" ? "Revealed from hidden tier" : "Queued for world placement",
-      ],
+    createCompactCardTexture(
+      post.title || truncateText(post.body_plain || "Post", 26),
+      result.worldQueueStatus === "ready" ? "Revealed from hidden tier" : "Queued for world placement",
       {
-        width: 700,
-        height: 240,
+        width: 640,
+        height: 200,
         accent,
         background: "rgba(255, 255, 255, 0.94)",
       },
     ),
-    18,
-    6.6,
+    15.5,
+    5.3,
     {
       opacity: 0.94,
       fog: false,
@@ -709,7 +769,7 @@ function syncFocusedGhost() {
       renderOrder: 11,
     },
   );
-  card.position.set(0, 15, 0);
+  card.position.set(0, 12.8, 0);
   group.add(card);
 
   const ring = new THREE.Mesh(
@@ -729,6 +789,70 @@ function syncFocusedGhost() {
   sceneState.effects.add(group);
 }
 
+function syncExpandedTagState() {
+  for (const entry of sceneState.animatedPosts) {
+    entry.group.visible = state.openTagId === entry.tagId;
+  }
+
+  for (const entry of sceneState.animatedTags) {
+    const isOpen = state.openTagId === entry.tagId;
+    entry.isOpen = isOpen;
+    entry.center.scale.setScalar(isOpen ? 1.18 : 1);
+  }
+
+  if (state.stream) {
+    rebuildConnections(state.stream.pillars, state.stream.tags, state.stream.postInstances);
+  }
+  syncFocusedGhost();
+}
+
+function openTagCloud(entry) {
+  const isSameTag = state.openTagId === entry.tag_id;
+  if (isSameTag) {
+    state.openTagId = null;
+    state.focusedResult = null;
+    state.focusAnimation = null;
+    if (sceneState.floorMarker) {
+      sceneState.floorMarker.visible = false;
+    }
+    syncExpandedTagState();
+    return;
+  }
+
+  state.openTagId = entry.tag_id;
+  state.focusedResult = null;
+  syncExpandedTagState();
+
+  const target = new THREE.Vector3(entry.position_x, entry.position_y + 7, entry.position_z);
+  const orbitDistance = clamp((entry.orbit_radius ?? 22) + 18, 32, 52);
+  const approachVector = getFlatForwardVector(inputState.yaw);
+  const cameraDestination = target.clone().sub(approachVector.multiplyScalar(orbitDistance));
+  cameraDestination.y += 18;
+  const { yaw, pitch } = computeLookAngles(cameraDestination, target);
+
+  state.focusAnimation = {
+    startedAt: performance.now(),
+    fromPosition: sceneState.camera.position.clone(),
+    toPosition: cameraDestination,
+    fromYaw: inputState.yaw,
+    toYaw: yaw,
+    fromPitch: inputState.pitch,
+    toPitch: pitch,
+    lookAt: target,
+    durationMs: 900,
+  };
+
+  loadStreamForPosition(cameraDestination, true).catch((error) => showToast(error.message));
+}
+
+function openPostDetail(entry) {
+  const postId = entry?.post_id;
+  if (!postId) {
+    return;
+  }
+  window.location.assign(`/social/post.html?id=${encodeURIComponent(postId)}`);
+}
+
 function rebuildConnections(pillars, tags, posts) {
   clearGroup(sceneState.lines);
   if (pillars.length === 0 || tags.length === 0) {
@@ -746,6 +870,9 @@ function rebuildConnections(pillars, tags, posts) {
     positions.push(tag.position_x, tag.position_y, tag.position_z);
   }
   for (const post of posts) {
+    if (state.openTagId !== post.tag_id) {
+      continue;
+    }
     const tag = tagById.get(post.tag_id);
     if (!tag) {
       continue;
@@ -789,6 +916,7 @@ function rebuildScene(streamPayload) {
     sceneState.presence.add(buildPresenceObject(presence));
   }
   rebuildConnections(streamPayload.pillars, streamPayload.tags, streamPayload.postInstances);
+  syncExpandedTagState();
   syncFocusedGhost();
 }
 
@@ -1075,7 +1203,9 @@ function focusOnDestination(result) {
     sceneState.floorMarker.position.set(destination.position_x, 0.2, destination.position_z);
   }
 
+  state.openTagId = destination.tag_id ?? null;
   state.focusedResult = result;
+  syncExpandedTagState();
   loadStreamForPosition(cameraDestination, true).catch((error) => showToast(error.message));
   syncFocusedGhost();
   renderSelected(result);
@@ -1266,19 +1396,19 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   const farDistance = state.meta?.renderer?.fog?.farDistance ?? 720;
 
   for (const entry of sceneState.animatedPosts) {
+    if (!entry.group.visible) {
+      continue;
+    }
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
-    const detailFade = 1 - clamp((distance - nearDistance * 0.72) / Math.max(1, nearDistance * 0.46), 0, 1);
-    const hintFade = clamp((distance - nearDistance * 0.38) / Math.max(1, farDistance - nearDistance * 0.38), 0, 1);
-    const hintMin =
-      entry.displayTier === "hero" ? 0.1 : entry.displayTier === "standard" ? 0.08 : 0.06;
-    const hintMax =
-      entry.displayTier === "hero" ? 0.24 : entry.displayTier === "standard" ? 0.18 : 0.13;
+    const fade = 1 - clamp((distance - nearDistance * 0.46) / Math.max(1, farDistance - nearDistance * 0.46), 0, 1);
+    const minOpacity =
+      entry.displayTier === "hero" ? 0.44 : entry.displayTier === "standard" ? 0.28 : 0.18;
+    const maxOpacity =
+      entry.displayTier === "hero" ? 0.98 : entry.displayTier === "standard" ? 0.9 : 0.8;
 
-    entry.detailCard.material.opacity = detailFade;
-    entry.detailCard.visible = detailFade > 0.03 && distance <= billboardDistance * 1.1;
-
-    entry.hintCard.material.opacity = hintMin + (hintMax - hintMin) * hintFade;
-    entry.hintCard.visible = distance <= farDistance * 1.25;
+    entry.card.material.opacity = minOpacity + (maxOpacity - minOpacity) * fade;
+    entry.card.visible = distance <= billboardDistance * 1.2;
+    entry.baseMarker.material.opacity = 0.04 + fade * 0.12;
   }
 
   for (const entry of sceneState.animatedTags) {
@@ -1286,10 +1416,20 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     entry.halo.rotation.z -= deltaSeconds * entry.speed * 0.62;
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
     const farMix = clamp((distance - nearDistance * 0.8) / Math.max(1, farDistance - nearDistance * 0.8), 0, 1);
-    entry.label.visible = distance <= nearDistance * 1.22;
-    entry.beacon.material.opacity = 0.16 + farMix * 0.22;
-    entry.ring.material.opacity = 0.52 + farMix * 0.2;
-    entry.halo.material.opacity = 0.1 + farMix * 0.14;
+    entry.label.visible = true;
+    entry.label.material.opacity = entry.isOpen
+      ? 0.96 - farMix * 0.16
+      : 0.68 - farMix * 0.24;
+    entry.beacon.material.opacity = entry.isOpen
+      ? 0.1 + farMix * 0.08
+      : 0.14 + farMix * 0.2;
+    entry.ring.material.opacity = entry.isOpen
+      ? 0.66 + farMix * 0.12
+      : 0.24 + farMix * 0.18;
+    entry.halo.material.opacity = entry.isOpen
+      ? 0.16 + farMix * 0.08
+      : 0.06 + farMix * 0.08;
+    entry.center.material.opacity = entry.isOpen ? 1 : 0.86;
   }
 
   for (const entry of sceneState.animatedPresence) {
@@ -1389,26 +1529,11 @@ function pickSceneObject(event) {
   }
 
   if (payload.type === "post") {
-    const entry = payload.data;
-    state.activeResultId = entry.post_id;
-    renderSearchResults();
-    focusOnDestination({
-      post: entry.post,
-      destination: {
-        world_snapshot_id: state.meta?.worldSnapshotId,
-        post_id: entry.post_id,
-        tag_id: entry.tag_id,
-        position_x: entry.position_x,
-        position_y: entry.position_y,
-        position_z: entry.position_z,
-        heading_y: entry.heading_y,
-      },
-      worldQueueStatus: "ready",
-    });
+    openPostDetail(payload.data);
   } else if (payload.type === "pillar") {
     return;
   } else if (payload.type === "tag") {
-    return;
+    openTagCloud(payload.data);
   }
 }
 
