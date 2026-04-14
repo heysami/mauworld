@@ -2036,6 +2036,9 @@ function buildPostObject(entry) {
     cellX: entry.cell_x,
     cellZ: entry.cell_z,
     displayTier: entry.display_tier,
+    targetVisible: false,
+    visibilityProgress: 0,
+    visibilitySpeed: 10 + (hashString(`${entry.post_id}:${entry.tag_id}`) % 4),
   });
 
   const clickablePayload = {
@@ -2434,7 +2437,10 @@ function syncFocusedGhost() {
 
 function syncExpandedTagState() {
   for (const entry of sceneState.animatedPosts) {
-    entry.group.visible = state.openTagId === entry.tagId;
+    entry.targetVisible = state.openTagId === entry.tagId;
+    if (entry.targetVisible) {
+      entry.group.visible = true;
+    }
   }
 
   for (const entry of sceneState.animatedTags) {
@@ -3268,9 +3274,22 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   }
 
   for (const entry of sceneState.animatedPosts) {
+    const visibilityTarget = entry.targetVisible ? 1 : 0;
+    const visibilityMix = 1 - Math.exp(-deltaSeconds * entry.visibilitySpeed);
+    entry.visibilityProgress += (visibilityTarget - entry.visibilityProgress) * visibilityMix;
+    if (!entry.targetVisible && entry.visibilityProgress <= 0.01) {
+      entry.visibilityProgress = 0;
+      entry.group.visible = false;
+      entry.card.visible = false;
+      entry.proxy.visible = false;
+      continue;
+    }
+    entry.group.visible = true;
+
     if (!entry.group.visible) {
       continue;
     }
+    const reveal = easeInOutCubic(clamp(entry.visibilityProgress, 0, 1));
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
     const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
     const fade = 1 - clamp((distance - nearDistance * 0.46) / Math.max(1, retainedDistance - nearDistance * 0.46), 0, 1);
@@ -3279,16 +3298,20 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     const maxOpacity =
       entry.displayTier === "hero" ? 0.98 : entry.displayTier === "standard" ? 0.9 : 0.8;
     const cardRange = activeCell ? billboardDistance * 1.25 : billboardDistance * 0.62;
+    entry.group.position.copy(entry.anchor);
+    entry.group.position.y += (1 - reveal) * 1.6;
+    const scale = 0.84 + reveal * 0.16;
+    entry.group.scale.setScalar(scale);
 
-    entry.card.material.opacity = (minOpacity + (maxOpacity - minOpacity) * fade) * (activeCell ? 1 : 0.54);
-    entry.card.visible = distance <= cardRange;
-    entry.proxy.visible = !entry.card.visible || !activeCell;
+    entry.card.material.opacity = ((minOpacity + (maxOpacity - minOpacity) * fade) * (activeCell ? 1 : 0.54)) * reveal;
+    entry.card.visible = reveal > 0.06 && distance <= cardRange;
+    entry.proxy.visible = reveal > 0.04 && (!entry.card.visible || !activeCell);
     entry.proxy.material.opacity = activeCell
-      ? 0.04 + (1 - fade) * 0.12
-      : 0.16 + fade * 0.18;
+      ? (0.04 + (1 - fade) * 0.12) * reveal
+      : (0.16 + fade * 0.18) * reveal;
     entry.baseMarker.material.opacity = activeCell
-      ? 0.05 + fade * 0.1
-      : 0.12 + fade * 0.08;
+      ? (0.05 + fade * 0.1) * reveal
+      : (0.12 + fade * 0.08) * reveal;
   }
 
   for (const entry of sceneState.animatedTags) {
