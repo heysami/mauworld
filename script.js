@@ -2076,8 +2076,8 @@ if (languageSelector) {
 
   const guidedStartContent = {
     en: {
-      title: "Five tabs. Then you are running.",
-      description: "Open each one, finish the small task, come back. Maumau takes it from there.",
+      title: "Start here, in order.",
+      description: "Open the page for each step, finish it, then come back for the next one.",
     },
     zh: {
       title: "按顺序从这里开始。",

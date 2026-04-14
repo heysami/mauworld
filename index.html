@@ -106,69 +106,72 @@
         </div>
 
         <div class="hero-panel__shell" data-reveal>
-          <div class="hero-panel__core">
+          <div class="hero-panel__core hero-showcase">
             <div class="hero-panel__topline">
               <span data-slot="hero_panel_topline">Latest macOS installer ready</span>
               <span class="pill">Maumau-2026.3.28-beta.2.dmg</span>
             </div>
 
-            <div class="hero-board">
-              <div class="hero-board__image">
-                <img src="assets/maumau-icon.png" alt="Maumau pixel mascot on a sky-blue tile" />
-              </div>
+            <div class="hero-showcase__stage">
+              <figure class="hero-shot hero-shot--primary">
+                <img src="assets/dashboard-shots/today.png" alt="Maumau Today dashboard screenshot" />
+              </figure>
+              <figure class="hero-shot hero-shot--secondary">
+                <img src="assets/dashboard-shots/calendar.png" alt="Maumau calendar dashboard screenshot" />
+              </figure>
 
-              <div class="hero-board__stack">
-                <article class="hero-pocket">
-                  <div class="hero-pocket__head">
-                    <span class="hero-pocket__glyph" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                        <path d="M12 3 4 7v5c0 5 3.4 7.8 8 9 4.6-1.2 8-4 8-9V7l-8-4Z"></path>
-                        <path d="m9 12 2 2 4-4"></path>
-                      </svg>
-                    </span>
-                    <div>
-                      <strong data-slot="hero_pocket_setup_title">Guided setup</strong>
-                      <span data-slot="hero_pocket_setup_desc">Install, connect, onboard.</span>
-                    </div>
+              <article class="hero-pocket hero-pocket--setup">
+                <div class="hero-pocket__head">
+                  <span class="hero-pocket__glyph" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                      <path d="M12 3 4 7v5c0 5 3.4 7.8 8 9 4.6-1.2 8-4 8-9V7l-8-4Z"></path>
+                      <path d="m9 12 2 2 4-4"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <strong data-slot="hero_pocket_setup_title">Guided setup</strong>
+                    <span data-slot="hero_pocket_setup_desc">Install, connect, onboard.</span>
                   </div>
-                </article>
-                <article class="hero-pocket">
-                  <div class="hero-pocket__head">
-                    <span class="hero-pocket__glyph" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                        <path d="M5 4h5l2 5-3 2a14 14 0 0 0 4 4l2-3 5 2v5a2 2 0 0 1-2 2c-8 0-15-7-15-15a2 2 0 0 1 2-2Z"></path>
-                      </svg>
-                    </span>
-                    <div>
-                      <strong data-slot="hero_pocket_voice_title">Voice ready</strong>
-                      <span data-slot="hero_pocket_voice_desc">Telephony, speech, voice defaults.</span>
-                    </div>
+                </div>
+              </article>
+
+              <article class="hero-pocket hero-pocket--voice">
+                <div class="hero-pocket__head">
+                  <span class="hero-pocket__glyph" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                      <path d="M5 4h5l2 5-3 2a14 14 0 0 0 4 4l2-3 5 2v5a2 2 0 0 1-2 2c-8 0-15-7-15-15a2 2 0 0 1 2-2Z"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <strong data-slot="hero_pocket_voice_title">Voice ready</strong>
+                    <span data-slot="hero_pocket_voice_desc">Telephony, speech, voice defaults.</span>
                   </div>
-                </article>
-                <article class="hero-pocket">
-                  <div class="hero-pocket__head">
-                    <span class="hero-pocket__glyph" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                        <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="10" cy="7" r="4"></circle>
-                        <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
-                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                      </svg>
-                    </span>
-                    <div>
-                      <strong data-slot="hero_pocket_teams_title">Specialist teams</strong>
-                      <span data-slot="hero_pocket_teams_desc">Build, design, business, life.</span>
-                    </div>
+                </div>
+              </article>
+
+              <article class="hero-pocket hero-pocket--teams">
+                <div class="hero-pocket__head">
+                  <span class="hero-pocket__glyph" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                      <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                      <circle cx="10" cy="7" r="4"></circle>
+                      <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <strong data-slot="hero_pocket_teams_title">Specialist teams</strong>
+                    <span data-slot="hero_pocket_teams_desc">Build, design, business, life.</span>
                   </div>
-                </article>
-              </div>
+                </div>
+              </article>
             </div>
           </div>
         </div>
       </section>
 
       <section class="section-block section-block--why" data-reveal>
-        <div class="section-heading">
+        <div class="section-heading section-heading--narrow">
           <p class="section-kicker" data-slot="why_kicker">Why Maumau</p>
           <h2 data-slot="why_title">OpenClaw, made easier to live with.</h2>
           <p data-slot="why_desc">Maumau takes the powerful parts and turns them into something people can actually start, use, and keep up with.</p>
@@ -176,80 +179,100 @@
 
         <div class="feature-grid" data-feature-grid>
           <article class="feature-card">
-            <div class="feature-card__head">
-              <span class="feature-card__glyph" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                  <path d="M12 3 4 7v5c0 5 3.4 7.8 8 9 4.6-1.2 8-4 8-9V7l-8-4Z"></path>
-                  <path d="m9 12 2 2 4-4"></path>
-                </svg>
-              </span>
-              <div>
-                <h3>You start in the app, not the terminal</h3>
-                <p>Maumau turns blank setup into a guided path, so the first run feels possible instead of technical.</p>
+            <figure class="feature-card__media">
+              <img src="assets/dashboard-shots/user-channels.png" alt="Maumau user channels dashboard screenshot" />
+            </figure>
+            <div class="feature-card__body">
+              <div class="feature-card__head">
+                <span class="feature-card__glyph" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                    <path d="M12 3 4 7v5c0 5 3.4 7.8 8 9 4.6-1.2 8-4 8-9V7l-8-4Z"></path>
+                    <path d="m9 12 2 2 4-4"></path>
+                  </svg>
+                </span>
+                <div>
+                  <h3>You start in the app, not the terminal</h3>
+                  <p>Maumau turns blank setup into a guided path, so the first run feels possible instead of technical.</p>
+                </div>
               </div>
+              <p class="feature-card__meta" data-feature-meta>Telegram gets you into chat, Vapi adds calling, and Tailscale keeps your phone in the loop.</p>
             </div>
-            <p class="feature-card__meta" data-feature-meta>Telegram gets you into chat, Vapi adds calling, and Tailscale keeps your phone in the loop.</p>
           </article>
 
           <article class="feature-card">
-            <div class="feature-card__head">
-              <span class="feature-card__glyph" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                  <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                  <circle cx="10" cy="7" r="4"></circle>
-                  <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                </svg>
-              </span>
-              <div>
-                <h3>The teams are already assembled</h3>
-                <p>You do not have to design the org chart before the work begins.</p>
+            <figure class="feature-card__media">
+              <img src="assets/dashboard-shots/teams.png" alt="Maumau teams dashboard screenshot" />
+            </figure>
+            <div class="feature-card__body">
+              <div class="feature-card__head">
+                <span class="feature-card__glyph" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="10" cy="7" r="4"></circle>
+                    <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                  </svg>
+                </span>
+                <div>
+                  <h3>The teams are already assembled</h3>
+                  <p>You do not have to design the org chart before the work begins.</p>
+                </div>
               </div>
+              <p class="feature-card__meta" data-feature-meta>A main agent runs mini teams for coding, design, life, and business through OpenProse.</p>
             </div>
-            <p class="feature-card__meta" data-feature-meta>A main agent runs mini teams for coding, design, life, and business through OpenProse.</p>
           </article>
 
           <article class="feature-card">
-            <div class="feature-card__head">
-              <span class="feature-card__glyph" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                  <path d="M4 20h16"></path>
-                  <path d="M7 16V8"></path>
-                  <path d="M12 16V4"></path>
-                  <path d="M17 16v-6"></path>
-                </svg>
-              </span>
-              <div>
-                <h3>Memory stays useful as life gets messy</h3>
-                <p>Keep personal context separate, share what should be shared, and avoid one giant pile of notes.</p>
+            <figure class="feature-card__media">
+              <img src="assets/dashboard-shots/memory-notes.png" alt="Maumau memory notes dashboard screenshot" />
+            </figure>
+            <div class="feature-card__body">
+              <div class="feature-card__head">
+                <span class="feature-card__glyph" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                    <path d="M4 20h16"></path>
+                    <path d="M7 16V8"></path>
+                    <path d="M12 16V4"></path>
+                    <path d="M17 16v-6"></path>
+                  </svg>
+                </span>
+                <div>
+                  <h3>Memory stays useful as life gets messy</h3>
+                  <p>Keep personal context separate, share what should be shared, and avoid one giant pile of notes.</p>
+                </div>
               </div>
+              <p class="feature-card__meta" data-feature-meta>QMD and Lossless Claw support the memory layer underneath.</p>
             </div>
-            <p class="feature-card__meta" data-feature-meta>QMD and Lossless Claw support the memory layer underneath.</p>
           </article>
 
           <article class="feature-card">
-            <div class="feature-card__head">
-              <span class="feature-card__glyph" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                  <rect x="3" y="4" width="18" height="14" rx="2"></rect>
-                  <path d="M8 20h8"></path>
-                </svg>
-              </span>
-              <div>
-                <h3>You can actually tell what happened</h3>
-                <p>Agent work is easier to trust when actions, blockers, and handoffs are visible.</p>
+            <figure class="feature-card__media">
+              <img src="assets/dashboard-shots/mau-office.png" alt="MauOffice dashboard screenshot" />
+            </figure>
+            <div class="feature-card__body">
+              <div class="feature-card__head">
+                <span class="feature-card__glyph" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                    <rect x="3" y="4" width="18" height="14" rx="2"></rect>
+                    <path d="M8 20h8"></path>
+                  </svg>
+                </span>
+                <div>
+                  <h3>You can actually tell what happened</h3>
+                  <p>Agent work is easier to trust when actions, blockers, and handoffs are visible.</p>
+                </div>
               </div>
+              <p class="feature-card__meta" data-feature-meta>MauOffice and the operations dashboard turn activity into something readable.</p>
             </div>
-            <p class="feature-card__meta" data-feature-meta>MauOffice and the operations dashboard turn activity into something readable.</p>
           </article>
         </div>
       </section>
 
       <section class="section-block section-block--start" data-reveal>
-        <div class="section-heading">
+        <div class="section-heading section-heading--narrow">
           <p class="section-kicker" data-slot="start_kicker">How to start</p>
-          <h2 data-slot="start_title">Five tabs. Then you are running.</h2>
-          <p data-slot="start_desc">Open each one, finish the small task, come back. Maumau takes it from there.</p>
+          <h2 data-slot="start_title">Start here, in order.</h2>
+          <p data-slot="start_desc">Open the page for each step, finish it, then come back for the next one.</p>
         </div>
 
         <div class="start-grid" data-start-grid>
