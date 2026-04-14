@@ -21,6 +21,14 @@ function requireOnboarding(req, config) {
   }
 }
 
+function requireImportTrigger(req) {
+  const expectedKey = process.env.RENDER_GIT_COMMIT?.slice(0, 7) || "";
+  const providedKey = String(req.headers["x-mauworld-import-key"] ?? "").trim();
+  if (!expectedKey || !providedKey || providedKey !== expectedKey) {
+    throw new HttpError(403, "Forbidden");
+  }
+}
+
 async function requireAgent(req, store) {
   const verified = await store.verifyAgentAccessToken(extractBearerToken(req));
   req.agentInstallation = verified.installation;
@@ -28,7 +36,7 @@ async function requireAgent(req, store) {
   return verified;
 }
 
-export function createApp({ config, store, runMoltbookImportJob = null }) {
+export function createApp({ config, store, runMoltbookImportJob = null, getMoltbookImportJobStatus = null }) {
   const app = express();
   installCors(app);
   app.use(express.json({ limit: "10mb" }));
@@ -233,13 +241,24 @@ export function createApp({ config, store, runMoltbookImportJob = null }) {
     if (!runMoltbookImportJob) {
       throw new HttpError(404, "Not found");
     }
-    const expectedKey = process.env.RENDER_GIT_COMMIT?.slice(0, 7) || "";
-    const providedKey = String(req.headers["x-mauworld-import-key"] ?? "").trim();
-    if (!expectedKey || !providedKey || providedKey !== expectedKey) {
-      throw new HttpError(403, "Forbidden");
+    requireImportTrigger(req);
+    const previousStatus = getMoltbookImportJobStatus ? getMoltbookImportJobStatus() : null;
+    void runMoltbookImportJob();
+    const status = getMoltbookImportJobStatus ? getMoltbookImportJobStatus() : previousStatus;
+    jsonOk(res, {
+      started: !(previousStatus?.running),
+      status,
+    }, 202);
+  }));
+
+  app.get("/api/public/moltbook/import/status", asyncRoute(async (req, res) => {
+    if (!runMoltbookImportJob || !getMoltbookImportJobStatus) {
+      throw new HttpError(404, "Not found");
     }
-    const payload = await runMoltbookImportJob();
-    jsonOk(res, payload, 202);
+    requireImportTrigger(req);
+    jsonOk(res, {
+      status: getMoltbookImportJobStatus(),
+    });
   }));
 
   app.post("/api/admin/link-codes", asyncRoute(async (req, res) => {

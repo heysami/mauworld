@@ -8,18 +8,102 @@ const shouldRunStartupMaintenance =
   /^https?:\/\//i.test(config.publicBaseUrl)
   && !/\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(config.publicBaseUrl);
 let externalCleanupPromise = null;
+let externalCleanupStatus = {
+  running: false,
+  state: "idle",
+  startedAt: null,
+  finishedAt: null,
+  batchesCompleted: 0,
+  targetCount: 0,
+  totalCount: 0,
+  remainingCount: null,
+  completedTarget: false,
+  lastResult: null,
+  error: null,
+};
+
+function getCuratedCorpusJobStatus() {
+  return {
+    ...externalCleanupStatus,
+    running: Boolean(externalCleanupPromise),
+  };
+}
 
 async function runCuratedCorpusJob() {
   if (externalCleanupPromise) {
     return externalCleanupPromise;
   }
-  externalCleanupPromise = store.syncCuratedCorpus().finally(() => {
-    externalCleanupPromise = null;
-  });
+  externalCleanupStatus = {
+    ...externalCleanupStatus,
+    running: true,
+    state: "running",
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    batchesCompleted: 0,
+    error: null,
+  };
+  externalCleanupPromise = (async () => {
+    let lastTotal = -1;
+
+    while (true) {
+      const result = await store.syncCuratedCorpus();
+      const totalCount = Number(result.totalCount ?? ((result.existingCount ?? 0) + (result.importedCount ?? 0)));
+      const remainingCount = Number(result.remainingCount ?? Math.max(0, (result.targetCount ?? 0) - totalCount));
+      const completedTarget = Boolean(result.completedTarget) || remainingCount <= 0;
+
+      externalCleanupStatus = {
+        ...externalCleanupStatus,
+        state: "running",
+        batchesCompleted: externalCleanupStatus.batchesCompleted + 1,
+        targetCount: Number(result.targetCount ?? externalCleanupStatus.targetCount ?? 0),
+        totalCount,
+        remainingCount,
+        completedTarget,
+        lastResult: result,
+        error: null,
+      };
+
+      if (completedTarget || (result.importedCount ?? 0) === 0 || totalCount === lastTotal) {
+        externalCleanupStatus = {
+          ...externalCleanupStatus,
+          running: false,
+          state: completedTarget ? "completed" : "stalled",
+          finishedAt: new Date().toISOString(),
+        };
+        return {
+          ...result,
+          batchesCompleted: externalCleanupStatus.batchesCompleted,
+          totalCount,
+          remainingCount,
+          completedTarget,
+        };
+      }
+
+      lastTotal = totalCount;
+    }
+  })()
+    .catch((error) => {
+      externalCleanupStatus = {
+        ...externalCleanupStatus,
+        running: false,
+        state: "failed",
+        finishedAt: new Date().toISOString(),
+        error: error.message,
+      };
+      throw error;
+    })
+    .finally(() => {
+      externalCleanupPromise = null;
+    });
   return externalCleanupPromise;
 }
 
-const app = createApp({ config, store, runMoltbookImportJob: runCuratedCorpusJob });
+const app = createApp({
+  config,
+  store,
+  runMoltbookImportJob: runCuratedCorpusJob,
+  getMoltbookImportJobStatus: getCuratedCorpusJobStatus,
+});
 
 app.listen(config.port, () => {
   console.log(`mauworld-api listening on :${config.port}`);
