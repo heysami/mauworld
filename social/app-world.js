@@ -2661,6 +2661,9 @@ function openPostDetail(entry) {
   if (!result?.destination?.post_id) {
     return;
   }
+  const currentPosition = getNavigationPosition().clone();
+  const approach = computeApproachAnchor(result.destination, 9.5, -6.5, currentPosition);
+  const focusDistance = currentPosition.distanceTo(approach.anchor);
   state.activeResultId = result.destination.post_id;
   state.focusedResult = result;
   state.openTagId = result.destination.tag_id ?? state.openTagId;
@@ -2672,10 +2675,23 @@ function openPostDetail(entry) {
       result.destination.position_z,
     );
   }
+  state.focusAnimation = {
+    startedAt: performance.now(),
+    durationMs: clamp(Math.round(focusDistance * 34), 680, 1500),
+    fromPosition: currentPosition,
+    toPosition: approach.anchor,
+    fromRadius: state.cameraRadius,
+    toRadius: clamp(18, PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius),
+    fromYaw: inputState.yaw,
+    toYaw: approach.yaw,
+    fromPitch: inputState.pitch,
+    toPitch: clamp(0.16, CAMERA.lookMin, CAMERA.lookMax),
+  };
   syncExpandedTagState();
   syncFocusedGhost();
   renderSearchResults();
   renderSelected(result);
+  loadStreamForPosition(approach.anchor, true).catch((error) => showToast(error.message));
 }
 
 function rebuildConnections(pillars, tags, posts) {
