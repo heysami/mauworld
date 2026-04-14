@@ -2450,6 +2450,49 @@ if (languageSelector) {
     ],
   };
 
+  const footerContent = {
+    en: {
+      note: "Maumau for macOS. Guided setup, built-in teams, clear operations.",
+      guide: "Operations guide",
+      download: "Download Maumau",
+    },
+    zh: {
+      note: "适用于 macOS 的 Maumau。引导式设置、内置团队、清晰运营。",
+      guide: "运营指南",
+      download: "下载 Maumau",
+    },
+    id: {
+      note: "Maumau untuk macOS. Setup terpandu, tim bawaan, operasi yang jelas.",
+      guide: "Panduan operasi",
+      download: "Unduh Maumau",
+    },
+    ms: {
+      note: "Maumau untuk macOS. Setup berpandu, pasukan terbina, operasi yang jelas.",
+      guide: "Panduan operasi",
+      download: "Muat turun Maumau",
+    },
+    th: {
+      note: "Maumau สำหรับ macOS พร้อมตั้งค่าแบบมีไกด์ ทีมที่มีมาให้ และมุมมองการทำงานที่ชัดเจน",
+      guide: "คู่มือการใช้งาน",
+      download: "ดาวน์โหลด Maumau",
+    },
+    vi: {
+      note: "Maumau cho macOS voi setup co huong dan, cac doi co san, va van hanh de hieu.",
+      guide: "Huong dan van hanh",
+      download: "Tai Maumau",
+    },
+    my: {
+      note: "Maumau for macOS. Guided setup, built-in teams, နဲ့ ရှင်းလင်းတဲ့ operations.",
+      guide: "Operations guide",
+      download: "Maumau ကို download လုပ်မယ်",
+    },
+    fil: {
+      note: "Maumau para sa macOS. Guided setup, built-in teams, at malinaw na operations.",
+      guide: "Gabay sa operations",
+      download: "I-download ang Maumau",
+    },
+  };
+
   const connectedFeatureCards = {
     en: [
       {
@@ -2651,6 +2694,14 @@ if (languageSelector) {
     landingTranslations[locale].startSteps = steps;
   });
 
+  Object.entries(footerContent).forEach(([locale, copy]) => {
+    Object.assign(landingTranslations[locale].text, {
+      footer_note: copy.note,
+      footer_guide: copy.guide,
+      footer_download: copy.download,
+    });
+  });
+
   ["jv", "su", "btk", "min", "ban"].forEach((locale) => {
     landingTranslations[locale].text.why_title = conciseWhyContent.id.title;
     landingTranslations[locale].text.why_desc = conciseWhyContent.id.description;
@@ -2658,6 +2709,9 @@ if (languageSelector) {
     landingTranslations[locale].text.start_title = guidedStartContent.id.title;
     landingTranslations[locale].text.start_desc = guidedStartContent.id.description;
     landingTranslations[locale].startSteps = guidedStartSteps.id;
+    landingTranslations[locale].text.footer_note = footerContent.id.note;
+    landingTranslations[locale].text.footer_guide = footerContent.id.guide;
+    landingTranslations[locale].text.footer_download = footerContent.id.download;
   });
 
   const localeLang = {
