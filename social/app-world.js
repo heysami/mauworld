@@ -69,6 +69,7 @@ const WORLD_STYLE = {
   muted: "#7282b9",
   outline: "#33407a",
   white: "#ffffff",
+  trailOutline: "#bcc3cf",
   accents: ["#ff4fa8", "#2dd8ff", "#ffd84d", "#7ce85b", "#ff9548", "#7ed7ff"],
 };
 
@@ -2381,44 +2382,34 @@ function spawnTrailPuff(position, travelVector) {
   const group = new THREE.Group();
   group.position.copy(position);
   group.position.y += 1.35;
-  const pieceCount = 8;
-  const outlineColor = pickAccent(
-    `trail-outline-${position.x.toFixed(2)}-${position.z.toFixed(2)}-${travelVector.x.toFixed(2)}-${travelVector.z.toFixed(2)}`,
+  const radius = 0.3 + Math.random() * 0.16;
+  const geometry = new THREE.SphereGeometry(radius, 16, 16);
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshToonMaterial({
+      color: new THREE.Color(WORLD_STYLE.white),
+      gradientMap: getToonGradientTexture(),
+      transparent: true,
+      opacity: 0.94,
+      depthWrite: false,
+      fog: false,
+    }),
   );
-  const pieces = Array.from({ length: pieceCount }, (_, index) => {
-    const radius = 0.14 + Math.random() * 0.22;
-    const geometry = new THREE.SphereGeometry(radius, 10, 10);
-    const mesh = new THREE.Mesh(
-      geometry,
-      new THREE.MeshToonMaterial({
-        color: new THREE.Color(WORLD_STYLE.white),
-        gradientMap: getToonGradientTexture(),
-        transparent: true,
-        opacity: 0.94,
-        depthWrite: false,
-        fog: false,
-      }),
-    );
-    const shell = createOutlineShell(geometry, outlineColor, 1.18);
-    shell.material.opacity = 0.48;
-    mesh.add(shell);
-    mesh.position.set(
-      (Math.random() - 0.5) * 1.2,
-      Math.random() * 0.68,
-      (Math.random() - 0.5) * 1.2,
-    );
-    group.add(mesh);
-    return {
-      mesh,
-      shell,
-      velocity: new THREE.Vector3(
-        (Math.random() - 0.5) * 1.4 - travelVector.x * 0.012,
-        0.18 + Math.random() * 0.42,
-        (Math.random() - 0.5) * 1.4 - travelVector.z * 0.012,
-      ),
-      growth: 0.34 + Math.random() * 0.62,
-    };
-  });
+  const shell = createOutlineShell(geometry, WORLD_STYLE.trailOutline, 1.12);
+  shell.material.opacity = 0.58;
+  mesh.add(shell);
+  group.add(mesh);
+
+  const pieces = [{
+    mesh,
+    shell,
+    velocity: new THREE.Vector3(
+      -travelVector.x * 0.018 + (Math.random() - 0.5) * 0.18,
+      0.08 + Math.random() * 0.1,
+      -travelVector.z * 0.018 + (Math.random() - 0.5) * 0.18,
+    ),
+    growth: 0.18 + Math.random() * 0.16,
+  }];
   sceneState.trails.add(group);
   sceneState.trailPuffs.push({
     group,
@@ -2426,9 +2417,9 @@ function spawnTrailPuff(position, travelVector) {
     age: 0,
     lifetime: 1.1 + Math.random() * 0.28,
     drift: new THREE.Vector3(
-      -travelVector.x * 0.006,
-      0.08 + Math.random() * 0.08,
-      -travelVector.z * 0.006,
+      -travelVector.x * 0.004,
+      0.05 + Math.random() * 0.04,
+      -travelVector.z * 0.004,
     ),
   });
 }
