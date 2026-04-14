@@ -206,7 +206,7 @@ function getCameraPlanarBasis() {
     forward.normalize();
   }
 
-  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), forward);
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
   if (right.lengthSq() < 0.000001) {
     right.set(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw));
   } else {
@@ -214,6 +214,33 @@ function getCameraPlanarBasis() {
   }
 
   return { forward, right };
+}
+
+function getCameraMovementBasis() {
+  const planarBasis = getCameraPlanarBasis();
+  if (!sceneState.camera) {
+    return planarBasis;
+  }
+
+  const fullForward = new THREE.Vector3();
+  sceneState.camera.getWorldDirection(fullForward);
+  if (fullForward.lengthSq() < 0.000001) {
+    return planarBasis;
+  }
+  fullForward.normalize();
+
+  const tiltMix = clamp((Math.abs(inputState.pitch) - 0.34) / 0.5, 0, 1);
+  const forward = planarBasis.forward.clone().lerp(fullForward, tiltMix);
+  if (forward.lengthSq() < 0.000001) {
+    forward.copy(planarBasis.forward);
+  } else {
+    forward.normalize();
+  }
+
+  return {
+    forward,
+    right: planarBasis.right,
+  };
 }
 
 function yawFromVector(vector) {
@@ -3477,7 +3504,7 @@ function updateMovement(deltaSeconds) {
     return;
   }
   const previousPosition = getNavigationPosition().clone();
-  const { forward, right } = getCameraPlanarBasis();
+  const { forward, right } = getCameraMovementBasis();
   const velocity = new THREE.Vector3();
   let vertical = 0;
   const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
