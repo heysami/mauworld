@@ -42,6 +42,13 @@ const CAMERA = {
   focusDurationMs: 1400,
 };
 
+const WORLD_STREAM = {
+  mobileRange: 5,
+  desktopRange: 6,
+  retainPadding: 8,
+  fogMultiplier: 2.4,
+};
+
 const state = {
   meta: null,
   stream: null,
@@ -50,6 +57,7 @@ const state = {
   focusedResult: null,
   openTagId: null,
   hoveredResultId: null,
+  activeCellWindow: null,
   currentCellKey: "",
   loading: true,
   streamLoading: false,
@@ -61,6 +69,11 @@ const state = {
   initialViewFramed: false,
   viewerSessionId: "",
   moveButtons: new Set(),
+  worldCache: {
+    pillars: new Map(),
+    tags: new Map(),
+    posts: new Map(),
+  },
 };
 
 const sceneState = {
@@ -76,6 +89,7 @@ const sceneState = {
   presence: new THREE.Group(),
   effects: new THREE.Group(),
   billboards: [],
+  animatedPillars: [],
   animatedPosts: [],
   animatedTags: [],
   animatedPresence: [],
@@ -166,6 +180,90 @@ function truncateText(value, maxLength) {
     return text;
   }
   return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}...`;
+}
+
+function isCellWithinWindow(cellX, cellZ, window = state.activeCellWindow) {
+  if (!window || !Number.isFinite(cellX) || !Number.isFinite(cellZ)) {
+    return true;
+  }
+  return (
+    cellX >= window.cell_x_min
+    && cellX <= window.cell_x_max
+    && cellZ >= window.cell_z_min
+    && cellZ <= window.cell_z_max
+  );
+}
+
+function getPillarCacheKey(entry) {
+  return String(entry?.pillar_id ?? "");
+}
+
+function getTagCacheKey(entry) {
+  return `${entry?.pillar_id ?? ""}:${entry?.tag_id ?? ""}`;
+}
+
+function getPostCacheKey(entry) {
+  return `${entry?.post_id ?? ""}:${entry?.tag_id ?? ""}`;
+}
+
+function mergeStreamIntoCache(streamPayload) {
+  for (const pillar of streamPayload.pillars ?? []) {
+    state.worldCache.pillars.set(getPillarCacheKey(pillar), pillar);
+  }
+  for (const tag of streamPayload.tags ?? []) {
+    state.worldCache.tags.set(getTagCacheKey(tag), tag);
+  }
+  for (const post of streamPayload.postInstances ?? []) {
+    state.worldCache.posts.set(getPostCacheKey(post), post);
+  }
+}
+
+function pruneWorldCache() {
+  const window = state.activeCellWindow;
+  if (!window) {
+    return;
+  }
+  const minX = window.cell_x_min - WORLD_STREAM.retainPadding;
+  const maxX = window.cell_x_max + WORLD_STREAM.retainPadding;
+  const minZ = window.cell_z_min - WORLD_STREAM.retainPadding;
+  const maxZ = window.cell_z_max + WORLD_STREAM.retainPadding;
+  const shouldKeep = (entry) =>
+    !Number.isFinite(entry?.cell_x)
+    || !Number.isFinite(entry?.cell_z)
+    || (
+      entry.cell_x >= minX
+      && entry.cell_x <= maxX
+      && entry.cell_z >= minZ
+      && entry.cell_z <= maxZ
+    );
+
+  for (const [key, entry] of state.worldCache.pillars.entries()) {
+    if (!shouldKeep(entry)) {
+      state.worldCache.pillars.delete(key);
+    }
+  }
+  for (const [key, entry] of state.worldCache.tags.entries()) {
+    if (!shouldKeep(entry)) {
+      state.worldCache.tags.delete(key);
+    }
+  }
+  for (const [key, entry] of state.worldCache.posts.entries()) {
+    if (!shouldKeep(entry)) {
+      state.worldCache.posts.delete(key);
+    }
+  }
+}
+
+function getCachedWorldPayload(presence = []) {
+  return {
+    pillars: [...state.worldCache.pillars.values()],
+      .sort((left, right) => (right.importance_score ?? 0) - (left.importance_score ?? 0)),
+    tags: [...state.worldCache.tags.values()]
+      .sort((left, right) => (right.active_post_count ?? 0) - (left.active_post_count ?? 0)),
+    postInstances: [...state.worldCache.posts.values()]
+      .sort((left, right) => (right.popularity_score ?? 0) - (left.popularity_score ?? 0)),
+    presence,
+  };
 }
 
 function formatQueueLabel(status) {
@@ -441,6 +539,7 @@ function createBillboard(texture, width, height, options = {}) {
 function buildPillarObject(entry) {
   const pillar = entry.pillar ?? {};
   const group = new THREE.Group();
+  const anchor = new THREE.Vector3(entry.position_x, entry.position_y + entry.height * 0.5, entry.position_z);
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
 
   const baseMaterial = new THREE.MeshStandardMaterial({
@@ -448,6 +547,8 @@ function buildPillarObject(entry) {
     emissive: new THREE.Color("#d4aa2f"),
     roughness: 0.38,
     metalness: 0.08,
+    transparent: true,
+    opacity: 0.96,
   });
   const pillarGeometry = new THREE.CylinderGeometry(entry.radius, entry.radius * 1.1, entry.height, 24, 1, false);
   const pillarMesh = new THREE.Mesh(pillarGeometry, baseMaterial);
@@ -460,6 +561,8 @@ function buildPillarObject(entry) {
     emissive: new THREE.Color("#188d8d"),
     roughness: 0.28,
     metalness: 0.26,
+    transparent: true,
+    opacity: 0.92,
   });
   const cap = new THREE.Mesh(capGeometry, capMaterial);
   cap.rotation.x = Math.PI / 2;
@@ -481,6 +584,14 @@ function buildPillarObject(entry) {
   );
   label.position.set(0, entry.height + 14, 0);
   group.add(label);
+  sceneState.animatedPillars.push({
+    anchor,
+    body: pillarMesh,
+    cap,
+    label,
+    cellX: entry.cell_x,
+    cellZ: entry.cell_z,
+  });
   sceneState.clickable.push({
     mesh: pillarMesh,
     type: "pillar",
@@ -572,6 +683,8 @@ function buildTagObject(entry) {
     halo,
     beacon,
     label,
+    cellX: entry.cell_x,
+    cellZ: entry.cell_z,
     speed: 0.18 + entry.branch_depth * 0.05,
   });
   sceneState.clickable.push(
@@ -643,13 +756,33 @@ function buildPostObject(entry) {
   baseMarker.position.y = 0.18;
   group.add(baseMarker);
 
+  const proxy = createBillboard(
+    createCircleTexture({
+      fill: "rgba(255, 255, 255, 0.22)",
+      stroke: color,
+      glow: `${color}33`,
+    }),
+    Math.max(3.8, width * 0.42),
+    Math.max(3.8, width * 0.42),
+    {
+      opacity: 0.16,
+      fog: false,
+      renderOrder: 8,
+    },
+  );
+  proxy.position.set(0, elevation * 0.78, 0);
+  group.add(proxy);
+
   sceneState.animatedPosts.push({
     tagId: entry.tag_id,
     postId: entry.post_id,
     group,
     card,
     baseMarker,
+    proxy,
     anchor,
+    cellX: entry.cell_x,
+    cellZ: entry.cell_z,
     displayTier: entry.display_tier,
   });
 
@@ -893,6 +1026,7 @@ function rebuildConnections(pillars, tags, posts) {
 
 function rebuildScene(streamPayload) {
   sceneState.billboards = [];
+  sceneState.animatedPillars = [];
   sceneState.animatedPosts = [];
   sceneState.animatedTags = [];
   sceneState.animatedPresence = [];
@@ -931,7 +1065,7 @@ function initScene() {
 
   sceneState.scene = new THREE.Scene();
   sceneState.scene.background = new THREE.Color("#e6eee7");
-  sceneState.scene.fog = new THREE.Fog("#e6eee7", 170, 720);
+  sceneState.scene.fog = new THREE.Fog("#e6eee7", 170, 1600);
 
   sceneState.camera = new THREE.PerspectiveCamera(
     58,
@@ -1260,7 +1394,7 @@ function renderSearchResults() {
 
 function buildCellWindow(position = sceneState.camera.position) {
   const cellSize = state.meta?.renderer?.lod?.cellSize ?? 64;
-  const range = window.innerWidth < 780 ? 4 : 5;
+  const range = window.innerWidth < 780 ? WORLD_STREAM.mobileRange : WORLD_STREAM.desktopRange;
   const centerX = Math.floor(position.x / Math.max(1, cellSize));
   const centerZ = Math.floor(position.z / Math.max(1, cellSize));
   return {
@@ -1281,7 +1415,7 @@ async function loadMeta(force = false) {
   state.meta = payload;
   const nearDistance = payload.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = payload.renderer?.fog?.farDistance ?? 720;
-  sceneState.scene.fog = new THREE.Fog("#e6eee7", nearDistance, farDistance);
+  sceneState.scene.fog = new THREE.Fog("#e6eee7", nearDistance, farDistance * WORLD_STREAM.fogMultiplier);
   updateMetaPanel();
   return payload;
 }
@@ -1302,9 +1436,12 @@ async function loadStreamForPosition(position, force = false) {
   state.streamLoading = true;
   try {
     const payload = await fetchJson(WORLD_API.stream, nextWindow);
-    state.stream = payload;
+    state.activeCellWindow = nextWindow;
+    mergeStreamIntoCache(payload);
+    pruneWorldCache();
+    state.stream = getCachedWorldPayload(payload.presence);
     state.currentCellKey = nextWindow.key;
-    rebuildScene(payload);
+    rebuildScene(state.stream);
     frameInitialViewFromStream();
     updateStagePanel();
   } catch (error) {
@@ -1394,42 +1531,66 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   const billboardDistance = state.meta?.renderer?.fog?.billboardDistance ?? 420;
   const nearDistance = state.meta?.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = state.meta?.renderer?.fog?.farDistance ?? 720;
+  const retainedDistance = farDistance * WORLD_STREAM.fogMultiplier;
+
+  for (const entry of sceneState.animatedPillars) {
+    const distance = entry.anchor.distanceTo(sceneState.camera.position);
+    const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
+    const fade = 1 - clamp((distance - nearDistance * 0.4) / Math.max(1, retainedDistance - nearDistance * 0.4), 0, 1);
+    const worldMix = activeCell ? 1 : 0.42;
+    entry.body.material.opacity = (0.18 + fade * 0.78) * worldMix;
+    entry.cap.material.opacity = (0.16 + fade * 0.72) * worldMix;
+    entry.label.material.opacity = activeCell
+      ? 0.18 + fade * 0.74
+      : 0.08 + fade * 0.26;
+  }
 
   for (const entry of sceneState.animatedPosts) {
     if (!entry.group.visible) {
       continue;
     }
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
-    const fade = 1 - clamp((distance - nearDistance * 0.46) / Math.max(1, farDistance - nearDistance * 0.46), 0, 1);
+    const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
+    const fade = 1 - clamp((distance - nearDistance * 0.46) / Math.max(1, retainedDistance - nearDistance * 0.46), 0, 1);
     const minOpacity =
       entry.displayTier === "hero" ? 0.44 : entry.displayTier === "standard" ? 0.28 : 0.18;
     const maxOpacity =
       entry.displayTier === "hero" ? 0.98 : entry.displayTier === "standard" ? 0.9 : 0.8;
+    const cardRange = activeCell ? billboardDistance * 1.25 : billboardDistance * 0.62;
 
-    entry.card.material.opacity = minOpacity + (maxOpacity - minOpacity) * fade;
-    entry.card.visible = distance <= billboardDistance * 1.2;
-    entry.baseMarker.material.opacity = 0.04 + fade * 0.12;
+    entry.card.material.opacity = (minOpacity + (maxOpacity - minOpacity) * fade) * (activeCell ? 1 : 0.54);
+    entry.card.visible = distance <= cardRange;
+    entry.proxy.visible = !entry.card.visible || !activeCell;
+    entry.proxy.material.opacity = activeCell
+      ? 0.04 + (1 - fade) * 0.12
+      : 0.16 + fade * 0.18;
+    entry.baseMarker.material.opacity = activeCell
+      ? 0.05 + fade * 0.1
+      : 0.12 + fade * 0.08;
   }
 
   for (const entry of sceneState.animatedTags) {
     entry.ring.rotation.z += deltaSeconds * entry.speed;
     entry.halo.rotation.z -= deltaSeconds * entry.speed * 0.62;
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
-    const farMix = clamp((distance - nearDistance * 0.8) / Math.max(1, farDistance - nearDistance * 0.8), 0, 1);
+    const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
+    const farMix = clamp((distance - nearDistance * 0.8) / Math.max(1, retainedDistance - nearDistance * 0.8), 0, 1);
     entry.label.visible = true;
     entry.label.material.opacity = entry.isOpen
-      ? 0.96 - farMix * 0.16
-      : 0.68 - farMix * 0.24;
+      ? (activeCell ? 0.96 - farMix * 0.16 : 0.42 - farMix * 0.12)
+      : (activeCell ? 0.68 - farMix * 0.24 : 0.26 - farMix * 0.08);
     entry.beacon.material.opacity = entry.isOpen
-      ? 0.1 + farMix * 0.08
-      : 0.14 + farMix * 0.2;
+      ? (activeCell ? 0.1 + farMix * 0.08 : 0.18 + farMix * 0.1)
+      : (activeCell ? 0.14 + farMix * 0.2 : 0.2 + farMix * 0.14);
     entry.ring.material.opacity = entry.isOpen
-      ? 0.66 + farMix * 0.12
-      : 0.24 + farMix * 0.18;
+      ? (activeCell ? 0.66 + farMix * 0.12 : 0.22 + farMix * 0.08)
+      : (activeCell ? 0.24 + farMix * 0.18 : 0.14 + farMix * 0.1);
     entry.halo.material.opacity = entry.isOpen
-      ? 0.16 + farMix * 0.08
-      : 0.06 + farMix * 0.08;
-    entry.center.material.opacity = entry.isOpen ? 1 : 0.86;
+      ? (activeCell ? 0.16 + farMix * 0.08 : 0.08 + farMix * 0.06)
+      : (activeCell ? 0.06 + farMix * 0.08 : 0.04 + farMix * 0.05);
+    entry.center.material.opacity = entry.isOpen
+      ? (activeCell ? 1 : 0.54)
+      : (activeCell ? 0.86 : 0.34);
   }
 
   for (const entry of sceneState.animatedPresence) {
