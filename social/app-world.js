@@ -1994,11 +1994,56 @@ function buildPillarObject(entry) {
   return group;
 }
 
+function getTagWeight(entry) {
+  return Math.max(
+    0,
+    Number(entry?.active_post_count ?? 0),
+    Number(entry?.visible_post_count ?? 0),
+  );
+}
+
+function computeTagHomeAnchor(entry) {
+  const pillar = state.stream?.pillars?.find((row) => row.pillar_id === entry.pillar_id);
+  if (!pillar) {
+    return new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z);
+  }
+
+  const siblings = (state.stream?.tags ?? [])
+    .filter((row) => row.pillar_id === entry.pillar_id)
+    .sort((left, right) =>
+      getTagWeight(right) - getTagWeight(left)
+      || Number(right.visible_post_count ?? 0) - Number(left.visible_post_count ?? 0)
+      || Number(left.branch_depth ?? 0) - Number(right.branch_depth ?? 0)
+      || String(left.tag_id).localeCompare(String(right.tag_id)));
+  if (siblings.length === 0) {
+    return new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z);
+  }
+
+  const rankIndex = Math.max(0, siblings.findIndex((row) => row.tag_id === entry.tag_id));
+  const weights = siblings.map((row) => getTagWeight(row));
+  const minWeight = Math.min(...weights);
+  const maxWeight = Math.max(...weights);
+  const rankMix = siblings.length <= 1 ? 0.72 : 1 - (rankIndex / Math.max(1, siblings.length - 1));
+  const weightMix = maxWeight > minWeight
+    ? (getTagWeight(entry) - minWeight) / Math.max(1, maxWeight - minWeight)
+    : rankMix;
+  const prominence = clamp(weightMix * 0.78 + rankMix * 0.22, 0, 1);
+  const minOffset = Math.min(pillar.height - 18, Math.max(20, pillar.height * 0.24));
+  const maxOffset = Math.min(pillar.height - 10, Math.max(minOffset + 20, pillar.height * 0.9));
+  const yOffset = minOffset + (maxOffset - minOffset) * prominence;
+  return new THREE.Vector3(
+    entry.position_x,
+    pillar.position_y + yOffset,
+    entry.position_z,
+  );
+}
+
 function buildTagObject(entry) {
   const tag = entry.tag ?? {};
   const accents = pickAccentSet(entry.tag_id || tag.label);
   const group = new THREE.Group();
-  group.position.set(entry.position_x, entry.position_y, entry.position_z);
+  const homeAnchor = computeTagHomeAnchor(entry);
+  group.position.copy(homeAnchor);
 
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(3.2, 0.28, 10, 32),
@@ -2082,9 +2127,9 @@ function buildTagObject(entry) {
   sceneState.animatedTags.push({
     tagId: entry.tag_id,
     group,
-    anchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
-    homeAnchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
-    displayAnchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
+    anchor: homeAnchor.clone(),
+    homeAnchor: homeAnchor.clone(),
+    displayAnchor: homeAnchor.clone(),
     outline,
     center,
     ring,
@@ -2613,7 +2658,7 @@ function getRenderedTagAnchor(tag) {
   if (animated?.displayAnchor) {
     return animated.displayAnchor;
   }
-  return new THREE.Vector3(tag.position_x, tag.position_y, tag.position_z);
+  return computeTagHomeAnchor(tag);
 }
 
 function getRenderedTagAnchorById(tagId) {
@@ -2623,7 +2668,7 @@ function getRenderedTagAnchorById(tagId) {
   }
   const tag = state.stream?.tags?.find((entry) => entry.tag_id === tagId);
   if (tag) {
-    return new THREE.Vector3(tag.position_x, tag.position_y, tag.position_z);
+    return computeTagHomeAnchor(tag);
   }
   return null;
 }
@@ -2822,12 +2867,13 @@ function openTagCloud(entry) {
   renderSearchResults();
   syncExpandedTagState();
 
-  const target = new THREE.Vector3(entry.position_x, entry.position_y + 7, entry.position_z);
+  const renderedAnchor = getRenderedTagAnchorById(entry.tag_id)
+    ?? new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z);
   const approach = computeApproachAnchor(
     {
-      position_x: entry.position_x,
-      position_y: entry.position_y + 2,
-      position_z: entry.position_z,
+      position_x: renderedAnchor.x,
+      position_y: renderedAnchor.y + 2,
+      position_z: renderedAnchor.z,
       heading_y: inputState.yaw,
     },
     clamp((entry.orbit_radius ?? 22) * 0.32 + 10, 12, 18),
@@ -3984,7 +4030,7 @@ function frameInitialViewFromStream() {
   }
   const anchors = [
     ...state.stream.pillars.map((entry) => new THREE.Vector3(entry.position_x, entry.position_y + entry.height * 0.4, entry.position_z)),
-    ...state.stream.tags.map((entry) => new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z)),
+    ...state.stream.tags.map((entry) => computeTagHomeAnchor(entry)),
   ];
   if (anchors.length === 0) {
     return;
