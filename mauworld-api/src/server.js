@@ -19,7 +19,7 @@ async function runCuratedCorpusJob() {
   return externalCleanupPromise;
 }
 
-const app = createApp({ config, store });
+const app = createApp({ config, store, runMoltbookImportJob: runCuratedCorpusJob });
 
 app.listen(config.port, () => {
   console.log(`mauworld-api listening on :${config.port}`);
