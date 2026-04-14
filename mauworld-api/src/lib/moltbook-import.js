@@ -6,6 +6,7 @@ const MOLTBOOK_BASE_URL = "https://www.moltbook.com";
 const MOLTBOOK_TARGET_COUNT = 2200;
 const MOLTBOOK_IMPORT_BATCH_SIZE = 250;
 const MOLTBOOK_SELECTION_BATCH_TARGET = 420;
+const MOLTBOOK_MIN_QUERIES_PER_PASS = 12;
 const MOLTBOOK_SEARCH_PAGE_SIZE = 50;
 const MOLTBOOK_MAX_PAGES_PER_QUERY = 10;
 const MOLTBOOK_DETAIL_SHORTLIST_SIZE = 700;
@@ -286,6 +287,22 @@ function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function parseRetryAfterMs(response) {
+  const raw = response.headers.get("retry-after")?.trim();
+  if (!raw) {
+    return 0;
+  }
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return seconds * 1000;
+  }
+  const timestamp = Date.parse(raw);
+  if (Number.isNaN(timestamp)) {
+    return 0;
+  }
+  return Math.max(0, timestamp - Date.now());
 }
 
 function clampInteger(value, min, max) {
@@ -574,9 +591,10 @@ function computeSyntheticVoteTargets(selected) {
 }
 
 async function fetchJson(url) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  let nextDelayMs = 120;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     if (attempt > 0) {
-      await sleep(400 * attempt);
+      await sleep(nextDelayMs);
     } else {
       await sleep(120);
     }
@@ -589,10 +607,18 @@ async function fetchJson(url) {
     if (response.ok) {
       return response.json();
     }
+    if (response.status === 429) {
+      const retryAfterMs = parseRetryAfterMs(response);
+      nextDelayMs = retryAfterMs > 0
+        ? Math.min(20_000, retryAfterMs)
+        : Math.min(20_000, 1_200 * (2 ** attempt));
+    } else {
+      nextDelayMs = Math.min(10_000, 800 * (attempt + 1));
+    }
     if (response.status !== 429 && response.status < 500) {
       throw new Error(`Moltbook request failed (${response.status}) for ${url}`);
     }
-    if (attempt === 4) {
+    if (attempt === 5) {
       throw new Error(`Moltbook request failed (${response.status}) for ${url}`);
     }
   }
@@ -653,52 +679,65 @@ function finalizeDetailedScore(post, preliminary) {
 
 export async function collectUsefulMoltbookPosts(targetCount, existingSourceIds) {
   const candidates = new Map();
+  const enoughCandidatesThreshold = Math.max(MOLTBOOK_DETAIL_SHORTLIST_SIZE, targetCount * 3);
 
-  for (const query of MOLTBOOK_QUERIES) {
-    let cursor = "";
-    for (let page = 0; page < MOLTBOOK_MAX_PAGES_PER_QUERY; page += 1) {
-      const { results, hasMore, nextCursor } = await fetchSearchPage(query, cursor);
-      if (results.length === 0) {
-        break;
-      }
-      for (const raw of results) {
-        if (raw.type !== "post" || !raw.id || existingSourceIds.has(raw.id)) {
-          continue;
+  for (let queryIndex = 0; queryIndex < MOLTBOOK_QUERIES.length; queryIndex += 1) {
+    const query = MOLTBOOK_QUERIES[queryIndex];
+    try {
+      let cursor = "";
+      for (let page = 0; page < MOLTBOOK_MAX_PAGES_PER_QUERY; page += 1) {
+        const { results, hasMore, nextCursor } = await fetchSearchPage(query, cursor);
+        if (results.length === 0) {
+          break;
         }
-        const record = {
-          id: raw.id,
-          title: raw.title ?? "",
-          content: stripSearchMarkup(raw.content ?? ""),
-          upvotes: Number(raw.upvotes ?? 0),
-          downvotes: Number(raw.downvotes ?? 0),
-          comment_count: Number(raw.comment_count ?? 0),
-          relevance: Number(raw.relevance ?? 0),
-          created_at: raw.created_at ?? "",
-          queryHits: [query],
-        };
-        const candidateScore = scoreMoltbookCandidate(record);
-        if (candidateScore.themeScore < 4 || candidateScore.score < 8) {
-          continue;
+        for (const raw of results) {
+          if (raw.type !== "post" || !raw.id || existingSourceIds.has(raw.id)) {
+            continue;
+          }
+          const record = {
+            id: raw.id,
+            title: raw.title ?? "",
+            content: stripSearchMarkup(raw.content ?? ""),
+            upvotes: Number(raw.upvotes ?? 0),
+            downvotes: Number(raw.downvotes ?? 0),
+            comment_count: Number(raw.comment_count ?? 0),
+            relevance: Number(raw.relevance ?? 0),
+            created_at: raw.created_at ?? "",
+            queryHits: [query],
+          };
+          const candidateScore = scoreMoltbookCandidate(record);
+          if (candidateScore.themeScore < 4 || candidateScore.score < 8) {
+            continue;
+          }
+          const existing = candidates.get(record.id);
+          if (existing) {
+            existing.queryHits = Array.from(new Set([...existing.queryHits, query]));
+            existing.relevance = Math.max(existing.relevance, record.relevance);
+            existing.preliminaryScore = Math.max(existing.preliminaryScore, candidateScore.score);
+            existing.content = existing.content.length >= record.content.length ? existing.content : record.content;
+            existing.upvotes = Math.max(existing.upvotes, record.upvotes);
+            existing.comment_count = Math.max(existing.comment_count, record.comment_count);
+          } else {
+            candidates.set(record.id, {
+              ...record,
+              preliminaryScore: candidateScore.score,
+            });
+          }
         }
-        const existing = candidates.get(record.id);
-        if (existing) {
-          existing.queryHits = Array.from(new Set([...existing.queryHits, query]));
-          existing.relevance = Math.max(existing.relevance, record.relevance);
-          existing.preliminaryScore = Math.max(existing.preliminaryScore, candidateScore.score);
-          existing.content = existing.content.length >= record.content.length ? existing.content : record.content;
-          existing.upvotes = Math.max(existing.upvotes, record.upvotes);
-          existing.comment_count = Math.max(existing.comment_count, record.comment_count);
-        } else {
-          candidates.set(record.id, {
-            ...record,
-            preliminaryScore: candidateScore.score,
-          });
+        if (!hasMore || !nextCursor) {
+          break;
         }
+        cursor = nextCursor;
       }
-      if (!hasMore || !nextCursor) {
-        break;
-      }
-      cursor = nextCursor;
+    } catch (error) {
+      console.warn(`[moltbook-import] query ${query} skipped: ${error.message}`);
+    }
+
+    if (
+      candidates.size >= enoughCandidatesThreshold
+      && queryIndex + 1 >= Math.min(MOLTBOOK_MIN_QUERIES_PER_PASS, MOLTBOOK_QUERIES.length)
+    ) {
+      break;
     }
   }
 
