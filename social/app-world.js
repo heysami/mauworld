@@ -2174,8 +2174,9 @@ function spawnTrailPuff(position, travelVector) {
   const pieceCount = 8;
   const pieces = Array.from({ length: pieceCount }, (_, index) => {
     const radius = 0.14 + Math.random() * 0.22;
+    const geometry = new THREE.SphereGeometry(radius, 10, 10);
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(radius, 10, 10),
+      geometry,
       new THREE.MeshBasicMaterial({
         color: "#ffffff",
         transparent: true,
@@ -2184,6 +2185,9 @@ function spawnTrailPuff(position, travelVector) {
         fog: false,
       }),
     );
+    const shell = createOutlineShell(geometry, WORLD_STYLE.accents[1], 1.18);
+    shell.material.opacity = 0.48;
+    mesh.add(shell);
     mesh.position.set(
       (Math.random() - 0.5) * 1.2,
       Math.random() * 0.68,
@@ -2192,6 +2196,7 @@ function spawnTrailPuff(position, travelVector) {
     group.add(mesh);
     return {
       mesh,
+      shell,
       velocity: new THREE.Vector3(
         (Math.random() - 0.5) * 1.4 - travelVector.x * 0.012,
         0.18 + Math.random() * 0.42,
@@ -3268,10 +3273,13 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
       const scale = 1 + life * piece.growth;
       piece.mesh.scale.setScalar(scale);
       piece.mesh.material.opacity = (1 - life) * 0.88;
+      piece.shell.material.opacity = (1 - life) * 0.46;
     }
     if (life >= 1) {
       sceneState.trails.remove(entry.group);
       for (const piece of entry.pieces) {
+        piece.shell.geometry.dispose();
+        piece.shell.material.dispose();
         piece.mesh.geometry.dispose();
         piece.mesh.material.dispose();
       }
