@@ -1,4 +1,5 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
+import { createWorldVisitorSystem, updateMascotMotion } from "./world-visitors.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 
@@ -124,11 +125,15 @@ const sceneState = {
   tags: new THREE.Group(),
   posts: new THREE.Group(),
   presence: new THREE.Group(),
+  visitors: new THREE.Group(),
   effects: new THREE.Group(),
+  focusGhosts: new THREE.Group(),
+  focusQueued: new THREE.Group(),
   routes: new THREE.Group(),
   trails: new THREE.Group(),
   player: new THREE.Group(),
   billboards: [],
+  persistentBillboards: [],
   animatedDecor: [],
   animatedPillars: [],
   animatedPosts: [],
@@ -139,6 +144,7 @@ const sceneState = {
   snowData: [],
   snowBounds: null,
   playerAvatar: null,
+  visitorSystem: null,
   trailPuffs: [],
   routeGuide: null,
   raycaster: new THREE.Raycaster(),
@@ -996,6 +1002,27 @@ function getToonGradientTexture() {
   return toonGradientTexture;
 }
 
+function registerBillboard(mesh, persistent = false) {
+  const registry = persistent ? sceneState.persistentBillboards : sceneState.billboards;
+  if (!registry.includes(mesh)) {
+    registry.push(mesh);
+  }
+}
+
+function unregisterBillboard(mesh, persistent = false) {
+  const registry = persistent ? sceneState.persistentBillboards : sceneState.billboards;
+  const index = registry.indexOf(mesh);
+  if (index >= 0) {
+    registry.splice(index, 1);
+  }
+}
+
+function unregisterBillboardsInGroup(root, persistent = false) {
+  root.traverse((node) => {
+    unregisterBillboard(node, persistent);
+  });
+}
+
 function createBillboard(texture, width, height, options = {}) {
   const material = new THREE.MeshBasicMaterial({
     map: texture,
@@ -1008,7 +1035,7 @@ function createBillboard(texture, width, height, options = {}) {
   const geometry = new THREE.PlaneGeometry(width, height);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.renderOrder = options.renderOrder ?? 10;
-  sceneState.billboards.push(mesh);
+  registerBillboard(mesh, options.persistent === true);
   return mesh;
 }
 
@@ -1507,6 +1534,10 @@ function resetConfettiField() {
   sceneState.snow.geometry.attributes.position.needsUpdate = true;
 }
 
+function syncConfettiFieldBounds() {
+  sceneState.snowBounds = getConfettiFieldBounds();
+}
+
 function rebuildVirtualDecor(streamPayload) {
   sceneState.animatedDecor = [];
   clearGroup(sceneState.decor);
@@ -1756,35 +1787,6 @@ function rebuildVirtualDecor(streamPayload) {
       baseY: entry.y,
       floatRange: 5 + index * 1.2,
       phase: index * 1.4,
-    });
-  });
-
-  const mascotAnchors = (streamPayload.tags ?? [])
-    .filter((_entry, index, tags) => index % Math.max(1, Math.floor(tags.length / 6)) === 0)
-    .slice(0, 6);
-
-  mascotAnchors.forEach((tag, index) => {
-    const mascot = createMascotFigure(`decor-${tag.tag_id}`, {
-      scale: 0.94 + (index % 3) * 0.1,
-    });
-    const angle = index * 1.14;
-    const radius = 10 + index * 1.8;
-    mascot.group.position.set(
-      tag.position_x + Math.cos(angle) * radius,
-      13 + (index % 3) * 4,
-      tag.position_z + Math.sin(angle) * radius,
-    );
-    sceneState.decor.add(mascot.group);
-    sceneState.animatedDecor.push({
-      kind: "mascot",
-      group: mascot.group,
-      halo: mascot.halo,
-      orb: mascot.orb,
-      orbBaseY: mascot.orb.position.y,
-      baseY: mascot.group.position.y,
-      bob: 0.5 + index * 0.08,
-      phase: index * 0.9,
-      spin: 0.12 + index * 0.02,
     });
   });
 
@@ -2242,45 +2244,18 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
   const position = getNavigationPosition();
   const deltaSeconds = Math.max(1 / 240, avatar.lastSyncElapsed == null ? 1 / 60 : elapsedSeconds - avatar.lastSyncElapsed);
   avatar.lastSyncElapsed = elapsedSeconds;
-  const movement = position.clone().sub(avatar.lastPosition ?? position);
-  avatar.lastPosition = avatar.lastPosition ?? position.clone();
-  avatar.lastPosition.copy(position);
-
-  const horizontalMovement = new THREE.Vector3(movement.x, 0, movement.z);
-  const horizontalSpeed = horizontalMovement.length() / Math.max(deltaSeconds, 0.0001);
-  const normalizedSpeed = clamp(horizontalSpeed / (CAMERA.movementSpeed * 1.35), 0, 1);
   const { forward, right } = getCameraPlanarBasis();
-  const forwardAmount = horizontalMovement.lengthSq() > 0.000001
-    ? clamp(horizontalMovement.dot(forward) / Math.max(horizontalMovement.length(), 0.0001), -1, 1) * normalizedSpeed
-    : 0;
-  const sideAmount = horizontalMovement.lengthSq() > 0.000001
-    ? clamp(horizontalMovement.dot(right) / Math.max(horizontalMovement.length(), 0.0001), -1, 1) * normalizedSpeed
-    : 0;
-  const leanMix = 1 - Math.exp(-deltaSeconds * 9);
-  avatar.targetLeanX = forwardAmount * 0.26;
-  avatar.targetLeanZ = sideAmount * 0.22;
-  avatar.leanX += (avatar.targetLeanX - avatar.leanX) * leanMix;
-  avatar.leanZ += (avatar.targetLeanZ - avatar.leanZ) * leanMix;
-
-  avatar.group.position.copy(position);
-  if (horizontalMovement.lengthSq() > 0.000001) {
-    const targetFacingYaw = normalizeAngle(yawFromVector(horizontalMovement) + Math.PI);
-    avatar.facingYaw = normalizeAngle(
-      avatar.facingYaw + shortestAngleDelta(avatar.facingYaw, targetFacingYaw) * (1 - Math.exp(-deltaSeconds * 10)),
-    );
-  }
-  avatar.group.rotation.y = avatar.facingYaw;
-  avatar.group.position.y += Math.sin(elapsedSeconds * 1.6) * 0.16;
-  if (avatar.poseRoot) {
-    avatar.poseRoot.rotation.x = avatar.leanX;
-    avatar.poseRoot.rotation.z = avatar.leanZ;
-  }
-  if (avatar.halo) {
-    avatar.halo.rotation.z += 0.008;
-  }
-  if (avatar.orb) {
-    avatar.orb.position.y = avatar.orbBaseY + Math.sin(elapsedSeconds * 2.1) * 0.24;
-  }
+  updateMascotMotion(avatar, {
+    deltaSeconds,
+    elapsedSeconds,
+    nextPosition: position,
+    maxSpeed: CAMERA.movementSpeed * 1.35,
+    movementBasisForward: forward,
+    movementBasisRight: right,
+    idleFacingYaw: avatar.facingYaw,
+    bobAmplitude: 0.16,
+    bobSpeed: 1.6,
+  });
 }
 
 function clearRouteGuide() {
@@ -2480,7 +2455,8 @@ function startGuidedTravel(result) {
 }
 
 function clearFocusGhost() {
-  clearGroup(sceneState.effects);
+  unregisterBillboardsInGroup(sceneState.focusGhosts);
+  clearGroup(sceneState.focusGhosts);
 }
 
 function hasVisibleFocusedPost(result) {
@@ -2497,9 +2473,48 @@ function hasVisibleFocusedPost(result) {
   );
 }
 
+function hasPresenceCheckingFocusedPost(result) {
+  if (!result?.destination || !state.stream?.presence?.length) {
+    return false;
+  }
+  const anchor = new THREE.Vector3(
+    result.destination.position_x,
+    result.destination.position_y ?? 0,
+    result.destination.position_z,
+  );
+  return state.stream.presence.some((entry) => {
+    const position = new THREE.Vector3(
+      entry.position_x ?? 0,
+      entry.position_y ?? 0,
+      entry.position_z ?? 0,
+    );
+    return position.distanceTo(anchor) <= 18;
+  });
+}
+
+function hasNewerPostForFocusedNode(result) {
+  if (!result?.destination || !state.stream?.postInstances?.length || !result.post?.created_at) {
+    return false;
+  }
+  const focusedCreatedAt = new Date(result.post.created_at).getTime();
+  if (!Number.isFinite(focusedCreatedAt)) {
+    return false;
+  }
+  return state.stream.postInstances.some((entry) => {
+    if (entry.tag_id !== result.destination.tag_id || entry.post_id === result.destination.post_id) {
+      return false;
+    }
+    const createdAt = new Date(entry.post?.created_at ?? 0).getTime();
+    return Number.isFinite(createdAt) && createdAt > focusedCreatedAt;
+  });
+}
+
 function syncFocusedGhost() {
   clearFocusGhost();
   const result = state.focusedResult;
+  sceneState.visitorSystem?.syncQueuedResult(result, {
+    interrupted: hasPresenceCheckingFocusedPost(result) || hasNewerPostForFocusedNode(result),
+  });
   if (!result?.destination) {
     return;
   }
@@ -2559,7 +2574,7 @@ function syncFocusedGhost() {
   ring.position.y = 0.16;
   group.add(ring);
 
-  sceneState.effects.add(group);
+  sceneState.focusGhosts.add(group);
 }
 
 function syncExpandedTagState() {
@@ -2798,6 +2813,7 @@ function rebuildScene(streamPayload) {
     sceneState.presence.add(buildPresenceObject(presence));
   }
   rebuildConnections(streamPayload.pillars, streamPayload.tags, streamPayload.postInstances);
+  sceneState.visitorSystem?.syncAmbient(streamPayload.tags);
   syncExpandedTagState();
   syncFocusedGhost();
 }
@@ -2857,6 +2873,8 @@ function initScene() {
   sceneState.floorMarker.visible = false;
   sceneState.scene.add(sceneState.floorMarker);
 
+  sceneState.effects.add(sceneState.focusGhosts);
+  sceneState.effects.add(sceneState.focusQueued);
   sceneState.root = new THREE.Group();
   sceneState.root.add(sceneState.decor);
   sceneState.root.add(sceneState.pillars);
@@ -2864,6 +2882,7 @@ function initScene() {
   sceneState.root.add(sceneState.tags);
   sceneState.root.add(sceneState.posts);
   sceneState.root.add(sceneState.presence);
+  sceneState.root.add(sceneState.visitors);
   sceneState.root.add(sceneState.player);
   sceneState.root.add(sceneState.trails);
   sceneState.root.add(sceneState.routes);
@@ -2889,6 +2908,15 @@ function initScene() {
     targetLeanZ: 0,
     facingYaw: normalizeAngle(inputState.yaw + Math.PI),
   };
+  sceneState.visitorSystem = createWorldVisitorSystem({
+    ambientRoot: sceneState.visitors,
+    queuedRoot: sceneState.focusQueued,
+    createMascotFigure,
+    createBillboard,
+    unregisterBillboard,
+    pickAccent,
+    worldStyle: WORLD_STYLE,
+  });
   syncLocalAvatar(0);
 
   const confettiBounds = getConfettiFieldBounds();
@@ -3183,7 +3211,7 @@ async function loadMeta(force = false) {
   const nearDistance = payload.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = payload.renderer?.fog?.farDistance ?? 720;
   sceneState.scene.fog = new THREE.Fog(WORLD_STYLE.fog, nearDistance, farDistance * WORLD_STREAM.fogMultiplier);
-  resetConfettiField();
+  syncConfettiFieldBounds();
   updateMetaPanel();
   return payload;
 }
@@ -3555,8 +3583,9 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   }
 
   syncLocalAvatar(elapsedSeconds);
+  sceneState.visitorSystem?.update(deltaSeconds, elapsedSeconds);
 
-  for (const mesh of sceneState.billboards) {
+  for (const mesh of [...sceneState.billboards, ...sceneState.persistentBillboards]) {
     mesh.quaternion.copy(sceneState.camera.quaternion);
   }
 }
