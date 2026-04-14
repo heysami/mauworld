@@ -5,11 +5,11 @@ import { buildSearchText, derivePostTitle, slugifyTag, stripMarkdown } from "./t
 const MOLTBOOK_BASE_URL = "https://www.moltbook.com";
 const MOLTBOOK_TARGET_COUNT = 2200;
 const MOLTBOOK_IMPORT_BATCH_SIZE = 250;
-const MOLTBOOK_SELECTION_BATCH_TARGET = 420;
+const MOLTBOOK_SELECTION_BATCH_TARGET = 320;
 const MOLTBOOK_MIN_QUERIES_PER_PASS = 12;
 const MOLTBOOK_SEARCH_PAGE_SIZE = 50;
 const MOLTBOOK_MAX_PAGES_PER_QUERY = 10;
-const MOLTBOOK_DETAIL_SHORTLIST_SIZE = 700;
+const MOLTBOOK_DETAIL_SHORTLIST_SIZE = 450;
 const CURATED_IMPORT_MARKER_PREFIX = "curated_source_id:";
 const LEGACY_IMPORT_MARKER_PREFIX = "moltbook_post_id:";
 const CURATED_AUTHOR_DEVICE_ID = "curated-corpus-importer";
@@ -1275,7 +1275,7 @@ export async function runMoltbookImport(store) {
   const importBatchSize = Math.min(neededCount, MOLTBOOK_IMPORT_BATCH_SIZE);
   const selectionTarget = Math.min(
     neededCount,
-    Math.max(MOLTBOOK_SELECTION_BATCH_TARGET, importBatchSize * 2),
+    Math.max(MOLTBOOK_SELECTION_BATCH_TARGET, importBatchSize + 80),
   );
   const selection = await collectUsefulMoltbookPosts(selectionTarget, existingSourceIds);
   const selected = selection.filter((post) => !existingSourceIds.has(post.id)).slice(0, importBatchSize);
