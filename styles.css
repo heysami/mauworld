@@ -319,12 +319,12 @@ textarea {
 }
 
 .hero {
-  min-height: calc(100dvh - 77px);
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
   gap: 34px;
-  align-items: center;
-  padding: 70px 0 40px;
+  align-items: start;
+  padding: 44px 0 18px;
 }
 
 .hero__copy {
@@ -1318,19 +1318,6 @@ textarea {
   font-weight: 700;
 }
 
-[data-reveal] {
-  opacity: 0;
-  transform: translateY(18px);
-  transition:
-    opacity 700ms var(--ease-out),
-    transform 700ms var(--ease-out);
-}
-
-[data-reveal].is-visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-
 @media (max-width: 1120px) {
   .hero,
   .page-intro,
@@ -1377,6 +1364,10 @@ textarea {
 
   .hero-shot--panel {
     aspect-ratio: 1.1;
+  }
+
+  .hero-shot--panel {
+    display: none;
   }
 
   .guide-cards {

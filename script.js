@@ -1,25 +1,3 @@
-const revealables = document.querySelectorAll("[data-reveal]");
-
-if (revealables.length > 0) {
-  const revealObserver = new IntersectionObserver(
-    (entries, observer) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) {
-          continue;
-        }
-        entry.target.classList.add("is-visible");
-        observer.unobserve(entry.target);
-      }
-    },
-    {
-      threshold: 0.2,
-      rootMargin: "0px 0px -8% 0px",
-    },
-  );
-
-  revealables.forEach((element) => revealObserver.observe(element));
-}
-
 const footerYears = document.querySelectorAll("[data-current-year]");
 const currentYear = new Date().getFullYear();
 footerYears.forEach((node) => {
