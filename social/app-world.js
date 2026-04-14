@@ -1300,6 +1300,7 @@ function resetConfettiField() {
     const particle = sceneState.snowData[index];
     particle.x = bounds.centerX + (Math.random() - 0.5) * bounds.halfX * 2;
     particle.y = bounds.minY + Math.random() * heightRange;
+    particle.baseY = particle.y;
     particle.z = bounds.centerZ + (Math.random() - 0.5) * bounds.halfZ * 2;
     positions[index * 3] = particle.x;
     positions[index * 3 + 1] = particle.y;
@@ -2656,10 +2657,12 @@ function initScene() {
     return {
       x,
       y,
+      baseY: y,
       z,
       driftX: (Math.random() - 0.5) * 4.2,
       driftZ: (Math.random() - 0.5) * 4.8,
-      fallSpeed: 16 + Math.random() * 26,
+      bobAmount: 0.28 + Math.random() * 1.1,
+      bobSpeed: 0.22 + Math.random() * 0.52,
       sway: 0.6 + Math.random() * 1.2,
       phase: Math.random() * Math.PI * 2,
     };
@@ -3043,15 +3046,11 @@ function updateSnow(deltaSeconds, elapsedSeconds) {
     const particle = sceneState.snowData[index];
     particle.x += particle.driftX * deltaSeconds;
     particle.z += particle.driftZ * deltaSeconds;
-    particle.y -= particle.fallSpeed * deltaSeconds;
     particle.x += Math.sin(elapsedSeconds * particle.sway + particle.phase) * 0.12;
     particle.z += Math.cos(elapsedSeconds * (particle.sway * 0.82) + particle.phase) * 0.1;
-
-    if (particle.y < bounds.minY) {
-      particle.y = bounds.maxY + Math.random() * 48;
-      particle.x = bounds.centerX + (Math.random() - 0.5) * bounds.halfX * 2;
-      particle.z = bounds.centerZ + (Math.random() - 0.5) * bounds.halfZ * 2;
-    }
+    particle.y = particle.baseY
+      + Math.sin(elapsedSeconds * particle.bobSpeed + particle.phase) * particle.bobAmount
+      + Math.cos(elapsedSeconds * (particle.bobSpeed * 0.62) + particle.phase * 0.5) * particle.bobAmount * 0.28;
     if (particle.x < minX) {
       particle.x += bounds.halfX * 2;
     } else if (particle.x > maxX) {
