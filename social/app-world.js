@@ -130,7 +130,6 @@ const sceneState = {
   snowData: [],
   playerAvatar: null,
   trailPuffs: [],
-  trailTexture: null,
   routeGuide: null,
   raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(),
@@ -1892,38 +1891,62 @@ function computeApproachAnchor(destination, distance = 12, lift = -6, sourcePosi
 }
 
 function spawnTrailPuff(position, travelVector) {
-  if (!sceneState.trailTexture) {
-    sceneState.trailTexture = createCloudTexture({
-      width: 300,
-      height: 180,
-      fill: "rgba(255, 255, 255, 0.94)",
-      stroke: "rgba(236, 246, 255, 0.98)",
-    });
-  }
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: sceneState.trailTexture,
-      transparent: true,
-      opacity: 0.32,
-      depthWrite: false,
-      fog: false,
-    }),
-  );
-  sprite.position.copy(position);
-  sprite.position.y += 1.4;
-  const scale = 7.5 + Math.min(6, travelVector.length() * 0.08);
-  sprite.scale.set(scale, scale * 0.56, 1);
-  sceneState.trails.add(sprite);
+  const group = new THREE.Group();
+  group.position.copy(position);
+  group.position.y += 1.8;
+  const pieceCount = 10;
+  const pieces = Array.from({ length: pieceCount }, (_, index) => {
+    const color = new THREE.Color(pickAccent(`trail-${Date.now()}-${index}`))
+      .lerp(new THREE.Color("#ffffff"), 0.08 + Math.random() * 0.16);
+    const width = 0.34 + Math.random() * 0.42;
+    const height = 0.16 + Math.random() * 0.28;
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, height),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.92,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    mesh.position.set(
+      (Math.random() - 0.5) * 1.8,
+      Math.random() * 1.3,
+      (Math.random() - 0.5) * 1.8,
+    );
+    mesh.rotation.set(
+      Math.random() * Math.PI,
+      Math.random() * Math.PI,
+      Math.random() * Math.PI,
+    );
+    group.add(mesh);
+    return {
+      mesh,
+      velocity: new THREE.Vector3(
+        (Math.random() - 0.5) * 4.6 - travelVector.x * 0.022,
+        0.7 + Math.random() * 1.2,
+        (Math.random() - 0.5) * 4.6 - travelVector.z * 0.022,
+      ),
+      spin: new THREE.Vector3(
+        (Math.random() - 0.5) * 5.4,
+        (Math.random() - 0.5) * 5.4,
+        (Math.random() - 0.5) * 5.4,
+      ),
+    };
+  });
+  sceneState.trails.add(group);
   sceneState.trailPuffs.push({
-    sprite,
+    group,
+    pieces,
     age: 0,
-    lifetime: 1.6,
+    lifetime: 1.35 + Math.random() * 0.35,
     drift: new THREE.Vector3(
-      -travelVector.x * 0.022,
-      1.1 + Math.random() * 0.5,
-      -travelVector.z * 0.022,
+      -travelVector.x * 0.012,
+      0.36 + Math.random() * 0.22,
+      -travelVector.z * 0.012,
     ),
-    growth: 1.1 + Math.random() * 0.35,
   });
 }
 
@@ -2943,13 +2966,21 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     const entry = sceneState.trailPuffs[index];
     entry.age += deltaSeconds;
     const life = clamp(entry.age / entry.lifetime, 0, 1);
-    entry.sprite.position.addScaledVector(entry.drift, deltaSeconds);
-    entry.sprite.material.opacity = (1 - life) * 0.32;
-    const scale = entry.sprite.scale.x * (1 + entry.growth * deltaSeconds * 0.12);
-    entry.sprite.scale.set(scale, scale * 0.56, 1);
+    entry.group.position.addScaledVector(entry.drift, deltaSeconds);
+    entry.group.position.y += deltaSeconds * 0.08;
+    for (const piece of entry.pieces) {
+      piece.mesh.position.addScaledVector(piece.velocity, deltaSeconds);
+      piece.mesh.rotation.x += piece.spin.x * deltaSeconds;
+      piece.mesh.rotation.y += piece.spin.y * deltaSeconds;
+      piece.mesh.rotation.z += piece.spin.z * deltaSeconds;
+      piece.mesh.material.opacity = (1 - life) * 0.86;
+    }
     if (life >= 1) {
-      sceneState.trails.remove(entry.sprite);
-      entry.sprite.material.dispose();
+      sceneState.trails.remove(entry.group);
+      for (const piece of entry.pieces) {
+        piece.mesh.geometry.dispose();
+        piece.mesh.material.dispose();
+      }
       sceneState.trailPuffs.splice(index, 1);
     }
   }
