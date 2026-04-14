@@ -22,6 +22,7 @@ const elements = {
   stageMeta: document.querySelector("[data-world-stage-meta]"),
   resultsPanel: document.querySelector(".world-results-panel"),
   inspector: document.querySelector(".world-inspector"),
+  inspectorClose: document.querySelector("[data-world-inspector-close]"),
 };
 
 const WORLD_API = {
@@ -41,6 +42,8 @@ const CAMERA = {
   wheelFactor: 0.14,
   focusDurationMs: 1400,
 };
+
+const MOVEMENT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "shift"]);
 
 const WORLD_STREAM = {
   mobileRange: 5,
@@ -1363,17 +1366,26 @@ function openTagCloud(entry) {
   const isSameTag = state.openTagId === entry.tag_id;
   if (isSameTag) {
     state.openTagId = null;
+    state.activeResultId = null;
     state.focusedResult = null;
     state.focusAnimation = null;
     if (sceneState.floorMarker) {
       sceneState.floorMarker.visible = false;
     }
+    renderSelected(null);
+    renderSearchResults();
     syncExpandedTagState();
     return;
   }
 
   state.openTagId = entry.tag_id;
+  state.activeResultId = null;
   state.focusedResult = null;
+  if (sceneState.floorMarker) {
+    sceneState.floorMarker.visible = false;
+  }
+  renderSelected(null);
+  renderSearchResults();
   syncExpandedTagState();
 
   const target = new THREE.Vector3(entry.position_x, entry.position_y + 7, entry.position_z);
@@ -1398,12 +1410,45 @@ function openTagCloud(entry) {
   loadStreamForPosition(cameraDestination, true).catch((error) => showToast(error.message));
 }
 
+function buildSceneSelectionResult(entry) {
+  if (!entry?.post_id) {
+    return null;
+  }
+  return {
+    post: entry.post ?? null,
+    worldQueueStatus: "ready",
+    destination: {
+      world_snapshot_id: state.meta?.worldSnapshotId ?? entry.world_snapshot_id ?? null,
+      post_id: entry.post_id,
+      tag_id: entry.tag_id,
+      position_x: entry.position_x,
+      position_y: entry.position_y,
+      position_z: entry.position_z,
+      heading_y: entry.heading_y ?? 0,
+    },
+  };
+}
+
 function openPostDetail(entry) {
-  const postId = entry?.post_id;
-  if (!postId) {
+  const result = buildSceneSelectionResult(entry);
+  if (!result?.destination?.post_id) {
     return;
   }
-  window.location.assign(`/social/post.html?id=${encodeURIComponent(postId)}`);
+  state.activeResultId = result.destination.post_id;
+  state.focusedResult = result;
+  state.openTagId = result.destination.tag_id ?? state.openTagId;
+  if (sceneState.floorMarker) {
+    sceneState.floorMarker.visible = true;
+    sceneState.floorMarker.position.set(
+      result.destination.position_x,
+      0.2,
+      result.destination.position_z,
+    );
+  }
+  syncExpandedTagState();
+  syncFocusedGhost();
+  renderSearchResults();
+  renderSelected(result);
 }
 
 function rebuildConnections(pillars, tags, posts) {
@@ -1693,7 +1738,7 @@ function renderSelected(result) {
   }
   if (!result) {
     elements.inspector?.classList.add("is-empty");
-    elements.focusKind.textContent = "None";
+    elements.focusKind.textContent = "Post";
     elements.selected.innerHTML = "";
     return;
   }
@@ -1701,8 +1746,9 @@ function renderSelected(result) {
   elements.inspector?.classList.remove("is-empty");
   const post = result.post ?? {};
   const media = post.media?.[0];
-  const bodySummary = summarizeBodyMarkdown(post.body_md, post.body_plain, 260);
+  const bodySummary = summarizeBodyMarkdown(post.body_md, post.body_plain, 420);
   const tagSummary = post.tags?.slice(0, 5).map((tag) => `#${tag.label}`).join(" ") || "No visible tags";
+  const postHref = post.id ? `/social/post.html?id=${encodeURIComponent(post.id)}` : "";
   elements.focusKind.textContent = result.destination ? "Post" : "Queued";
   elements.selected.innerHTML = `
     <div class="world-selected__meta">
@@ -1721,6 +1767,7 @@ function renderSelected(result) {
       <span>${htmlEscape(tagSummary)}</span>
       <span>${htmlEscape(post.created_at ? formatRelativeTime(post.created_at) : "now")}</span>
     </div>
+    ${postHref ? `<a class="world-selected__link" href="${postHref}">Open full post</a>` : ""}
   `;
 }
 
@@ -2098,9 +2145,12 @@ function updateMovement(deltaSeconds) {
   if (state.focusAnimation) {
     return;
   }
-  const forward = getFlatForwardVector(inputState.yaw);
-  const right = new THREE.Vector3(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw));
+  const forward = new THREE.Vector3();
+  sceneState.camera.getWorldDirection(forward);
+  forward.normalize();
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(sceneState.camera.quaternion).normalize();
   const velocity = new THREE.Vector3();
+  let vertical = 0;
   const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
 
   if (activeKeys.has("w") || activeKeys.has("forward")) {
@@ -2116,24 +2166,26 @@ function updateMovement(deltaSeconds) {
     velocity.add(right);
   }
   if (activeKeys.has("q") || activeKeys.has("down")) {
-    velocity.y -= 1;
+    vertical -= 1;
   }
   if (activeKeys.has("e") || activeKeys.has("up")) {
-    velocity.y += 1;
+    vertical += 1;
   }
 
-  if (velocity.lengthSq() === 0) {
+  if (velocity.lengthSq() === 0 && vertical === 0) {
     return;
   }
 
   const speedMultiplier = inputState.keys.has("shift") ? 2.1 : 1;
-  velocity.normalize();
-  sceneState.camera.position.addScaledVector(
-    new THREE.Vector3(velocity.x, 0, velocity.z),
-    deltaSeconds * CAMERA.movementSpeed * speedMultiplier,
-  );
+  if (velocity.lengthSq() > 0) {
+    velocity.normalize();
+    sceneState.camera.position.addScaledVector(
+      velocity,
+      deltaSeconds * CAMERA.movementSpeed * speedMultiplier,
+    );
+  }
   sceneState.camera.position.y = clamp(
-    sceneState.camera.position.y + velocity.y * deltaSeconds * CAMERA.verticalSpeed,
+    sceneState.camera.position.y + vertical * deltaSeconds * CAMERA.verticalSpeed * speedMultiplier,
     CAMERA.minY,
     CAMERA.maxY,
   );
@@ -2269,9 +2321,11 @@ function onWheel(event) {
   if (state.focusAnimation) {
     return;
   }
-  const direction = getFlatForwardVector(inputState.yaw);
-  sceneState.camera.position.addScaledVector(direction, -event.deltaY * CAMERA.wheelFactor * 0.1);
-  sceneState.camera.position.y = clamp(sceneState.camera.position.y, CAMERA.minY, CAMERA.maxY);
+  sceneState.camera.position.y = clamp(
+    sceneState.camera.position.y + (-event.deltaY * CAMERA.wheelFactor),
+    CAMERA.minY,
+    CAMERA.maxY,
+  );
 }
 
 function registerInput() {
@@ -2281,10 +2335,26 @@ function registerInput() {
       return;
     }
     const key = event.key.toLowerCase();
+    if (MOVEMENT_KEYS.has(key)) {
+      event.preventDefault();
+    }
     inputState.keys.add(key);
+    if (key === "escape") {
+      state.activeResultId = null;
+      state.focusedResult = null;
+      if (sceneState.floorMarker) {
+        sceneState.floorMarker.visible = false;
+      }
+      renderSelected(null);
+      renderSearchResults();
+    }
   });
   window.addEventListener("keyup", (event) => {
-    inputState.keys.delete(event.key.toLowerCase());
+    const key = event.key.toLowerCase();
+    if (MOVEMENT_KEYS.has(key)) {
+      event.preventDefault();
+    }
+    inputState.keys.delete(key);
   });
 
   elements.canvas.addEventListener("pointerdown", onPointerDown);
@@ -2306,6 +2376,16 @@ function registerInput() {
       button.addEventListener("pointercancel", end);
     }
   }
+
+  elements.inspectorClose?.addEventListener("click", () => {
+    state.activeResultId = null;
+    state.focusedResult = null;
+    if (sceneState.floorMarker) {
+      sceneState.floorMarker.visible = false;
+    }
+    renderSelected(null);
+    renderSearchResults();
+  });
 }
 
 function animate() {
