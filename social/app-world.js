@@ -1006,6 +1006,90 @@ function createBillboard(texture, width, height, options = {}) {
   return mesh;
 }
 
+function getPostCardLayout(entry) {
+  const cardTextureWidth = 700;
+  const cardTextureHeight = entry.display_tier === "hero" ? 272 : 248;
+  const cardWidth = 8.6 + entry.size_factor * 4.8 + (entry.display_tier === "hero" ? 1.6 : 0);
+  const cardHeight = cardWidth * (cardTextureHeight / cardTextureWidth);
+  const elevation = cardHeight * 0.62;
+  return {
+    cardTextureWidth,
+    cardTextureHeight,
+    cardWidth,
+    cardHeight,
+    elevation,
+  };
+}
+
+function createBranchConnection(start, end, options = {}) {
+  const accent = options.accent ?? WORLD_STYLE.accents[1];
+  const outerRadius = options.outerRadius ?? 0.11;
+  const innerRadius = outerRadius * 0.54;
+  const distance = start.distanceTo(end);
+  const midpoint = start.clone().lerp(end, 0.5);
+  midpoint.y += clamp(distance * 0.18, 2.6, 10.5);
+  const curve = new THREE.CatmullRomCurve3([start.clone(), midpoint, end.clone()]);
+  const segments = clamp(Math.round(distance * 2.4), 16, 42);
+  const group = new THREE.Group();
+
+  const outer = new THREE.Mesh(
+    new THREE.TubeGeometry(curve, segments, outerRadius, 8, false),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(accent),
+      transparent: true,
+      opacity: options.outerOpacity ?? 0.32,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  outer.renderOrder = 4;
+  group.add(outer);
+
+  const inner = new THREE.Mesh(
+    new THREE.TubeGeometry(curve, segments, innerRadius, 8, false),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(WORLD_STYLE.white),
+      transparent: true,
+      opacity: options.innerOpacity ?? 0.72,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  inner.renderOrder = 5;
+  group.add(inner);
+
+  const endpointRadius = outerRadius * 1.85;
+  const startOrb = new THREE.Mesh(
+    new THREE.SphereGeometry(endpointRadius, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(accent),
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  startOrb.position.copy(start);
+  startOrb.renderOrder = 4;
+  group.add(startOrb);
+
+  const endOrb = new THREE.Mesh(
+    new THREE.SphereGeometry(endpointRadius * 0.92, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(accent),
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  endOrb.position.copy(end);
+  endOrb.renderOrder = 4;
+  group.add(endOrb);
+
+  return group;
+}
+
 function createCloudTexture(options = {}) {
   const canvas = document.createElement("canvas");
   const width = options.width ?? 640;
@@ -1991,11 +2075,13 @@ function buildPostObject(entry) {
       : entry.display_tier === "standard"
         ? accents.secondary
         : accents.tertiary;
-  const cardTextureWidth = 700;
-  const cardTextureHeight = entry.display_tier === "hero" ? 272 : 248;
-  const cardWidth = 8.6 + entry.size_factor * 4.8 + (entry.display_tier === "hero" ? 1.6 : 0);
-  const cardHeight = cardWidth * (cardTextureHeight / cardTextureWidth);
-  const elevation = cardHeight * 0.62;
+  const {
+    cardTextureWidth,
+    cardTextureHeight,
+    cardWidth,
+    cardHeight,
+    elevation,
+  } = getPostCardLayout(entry);
 
   const card = createBillboard(
     createCompactCardTexture(
@@ -2621,13 +2707,36 @@ function rebuildConnections(pillars, tags, posts) {
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  const material = new THREE.LineBasicMaterial({
-    color: new THREE.Color(WORLD_STYLE.line),
-    transparent: true,
-    opacity: 0.24,
-    fog: false,
-  });
-  sceneState.lines.add(new THREE.LineSegments(geometry, material));
+  if (positions.length > 0) {
+    const material = new THREE.LineBasicMaterial({
+      color: new THREE.Color(WORLD_STYLE.line),
+      transparent: true,
+      opacity: 0.2,
+      fog: false,
+    });
+    sceneState.lines.add(new THREE.LineSegments(geometry, material));
+  }
+
+  for (const post of posts) {
+    if (state.openTagId !== post.tag_id || post.display_tier === "hidden") {
+      continue;
+    }
+    const tag = tagById.get(post.tag_id);
+    if (!tag) {
+      continue;
+    }
+    const { elevation } = getPostCardLayout(post);
+    const start = new THREE.Vector3(tag.position_x, tag.position_y + 0.18, tag.position_z);
+    const end = new THREE.Vector3(post.position_x, post.position_y + elevation * 0.76, post.position_z);
+    const accents = pickAccentSet(post.post_id || post.post?.title || `${post.tag_id}:${post.post_id}`);
+    const branch = createBranchConnection(start, end, {
+      accent: post.display_tier === "hero" ? accents.primary : accents.secondary,
+      outerRadius: post.display_tier === "hero" ? 0.16 : post.display_tier === "standard" ? 0.12 : 0.095,
+      outerOpacity: post.display_tier === "hero" ? 0.38 : 0.3,
+      innerOpacity: post.display_tier === "hero" ? 0.8 : 0.68,
+    });
+    sceneState.lines.add(branch);
+  }
 }
 
 function rebuildScene(streamPayload) {
