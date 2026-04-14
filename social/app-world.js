@@ -2242,6 +2242,8 @@ function buildPostObject(entry) {
     anchor,
     homeAnchor: anchor.clone(),
     displayAnchor: anchor.clone(),
+    cardWidth,
+    cardHeight,
     cardElevation: elevation,
     cellX: entry.cell_x,
     cellZ: entry.cell_z,
@@ -2686,6 +2688,17 @@ function getRenderedPostAnchor(post) {
   return new THREE.Vector3(post.position_x, post.position_y, post.position_z);
 }
 
+function getRenderedPostAnchorById(postId, tagId, fallback = null) {
+  const animated = getAnimatedPostEntry(postId, tagId);
+  if (animated?.displayAnchor) {
+    return animated.displayAnchor.clone();
+  }
+  if (fallback) {
+    return fallback.clone();
+  }
+  return null;
+}
+
 function computeOpenPostDisplayAnchors(tagId) {
   const tagAnchor = getRenderedTagAnchorById(tagId);
   if (!tagAnchor) {
@@ -2716,16 +2729,18 @@ function computeOpenPostDisplayAnchors(tagId) {
     : 0;
   const positions = new Map();
   let cursor = 0;
+  const lanePattern = [0, 1, -1, 2, -2, 3, -3];
 
   if (focusedPostId) {
     const focused = posts.find((entry) => entry.postId === focusedPostId);
     if (focused) {
+      const focusRadius = Math.max(8.4, (focused.cardWidth ?? 12) * 0.62);
       positions.set(
         focused.postId,
         new THREE.Vector3(
-          tagAnchor.x + Math.cos(frontAngle) * 7.4,
-          tagAnchor.y - focused.cardElevation * 0.5 + 0.4,
-          tagAnchor.z + Math.sin(frontAngle) * 7.4,
+          tagAnchor.x + Math.cos(frontAngle) * focusRadius,
+          tagAnchor.y - focused.cardElevation * 0.22 + 0.8,
+          tagAnchor.z + Math.sin(frontAngle) * focusRadius,
         ),
       );
       cursor = 1;
@@ -2734,32 +2749,42 @@ function computeOpenPostDisplayAnchors(tagId) {
 
   let ringIndex = 0;
   while (cursor < posts.length) {
-    const ringCapacity = ringIndex === 0 ? 4 : 6;
+    const ringCapacity = ringIndex === 0 ? 3 : ringIndex === 1 ? 4 : 6;
     const ringPosts = posts.slice(cursor, cursor + ringCapacity);
-    const ringRadius = 9.6 + ringIndex * 4.2;
+    const maxCardWidth = Math.max(...ringPosts.map((post) => post.cardWidth ?? 12));
+    const maxCardHeight = Math.max(...ringPosts.map((post) => post.cardHeight ?? 4.5));
     const span = ringPosts.length <= 1
       ? 0
       : ringIndex === 0
-        ? Math.PI * 0.74
-        : Math.PI * 0.98;
+        ? Math.PI * 0.92
+        : ringIndex === 1
+          ? Math.PI * 1.18
+          : Math.PI * 1.34;
+    const angleStep = ringPosts.length <= 1 ? span : span / Math.max(1, ringPosts.length - 1);
+    const minChord = maxCardWidth * 0.9;
+    const chordRadius = ringPosts.length <= 1
+      ? minChord * 0.68
+      : minChord / Math.max(0.18, 2 * Math.sin(angleStep / 2));
+    const ringRadius = Math.max(14 + ringIndex * 6.4, chordRadius + 1.4);
+    const laneStep = Math.max(3.6, maxCardHeight * 0.82);
+    const shelfBase = tagAnchor.y - 1.1 + ringIndex * 2.4;
 
     for (let slot = 0; slot < ringPosts.length; slot += 1) {
       const post = ringPosts[slot];
       const offset = ringPosts.length <= 1 ? 0 : (slot / (ringPosts.length - 1)) - 0.5;
       const angle = frontAngle + offset * span;
-      const radius =
-        ringRadius
-        + (post.displayTier === "hero" ? -0.8 : post.displayTier === "hint" ? 1.1 : 0);
+      const radius = ringRadius + (post.displayTier === "hero" ? -0.9 : post.displayTier === "hint" ? 1.2 : 0);
+      const laneOffset = lanePattern[slot] ?? (slot - Math.floor(ringPosts.length / 2));
       const verticalOffset =
-        -post.cardElevation * 0.46
-        + 0.7
-        + ringIndex * 0.95
-        + (post.displayTier === "hero" ? 0.18 : 0);
+        shelfBase
+        + laneOffset * laneStep
+        - post.cardElevation * 0.18
+        + (post.displayTier === "hero" ? 1.2 : post.displayTier === "hint" ? -0.6 : 0);
       positions.set(
         post.postId,
         new THREE.Vector3(
           tagAnchor.x + Math.cos(angle) * radius,
-          tagAnchor.y + verticalOffset,
+          verticalOffset,
           tagAnchor.z + Math.sin(angle) * radius,
         ),
       );
@@ -2900,6 +2925,12 @@ function buildSceneSelectionResult(entry) {
   if (!entry?.post_id) {
     return null;
   }
+  const fallbackAnchor = new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z);
+  const renderedAnchor = getRenderedPostAnchorById(entry.post_id, entry.tag_id, fallbackAnchor) ?? fallbackAnchor;
+  const renderedTagAnchor = getRenderedTagAnchorById(entry.tag_id);
+  const headingSource = renderedTagAnchor
+    ? new THREE.Vector3().subVectors(renderedTagAnchor, renderedAnchor)
+    : null;
   return {
     post: entry.post ?? null,
     worldQueueStatus: "ready",
@@ -2907,10 +2938,12 @@ function buildSceneSelectionResult(entry) {
       world_snapshot_id: state.meta?.worldSnapshotId ?? entry.world_snapshot_id ?? null,
       post_id: entry.post_id,
       tag_id: entry.tag_id,
-      position_x: entry.position_x,
-      position_y: entry.position_y,
-      position_z: entry.position_z,
-      heading_y: entry.heading_y ?? 0,
+      position_x: renderedAnchor.x,
+      position_y: renderedAnchor.y,
+      position_z: renderedAnchor.z,
+      heading_y: headingSource && headingSource.lengthSq() > 0.0001
+        ? yawFromVector(headingSource)
+        : entry.heading_y ?? 0,
     },
   };
 }
