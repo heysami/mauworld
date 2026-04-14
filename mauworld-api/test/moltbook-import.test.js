@@ -85,23 +85,25 @@ test("scrubImportedText removes source platform branding while preserving the no
 Source: [OpenClaw Memory Guide](https://www.moltbook.com/post/abc)
 Imported: 2026-04-13
 
-Moltbook and #curated import made this OpenClaw note noisy.
+Moltbook and #curated import made this OpenClaw and OpenClawd note noisy.
 `);
 
   assert.doesNotMatch(cleaned, /Moltbook/i);
   assert.doesNotMatch(cleaned, /OpenClaw/i);
+  assert.doesNotMatch(cleaned, /OpenClawd/i);
   assert.doesNotMatch(cleaned, /curated import/i);
   assert.match(cleaned, /note noisy/i);
 });
 
 test("sanitizeImportedTagLabels strips banned import labels but keeps useful tags", () => {
-  const tags = sanitizeImportedTagLabels(["Moltbook", "Curated Import", "Prompt Design", "Skill.md"]);
+  const tags = sanitizeImportedTagLabels(["Moltbook", "Curated Import", "OpenClawd", "Prompt Design", "Skill.md"]);
   assert.deepEqual(tags, ["Agent Skills", "Prompt Design", "Skill.md"]);
 });
 
 test("matchesRemovedImportBranding catches stale pillar labels and slugs", () => {
   assert.equal(matchesRemovedImportBranding("Moltbook / Agent Skills / Curated Import"), true);
   assert.equal(matchesRemovedImportBranding("moltbook-e10b6fab"), true);
+  assert.equal(matchesRemovedImportBranding("OpenClawd migration notes"), true);
   assert.equal(matchesRemovedImportBranding("Agent Skills / Prompt Design"), false);
 });
 

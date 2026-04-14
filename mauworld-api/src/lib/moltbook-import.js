@@ -3,10 +3,12 @@ import { normalizePostEmotionInputs } from "./emotions.js";
 import { buildSearchText, derivePostTitle, slugifyTag, stripMarkdown } from "./text.js";
 
 const MOLTBOOK_BASE_URL = "https://www.moltbook.com";
-const MOLTBOOK_TARGET_COUNT = 200;
+const MOLTBOOK_TARGET_COUNT = 2200;
+const MOLTBOOK_IMPORT_BATCH_SIZE = 250;
+const MOLTBOOK_SELECTION_BATCH_TARGET = 420;
 const MOLTBOOK_SEARCH_PAGE_SIZE = 50;
-const MOLTBOOK_MAX_PAGES_PER_QUERY = 2;
-const MOLTBOOK_DETAIL_SHORTLIST_SIZE = 240;
+const MOLTBOOK_MAX_PAGES_PER_QUERY = 8;
+const MOLTBOOK_DETAIL_SHORTLIST_SIZE = 700;
 const CURATED_IMPORT_MARKER_PREFIX = "curated_source_id:";
 const LEGACY_IMPORT_MARKER_PREFIX = "moltbook_post_id:";
 const CURATED_AUTHOR_DEVICE_ID = "curated-corpus-importer";
@@ -15,41 +17,106 @@ const CURATED_VOTER_PREFIX = "curated-signal";
 const LEGACY_VOTER_PREFIX = "moltbook-voter";
 const MOLTBOOK_UPVOTER_COUNT = 10;
 const MOLTBOOK_DOWNVOTER_COUNT = 2;
-const REMOVED_IMPORT_TAG_SLUGS = new Set(["moltbook", "curated-import", "openclaw", "open-claw", "claw"]);
+const REMOVED_IMPORT_TAG_SLUGS = new Set([
+  "moltbook",
+  "curated-import",
+  "openclaw",
+  "open-claw",
+  "openclawd",
+  "open-clawd",
+  "claw",
+  "clawd",
+]);
 const IMPORT_MARKER_RE = /(?:moltbook_post_id|curated_source_id):([0-9a-f-]+)/i;
 const EXTERNAL_BRAND_PATTERNS = [
   { pattern: /#\s*moltbook\b/gi, replace: "" },
   { pattern: /#\s*curated\s+import\b/gi, replace: "" },
   { pattern: /\bopen\s*claw\b/gi, replace: "" },
+  { pattern: /\bopen\s*clawd\b/gi, replace: "" },
   { pattern: /\bmoltbook\b/gi, replace: "" },
   { pattern: /\bclaw\b/gi, replace: "" },
+  { pattern: /\bclawd\b/gi, replace: "" },
   { pattern: /\bcurated\s+import\b/gi, replace: "" },
 ];
 
-const MOLTBOOK_QUERIES = [
+const MOLTBOOK_QUERIES = Array.from(new Set([
   "skill.md",
   "skill",
+  "skills",
   "structured prompt",
   "prompt",
+  "system prompt",
   "instructions",
+  "instruction",
   "markdown",
   "user intent",
   "requirements",
   "spec",
+  "specification",
+  "brief",
+  "contract",
+  "schema",
   "memory",
+  "memory management",
   "context engineering",
+  "context",
   "notes",
+  "knowledge",
   "retrieval",
+  "search",
   "verification",
   "audit",
   "eval",
+  "evaluation",
   "workflow",
   "orchestration",
   "planning",
   "observability",
   "debugging",
   "tooling",
-];
+  "security",
+  "safety",
+  "trust",
+  "communication",
+  "protocol",
+  "identity",
+  "architecture",
+  "design",
+  "research",
+  "documentation",
+  "api",
+  "database",
+  "network",
+  "storage",
+  "distributed",
+  "resilience",
+  "monitoring",
+  "telemetry",
+  "logging",
+  "reliability",
+  "testing",
+  "integration",
+  "plugin",
+  "mcp",
+  "queue",
+  "async",
+  "performance",
+  "latency",
+  "concurrency",
+  "auth",
+  "permissions",
+  "sandbox",
+  "secrets",
+  "parser",
+  "interface",
+  "runtime",
+  "incident",
+  "failover",
+  "cache",
+  "kernel",
+  "linux",
+  "agent",
+]));
 
 const TAG_RULES = [
   { label: "Skill.md", pattern: /\bskill\.?md\b/i },
@@ -129,6 +196,9 @@ export function matchesRemovedImportBranding(value) {
     || normalized.includes("curated import")
     || normalized.includes("openclaw")
     || normalized.includes("open claw")
+    || normalized.includes("openclawd")
+    || normalized.includes("open clawd")
+    || normalized.includes("clawd")
   ) {
     return true;
   }
@@ -190,6 +260,18 @@ export function shouldRecomputeCuratedCorpusLayout(scrubbed, imported) {
     || (scrubbed?.prunedTagCount ?? 0) > 0
     || (scrubbed?.stalePillarCount ?? 0) > 0
     || (imported?.importedCount ?? 0) > 0;
+}
+
+function buildImportProgress(existingCount, importedCount) {
+  const totalCount = existingCount + importedCount;
+  return {
+    targetCount: MOLTBOOK_TARGET_COUNT,
+    existingCount,
+    importedCount,
+    totalCount,
+    remainingCount: Math.max(0, MOLTBOOK_TARGET_COUNT - totalCount),
+    completedTarget: totalCount >= MOLTBOOK_TARGET_COUNT,
+  };
 }
 
 function sanitizeImportedExcerpt(value) {
@@ -1127,6 +1209,11 @@ export async function runCuratedCorpusSync(store) {
     stalePillarCount: scrubbed.stalePillarCount,
     importedCount: imported.importedCount ?? 0,
     existingCount: imported.existingCount ?? 0,
+    totalCount: imported.totalCount ?? ((imported.existingCount ?? 0) + (imported.importedCount ?? 0)),
+    remainingCount: imported.remainingCount ?? Math.max(0, MOLTBOOK_TARGET_COUNT - ((imported.existingCount ?? 0) + (imported.importedCount ?? 0))),
+    targetCount: imported.targetCount ?? MOLTBOOK_TARGET_COUNT,
+    completedTarget: Boolean(imported.completedTarget),
+    batchSize: imported.batchSize ?? 0,
     skipped: Boolean(imported.skipped),
     recomputed: Boolean(recompute),
     world: recompute?.world ?? null,
@@ -1137,19 +1224,28 @@ export async function runCuratedCorpusSync(store) {
 export async function runMoltbookImport(store) {
   const existingSourceIds = await loadImportedSourceIds(store);
   if (existingSourceIds.size >= MOLTBOOK_TARGET_COUNT) {
+    const progress = buildImportProgress(existingSourceIds.size, 0);
     return {
       skipped: true,
-      existingCount: existingSourceIds.size,
+      ...progress,
+      batchSize: 0,
     };
   }
 
   const neededCount = MOLTBOOK_TARGET_COUNT - existingSourceIds.size;
-  const selection = await collectUsefulMoltbookPosts(MOLTBOOK_TARGET_COUNT, existingSourceIds);
-  const selected = selection.filter((post) => !existingSourceIds.has(post.id)).slice(0, neededCount);
+  const importBatchSize = Math.min(neededCount, MOLTBOOK_IMPORT_BATCH_SIZE);
+  const selectionTarget = Math.min(
+    neededCount,
+    Math.max(MOLTBOOK_SELECTION_BATCH_TARGET, importBatchSize * 2),
+  );
+  const selection = await collectUsefulMoltbookPosts(selectionTarget, existingSourceIds);
+  const selected = selection.filter((post) => !existingSourceIds.has(post.id)).slice(0, importBatchSize);
   if (selected.length === 0) {
+    const progress = buildImportProgress(existingSourceIds.size, 0);
     return {
       skipped: true,
-      existingCount: existingSourceIds.size,
+      ...progress,
+      batchSize: importBatchSize,
     };
   }
 
@@ -1273,9 +1369,10 @@ export async function runMoltbookImport(store) {
   })), sourceVoteTargets, upvoters, downvoters);
   await store.recomputePillars({ forcePromoteCurrent: true });
 
+  const progress = buildImportProgress(existingSourceIds.size, preparedPosts.length);
   return {
     skipped: false,
-    importedCount: preparedPosts.length,
-    existingCount: existingSourceIds.size,
+    ...progress,
+    batchSize: importBatchSize,
   };
 }
