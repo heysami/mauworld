@@ -73,6 +73,7 @@ const WORLD_STYLE = {
 };
 
 const skylineTextureCache = new Map();
+let toonGradientTexture = null;
 
 const state = {
   meta: null,
@@ -927,6 +928,32 @@ function createConfettiTexture(options = {}) {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.needsUpdate = true;
   return texture;
+}
+
+function getToonGradientTexture() {
+  if (toonGradientTexture) {
+    return toonGradientTexture;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 4;
+  canvas.height = 1;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#444444";
+  context.fillRect(0, 0, 1, 1);
+  context.fillStyle = "#8d8d8d";
+  context.fillRect(1, 0, 1, 1);
+  context.fillStyle = "#d7d7d7";
+  context.fillRect(2, 0, 1, 1);
+  context.fillStyle = "#ffffff";
+  context.fillRect(3, 0, 1, 1);
+
+  toonGradientTexture = new THREE.CanvasTexture(canvas);
+  toonGradientTexture.minFilter = THREE.NearestFilter;
+  toonGradientTexture.magFilter = THREE.NearestFilter;
+  toonGradientTexture.generateMipmaps = false;
+  toonGradientTexture.needsUpdate = true;
+  return toonGradientTexture;
 }
 
 function createBillboard(texture, width, height, options = {}) {
@@ -2205,20 +2232,24 @@ function spawnTrailPuff(position, travelVector) {
   group.position.copy(position);
   group.position.y += 1.35;
   const pieceCount = 8;
+  const outlineColor = pickAccent(
+    `trail-outline-${position.x.toFixed(2)}-${position.z.toFixed(2)}-${travelVector.x.toFixed(2)}-${travelVector.z.toFixed(2)}`,
+  );
   const pieces = Array.from({ length: pieceCount }, (_, index) => {
     const radius = 0.14 + Math.random() * 0.22;
     const geometry = new THREE.SphereGeometry(radius, 10, 10);
     const mesh = new THREE.Mesh(
       geometry,
-      new THREE.MeshBasicMaterial({
-        color: "#ffffff",
+      new THREE.MeshToonMaterial({
+        color: new THREE.Color(WORLD_STYLE.white),
+        gradientMap: getToonGradientTexture(),
         transparent: true,
         opacity: 0.94,
         depthWrite: false,
         fog: false,
       }),
     );
-    const shell = createOutlineShell(geometry, WORLD_STYLE.accents[1], 1.18);
+    const shell = createOutlineShell(geometry, outlineColor, 1.18);
     shell.material.opacity = 0.48;
     mesh.add(shell);
     mesh.position.set(
