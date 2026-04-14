@@ -79,6 +79,7 @@ if (languageSelector) {
     (card) => ({
       title: card.querySelector("h3"),
       description: card.querySelector(".feature-card__head p"),
+      meta: card.querySelector("[data-feature-meta]"),
       points: Array.from(card.querySelectorAll(".point-item")).map((point) => ({
         title: point.querySelector(".point-copy strong"),
         description: point.querySelector(".point-copy span"),
@@ -2449,6 +2450,185 @@ if (languageSelector) {
     ],
   };
 
+  const connectedFeatureCards = {
+    en: [
+      {
+        title: "Guided setup for real channels",
+        description: "The first run stays calm while Maumau connects chat, calling, and phone access.",
+        meta: "Telegram handles chat, Vapi handles calling, and Tailscale keeps links reachable from your phone.",
+      },
+      {
+        title: "Built-in teams for actual work",
+        description: "Coding, design, life, and business teams are already there on day one.",
+        meta: "A main agent coordinates mini teams and subagents, with the workflow structured by OpenProse.",
+      },
+      {
+        title: "Memory that respects boundaries",
+        description: "Users and groups can share the right context without turning memory into one giant bucket.",
+        meta: "The memory layer is supported by QMD and Lossless Claw.",
+      },
+      {
+        title: "Dashboards that explain actions",
+        description: "You can see what ran, what changed, and what needs attention without digging through logs.",
+        meta: "MauOffice and the operations dashboard keep agent actions, monitoring, and handoffs in view.",
+      },
+    ],
+    zh: [
+      {
+        title: "面向真实渠道的引导式设置",
+        description: "第一次运行更像入门流程，而不是自己搭基础设施。",
+        meta: "Telegram 负责聊天，Vapi 负责通话，Tailscale 让手机也能打开系统生成的链接。",
+      },
+      {
+        title: "上来就能工作的内置团队",
+        description: "编码、设计、生活和业务团队从第一天就已经在里面。",
+        meta: "一个主代理统筹小团队和子代理，流程由 OpenProse 组织起来。",
+      },
+      {
+        title: "有边界的记忆系统",
+        description: "用户和群组可以共享该共享的上下文，而不会把记忆混成一团。",
+        meta: "底层记忆层由 QMD 和 Lossless Claw 支持。",
+      },
+      {
+        title: "能解释动作的仪表板",
+        description: "不用翻日志，也能看见跑了什么、变了什么、该注意什么。",
+        meta: "MauOffice 和运营仪表板会把动作、监控和交接保持在视野里。",
+      },
+    ],
+    id: [
+      {
+        title: "Setup terpandu untuk channel nyata",
+        description: "Run pertama terasa seperti onboarding, bukan kerja infrastruktur.",
+        meta: "Telegram menangani chat, Vapi menangani panggilan, dan Tailscale membuat tautan tetap mudah dibuka dari ponsel.",
+      },
+      {
+        title: "Tim bawaan untuk kerja nyata",
+        description: "Tim coding, design, life, dan business sudah ada sejak hari pertama.",
+        meta: "Satu main agent mengoordinasikan mini teams dan subagents dengan alur kerja OpenProse.",
+      },
+      {
+        title: "Memory dengan batas yang jelas",
+        description: "User dan grup bisa berbagi konteks yang tepat tanpa menjadikan memory satu ember besar.",
+        meta: "Lapisan memory didukung oleh QMD dan Lossless Claw.",
+      },
+      {
+        title: "Dashboard yang menjelaskan aksi",
+        description: "Kamu bisa melihat apa yang jalan, apa yang berubah, dan apa yang butuh perhatian tanpa berburu log.",
+        meta: "MauOffice dan operations dashboard menjaga aksi agen, monitoring, dan handoff tetap terlihat.",
+      },
+    ],
+    ms: [
+      {
+        title: "Setup berpandu untuk saluran sebenar",
+        description: "Run pertama terasa seperti onboarding, bukan kerja infrastruktur.",
+        meta: "Telegram mengendalikan chat, Vapi mengendalikan panggilan, dan Tailscale memastikan pautan mudah dibuka dari telefon.",
+      },
+      {
+        title: "Pasukan terbina untuk kerja sebenar",
+        description: "Pasukan coding, design, life, dan business sudah ada sejak hari pertama.",
+        meta: "Satu main agent menyelaras mini teams dan subagents dengan aliran kerja OpenProse.",
+      },
+      {
+        title: "Memory dengan sempadan yang jelas",
+        description: "Pengguna dan kumpulan boleh berkongsi konteks yang betul tanpa menjadikan memory satu baldi besar.",
+        meta: "Lapisan memory disokong oleh QMD dan Lossless Claw.",
+      },
+      {
+        title: "Dashboard yang menerangkan tindakan",
+        description: "Anda boleh melihat apa yang berjalan, apa yang berubah, dan apa yang perlukan perhatian tanpa memburu log.",
+        meta: "MauOffice dan operations dashboard memastikan tindakan agen, pemantauan, dan handoff kekal kelihatan.",
+      },
+    ],
+    th: [
+      {
+        title: "ตั้งค่าแบบมีไกด์สำหรับช่องทางจริง",
+        description: "การรันครั้งแรกให้ความรู้สึกเหมือน onboarding ไม่ใช่งานวางระบบเองทั้งหมด",
+        meta: "Telegram ใช้สำหรับแชต, Vapi ใช้สำหรับการโทร, และ Tailscale ช่วยให้เปิดลิงก์จากมือถือได้ง่าย",
+      },
+      {
+        title: "มีทีมพร้อมทำงานมาให้",
+        description: "ทีมโค้ด ดีไซน์ ชีวิต และธุรกิจมีมาให้ตั้งแต่วันแรก",
+        meta: "main agent หนึ่งตัวประสาน mini teams และ subagents โดยมี OpenProse วางโครง workflow",
+      },
+      {
+        title: "memory ที่มีขอบเขตชัด",
+        description: "ผู้ใช้และกลุ่มแชร์บริบทที่ควรแชร์ได้ โดยไม่ทำให้ memory กลายเป็นกองเดียวกันทั้งหมด",
+        meta: "ชั้น memory ด้านล่างทำงานร่วมกับ QMD และ Lossless Claw",
+      },
+      {
+        title: "แดชบอร์ดที่อธิบายการทำงาน",
+        description: "คุณเห็นได้ว่าอะไรถูกรัน อะไรเปลี่ยน และอะไรต้องสนใจ โดยไม่ต้องคุ้ย log",
+        meta: "MauOffice และ operations dashboard ช่วยให้ actions, monitoring, และ handoff ยังมองเห็นได้",
+      },
+    ],
+    vi: [
+      {
+        title: "Setup co huong dan cho cac kenh that",
+        description: "Lan chay dau tien giong onboarding hon la tu dung ha tang tu dau.",
+        meta: "Telegram lo phan chat, Vapi lo phan goi dien, va Tailscale giup mo lien ket tu dien thoai de hon.",
+      },
+      {
+        title: "Da co san cac doi de lam viec",
+        description: "Cac doi coding, design, doi song, va kinh doanh da co mat ngay tu ngay dau.",
+        meta: "Mot main agent dieu phoi mini teams va subagents, voi workflow duoc sap xep boi OpenProse.",
+      },
+      {
+        title: "Memory co ranh gioi ro rang",
+        description: "User va nhom co the chia se dung boi canh ma khong bien memory thanh mot xau lon duy nhat.",
+        meta: "Lop memory duoc ho tro boi QMD va Lossless Claw.",
+      },
+      {
+        title: "Dashboard giai thich duoc hanh dong",
+        description: "Ban thay duoc dieu gi da chay, dieu gi da doi, va dieu gi can chu y ma khong can dao log.",
+        meta: "MauOffice va operations dashboard giu actions, monitoring, va handoff trong tam nhin.",
+      },
+    ],
+    my: [
+      {
+        title: "တကယ်သုံးမယ့် channel တွေအတွက် guided setup",
+        description: "ပထမ run က infrastructure ကိုကိုယ်တိုင်ဆောက်ရသလို မခံစားရဘဲ onboarding လိုပဲ တဖြည်းဖြည်းသွားနိုင်တယ်။",
+        meta: "Telegram က chat အတွက်, Vapi က call အတွက်, Tailscale က phone ကနေ link တွေဖွင့်ရတာ လွယ်အောင်လုပ်ပေးတယ်။",
+      },
+      {
+        title: "အလုပ်လုပ်ဖို့ အဆင်သင့်ဖြစ်ပြီးသား team တွေ",
+        description: "Coding, design, life, နဲ့ business team တွေက ပထမနေ့ကတည်းက ပါပြီးသား။",
+        meta: "Main agent တစ်ယောက်က mini teams နဲ့ subagents ကိုညှိနှိုင်းပြီး OpenProse က workflow ကိုစီထားတယ်။",
+      },
+      {
+        title: "ဘောင်သတ်ထားတဲ့ memory",
+        description: "User နဲ့ group တွေက shared လုပ်သင့်တာကို shared လုပ်နိုင်ပေမယ့် memory တစ်အိုးကြီးလို မပျက်သွားဘူး။",
+        meta: "Memory layer ကို QMD နဲ့ Lossless Claw က support လုပ်ထားတယ်။",
+      },
+      {
+        title: "လုပ်ဆောင်ချက်ကိုရှင်းပြပေးတဲ့ dashboard",
+        description: "ဘာ run သွားလဲ၊ ဘာပြောင်းလဲလဲ၊ ဘာကိုဂရုစိုက်ရမလဲဆိုတာ log မလိုက်ရှာဘဲ မြင်နိုင်တယ်။",
+        meta: "MauOffice နဲ့ operations dashboard က actions, monitoring, နဲ့ handoff တွေကို မြင်သာအောင်ထားတယ်။",
+      },
+    ],
+    fil: [
+      {
+        title: "Guided setup para sa totoong channels",
+        description: "Mas onboarding ang unang run kaysa mano-manong pagbuo ng infra.",
+        meta: "Telegram ang para sa chat, Vapi ang para sa tawag, at Tailscale ang para madaling mabuksan ang links mula sa phone.",
+      },
+      {
+        title: "May teams nang handang magtrabaho",
+        description: "Kasama na agad ang coding, design, life, at business teams mula sa unang araw.",
+        meta: "Isang main agent ang nag-uugnay sa mini teams at subagents, at ang workflow ay nakaayos sa OpenProse.",
+      },
+      {
+        title: "Memory na may malinaw na hangganan",
+        description: "Puwedeng mag-share ang users at groups ng tamang context nang hindi nagiging isang malaking bunton ang memory.",
+        meta: "Ang memory layer ay sinusuportahan ng QMD at Lossless Claw.",
+      },
+      {
+        title: "Dashboard na nagpapaliwanag ng actions",
+        description: "Makikita mo kung ano ang tumakbo, ano ang nagbago, at ano ang dapat bantayan nang hindi naghahalungkat ng logs.",
+        meta: "Pinananatiling kita ng MauOffice at operations dashboard ang actions, monitoring, at handoffs.",
+      },
+    ],
+  };
+
   Object.entries(conciseWhyContent).forEach(([locale, copy]) => {
     Object.assign(landingTranslations[locale].text, {
       why_title: copy.title,
@@ -2456,7 +2636,7 @@ if (languageSelector) {
     });
   });
 
-  Object.entries(conciseFeatureCards).forEach(([locale, cards]) => {
+  Object.entries(connectedFeatureCards).forEach(([locale, cards]) => {
     landingTranslations[locale].featureCards = cards;
   });
 
@@ -2474,7 +2654,7 @@ if (languageSelector) {
   ["jv", "su", "btk", "min", "ban"].forEach((locale) => {
     landingTranslations[locale].text.why_title = conciseWhyContent.id.title;
     landingTranslations[locale].text.why_desc = conciseWhyContent.id.description;
-    landingTranslations[locale].featureCards = conciseFeatureCards.id;
+    landingTranslations[locale].featureCards = connectedFeatureCards.id;
     landingTranslations[locale].text.start_title = guidedStartContent.id.title;
     landingTranslations[locale].text.start_desc = guidedStartContent.id.description;
     landingTranslations[locale].startSteps = guidedStartSteps.id;
@@ -2558,15 +2738,9 @@ if (languageSelector) {
 
       cardNodes.title.textContent = card.title;
       cardNodes.description.textContent = card.description;
-
-      cardNodes.points.forEach((pointNodes, pointIndex) => {
-        const point = card.points[pointIndex];
-        if (!point) {
-          return;
-        }
-        pointNodes.title.textContent = point.title;
-        pointNodes.description.textContent = point.description;
-      });
+      if (cardNodes.meta) {
+        cardNodes.meta.textContent = card.meta ?? card.points?.[1]?.description ?? "";
+      }
     });
   };
 
