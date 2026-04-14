@@ -2895,6 +2895,7 @@ function computeFocusedPostView(result, sourcePosition = getNavigationPosition()
     );
   const cardElevation = animated?.cardElevation ?? 5.2;
   const cardWidth = animated?.cardWidth ?? 12;
+  const cardHeight = animated?.cardHeight ?? 6.8;
   const focusTarget = anchor.clone().add(new THREE.Vector3(0, cardElevation * 0.86, 0));
   const eyeOrigin = getPlayerLookTarget(sourcePosition);
   const planarApproach = new THREE.Vector3(
@@ -2907,9 +2908,9 @@ function computeFocusedPostView(result, sourcePosition = getNavigationPosition()
   } else {
     planarApproach.normalize();
   }
-  const eyeDistance = Math.max(5.8, cardWidth * 0.48);
+  const eyeDistance = Math.max(14.5, cardWidth * 1.12, cardHeight * 1.7);
   const eyePosition = focusTarget.clone().sub(planarApproach.multiplyScalar(eyeDistance));
-  eyePosition.y = focusTarget.y - 0.7;
+  eyePosition.y = focusTarget.y - 0.38;
   const navigationTarget = eyePosition.clone().sub(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
   navigationTarget.y = clamp(navigationTarget.y, CAMERA.minY, CAMERA.maxY);
   const { yaw, pitch } = computeLookAngles(eyePosition, focusTarget);
@@ -3015,7 +3016,7 @@ function updateFocusVeil() {
   const width = elements.canvas.clientWidth || window.innerWidth;
   const height = elements.canvas.clientHeight || window.innerHeight;
   elements.focusVeil.hidden = false;
-  elements.focusVeil.style.opacity = String(mix);
+  elements.focusVeil.style.opacity = String(mix * 0.72);
 
   const pieces = elements.focusPieces;
   pieces.top.style.left = "0px";
@@ -3042,7 +3043,7 @@ function updateFocusVeil() {
   elements.focusFrame.style.top = `${rect.top}px`;
   elements.focusFrame.style.width = `${rect.width}px`;
   elements.focusFrame.style.height = `${rect.height}px`;
-  elements.focusFrame.style.opacity = String(0.38 + mix * 0.44);
+  elements.focusFrame.style.opacity = String(0.12 + mix * 0.2);
 }
 
 function syncFocusedFloorMarker() {

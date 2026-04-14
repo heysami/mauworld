@@ -66,18 +66,18 @@ body.world-body {
 
 .world-focus-veil__piece {
   position: absolute;
-  background: rgba(247, 251, 255, 0.14);
-  backdrop-filter: blur(26px) saturate(0.72) brightness(0.84);
+  background: rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(10px) saturate(1.04);
 }
 
 .world-focus-veil__frame {
   position: absolute;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.48);
   box-shadow:
-    0 0 0 1px rgba(61, 87, 182, 0.14),
-    0 24px 48px rgba(18, 31, 78, 0.16);
-  background: rgba(255, 255, 255, 0.02);
+    0 0 0 1px rgba(61, 87, 182, 0.08),
+    0 18px 32px rgba(18, 31, 78, 0.08);
+  background: rgba(255, 255, 255, 0.012);
 }
 
 .world-panel,
