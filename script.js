@@ -1692,6 +1692,524 @@ if (languageSelector) {
     },
   });
 
+  const conciseWhyContent = {
+    en: {
+      title: "Less setup. More first run.",
+      description: "Maumau keeps the hard parts guided, visible, and already wired.",
+    },
+    zh: {
+      title: "更少折腾设置，更快跑起来。",
+      description: "Maumau 把最难的部分变成引导步骤、现成团队、清晰仪表板和有边界的记忆系统。",
+    },
+    id: {
+      title: "Lebih sedikit setup. Lebih cepat run pertama.",
+      description: "Maumau membuat bagian yang berat jadi terpandu, terlihat, dan sudah terhubung.",
+    },
+    ms: {
+      title: "Kurang setup. Lebih cepat run pertama.",
+      description: "Maumau menjadikan bahagian yang sukar lebih berpandu, jelas, dan sudah disambung.",
+    },
+    th: {
+      title: "ตั้งค่าน้อยลง ไปถึงรันจริงได้เร็วขึ้น",
+      description: "Maumau ทำส่วนที่ยากให้เป็นขั้นตอนนำทาง เห็นภาพชัด และเชื่อมไว้ให้แล้ว",
+    },
+    vi: {
+      title: "Bot setup hon. Den run dau nhanh hon.",
+      description: "Maumau bien phan kho thanh tung buoc co huong dan, de nhin, va da duoc noi san.",
+    },
+    my: {
+      title: "Setup နည်းနည်း၊ first run မြန်မြန်",
+      description: "Maumau က ခက်တဲ့အပိုင်းတွေကို guide လုပ်ထားပြီး မြင်လွယ်အောင် ပြထားတယ်၊ connection တွေလည်း ချိတ်ပြီးသား။",
+    },
+    fil: {
+      title: "Mas kaunting setup. Mas mabilis sa unang run.",
+      description: "Ginagawang guided, malinaw, at naka-wire na ni Maumau ang mahihirap na bahagi.",
+    },
+  };
+
+  const conciseFeatureCards = {
+    en: [
+      {
+        title: "Setup without terminal stress",
+        description: "The app walks people through the first run.",
+        points: [
+          {
+            title: "Benefit",
+            description: "Only the necessary steps, with defaults already filled.",
+          },
+          {
+            title: "Key tech",
+            description: "Telegram, Vapi, Tailscale.",
+          },
+        ],
+      },
+      {
+        title: "Teams already included",
+        description: "Useful specialists arrive ready to work.",
+        points: [
+          {
+            title: "Benefit",
+            description: "Coding, design, life, and business support are bundled.",
+          },
+          {
+            title: "Key tech",
+            description: "Main agent, mini teams, subagents, OpenProse.",
+          },
+        ],
+      },
+      {
+        title: "Memory that stays organized",
+        description: "People can keep context separate or shared.",
+        points: [
+          {
+            title: "Benefit",
+            description: "Multiple users and groups remember at the right boundary.",
+          },
+          {
+            title: "Key tech",
+            description: "QMD, Lossless Claw.",
+          },
+        ],
+      },
+      {
+        title: "Dashboards you can read",
+        description: "You can tell what the system is doing.",
+        points: [
+          {
+            title: "Benefit",
+            description: "Actions, monitoring, and handoffs stay visible.",
+          },
+          {
+            title: "Key tech",
+            description: "MauOffice, operations dashboard.",
+          },
+        ],
+      },
+    ],
+    zh: [
+      {
+        title: "不被终端劝退的设置",
+        description: "应用会带你走完第一次运行。",
+        points: [
+          {
+            title: "价值",
+            description: "只做必要步骤，默认值也先帮你填好。",
+          },
+          {
+            title: "关键技术",
+            description: "Telegram、Vapi、Tailscale。",
+          },
+        ],
+      },
+      {
+        title: "团队已经在里面",
+        description: "有用的专家一开始就能工作。",
+        points: [
+          {
+            title: "价值",
+            description: "编码、设计、生活和业务支持都已打包好。",
+          },
+          {
+            title: "关键技术",
+            description: "主代理、小团队、子代理、OpenProse。",
+          },
+        ],
+      },
+      {
+        title: "记忆保持有边界",
+        description: "个人上下文和共享上下文都能放对位置。",
+        points: [
+          {
+            title: "价值",
+            description: "多个用户和用户组可以按需要分开或共享记忆。",
+          },
+          {
+            title: "关键技术",
+            description: "QMD、Lossless Claw。",
+          },
+        ],
+      },
+      {
+        title: "看得懂的仪表板",
+        description: "你能知道系统现在在做什么。",
+        points: [
+          {
+            title: "价值",
+            description: "动作、监控和交接状态都保持可见。",
+          },
+          {
+            title: "关键技术",
+            description: "MauOffice、运营仪表板。",
+          },
+        ],
+      },
+    ],
+    id: [
+      {
+        title: "Setup tanpa stres terminal",
+        description: "Aplikasi memandu run pertamamu.",
+        points: [
+          {
+            title: "Benefit",
+            description: "Hanya langkah yang perlu, dengan default yang sudah terisi.",
+          },
+          {
+            title: "Teknologi kunci",
+            description: "Telegram, Vapi, Tailscale.",
+          },
+        ],
+      },
+      {
+        title: "Tim sudah termasuk",
+        description: "Spesialis yang berguna langsung siap kerja.",
+        points: [
+          {
+            title: "Benefit",
+            description: "Dukungan coding, design, life, dan business sudah dibundel.",
+          },
+          {
+            title: "Teknologi kunci",
+            description: "Main agent, mini teams, subagents, OpenProse.",
+          },
+        ],
+      },
+      {
+        title: "Memory tetap rapi",
+        description: "Konteks bisa dipisah atau dibagi dengan jelas.",
+        points: [
+          {
+            title: "Benefit",
+            description: "Banyak user dan grup bisa mengingat di batas yang tepat.",
+          },
+          {
+            title: "Teknologi kunci",
+            description: "QMD, Lossless Claw.",
+          },
+        ],
+      },
+      {
+        title: "Dashboard yang mudah dibaca",
+        description: "Kamu bisa tahu sistem sedang melakukan apa.",
+        points: [
+          {
+            title: "Benefit",
+            description: "Aksi, monitoring, dan handoff tetap terlihat.",
+          },
+          {
+            title: "Teknologi kunci",
+            description: "MauOffice, operations dashboard.",
+          },
+        ],
+      },
+    ],
+    ms: [
+      {
+        title: "Setup tanpa stres terminal",
+        description: "Aplikasi membimbing hingga run pertama.",
+        points: [
+          {
+            title: "Manfaat",
+            description: "Hanya langkah yang perlu, dengan default yang sudah diisi.",
+          },
+          {
+            title: "Teknologi utama",
+            description: "Telegram, Vapi, Tailscale.",
+          },
+        ],
+      },
+      {
+        title: "Pasukan sudah termasuk",
+        description: "Pakar yang berguna terus sedia bekerja.",
+        points: [
+          {
+            title: "Manfaat",
+            description: "Sokongan coding, design, life, dan business sudah dibundel.",
+          },
+          {
+            title: "Teknologi utama",
+            description: "Main agent, mini teams, subagents, OpenProse.",
+          },
+        ],
+      },
+      {
+        title: "Memory kekal tersusun",
+        description: "Konteks boleh diasingkan atau dikongsi dengan jelas.",
+        points: [
+          {
+            title: "Manfaat",
+            description: "Ramai pengguna dan kumpulan boleh mengingati pada sempadan yang betul.",
+          },
+          {
+            title: "Teknologi utama",
+            description: "QMD, Lossless Claw.",
+          },
+        ],
+      },
+      {
+        title: "Dashboard yang mudah dibaca",
+        description: "Anda tahu sistem sedang melakukan apa.",
+        points: [
+          {
+            title: "Manfaat",
+            description: "Tindakan, pemantauan, dan handoff kekal kelihatan.",
+          },
+          {
+            title: "Teknologi utama",
+            description: "MauOffice, operations dashboard.",
+          },
+        ],
+      },
+    ],
+    th: [
+      {
+        title: "ตั้งค่าโดยไม่ต้องกลัวเทอร์มินัล",
+        description: "แอปพาไปจนถึงการรันครั้งแรก",
+        points: [
+          {
+            title: "ประโยชน์",
+            description: "มีเฉพาะขั้นตอนที่จำเป็น และค่าเริ่มต้นถูกใส่ไว้แล้ว",
+          },
+          {
+            title: "เทคโนโลยีหลัก",
+            description: "Telegram, Vapi, Tailscale",
+          },
+        ],
+      },
+      {
+        title: "มีทีมมาให้แล้ว",
+        description: "ทีมที่ใช้ได้จริงพร้อมเริ่มงาน",
+        points: [
+          {
+            title: "ประโยชน์",
+            description: "มีทีมโค้ด ดีไซน์ ชีวิต และธุรกิจมาให้ในตัว",
+          },
+          {
+            title: "เทคโนโลยีหลัก",
+            description: "main agent, mini teams, subagents, OpenProse",
+          },
+        ],
+      },
+      {
+        title: "หน่วยความจำเป็นระเบียบ",
+        description: "จะแยกบริบทหรือแชร์ร่วมกันก็ได้",
+        points: [
+          {
+            title: "ประโยชน์",
+            description: "หลายผู้ใช้และหลายกลุ่มเก็บความทรงจำในขอบเขตที่ถูกต้อง",
+          },
+          {
+            title: "เทคโนโลยีหลัก",
+            description: "QMD, Lossless Claw",
+          },
+        ],
+      },
+      {
+        title: "แดชบอร์ดที่อ่านรู้เรื่อง",
+        description: "คุณเห็นได้ว่าระบบกำลังทำอะไร",
+        points: [
+          {
+            title: "ประโยชน์",
+            description: "การทำงาน การมอนิเตอร์ และการส่งต่องานยังมองเห็นได้",
+          },
+          {
+            title: "เทคโนโลยีหลัก",
+            description: "MauOffice, operations dashboard",
+          },
+        ],
+      },
+    ],
+    vi: [
+      {
+        title: "Setup khong gay ngai terminal",
+        description: "Ung dung dan ban den run dau tien.",
+        points: [
+          {
+            title: "Loi ich",
+            description: "Chi co nhung buoc can thiet, va default da duoc dien san.",
+          },
+          {
+            title: "Cong nghe chinh",
+            description: "Telegram, Vapi, Tailscale.",
+          },
+        ],
+      },
+      {
+        title: "Da co san cac team",
+        description: "Nhung specialist huu ich da san sang lam viec.",
+        points: [
+          {
+            title: "Loi ich",
+            description: "Coding, design, doi song, va kinh doanh deu da duoc dong goi.",
+          },
+          {
+            title: "Cong nghe chinh",
+            description: "main agent, mini teams, subagents, OpenProse.",
+          },
+        ],
+      },
+      {
+        title: "Memory van gon gang",
+        description: "Boi canh co the tach rieng hoac chia se ro rang.",
+        points: [
+          {
+            title: "Loi ich",
+            description: "Nhieu user va nhieu nhom co the nho dung ranh gioi.",
+          },
+          {
+            title: "Cong nghe chinh",
+            description: "QMD, Lossless Claw.",
+          },
+        ],
+      },
+      {
+        title: "Dashboard de doc",
+        description: "Ban biet he thong dang lam gi.",
+        points: [
+          {
+            title: "Loi ich",
+            description: "Action, monitoring, va handoff van hien ro.",
+          },
+          {
+            title: "Cong nghe chinh",
+            description: "MauOffice, operations dashboard.",
+          },
+        ],
+      },
+    ],
+    my: [
+      {
+        title: "Terminal မကြောက်ရတဲ့ setup",
+        description: "App က first run အထိ လမ်းညွှန်ပေးတယ်။",
+        points: [
+          {
+            title: "Benefit",
+            description: "လိုအပ်တဲ့အဆင့်ပဲ ရှိပြီး default တွေလည်း ဖြည့်ပြီးသား။",
+          },
+          {
+            title: "Key tech",
+            description: "Telegram, Vapi, Tailscale.",
+          },
+        ],
+      },
+      {
+        title: "Team တွေပါပြီးသား",
+        description: "အသုံးဝင်တဲ့ specialist တွေက အလုပ်စလို့ရပြီ။",
+        points: [
+          {
+            title: "Benefit",
+            description: "Coding, design, life, နဲ့ business support တွေ bundled ဖြစ်ပြီးသား။",
+          },
+          {
+            title: "Key tech",
+            description: "main agent, mini teams, subagents, OpenProse.",
+          },
+        ],
+      },
+      {
+        title: "Memory ကိုစနစ်တကျထားတယ်",
+        description: "Context ကို သီးသန့်ထားလို့ရသလို မျှဝေလို့လည်းရတယ်။",
+        points: [
+          {
+            title: "Benefit",
+            description: "User အများအပြားနဲ့ group တွေက မှတ်ဉာဏ်ကို နေရာမှန်မှာထားနိုင်တယ်။",
+          },
+          {
+            title: "Key tech",
+            description: "QMD, Lossless Claw.",
+          },
+        ],
+      },
+      {
+        title: "ဖတ်ရလွယ်တဲ့ dashboard",
+        description: "System ဘာလုပ်နေတယ်ဆိုတာ မြင်ရတယ်။",
+        points: [
+          {
+            title: "Benefit",
+            description: "Action, monitoring, နဲ့ handoff တွေကို မြင်သာနေစေတယ်။",
+          },
+          {
+            title: "Key tech",
+            description: "MauOffice, operations dashboard.",
+          },
+        ],
+      },
+    ],
+    fil: [
+      {
+        title: "Setup na hindi nakaka-stress",
+        description: "Inaakay ka ng app hanggang unang run.",
+        points: [
+          {
+            title: "Benepisyo",
+            description: "Mga kailangang hakbang lang, at naka-fill na ang defaults.",
+          },
+          {
+            title: "Pangunahing tech",
+            description: "Telegram, Vapi, Tailscale.",
+          },
+        ],
+      },
+      {
+        title: "Kasama na ang teams",
+        description: "Handa nang magtrabaho ang mga specialist.",
+        points: [
+          {
+            title: "Benepisyo",
+            description: "Bundled na ang coding, design, life, at business support.",
+          },
+          {
+            title: "Pangunahing tech",
+            description: "main agent, mini teams, subagents, OpenProse.",
+          },
+        ],
+      },
+      {
+        title: "Memory na maayos",
+        description: "Puwedeng hiwalay o shared ang context.",
+        points: [
+          {
+            title: "Benepisyo",
+            description: "Maaaring magtanda ang maraming users at groups sa tamang hangganan.",
+          },
+          {
+            title: "Pangunahing tech",
+            description: "QMD, Lossless Claw.",
+          },
+        ],
+      },
+      {
+        title: "Dashboard na madaling basahin",
+        description: "Alam mo kung ano ang ginagawa ng system.",
+        points: [
+          {
+            title: "Benepisyo",
+            description: "Nananatiling kita ang actions, monitoring, at handoffs.",
+          },
+          {
+            title: "Pangunahing tech",
+            description: "MauOffice, operations dashboard.",
+          },
+        ],
+      },
+    ],
+  };
+
+  Object.entries(conciseWhyContent).forEach(([locale, copy]) => {
+    Object.assign(landingTranslations[locale].text, {
+      why_title: copy.title,
+      why_desc: copy.description,
+    });
+  });
+
+  Object.entries(conciseFeatureCards).forEach(([locale, cards]) => {
+    landingTranslations[locale].featureCards = cards;
+  });
+
+  ["jv", "su", "btk", "min", "ban"].forEach((locale) => {
+    landingTranslations[locale].text.why_desc = conciseWhyContent.id.description;
+    landingTranslations[locale].featureCards = conciseFeatureCards.id;
+  });
+
   const localeLang = {
     en: "en",
     zh: "zh-Hans",
