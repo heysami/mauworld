@@ -309,7 +309,7 @@ function setPostFocusMode(active, tagId = null) {
       state.focusReturnRadius = state.cameraRadius;
     }
     state.postFocusTagId = tagId ?? state.focusedResult?.destination?.tag_id ?? state.postFocusTagId;
-    state.postFocusMixTarget = 1;
+    state.postFocusMixTarget = 0.62;
     return;
   }
   state.postFocusMixTarget = 0;
@@ -2908,9 +2908,9 @@ function computeFocusedPostView(result, sourcePosition = getNavigationPosition()
   } else {
     planarApproach.normalize();
   }
-  const eyeDistance = Math.max(14.5, cardWidth * 1.12, cardHeight * 1.7);
+  const eyeDistance = Math.max(18, cardWidth * 1.35, cardHeight * 2.05);
   const eyePosition = focusTarget.clone().sub(planarApproach.multiplyScalar(eyeDistance));
-  eyePosition.y = focusTarget.y - 0.38;
+  eyePosition.y = focusTarget.y - 0.18;
   const navigationTarget = eyePosition.clone().sub(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
   navigationTarget.y = clamp(navigationTarget.y, CAMERA.minY, CAMERA.maxY);
   const { yaw, pitch } = computeLookAngles(eyePosition, focusTarget);
@@ -2972,8 +2972,8 @@ function computeFocusedPostScreenRect() {
 
   const width = elements.canvas.clientWidth || window.innerWidth;
   const height = elements.canvas.clientHeight || window.innerHeight;
-  const paddingX = 28;
-  const paddingY = 24;
+  const paddingX = 120;
+  const paddingY = 84;
   const left = clamp(Math.min(...corners.map((corner) => corner.x)) - paddingX, 0, width);
   const rightEdge = clamp(Math.max(...corners.map((corner) => corner.x)) + paddingX, 0, width);
   const top = clamp(Math.min(...corners.map((corner) => corner.y)) - paddingY, 0, height);
@@ -3016,7 +3016,7 @@ function updateFocusVeil() {
   const width = elements.canvas.clientWidth || window.innerWidth;
   const height = elements.canvas.clientHeight || window.innerHeight;
   elements.focusVeil.hidden = false;
-  elements.focusVeil.style.opacity = String(mix * 0.72);
+  elements.focusVeil.style.opacity = String(mix * 0.34);
 
   const pieces = elements.focusPieces;
   pieces.top.style.left = "0px";
@@ -3043,7 +3043,7 @@ function updateFocusVeil() {
   elements.focusFrame.style.top = `${rect.top}px`;
   elements.focusFrame.style.width = `${rect.width}px`;
   elements.focusFrame.style.height = `${rect.height}px`;
-  elements.focusFrame.style.opacity = String(0.12 + mix * 0.2);
+  elements.focusFrame.style.opacity = String(0.06 + mix * 0.08);
 }
 
 function syncFocusedFloorMarker() {
