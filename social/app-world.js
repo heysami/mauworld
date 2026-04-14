@@ -1124,6 +1124,8 @@ function createMascotFigure(seed, options = {}) {
   const scale = options.scale ?? 1;
   const outlineColor = options.outlineColor ?? WORLD_STYLE.outline;
   const group = new THREE.Group();
+  const poseRoot = new THREE.Group();
+  group.add(poseRoot);
 
   const bodyGeometry = new THREE.CapsuleGeometry(1.45 * scale, 2.4 * scale, 6, 16);
   const headGeometry = new THREE.SphereGeometry(2.15 * scale, 24, 24);
@@ -1137,41 +1139,41 @@ function createMascotFigure(seed, options = {}) {
 
   const bodyShell = createOutlineShell(bodyGeometry, outlineColor, 1.12);
   bodyShell.position.y = 4.2 * scale;
-  group.add(bodyShell);
+  poseRoot.add(bodyShell);
 
   const body = new THREE.Mesh(bodyGeometry, whiteMaterial);
   body.position.y = 4.2 * scale;
-  group.add(body);
+  poseRoot.add(body);
 
   const headShell = createOutlineShell(headGeometry, outlineColor, 1.12);
   headShell.position.y = 8.3 * scale;
-  group.add(headShell);
+  poseRoot.add(headShell);
 
   const head = new THREE.Mesh(headGeometry, whiteMaterial);
   head.position.y = 8.3 * scale;
-  group.add(head);
+  poseRoot.add(head);
 
   for (const side of [-1, 1]) {
     const earShell = createOutlineShell(earGeometry, accents.primary, 1.12);
     earShell.position.set(side * 1.45 * scale, 11 * scale, 0);
     earShell.rotation.z = side * 0.36;
-    group.add(earShell);
+    poseRoot.add(earShell);
 
     const ear = new THREE.Mesh(earGeometry, side > 0 ? primaryMaterial : secondaryMaterial);
     ear.position.copy(earShell.position);
     ear.rotation.copy(earShell.rotation);
-    group.add(ear);
+    poseRoot.add(ear);
 
     const arm = new THREE.Mesh(limbGeometry, side > 0 ? secondaryMaterial : primaryMaterial);
     arm.position.set(side * 2.25 * scale, 4.9 * scale, 0.1 * scale);
     arm.rotation.z = side * 0.84;
-    group.add(arm);
+    poseRoot.add(arm);
   }
 
   for (const side of [-1, 1]) {
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.25 * scale, 10, 10), faceMaterial);
     eye.position.set(side * 0.72 * scale, 8.45 * scale, 1.92 * scale);
-    group.add(eye);
+    poseRoot.add(eye);
 
     const cheek = new THREE.Mesh(
       new THREE.SphereGeometry(0.3 * scale, 10, 10),
@@ -1183,7 +1185,7 @@ function createMascotFigure(seed, options = {}) {
       }),
     );
     cheek.position.set(side * 1.2 * scale, 7.65 * scale, 1.8 * scale);
-    group.add(cheek);
+    poseRoot.add(cheek);
   }
 
   const halo = new THREE.Mesh(
@@ -1197,17 +1199,18 @@ function createMascotFigure(seed, options = {}) {
   );
   halo.rotation.x = Math.PI / 2;
   halo.position.y = 5.6 * scale;
-  group.add(halo);
+  poseRoot.add(halo);
 
   const orb = new THREE.Mesh(
     new THREE.SphereGeometry(0.46 * scale, 16, 16),
     new THREE.MeshToonMaterial({ color: new THREE.Color(accents.tertiary) }),
   );
   orb.position.set(0, 12.8 * scale, 0);
-  group.add(orb);
+  poseRoot.add(orb);
 
   return {
     group,
+    poseRoot,
     halo,
     orb,
   };
@@ -2029,9 +2032,37 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
     return;
   }
   const avatar = sceneState.playerAvatar;
-  avatar.group.position.copy(getNavigationPosition());
+  const position = getNavigationPosition();
+  const deltaSeconds = Math.max(1 / 240, avatar.lastSyncElapsed == null ? 1 / 60 : elapsedSeconds - avatar.lastSyncElapsed);
+  avatar.lastSyncElapsed = elapsedSeconds;
+  const movement = position.clone().sub(avatar.lastPosition ?? position);
+  avatar.lastPosition = avatar.lastPosition ?? position.clone();
+  avatar.lastPosition.copy(position);
+
+  const horizontalMovement = new THREE.Vector3(movement.x, 0, movement.z);
+  const horizontalSpeed = horizontalMovement.length() / Math.max(deltaSeconds, 0.0001);
+  const normalizedSpeed = clamp(horizontalSpeed / (CAMERA.movementSpeed * 1.35), 0, 1);
+  const forward = getFlatForwardVector(inputState.yaw);
+  const right = new THREE.Vector3(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw));
+  const forwardAmount = horizontalMovement.lengthSq() > 0.000001
+    ? clamp(horizontalMovement.dot(forward) / Math.max(horizontalMovement.length(), 0.0001), -1, 1) * normalizedSpeed
+    : 0;
+  const sideAmount = horizontalMovement.lengthSq() > 0.000001
+    ? clamp(horizontalMovement.dot(right) / Math.max(horizontalMovement.length(), 0.0001), -1, 1) * normalizedSpeed
+    : 0;
+  const leanMix = 1 - Math.exp(-deltaSeconds * 9);
+  avatar.targetLeanX = forwardAmount * 0.26;
+  avatar.targetLeanZ = -sideAmount * 0.22;
+  avatar.leanX += (avatar.targetLeanX - avatar.leanX) * leanMix;
+  avatar.leanZ += (avatar.targetLeanZ - avatar.leanZ) * leanMix;
+
+  avatar.group.position.copy(position);
   avatar.group.rotation.y = normalizeAngle(inputState.yaw + Math.PI);
   avatar.group.position.y += Math.sin(elapsedSeconds * 1.6) * 0.16;
+  if (avatar.poseRoot) {
+    avatar.poseRoot.rotation.x = avatar.leanX;
+    avatar.poseRoot.rotation.z = avatar.leanZ;
+  }
   if (avatar.halo) {
     avatar.halo.rotation.z += 0.008;
   }
@@ -2591,9 +2622,16 @@ function initScene() {
   sceneState.player.add(viewerAvatar.group);
   sceneState.playerAvatar = {
     group: viewerAvatar.group,
+    poseRoot: viewerAvatar.poseRoot,
     halo: viewerAvatar.halo,
     orb: viewerAvatar.orb,
     orbBaseY: viewerAvatar.orb.position.y,
+    lastPosition: getNavigationPosition().clone(),
+    lastSyncElapsed: 0,
+    leanX: 0,
+    leanZ: 0,
+    targetLeanX: 0,
+    targetLeanZ: 0,
   };
   syncLocalAvatar(0);
 
