@@ -79,6 +79,115 @@ function comparePosts(sort) {
   return (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
 }
 
+function normalizeSearchDocument(value) {
+  return stripMarkdown(String(value ?? ""))
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegex(value) {
+  return String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function tokenizeSearchQuery(value) {
+  const normalized = normalizeSearchDocument(value);
+  if (!normalized) {
+    return [];
+  }
+  return Array.from(new Set(normalized.split(/\s+/).filter((token) => token.length >= 2)));
+}
+
+function countWholeWordMatches(source, token) {
+  if (!source || !token) {
+    return 0;
+  }
+  const matches = source.match(new RegExp(`(^|\\s)${escapeRegex(token)}(?=\\s|$)`, "g"));
+  return matches?.length ?? 0;
+}
+
+function computePostSearchRelevance(post, query) {
+  const phrase = normalizeSearchDocument(query);
+  if (!phrase) {
+    return 0;
+  }
+  const tokens = tokenizeSearchQuery(phrase);
+  const title = normalizeSearchDocument(post.title ?? "");
+  const tagText = normalizeSearchDocument(post.tag_search_text ?? "");
+  const searchText = normalizeSearchDocument(post.search_text ?? "");
+  const body = normalizeSearchDocument(post.body_plain ?? "");
+  let score = 0;
+
+  if (title === phrase) {
+    score += 1800;
+  } else if (title.startsWith(phrase)) {
+    score += 1180;
+  } else if (title.includes(phrase)) {
+    score += 760;
+  }
+
+  if (tagText === phrase) {
+    score += 1320;
+  } else if (tagText.startsWith(phrase)) {
+    score += 820;
+  } else if (tagText.includes(phrase)) {
+    score += 520;
+  }
+
+  if (searchText.includes(phrase)) {
+    score += 240;
+  }
+  if (body.includes(phrase)) {
+    score += 180;
+  }
+
+  for (const token of tokens) {
+    score += countWholeWordMatches(title, token) * 220;
+    score += countWholeWordMatches(tagText, token) * 140;
+    score += countWholeWordMatches(searchText, token) * 64;
+    score += countWholeWordMatches(body, token) * 30;
+  }
+
+  if (tokens.length > 1 && tokens.every((token) => title.includes(token))) {
+    score += 240;
+  }
+  if (tokens.length > 1 && tokens.every((token) => tagText.includes(token))) {
+    score += 160;
+  }
+
+  const titleIndex = title.indexOf(phrase);
+  if (titleIndex >= 0) {
+    score += Math.max(0, 160 - titleIndex * 6);
+  }
+  const tagIndex = tagText.indexOf(phrase);
+  if (tagIndex >= 0) {
+    score += Math.max(0, 120 - tagIndex * 5);
+  }
+
+  return score;
+}
+
+function rerankSearchedPosts(posts, query, sort) {
+  if (!query || posts.length <= 1) {
+    return posts;
+  }
+  const compare = comparePosts(sort);
+  return posts
+    .map((post, index) => ({
+      post,
+      index,
+      relevance: computePostSearchRelevance(post, query),
+    }))
+    .sort((left, right) =>
+      right.relevance - left.relevance
+      || compare(left.post, right.post)
+      || left.index - right.index)
+    .map((entry) => entry.post);
+}
+
 function sanitizeFilename(filename) {
   return String(filename ?? "asset")
     .replace(/[^\w.-]+/g, "-")
@@ -2039,6 +2148,7 @@ export class MauworldStore {
       }
     }
 
+    const candidateLimit = q ? Math.min(Math.max(limit * 6, 60), 120) : limit;
     let query = this.serviceClient.from("posts").select("*").in("state", allowedStates);
     if (q) {
       query = query.textSearch("search_vector", q, {
@@ -2060,8 +2170,10 @@ export class MauworldStore {
       query = query.order("upvote_count", { ascending: false }).order("downvote_count", { ascending: false }).order("created_at", { ascending: false });
     }
 
-    let posts = await must(query.limit(limit), "Could not load posts");
-    if (sort === "controversial") {
+    let posts = await must(query.limit(candidateLimit), "Could not load posts");
+    if (q) {
+      posts = rerankSearchedPosts(posts, q, sort).slice(0, limit);
+    } else if (sort === "controversial") {
       posts = posts.sort(comparePosts(sort));
     }
 

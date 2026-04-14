@@ -403,6 +403,180 @@ function summarizeBodyMarkdown(markdown, fallback = "", maxLength = 220) {
   return truncateText(cleaned || fallback, maxLength) || "No body text.";
 }
 
+function renderInlinePostMarkup(value) {
+  const source = String(value ?? "");
+  if (!source) {
+    return "";
+  }
+  const pattern = /!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)|\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*|(https?:\/\/[^\s<]+)/g;
+  let html = "";
+  let lastIndex = 0;
+
+  const renderLink = (href, label) => {
+    try {
+      const safeHref = new URL(href, window.location.href).toString();
+      if (!/^https?:/i.test(safeHref)) {
+        return htmlEscape(label);
+      }
+      return `<a href="${htmlEscape(safeHref)}" target="_blank" rel="noreferrer">${htmlEscape(label)}</a>`;
+    } catch {
+      return htmlEscape(label);
+    }
+  };
+
+  for (const match of source.matchAll(pattern)) {
+    html += htmlEscape(source.slice(lastIndex, match.index));
+    if (match[1]) {
+      html += renderLink(match[1], "Image");
+    } else if (match[2] && match[3]) {
+      html += renderLink(match[3], match[2]);
+    } else if (match[4]) {
+      html += `<code>${htmlEscape(match[4])}</code>`;
+    } else if (match[5]) {
+      html += `<strong>${htmlEscape(match[5])}</strong>`;
+    } else if (match[6]) {
+      html += `<em>${htmlEscape(match[6])}</em>`;
+    } else if (match[7]) {
+      html += renderLink(match[7], match[7]);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+
+  html += htmlEscape(source.slice(lastIndex));
+  return html;
+}
+
+function renderFullPostBody(markdown, fallback = "") {
+  const source = String(markdown ?? fallback ?? "").replace(/\r\n/g, "\n").trim();
+  if (!source) {
+    return '<p class="world-selected__paragraph is-empty">No body text.</p>';
+  }
+
+  const blocks = [];
+  const paragraphLines = [];
+  let listType = "";
+  let listItems = [];
+  let inCodeBlock = false;
+  let codeLines = [];
+
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) {
+      return;
+    }
+    blocks.push(
+      `<p class="world-selected__paragraph">${renderInlinePostMarkup(paragraphLines.join(" "))}</p>`,
+    );
+    paragraphLines.length = 0;
+  };
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) {
+      listType = "";
+      listItems = [];
+      return;
+    }
+    const tagName = listType === "ol" ? "ol" : "ul";
+    blocks.push(
+      `<${tagName} class="world-selected__list">${listItems
+        .map((item) => `<li>${renderInlinePostMarkup(item)}</li>`)
+        .join("")}</${tagName}>`,
+    );
+    listType = "";
+    listItems = [];
+  };
+
+  const flushCode = () => {
+    if (!inCodeBlock) {
+      return;
+    }
+    blocks.push(
+      `<pre class="world-selected__code"><code>${htmlEscape(codeLines.join("\n"))}</code></pre>`,
+    );
+    inCodeBlock = false;
+    codeLines = [];
+  };
+
+  for (const rawLine of source.split("\n")) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("```")) {
+      flushParagraph();
+      flushList();
+      if (inCodeBlock) {
+        flushCode();
+      } else {
+        inCodeBlock = true;
+        codeLines = [];
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      const level = Math.min(4, headingMatch[1].length + 1);
+      blocks.push(
+        `<h${level} class="world-selected__heading world-selected__heading--h${level}">${renderInlinePostMarkup(headingMatch[2])}</h${level}>`,
+      );
+      continue;
+    }
+
+    const quoteMatch = trimmed.match(/^>\s?(.*)$/);
+    if (quoteMatch) {
+      flushParagraph();
+      flushList();
+      blocks.push(
+        `<blockquote class="world-selected__quote">${renderInlinePostMarkup(quoteMatch[1])}</blockquote>`,
+      );
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (listType && listType !== "ol") {
+        flushList();
+      }
+      listType = "ol";
+      listItems.push(orderedMatch[1]);
+      continue;
+    }
+
+    const unorderedMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      if (listType && listType !== "ul") {
+        flushList();
+      }
+      listType = "ul";
+      listItems.push(unorderedMatch[1]);
+      continue;
+    }
+
+    flushList();
+    paragraphLines.push(trimmed);
+  }
+
+  flushParagraph();
+  flushList();
+  flushCode();
+
+  return blocks.join("") || '<p class="world-selected__paragraph is-empty">No body text.</p>';
+}
+
 function hasSearchIntent() {
   const formData = new FormData(elements.searchForm);
   return Boolean(
@@ -933,6 +1107,7 @@ function buildPillarObject(entry) {
   group.add(pillarMesh);
 
   const bands = [accents.primary, accents.secondary, accents.tertiary].map((color, index) => {
+    const baseY = entry.height * (0.22 + index * 0.2);
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(entry.radius * (1.14 + index * 0.09), 0.34 + index * 0.02, 10, 40),
       new THREE.MeshBasicMaterial({
@@ -943,9 +1118,16 @@ function buildPillarObject(entry) {
       }),
     );
     ring.rotation.x = Math.PI / 2;
-    ring.position.y = entry.height * (0.22 + index * 0.2);
+    ring.position.y = baseY;
     group.add(ring);
-    return ring;
+    return {
+      mesh: ring,
+      baseY,
+      bobAmount: 0.36 + index * 0.12,
+      bobSpeed: 0.62 + index * 0.14,
+      phase: index * 0.9,
+      pulse: 0.018 + index * 0.008,
+    };
   });
 
   const capGeometry = new THREE.TorusGeometry(entry.radius * 1.16, Math.max(0.62, entry.radius * 0.08), 12, 40);
@@ -959,6 +1141,50 @@ function buildPillarObject(entry) {
   cap.rotation.x = Math.PI / 2;
   cap.position.y = entry.height + 2.4;
   group.add(cap);
+
+  const flowTexture = createCircleTexture({
+    fill: "rgba(255, 255, 255, 0.74)",
+    stroke: accents.secondary,
+    glow: `${accents.primary}44`,
+    size: 128,
+  });
+  const flowCount = clamp(Math.round(entry.height / 5), 12, 28);
+  const flowPositions = new Float32Array(flowCount * 3);
+  const flowData = Array.from({ length: flowCount }, (_, index) => {
+    const angle = ((Math.PI * 2) / flowCount) * index + Math.random() * 0.45;
+    const radius = entry.radius * (0.42 + Math.random() * 0.38);
+    const lift = Math.random();
+    flowPositions[index * 3] = Math.cos(angle) * radius;
+    flowPositions[index * 3 + 1] = lift * entry.height;
+    flowPositions[index * 3 + 2] = Math.sin(angle) * radius;
+    return {
+      angle,
+      radius,
+      offset: lift,
+      speed: 0.08 + Math.random() * 0.16,
+      spin: (Math.random() - 0.5) * 0.24,
+    };
+  });
+  const flowGeometry = new THREE.BufferGeometry();
+  const flowAttribute = new THREE.BufferAttribute(flowPositions, 3);
+  flowAttribute.setUsage(THREE.DynamicDrawUsage);
+  flowGeometry.setAttribute("position", flowAttribute);
+  const flow = new THREE.Points(
+    flowGeometry,
+    new THREE.PointsMaterial({
+      map: flowTexture,
+      size: 1.18,
+      transparent: true,
+      opacity: 0.52,
+      alphaTest: 0.02,
+      depthWrite: false,
+      fog: false,
+      sizeAttenuation: true,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  flow.position.y = 0.8;
+  group.add(flow);
 
   const crown = createBillboard(
     createCircleTexture({
@@ -998,8 +1224,13 @@ function buildPillarObject(entry) {
     outline,
     bands,
     cap,
+    capBaseY: cap.position.y,
     crown,
     label,
+    flow,
+    flowData,
+    height: entry.height,
+    phase: (hashString(entry.pillar_id || pillar.title) % 360) * 0.024,
     cellX: entry.cell_x,
     cellZ: entry.cell_z,
   });
@@ -1360,6 +1591,18 @@ function syncExpandedTagState() {
     rebuildConnections(state.stream.pillars, state.stream.tags, state.stream.postInstances);
   }
   syncFocusedGhost();
+}
+
+function closeSelectedPost() {
+  state.activeResultId = null;
+  state.focusedResult = null;
+  state.openTagId = null;
+  if (sceneState.floorMarker) {
+    sceneState.floorMarker.visible = false;
+  }
+  syncExpandedTagState();
+  renderSelected(null);
+  renderSearchResults();
 }
 
 function openTagCloud(entry) {
@@ -1746,7 +1989,7 @@ function renderSelected(result) {
   elements.inspector?.classList.remove("is-empty");
   const post = result.post ?? {};
   const media = post.media?.[0];
-  const bodySummary = summarizeBodyMarkdown(post.body_md, post.body_plain, 420);
+  const fullBody = renderFullPostBody(post.body_md, post.body_plain);
   const tagSummary = post.tags?.slice(0, 5).map((tag) => `#${tag.label}`).join(" ") || "No visible tags";
   const postHref = post.id ? `/social/post.html?id=${encodeURIComponent(post.id)}` : "";
   elements.focusKind.textContent = result.destination ? "Post" : "Queued";
@@ -1756,16 +1999,16 @@ function renderSelected(result) {
       <span class="world-chip ${result.worldQueueStatus === "ready" ? "world-chip--ready" : "world-chip--queue"}">${htmlEscape(formatQueueLabel(result.worldQueueStatus))}</span>
       <span class="world-chip">${htmlEscape(post.pillar?.title || "Unassigned pillar")}</span>
     </div>
-    <div class="world-selected__layout ${media ? "" : "is-single"}">
-      <div class="world-selected__copy">
-        <div class="world-selected__title">${htmlEscape(post.title || truncateText(post.body_plain || "Post", 80))}</div>
-        <p class="world-selected__body">${htmlEscape(bodySummary)}</p>
-      </div>
-      ${media ? `<img class="world-selected__media" src="${htmlEscape(media.url)}" alt="${htmlEscape(media.alt_text || post.title || "Post image")}" />` : ""}
-    </div>
+    <div class="world-selected__title">${htmlEscape(post.title || truncateText(post.body_plain || "Post", 80))}</div>
     <div class="world-selected__meta">
       <span>${htmlEscape(tagSummary)}</span>
       <span>${htmlEscape(post.created_at ? formatRelativeTime(post.created_at) : "now")}</span>
+      <span>Score ${Number(post.score ?? 0)}</span>
+      <span>Comments ${Number(post.comment_count ?? 0)}</span>
+    </div>
+    ${media ? `<img class="world-selected__media" src="${htmlEscape(media.url)}" alt="${htmlEscape(media.alt_text || post.title || "Post image")}" />` : ""}
+    <div class="world-selected__scroll">
+      <div class="world-selected__content">${fullBody}</div>
     </div>
     ${postHref ? `<a class="world-selected__link" href="${postHref}">Open full post</a>` : ""}
   `;
@@ -2034,14 +2277,34 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     const worldMix = activeCell ? 1 : 0.42;
     entry.body.material.opacity = (0.28 + fade * 0.68) * worldMix;
     entry.outline.material.opacity = (activeCell ? 0.9 : 0.42) * fade;
-    for (const ring of entry.bands) {
-      ring.material.opacity = (activeCell ? 0.58 : 0.26) + fade * 0.18;
+    for (const band of entry.bands) {
+      band.mesh.material.opacity = (activeCell ? 0.58 : 0.26) + fade * 0.18;
+      band.mesh.position.y = band.baseY + Math.sin(elapsedSeconds * band.bobSpeed + band.phase + entry.phase) * band.bobAmount;
+      const pulse = 1 + Math.sin(elapsedSeconds * (band.bobSpeed + 0.1) + band.phase) * band.pulse;
+      band.mesh.scale.setScalar(pulse);
     }
+    entry.cap.position.y = entry.capBaseY + Math.sin(elapsedSeconds * 0.76 + entry.phase) * 0.6;
     entry.cap.material.opacity = (0.24 + fade * 0.56) * worldMix;
     entry.crown.material.opacity = (activeCell ? 0.16 : 0.08) + fade * 0.12;
+    const crownPulse = 1 + Math.sin(elapsedSeconds * 0.9 + entry.phase) * 0.05;
+    entry.crown.scale.set(crownPulse, crownPulse, 1);
     entry.label.material.opacity = activeCell
       ? 0.26 + fade * 0.66
       : 0.1 + fade * 0.18;
+    if (entry.flow && entry.flowData?.length) {
+      const positions = entry.flow.geometry.attributes.position.array;
+      for (let index = 0; index < entry.flowData.length; index += 1) {
+        const particle = entry.flowData[index];
+        const offset = index * 3;
+        const progress = (particle.offset + elapsedSeconds * particle.speed) % 1;
+        const angle = particle.angle + elapsedSeconds * particle.spin;
+        positions[offset] = Math.cos(angle) * particle.radius;
+        positions[offset + 1] = progress * entry.height;
+        positions[offset + 2] = Math.sin(angle) * particle.radius;
+      }
+      entry.flow.geometry.attributes.position.needsUpdate = true;
+      entry.flow.material.opacity = (activeCell ? 0.24 : 0.1) + fade * 0.22;
+    }
   }
 
   for (const entry of sceneState.animatedPosts) {
@@ -2340,13 +2603,7 @@ function registerInput() {
     }
     inputState.keys.add(key);
     if (key === "escape") {
-      state.activeResultId = null;
-      state.focusedResult = null;
-      if (sceneState.floorMarker) {
-        sceneState.floorMarker.visible = false;
-      }
-      renderSelected(null);
-      renderSearchResults();
+      closeSelectedPost();
     }
   });
   window.addEventListener("keyup", (event) => {
@@ -2378,13 +2635,7 @@ function registerInput() {
   }
 
   elements.inspectorClose?.addEventListener("click", () => {
-    state.activeResultId = null;
-    state.focusedResult = null;
-    if (sceneState.floorMarker) {
-      sceneState.floorMarker.visible = false;
-    }
-    renderSelected(null);
-    renderSearchResults();
+    closeSelectedPost();
   });
 }
 
