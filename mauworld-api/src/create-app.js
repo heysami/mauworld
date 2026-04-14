@@ -271,6 +271,12 @@ export function createApp({ config, store, runMoltbookImportJob = null }) {
     jsonOk(res, payload);
   }));
 
+  app.post("/api/admin/purge-external-content", asyncRoute(async (req, res) => {
+    requireAdmin(req, config);
+    const payload = await store.purgeExternalContent();
+    jsonOk(res, payload);
+  }));
+
   installErrorHandler(app);
   return app;
 }

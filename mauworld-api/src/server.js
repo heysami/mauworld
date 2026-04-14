@@ -1,41 +1,44 @@
 import { createApp } from "./create-app.js";
 import { loadConfig } from "./config.js";
-import { runMoltbookImport } from "./lib/moltbook-import.js";
 import { MauworldStore } from "./lib/supabase-store.js";
 
 const config = loadConfig();
 const store = new MauworldStore(config);
-const shouldRunMoltbookImport =
+const shouldRunStartupMaintenance =
   /^https?:\/\//i.test(config.publicBaseUrl)
   && !/\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(config.publicBaseUrl);
-let moltbookImportPromise = null;
+let externalCleanupPromise = null;
 
-async function runMoltbookImportJob() {
-  if (moltbookImportPromise) {
-    return moltbookImportPromise;
+async function runExternalCleanupJob() {
+  if (externalCleanupPromise) {
+    return externalCleanupPromise;
   }
-  moltbookImportPromise = runMoltbookImport(store).finally(() => {
-    moltbookImportPromise = null;
+  externalCleanupPromise = store.purgeExternalContent().finally(() => {
+    externalCleanupPromise = null;
   });
-  return moltbookImportPromise;
+  return externalCleanupPromise;
 }
 
-const app = createApp({ config, store, runMoltbookImportJob });
+const app = createApp({ config, store });
 
 app.listen(config.port, () => {
   console.log(`mauworld-api listening on :${config.port}`);
-  if (shouldRunMoltbookImport) {
+  if (shouldRunStartupMaintenance) {
     setTimeout(() => {
-      void runMoltbookImportJob()
+      void runExternalCleanupJob()
         .then((result) => {
-          if (result.skipped) {
-            console.log(`[moltbook-import] skipped (${result.existingCount ?? 0} existing imports)`);
+          if (!result.recomputed && result.deletedPostCount === 0 && result.prunedTagCount === 0 && result.deletedInstallationCount === 0) {
+            console.log("[external-content-cleanup] no external content matched");
             return;
           }
-          console.log(`[moltbook-import] imported ${result.importedCount ?? 0} posts`);
+          console.log(
+            `[external-content-cleanup] removed ${result.deletedPostCount ?? 0} posts, `
+            + `${result.deletedInstallationCount ?? 0} installations, `
+            + `${result.prunedTagCount ?? 0} tags`,
+          );
         })
         .catch((error) => {
-          console.error("[moltbook-import] failed", error);
+          console.error("[external-content-cleanup] failed", error);
         });
     }, 500);
   }

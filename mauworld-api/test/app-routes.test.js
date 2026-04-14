@@ -228,3 +228,13 @@ test("public world presence endpoint upserts viewer sessions", async () => {
   assert.equal(response.body.worldSnapshotId, "world_123");
   assert.equal(response.body.session.id, "presence_123");
 });
+
+test("public moltbook import endpoint is unavailable without an import job", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app).post("/api/public/moltbook/import").send({});
+  assert.equal(response.status, 404);
+});

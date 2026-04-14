@@ -29,6 +29,9 @@ import {
 
 const CURRENT_ORGANIZATION_SLOT = "current";
 const NEXT_ORGANIZATION_SLOT = "next";
+const EXTERNAL_CONTENT_PURGE_PHRASES = ["moltbook", "curated import", "openclaw", "open claw"];
+const EXTERNAL_CONTENT_PURGE_WHOLE_WORDS = ["claw"];
+const EXTERNAL_INSTALLATION_PURGE_PHRASES = ["moltbook", "openclaw", "open claw"];
 
 function nowIso() {
   return new Date().toISOString();
@@ -89,8 +92,74 @@ function normalizeSearchDocument(value) {
     .trim();
 }
 
+function normalizeCleanupDocument(value) {
+  return normalizeSearchDocument(String(value ?? "").replace(/#/g, " "));
+}
+
 function escapeRegex(value) {
   return String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchesCleanupTerms(value, { phrases = [], wholeWords = [] } = {}) {
+  const normalized = normalizeCleanupDocument(value);
+  if (!normalized) {
+    return false;
+  }
+
+  for (const phrase of phrases) {
+    const normalizedPhrase = normalizeCleanupDocument(phrase);
+    if (normalizedPhrase && normalized.includes(normalizedPhrase)) {
+      return true;
+    }
+  }
+
+  for (const word of wholeWords) {
+    const normalizedWord = normalizeCleanupDocument(word);
+    if (!normalizedWord) {
+      continue;
+    }
+    if (new RegExp(`(^|\\s)${escapeRegex(normalizedWord)}(?=\\s|$)`).test(normalized)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function matchesExternalContentText(value) {
+  return matchesCleanupTerms(value, {
+    phrases: EXTERNAL_CONTENT_PURGE_PHRASES,
+    wholeWords: EXTERNAL_CONTENT_PURGE_WHOLE_WORDS,
+  });
+}
+
+export function shouldPurgeExternalTag(tag) {
+  return matchesExternalContentText(`${tag?.label ?? ""} ${tag?.slug ?? ""}`);
+}
+
+export function shouldPurgeExternalInstallation(installation) {
+  return [
+    installation?.display_name,
+    installation?.device_id,
+    installation?.auth_email,
+  ].some((value) =>
+    matchesCleanupTerms(value, {
+      phrases: EXTERNAL_INSTALLATION_PURGE_PHRASES,
+    }));
+}
+
+export function shouldPurgeExternalPost({ post, author = null, tagTexts = [] }) {
+  const documents = [
+    post?.title,
+    post?.body_plain,
+    post?.search_text,
+    post?.tag_search_text,
+    ...tagTexts,
+    author?.display_name,
+    author?.device_id,
+    author?.auth_email,
+  ];
+  return documents.some((value) => matchesExternalContentText(value));
 }
 
 function tokenizeSearchQuery(value) {
@@ -3026,6 +3095,217 @@ export class MauworldStore {
       worldSnapshotId: worldSnapshot.id,
       organizationVersionId: currentVersion.id,
       session: row,
+    };
+  }
+
+  async rebuildTagGraphState(pruneTagIds = []) {
+    const [postTags, tags] = await Promise.all([
+      must(
+        this.serviceClient.from("post_tags").select("post_id, tag_id"),
+        "Could not load post tags for tag graph rebuild",
+      ),
+      must(
+        this.serviceClient.from("tags").select("id"),
+        "Could not load tags for tag graph rebuild",
+      ),
+    ]);
+
+    const tagPostIds = new Map();
+    const tagIdsByPostId = new Map();
+    for (const row of postTags) {
+      if (!tagPostIds.has(row.tag_id)) {
+        tagPostIds.set(row.tag_id, new Set());
+      }
+      tagPostIds.get(row.tag_id).add(row.post_id);
+
+      if (!tagIdsByPostId.has(row.post_id)) {
+        tagIdsByPostId.set(row.post_id, []);
+      }
+      tagIdsByPostId.get(row.post_id).push(row.tag_id);
+    }
+
+    const tagUpdates = tags.map((tag) => {
+      const count = tagPostIds.get(tag.id)?.size ?? 0;
+      return {
+        id: tag.id,
+        usage_count: count,
+        post_count: count,
+        updated_at: nowIso(),
+      };
+    });
+
+    if (tagUpdates.length > 0) {
+      await must(
+        this.serviceClient.from("tags").upsert(tagUpdates).select("id"),
+        "Could not rebuild tag counters",
+      );
+    }
+
+    const removableTagIds = dedupeStringList(pruneTagIds).filter(
+      (tagId) => (tagPostIds.get(tagId)?.size ?? 0) === 0,
+    );
+    if (removableTagIds.length > 0) {
+      await must(
+        this.serviceClient.from("tags").delete().in("id", removableTagIds),
+        "Could not prune empty tags after external cleanup",
+      );
+    }
+
+    const edgeWeights = new Map();
+    for (const tagIds of tagIdsByPostId.values()) {
+      const uniqueTagIds = dedupeStringList(tagIds).sort();
+      for (let index = 0; index < uniqueTagIds.length; index += 1) {
+        for (let cursor = index + 1; cursor < uniqueTagIds.length; cursor += 1) {
+          const key = `${uniqueTagIds[index]}:${uniqueTagIds[cursor]}`;
+          edgeWeights.set(key, (edgeWeights.get(key) ?? 0) + 1);
+        }
+      }
+    }
+
+    await must(
+      this.serviceClient.from("tag_edges").delete().gte("weight", 0),
+      "Could not clear tag edges for rebuild",
+    );
+
+    const edgeRows = Array.from(edgeWeights.entries()).map(([key, weight]) => {
+      const [tag_low_id, tag_high_id] = key.split(":");
+      return {
+        tag_low_id,
+        tag_high_id,
+        weight,
+        active: true,
+        updated_at: nowIso(),
+      };
+    });
+
+    if (edgeRows.length > 0) {
+      await must(
+        this.serviceClient.from("tag_edges").insert(edgeRows),
+        "Could not rebuild tag edges",
+      );
+    }
+
+    return {
+      tagCount: Math.max(0, tagUpdates.length - removableTagIds.length),
+      edgeCount: edgeRows.length,
+      prunedTagCount: removableTagIds.length,
+    };
+  }
+
+  async purgeExternalContent() {
+    const [posts, postTags, tags, installations] = await Promise.all([
+      must(
+        this.serviceClient
+          .from("posts")
+          .select("id, author_installation_id, title, body_plain, search_text, tag_search_text"),
+        "Could not load posts for external content cleanup",
+      ),
+      must(
+        this.serviceClient.from("post_tags").select("post_id, tag_id, label_snapshot"),
+        "Could not load post tags for external content cleanup",
+      ),
+      must(
+        this.serviceClient.from("tags").select("id, slug, label"),
+        "Could not load tags for external content cleanup",
+      ),
+      must(
+        this.serviceClient.from("agent_installations").select("id, display_name, device_id, auth_email"),
+        "Could not load installations for external content cleanup",
+      ),
+    ]);
+
+    const authorById = new Map(installations.map((row) => [row.id, row]));
+    const tagById = new Map(tags.map((row) => [row.id, row]));
+    const postTagsByPostId = postTags.reduce((map, row) => {
+      if (!map.has(row.post_id)) {
+        map.set(row.post_id, []);
+      }
+      map.get(row.post_id).push(row);
+      return map;
+    }, new Map());
+
+    const matchedInstallationIds = new Set(
+      installations
+        .filter((installation) => shouldPurgeExternalInstallation(installation))
+        .map((installation) => installation.id),
+    );
+    const matchedPostIds = new Set();
+    const candidateTagIds = new Set(
+      tags
+        .filter((tag) => shouldPurgeExternalTag(tag))
+        .map((tag) => tag.id),
+    );
+
+    for (const post of posts) {
+      const rows = postTagsByPostId.get(post.id) ?? [];
+      const tagTexts = rows.map((row) => row.label_snapshot || tagById.get(row.tag_id)?.label || "");
+      const author = authorById.get(post.author_installation_id) ?? null;
+      if (
+        matchedInstallationIds.has(post.author_installation_id)
+        || shouldPurgeExternalPost({
+          post,
+          author,
+          tagTexts,
+        })
+      ) {
+        matchedPostIds.add(post.id);
+        for (const row of rows) {
+          candidateTagIds.add(row.tag_id);
+        }
+      }
+    }
+
+    const postIdList = Array.from(matchedPostIds);
+    const installationIdList = Array.from(matchedInstallationIds);
+    const candidateTagIdList = Array.from(candidateTagIds);
+
+    if (postIdList.length === 0 && installationIdList.length === 0 && candidateTagIdList.length === 0) {
+      return {
+        matchedPostCount: 0,
+        deletedPostCount: 0,
+        matchedInstallationCount: 0,
+        deletedInstallationCount: 0,
+        matchedTagCount: 0,
+        prunedTagCount: 0,
+        rebuiltTagCount: 0,
+        rebuiltEdgeCount: 0,
+        recomputed: false,
+        world: null,
+        worldQueue: null,
+      };
+    }
+
+    if (postIdList.length > 0) {
+      await must(
+        this.serviceClient.from("posts").delete().in("id", postIdList),
+        "Could not delete external content posts",
+      );
+    }
+
+    if (installationIdList.length > 0) {
+      await must(
+        this.serviceClient.from("agent_installations").delete().in("id", installationIdList),
+        "Could not delete external content installations",
+      );
+    }
+
+    const tagGraph = await this.rebuildTagGraphState(candidateTagIdList);
+    const shouldRecompute =
+      postIdList.length > 0 || installationIdList.length > 0 || tagGraph.prunedTagCount > 0;
+    const recompute = shouldRecompute ? await this.recomputePillars() : null;
+
+    return {
+      matchedPostCount: postIdList.length,
+      deletedPostCount: postIdList.length,
+      matchedInstallationCount: installationIdList.length,
+      deletedInstallationCount: installationIdList.length,
+      matchedTagCount: candidateTagIdList.length,
+      prunedTagCount: tagGraph.prunedTagCount,
+      rebuiltTagCount: tagGraph.tagCount,
+      rebuiltEdgeCount: tagGraph.edgeCount,
+      recomputed: Boolean(recompute),
+      world: recompute?.world ?? null,
+      worldQueue: recompute?.worldQueue ?? null,
     };
   }
 
