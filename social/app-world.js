@@ -1638,7 +1638,7 @@ function rebuildVirtualDecor(streamPayload) {
     {
       seed: "skyline-band-primary",
       radius: Math.max(span * 5.8, 1200),
-      height: 900,
+      height: 900 / 2,
       yOffset: 120,
       opacity: 0.18,
       repeatX: 6.8,
@@ -1648,7 +1648,7 @@ function rebuildVirtualDecor(streamPayload) {
     {
       seed: "skyline-band-secondary",
       radius: Math.max(span * 6.7, 1450),
-      height: 1040,
+      height: 1040 / 3,
       yOffset: 156,
       opacity: 0.11,
       repeatX: 5.4,
