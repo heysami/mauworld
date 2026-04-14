@@ -187,6 +187,34 @@ function getFlatForwardVector(yaw) {
   return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
 }
 
+function getCameraPlanarBasis() {
+  const fallbackForward = getFlatForwardVector(inputState.yaw);
+  if (!sceneState.camera) {
+    return {
+      forward: fallbackForward,
+      right: new THREE.Vector3(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw)),
+    };
+  }
+
+  const forward = new THREE.Vector3();
+  sceneState.camera.getWorldDirection(forward);
+  forward.y = 0;
+  if (forward.lengthSq() < 0.000001) {
+    forward.copy(fallbackForward);
+  } else {
+    forward.normalize();
+  }
+
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), forward);
+  if (right.lengthSq() < 0.000001) {
+    right.set(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw));
+  } else {
+    right.normalize();
+  }
+
+  return { forward, right };
+}
+
 function yawFromVector(vector) {
   return normalizeAngle(Math.atan2(-vector.x, -vector.z));
 }
@@ -2043,8 +2071,7 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
   const horizontalMovement = new THREE.Vector3(movement.x, 0, movement.z);
   const horizontalSpeed = horizontalMovement.length() / Math.max(deltaSeconds, 0.0001);
   const normalizedSpeed = clamp(horizontalSpeed / (CAMERA.movementSpeed * 1.35), 0, 1);
-  const forward = getFlatForwardVector(inputState.yaw);
-  const right = new THREE.Vector3(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw));
+  const { forward, right } = getCameraPlanarBasis();
   const forwardAmount = horizontalMovement.lengthSq() > 0.000001
     ? clamp(horizontalMovement.dot(forward) / Math.max(horizontalMovement.length(), 0.0001), -1, 1) * normalizedSpeed
     : 0;
@@ -2058,7 +2085,13 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
   avatar.leanZ += (avatar.targetLeanZ - avatar.leanZ) * leanMix;
 
   avatar.group.position.copy(position);
-  avatar.group.rotation.y = normalizeAngle(inputState.yaw + Math.PI);
+  if (horizontalMovement.lengthSq() > 0.000001) {
+    const targetFacingYaw = normalizeAngle(yawFromVector(horizontalMovement) + Math.PI);
+    avatar.facingYaw = normalizeAngle(
+      avatar.facingYaw + shortestAngleDelta(avatar.facingYaw, targetFacingYaw) * (1 - Math.exp(-deltaSeconds * 10)),
+    );
+  }
+  avatar.group.rotation.y = avatar.facingYaw;
   avatar.group.position.y += Math.sin(elapsedSeconds * 1.6) * 0.16;
   if (avatar.poseRoot) {
     avatar.poseRoot.rotation.x = avatar.leanX;
@@ -2638,6 +2671,7 @@ function initScene() {
     leanZ: 0,
     targetLeanX: 0,
     targetLeanZ: 0,
+    facingYaw: normalizeAngle(inputState.yaw + Math.PI),
   };
   syncLocalAvatar(0);
 
@@ -3376,8 +3410,7 @@ function updateMovement(deltaSeconds) {
     return;
   }
   const previousPosition = getNavigationPosition().clone();
-  const forward = getFlatForwardVector(inputState.yaw);
-  const right = new THREE.Vector3(Math.cos(inputState.yaw), 0, -Math.sin(inputState.yaw));
+  const { forward, right } = getCameraPlanarBasis();
   const velocity = new THREE.Vector3();
   let vertical = 0;
   const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
