@@ -65,11 +65,13 @@ body.world-body {
   display: grid;
   gap: 10px;
   padding: 12px;
+  overflow: hidden;
+  isolation: isolate;
   border: 1px solid var(--world-line);
   border-radius: 8px;
-  background: var(--world-surface-strong);
-  backdrop-filter: blur(18px);
-  box-shadow: var(--world-shadow);
+  background: rgba(251, 253, 249, 0.985);
+  backdrop-filter: blur(28px) saturate(1.2);
+  box-shadow: 0 24px 56px rgba(23, 39, 30, 0.18);
 }
 
 .world-search-form {
@@ -145,6 +147,7 @@ body.world-body {
 .world-results {
   display: grid;
   gap: 8px;
+  grid-auto-rows: max-content;
   max-height: min(72dvh, 700px);
   overflow: auto;
   padding-right: 4px;
@@ -153,10 +156,12 @@ body.world-body {
 .world-result {
   width: 100%;
   display: grid;
+  align-content: start;
   gap: 8px;
   padding: 12px;
-  border: 1px solid var(--world-line);
-  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(21, 35, 27, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 1px 0 rgba(21, 35, 27, 0.04);
   text-align: left;
   color: inherit;
 }
