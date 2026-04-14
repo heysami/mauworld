@@ -49,6 +49,19 @@ const WORLD_STREAM = {
   fogMultiplier: 2.4,
 };
 
+const WORLD_STYLE = {
+  background: "#fbfcff",
+  fog: "#f4fbff",
+  ground: "#ffffff",
+  groundGlow: "#fff3be",
+  line: "#c9dcff",
+  ink: "#1f2f68",
+  muted: "#7282b9",
+  outline: "#33407a",
+  white: "#ffffff",
+  accents: ["#ff4fa8", "#2dd8ff", "#ffd84d", "#7ce85b", "#ff9548", "#7ed7ff"],
+};
+
 const state = {
   meta: null,
   stream: null,
@@ -82,6 +95,7 @@ const sceneState = {
   camera: null,
   clock: new THREE.Clock(),
   root: null,
+  decor: new THREE.Group(),
   pillars: new THREE.Group(),
   lines: new THREE.Group(),
   tags: new THREE.Group(),
@@ -89,6 +103,7 @@ const sceneState = {
   presence: new THREE.Group(),
   effects: new THREE.Group(),
   billboards: [],
+  animatedDecor: [],
   animatedPillars: [],
   animatedPosts: [],
   animatedTags: [],
@@ -180,6 +195,28 @@ function truncateText(value, maxLength) {
     return text;
   }
   return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}...`;
+}
+
+function hashString(value) {
+  let hash = 0;
+  const source = String(value ?? "");
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash << 5) - hash) + source.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function pickAccent(seed, offset = 0) {
+  return WORLD_STYLE.accents[(hashString(seed) + offset) % WORLD_STYLE.accents.length];
+}
+
+function pickAccentSet(seed) {
+  return {
+    primary: pickAccent(seed, 0),
+    secondary: pickAccent(seed, 2),
+    tertiary: pickAccent(seed, 4),
+  };
 }
 
 function isCellWithinWindow(cellX, cellZ, window = state.activeCellWindow) {
@@ -379,11 +416,11 @@ function createLabelTexture(lines, options = {}) {
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
-  const background = options.background ?? "rgba(248, 252, 247, 0.96)";
-  const border = options.border ?? "rgba(20, 35, 29, 0.14)";
-  const accent = options.accent ?? "#2eb8b8";
-  const bodyColor = options.bodyColor ?? "#22352d";
-  const mutedColor = options.mutedColor ?? "#607268";
+  const background = options.background ?? "rgba(255, 255, 255, 0.96)";
+  const border = options.border ?? "rgba(51, 64, 122, 0.14)";
+  const accent = options.accent ?? WORLD_STYLE.accents[1];
+  const bodyColor = options.bodyColor ?? WORLD_STYLE.ink;
+  const mutedColor = options.mutedColor ?? WORLD_STYLE.muted;
 
   context.fillStyle = background;
   context.fillRect(0, 0, width, height);
@@ -422,20 +459,26 @@ function createCompactCardTexture(title, subtitle = "", options = {}) {
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
-  const background = options.background ?? "rgba(255, 255, 255, 0.95)";
-  const border = options.border ?? "rgba(20, 35, 29, 0.14)";
-  const accent = options.accent ?? "#2eb8b8";
-  const bodyColor = options.bodyColor ?? "#182821";
-  const mutedColor = options.mutedColor ?? "#6c7d73";
+  const accent = options.accent ?? pickAccent(title);
+  const background = options.background ?? "rgba(255, 255, 255, 0.98)";
+  const border = options.border ?? accent;
+  const bodyColor = options.bodyColor ?? WORLD_STYLE.ink;
+  const mutedColor = options.mutedColor ?? WORLD_STYLE.muted;
 
   context.clearRect(0, 0, width, height);
   context.fillStyle = background;
   context.fillRect(0, 0, width, height);
-  context.lineWidth = 4;
+  context.fillStyle = "rgba(255, 255, 255, 0.78)";
+  context.fillRect(14, 14, width - 28, height - 28);
+  context.strokeStyle = "rgba(51, 64, 122, 0.12)";
+  context.lineWidth = 2;
+  context.strokeRect(13, 13, width - 26, height - 26);
+  context.lineWidth = 8;
   context.strokeStyle = border;
-  context.strokeRect(2, 2, width - 4, height - 4);
+  context.strokeRect(4, 4, width - 8, height - 8);
   context.fillStyle = accent;
-  context.fillRect(0, 0, width, 10);
+  context.fillRect(0, 0, width, 12);
+  context.fillRect(width - 84, height - 22, 56, 10);
 
   context.fillStyle = bodyColor;
   context.font = "700 44px Manrope, sans-serif";
@@ -459,24 +502,22 @@ function createTagTextTexture(label, options = {}) {
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
-  const accent = options.accent ?? "#2eb8b8";
-  const bodyColor = options.bodyColor ?? "#163129";
-  const glowColor = options.glowColor ?? "rgba(255, 255, 255, 0.92)";
+  const accent = options.accent ?? pickAccent(label);
+  const secondary = options.secondary ?? WORLD_STYLE.outline;
   const text = `#${truncateText(label || "tag", 24)}`;
 
   context.clearRect(0, 0, width, height);
   context.textBaseline = "middle";
   context.textAlign = "center";
-
-  context.save();
-  context.shadowColor = glowColor;
-  context.shadowBlur = 30;
-  context.fillStyle = "rgba(255, 255, 255, 0.78)";
+  context.lineJoin = "round";
   context.font = "800 72px Manrope, sans-serif";
-  context.fillText(text, width / 2, height / 2 - 8);
-  context.restore();
-
-  context.fillStyle = bodyColor;
+  context.lineWidth = 18;
+  context.strokeStyle = accent;
+  context.strokeText(text, width / 2, height / 2 - 8);
+  context.lineWidth = 5;
+  context.strokeStyle = secondary;
+  context.strokeText(text, width / 2, height / 2 - 8);
+  context.fillStyle = WORLD_STYLE.white;
   context.font = "800 72px Manrope, sans-serif";
   context.fillText(text, width / 2, height / 2 - 8);
 
@@ -536,38 +577,402 @@ function createBillboard(texture, width, height, options = {}) {
   return mesh;
 }
 
+function createCloudTexture(options = {}) {
+  const canvas = document.createElement("canvas");
+  const width = options.width ?? 640;
+  const height = options.height ?? 320;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const fill = options.fill ?? "rgba(255, 255, 255, 0.96)";
+  const stroke = options.stroke ?? "rgba(190, 226, 255, 0.98)";
+
+  context.clearRect(0, 0, width, height);
+  context.beginPath();
+  context.moveTo(98, 214);
+  context.bezierCurveTo(66, 168, 118, 120, 172, 132);
+  context.bezierCurveTo(188, 84, 260, 76, 316, 112);
+  context.bezierCurveTo(342, 70, 420, 78, 444, 128);
+  context.bezierCurveTo(506, 112, 560, 158, 544, 214);
+  context.lineTo(544, 240);
+  context.lineTo(98, 240);
+  context.closePath();
+  context.fillStyle = fill;
+  context.fill();
+  context.lineWidth = 10;
+  context.strokeStyle = stroke;
+  context.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createOutlineShell(geometry, color, scale = 1.08) {
+  const shell = new THREE.Mesh(
+    geometry.clone(),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color),
+      side: THREE.BackSide,
+      fog: false,
+    }),
+  );
+  shell.scale.setScalar(scale);
+  return shell;
+}
+
+function createMascotFigure(seed, options = {}) {
+  const accents = pickAccentSet(seed);
+  const scale = options.scale ?? 1;
+  const outlineColor = options.outlineColor ?? WORLD_STYLE.outline;
+  const group = new THREE.Group();
+
+  const bodyGeometry = new THREE.CapsuleGeometry(1.45 * scale, 2.4 * scale, 6, 16);
+  const headGeometry = new THREE.SphereGeometry(2.15 * scale, 24, 24);
+  const earGeometry = new THREE.ConeGeometry(0.8 * scale, 1.9 * scale, 16);
+  const limbGeometry = new THREE.CapsuleGeometry(0.38 * scale, 1.3 * scale, 4, 10);
+
+  const whiteMaterial = new THREE.MeshToonMaterial({ color: new THREE.Color(WORLD_STYLE.white) });
+  const primaryMaterial = new THREE.MeshToonMaterial({ color: new THREE.Color(accents.primary) });
+  const secondaryMaterial = new THREE.MeshToonMaterial({ color: new THREE.Color(accents.secondary) });
+  const faceMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(outlineColor), fog: false });
+
+  const bodyShell = createOutlineShell(bodyGeometry, outlineColor, 1.12);
+  bodyShell.position.y = 4.2 * scale;
+  group.add(bodyShell);
+
+  const body = new THREE.Mesh(bodyGeometry, whiteMaterial);
+  body.position.y = 4.2 * scale;
+  group.add(body);
+
+  const headShell = createOutlineShell(headGeometry, outlineColor, 1.12);
+  headShell.position.y = 8.3 * scale;
+  group.add(headShell);
+
+  const head = new THREE.Mesh(headGeometry, whiteMaterial);
+  head.position.y = 8.3 * scale;
+  group.add(head);
+
+  for (const side of [-1, 1]) {
+    const earShell = createOutlineShell(earGeometry, accents.primary, 1.12);
+    earShell.position.set(side * 1.45 * scale, 11 * scale, 0);
+    earShell.rotation.z = side * 0.36;
+    group.add(earShell);
+
+    const ear = new THREE.Mesh(earGeometry, side > 0 ? primaryMaterial : secondaryMaterial);
+    ear.position.copy(earShell.position);
+    ear.rotation.copy(earShell.rotation);
+    group.add(ear);
+
+    const arm = new THREE.Mesh(limbGeometry, side > 0 ? secondaryMaterial : primaryMaterial);
+    arm.position.set(side * 2.25 * scale, 4.9 * scale, 0.1 * scale);
+    arm.rotation.z = side * 0.84;
+    group.add(arm);
+  }
+
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.25 * scale, 10, 10), faceMaterial);
+    eye.position.set(side * 0.72 * scale, 8.45 * scale, 1.92 * scale);
+    group.add(eye);
+
+    const cheek = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3 * scale, 10, 10),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(side > 0 ? accents.primary : accents.secondary),
+        transparent: true,
+        opacity: 0.82,
+        fog: false,
+      }),
+    );
+    cheek.position.set(side * 1.2 * scale, 7.65 * scale, 1.8 * scale);
+    group.add(cheek);
+  }
+
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(2.9 * scale, 0.2 * scale, 10, 42),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(accents.primary),
+      transparent: true,
+      opacity: 0.9,
+      fog: false,
+    }),
+  );
+  halo.rotation.x = Math.PI / 2;
+  halo.position.y = 5.6 * scale;
+  group.add(halo);
+
+  const orb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.46 * scale, 16, 16),
+    new THREE.MeshToonMaterial({ color: new THREE.Color(accents.tertiary) }),
+  );
+  orb.position.set(0, 12.8 * scale, 0);
+  group.add(orb);
+
+  return {
+    group,
+    halo,
+    orb,
+  };
+}
+
+function getWorldBounds(streamPayload) {
+  const points = [
+    ...(streamPayload.pillars ?? []).map((entry) => ({
+      x: entry.position_x,
+      z: entry.position_z,
+    })),
+    ...(streamPayload.tags ?? []).map((entry) => ({
+      x: entry.position_x,
+      z: entry.position_z,
+    })),
+  ];
+
+  if (points.length === 0 && state.meta?.bounds) {
+    return {
+      minX: state.meta.bounds.minX,
+      maxX: state.meta.bounds.maxX,
+      minZ: state.meta.bounds.minZ,
+      maxZ: state.meta.bounds.maxZ,
+    };
+  }
+
+  return points.reduce(
+    (bounds, point) => ({
+      minX: Math.min(bounds.minX, point.x),
+      maxX: Math.max(bounds.maxX, point.x),
+      minZ: Math.min(bounds.minZ, point.z),
+      maxZ: Math.max(bounds.maxZ, point.z),
+    }),
+    {
+      minX: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      minZ: Number.POSITIVE_INFINITY,
+      maxZ: Number.NEGATIVE_INFINITY,
+    },
+  );
+}
+
+function rebuildVirtualDecor(streamPayload) {
+  sceneState.animatedDecor = [];
+  clearGroup(sceneState.decor);
+
+  const bounds = getWorldBounds(streamPayload);
+  if (!Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minZ)) {
+    return;
+  }
+
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  const span = Math.max(180, Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * 0.78);
+  const mainPillar = [...(streamPayload.pillars ?? [])]
+    .sort((left, right) => (right.importance_score ?? 0) - (left.importance_score ?? 0))[0];
+
+  for (let index = 0; index < 4; index += 1) {
+    const curve = new THREE.EllipseCurve(
+      0,
+      0,
+      span * (0.34 + index * 0.15),
+      span * (0.2 + index * 0.11),
+      0,
+      Math.PI * 2,
+      false,
+      index * 0.36,
+    );
+    const points = curve.getPoints(160).map(
+      (point) => new THREE.Vector3(centerX + point.x, -1.4 + index * 0.04, centerZ + point.y),
+    );
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.LineLoop(
+      geometry,
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color(pickAccent(`floor-${index}`)),
+        transparent: true,
+        opacity: 0.14,
+        fog: false,
+      }),
+    );
+    sceneState.decor.add(line);
+  }
+
+  if (mainPillar) {
+    const accents = pickAccentSet(mainPillar.pillar_id);
+    const orbitCenter = new THREE.Vector3(
+      mainPillar.position_x,
+      mainPillar.position_y + mainPillar.height * 0.58,
+      mainPillar.position_z,
+    );
+    [accents.primary, accents.secondary, accents.tertiary].forEach((color, index) => {
+      const orbit = new THREE.Mesh(
+        new THREE.TorusGeometry(mainPillar.radius * (2.3 + index * 0.68), 0.72, 10, 96),
+        new THREE.MeshBasicMaterial({
+          color: new THREE.Color(color),
+          transparent: true,
+          opacity: 0.34,
+          fog: false,
+        }),
+      );
+      orbit.position.copy(orbitCenter);
+      orbit.rotation.x = Math.PI / 2 + index * 0.14;
+      orbit.rotation.y = index * 0.32;
+      sceneState.decor.add(orbit);
+      sceneState.animatedDecor.push({
+        kind: "orbit",
+        mesh: orbit,
+        speed: (index % 2 === 0 ? 1 : -1) * (0.06 + index * 0.03),
+      });
+    });
+  }
+
+  const cloudTexture = createCloudTexture();
+  [
+    { x: centerX - span * 0.54, y: 188, z: centerZ - span * 0.2, width: 146, height: 74 },
+    { x: centerX + span * 0.56, y: 212, z: centerZ - span * 0.08, width: 172, height: 88 },
+    { x: centerX - span * 0.22, y: 236, z: centerZ + span * 0.42, width: 134, height: 68 },
+    { x: centerX + span * 0.18, y: 176, z: centerZ + span * 0.52, width: 118, height: 60 },
+  ].forEach((entry, index) => {
+    const cloud = createBillboard(
+      cloudTexture,
+      entry.width,
+      entry.height,
+      {
+        opacity: 0.82,
+        fog: false,
+        renderOrder: 1,
+      },
+    );
+    cloud.position.set(entry.x, entry.y, entry.z);
+    sceneState.decor.add(cloud);
+    sceneState.animatedDecor.push({
+      kind: "cloud",
+      mesh: cloud,
+      baseY: entry.y,
+      floatRange: 5 + index * 1.2,
+      phase: index * 1.4,
+    });
+  });
+
+  const mascotAnchors = (streamPayload.tags ?? [])
+    .filter((_entry, index, tags) => index % Math.max(1, Math.floor(tags.length / 6)) === 0)
+    .slice(0, 6);
+
+  mascotAnchors.forEach((tag, index) => {
+    const mascot = createMascotFigure(`decor-${tag.tag_id}`, {
+      scale: 0.94 + (index % 3) * 0.1,
+    });
+    const angle = index * 1.14;
+    const radius = 10 + index * 1.8;
+    mascot.group.position.set(
+      tag.position_x + Math.cos(angle) * radius,
+      13 + (index % 3) * 4,
+      tag.position_z + Math.sin(angle) * radius,
+    );
+    sceneState.decor.add(mascot.group);
+    sceneState.animatedDecor.push({
+      kind: "mascot",
+      group: mascot.group,
+      halo: mascot.halo,
+      orb: mascot.orb,
+      orbBaseY: mascot.orb.position.y,
+      baseY: mascot.group.position.y,
+      bob: 0.5 + index * 0.08,
+      phase: index * 0.9,
+      spin: 0.12 + index * 0.02,
+    });
+  });
+
+  for (let index = 0; index < 18; index += 1) {
+    const spark = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.5 + (index % 3) * 0.15, 0),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(pickAccent(`spark-${index}`)),
+        transparent: true,
+        opacity: 0.82,
+        fog: false,
+      }),
+    );
+    spark.position.set(
+      centerX + Math.cos(index * 0.72) * (span * (0.26 + (index % 4) * 0.08)),
+      52 + (index % 5) * 18,
+      centerZ + Math.sin(index * 0.72) * (span * (0.24 + (index % 4) * 0.1)),
+    );
+    sceneState.decor.add(spark);
+    sceneState.animatedDecor.push({
+      kind: "spark",
+      mesh: spark,
+      baseY: spark.position.y,
+      bob: 0.6 + (index % 4) * 0.08,
+      phase: index * 0.45,
+      spin: 0.3 + (index % 3) * 0.12,
+    });
+  }
+}
+
 function buildPillarObject(entry) {
   const pillar = entry.pillar ?? {};
+  const accents = pickAccentSet(entry.pillar_id || pillar.title);
   const group = new THREE.Group();
   const anchor = new THREE.Vector3(entry.position_x, entry.position_y + entry.height * 0.5, entry.position_z);
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
 
-  const baseMaterial = new THREE.MeshStandardMaterial({
-    color: new THREE.Color("#f0d24e"),
-    emissive: new THREE.Color("#d4aa2f"),
-    roughness: 0.38,
-    metalness: 0.08,
+  const pillarGeometry = new THREE.CylinderGeometry(entry.radius, entry.radius * 1.08, entry.height, 28, 1, false);
+  const outline = createOutlineShell(pillarGeometry, accents.primary, 1.04);
+  outline.position.y = entry.height / 2;
+  group.add(outline);
+
+  const baseMaterial = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(WORLD_STYLE.white),
     transparent: true,
-    opacity: 0.96,
+    opacity: 0.88,
   });
-  const pillarGeometry = new THREE.CylinderGeometry(entry.radius, entry.radius * 1.1, entry.height, 24, 1, false);
   const pillarMesh = new THREE.Mesh(pillarGeometry, baseMaterial);
   pillarMesh.position.y = entry.height / 2;
   group.add(pillarMesh);
 
-  const capGeometry = new THREE.TorusGeometry(entry.radius * 1.08, Math.max(0.8, entry.radius * 0.08), 12, 32);
-  const capMaterial = new THREE.MeshStandardMaterial({
-    color: new THREE.Color("#2eb8b8"),
-    emissive: new THREE.Color("#188d8d"),
-    roughness: 0.28,
-    metalness: 0.26,
+  const bands = [accents.primary, accents.secondary, accents.tertiary].map((color, index) => {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(entry.radius * (1.14 + index * 0.09), 0.34 + index * 0.02, 10, 40),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color),
+        transparent: true,
+        opacity: 0.86,
+        fog: false,
+      }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = entry.height * (0.22 + index * 0.2);
+    group.add(ring);
+    return ring;
+  });
+
+  const capGeometry = new THREE.TorusGeometry(entry.radius * 1.16, Math.max(0.62, entry.radius * 0.08), 12, 40);
+  const capMaterial = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(accents.secondary),
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.82,
+    fog: false,
   });
   const cap = new THREE.Mesh(capGeometry, capMaterial);
   cap.rotation.x = Math.PI / 2;
-  cap.position.y = entry.height + 2;
+  cap.position.y = entry.height + 2.4;
   group.add(cap);
+
+  const crown = createBillboard(
+    createCircleTexture({
+      fill: "rgba(255, 255, 255, 0.72)",
+      stroke: accents.primary,
+      glow: `${accents.secondary}44`,
+    }),
+    entry.radius * 4.8,
+    entry.radius * 4.8,
+    {
+      opacity: 0.24,
+      fog: false,
+      renderOrder: 6,
+    },
+  );
+  crown.position.set(0, entry.height + 6.4, 0);
+  group.add(crown);
 
   const label = createBillboard(
     createCompactCardTexture(
@@ -576,18 +981,21 @@ function buildPillarObject(entry) {
       {
         width: 660,
         height: 190,
-        accent: "#f1cb59",
+        accent: accents.primary,
       },
     ),
-    24,
-    6.9,
+    25,
+    7.2,
   );
-  label.position.set(0, entry.height + 14, 0);
+  label.position.set(0, entry.height + 15.2, 0);
   group.add(label);
   sceneState.animatedPillars.push({
     anchor,
     body: pillarMesh,
+    outline,
+    bands,
     cap,
+    crown,
     label,
     cellX: entry.cell_x,
     cellZ: entry.cell_z,
@@ -602,15 +1010,16 @@ function buildPillarObject(entry) {
 
 function buildTagObject(entry) {
   const tag = entry.tag ?? {};
+  const accents = pickAccentSet(entry.tag_id || tag.label);
   const group = new THREE.Group();
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
 
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(3.2, 0.28, 10, 32),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color("#58d0c7"),
+      color: new THREE.Color(accents.primary),
       transparent: true,
-      opacity: 0.44,
+      opacity: 0.58,
       fog: false,
     }),
   );
@@ -620,9 +1029,9 @@ function buildTagObject(entry) {
   const halo = new THREE.Mesh(
     new THREE.RingGeometry(4.4, 5.5, 40),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color("#86e1da"),
+      color: new THREE.Color(accents.secondary),
       transparent: true,
-      opacity: 0.08,
+      opacity: 0.12,
       side: THREE.DoubleSide,
       fog: false,
     }),
@@ -631,23 +1040,30 @@ function buildTagObject(entry) {
   halo.position.y = 0.1;
   group.add(halo);
 
+  const centerGeometry = new THREE.SphereGeometry(1.45, 18, 18);
+  const outline = createOutlineShell(centerGeometry, accents.primary, 1.18);
+  group.add(outline);
+
   const center = new THREE.Mesh(
-    new THREE.SphereGeometry(1.45, 18, 18),
-    new THREE.MeshBasicMaterial({
-      color: new THREE.Color("#f4f6f1"),
+    centerGeometry,
+    new THREE.MeshToonMaterial({
+      color: new THREE.Color(WORLD_STYLE.white),
       transparent: true,
-      opacity: 0.94,
-      fog: false,
+      opacity: 0.96,
     }),
   );
   group.add(center);
 
   const beacon = createBillboard(
-    createCircleTexture(),
+    createCircleTexture({
+      fill: "rgba(255, 255, 255, 0.78)",
+      stroke: accents.secondary,
+      glow: `${accents.primary}44`,
+    }),
     12,
     12,
     {
-      opacity: 0.2,
+      opacity: 0.28,
       fog: false,
       renderOrder: 8,
     },
@@ -660,7 +1076,8 @@ function buildTagObject(entry) {
     createTagTextTexture(
       tag.label || "tag",
       {
-        accent: "#2eb8b8",
+        accent: accents.primary,
+        secondary: accents.secondary,
       },
     ),
     labelWidth,
@@ -678,6 +1095,7 @@ function buildTagObject(entry) {
   sceneState.animatedTags.push({
     tagId: entry.tag_id,
     anchor: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
+    outline,
     center,
     ring,
     halo,
@@ -704,6 +1122,7 @@ function buildTagObject(entry) {
 
 function buildPostObject(entry) {
   const post = entry.post ?? {};
+  const accents = pickAccentSet(entry.post_id || post.title);
   const group = new THREE.Group();
   const anchor = new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z);
   group.position.copy(anchor);
@@ -711,10 +1130,10 @@ function buildPostObject(entry) {
 
   const color =
     entry.display_tier === "hero"
-      ? "#f26d54"
+      ? accents.primary
       : entry.display_tier === "standard"
-        ? "#f1cb59"
-        : "#c9e54f";
+        ? accents.secondary
+        : accents.tertiary;
   const width = 8.6 + entry.size_factor * 4.8 + (entry.display_tier === "hero" ? 1.6 : 0);
   const height = 4.8 + entry.size_factor * 2.2 + (entry.display_tier === "hero" ? 0.7 : 0);
   const elevation = height * 0.62;
@@ -730,6 +1149,7 @@ function buildPostObject(entry) {
         width: 700,
         height: 220,
         accent: color,
+        border: accents.primary,
       },
     ),
     width,
@@ -747,7 +1167,7 @@ function buildPostObject(entry) {
     new THREE.MeshBasicMaterial({
       color: new THREE.Color(color),
       transparent: true,
-      opacity: 0.09,
+      opacity: 0.13,
       side: THREE.DoubleSide,
       fog: false,
     }),
@@ -759,8 +1179,8 @@ function buildPostObject(entry) {
   const proxy = createBillboard(
     createCircleTexture({
       fill: "rgba(255, 255, 255, 0.22)",
-      stroke: color,
-      glow: `${color}33`,
+      stroke: accents.primary,
+      glow: `${accents.secondary}33`,
     }),
     Math.max(3.8, width * 0.42),
     Math.max(3.8, width * 0.42),
@@ -799,41 +1219,41 @@ function buildPresenceObject(entry) {
   const actor = entry.actor ?? {};
   const group = new THREE.Group();
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
-  const color = entry.actor_type === "agent" ? "#2eb8b8" : "#f26d54";
+  const seed = actor.id || actor.display_name || entry.actor_type;
+  const color = entry.actor_type === "agent" ? pickAccent(seed, 1) : pickAccent(seed, 3);
+  const mascot = createMascotFigure(seed, {
+    scale: 0.72,
+    outlineColor: color,
+  });
+  group.add(mascot.group);
 
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(1.8, 5.5, 8, 16),
-    new THREE.MeshStandardMaterial({
-      color: new THREE.Color(color),
-      emissive: new THREE.Color(color).multiplyScalar(0.12),
-      roughness: 0.22,
-      metalness: 0.08,
-    }),
-  );
-  body.position.y = 4.6;
-  group.add(body);
-
+  const labelWidth = clamp(12 + String(actor.display_name || entry.actor_type || "agent").length * 0.28, 14, 24);
   const label = createBillboard(
-    createLabelTexture(
-      [
-        actor.display_name || (entry.actor_type === "agent" ? "Agent" : "Visitor"),
-        entry.actor_type === "agent" ? "Live agent presence" : "Live visitor presence",
-        `Seen ${formatRelativeTime(entry.last_seen_at)}`,
-      ],
+    createTagTextTexture(
+      actor.display_name || (entry.actor_type === "agent" ? "agent" : "visitor"),
       {
-        width: 620,
-        height: 220,
         accent: color,
+        secondary: WORLD_STYLE.outline,
       },
     ),
-    21,
-    7.6,
+    labelWidth,
+    3.2,
+    {
+      opacity: 0.92,
+      fog: false,
+      depthTest: false,
+      renderOrder: 9,
+    },
   );
-  label.position.set(0, 12.4, 0);
+  label.position.set(0, 13.8, 0);
   group.add(label);
 
   sceneState.animatedPresence.push({
     group,
+    halo: mascot.halo,
+    orb: mascot.orb,
+    orbBaseY: mascot.orb.position.y,
+    label,
     baseY: entry.position_y,
     bob: 0.55 + Math.random() * 0.4,
     phase: Math.random() * Math.PI * 2,
@@ -874,7 +1294,7 @@ function syncFocusedGhost() {
   }
 
   const post = result.post ?? {};
-  const accent = result.worldQueueStatus === "ready" ? "#2aa8ad" : "#d36c54";
+  const accent = result.worldQueueStatus === "ready" ? WORLD_STYLE.accents[1] : WORLD_STYLE.accents[0];
   const group = new THREE.Group();
   group.position.set(
     result.destination.position_x,
@@ -1016,9 +1436,9 @@ function rebuildConnections(pillars, tags, posts) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   const material = new THREE.LineBasicMaterial({
-    color: new THREE.Color("#7dcfcb"),
+    color: new THREE.Color(WORLD_STYLE.line),
     transparent: true,
-    opacity: 0.22,
+    opacity: 0.24,
     fog: false,
   });
   sceneState.lines.add(new THREE.LineSegments(geometry, material));
@@ -1026,17 +1446,20 @@ function rebuildConnections(pillars, tags, posts) {
 
 function rebuildScene(streamPayload) {
   sceneState.billboards = [];
+  sceneState.animatedDecor = [];
   sceneState.animatedPillars = [];
   sceneState.animatedPosts = [];
   sceneState.animatedTags = [];
   sceneState.animatedPresence = [];
   sceneState.clickable = [];
 
+  clearGroup(sceneState.decor);
   clearGroup(sceneState.pillars);
   clearGroup(sceneState.tags);
   clearGroup(sceneState.posts);
   clearGroup(sceneState.presence);
 
+  rebuildVirtualDecor(streamPayload);
   for (const pillar of streamPayload.pillars) {
     sceneState.pillars.add(buildPillarObject(pillar));
   }
@@ -1064,8 +1487,8 @@ function initScene() {
   sceneState.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
   sceneState.scene = new THREE.Scene();
-  sceneState.scene.background = new THREE.Color("#e6eee7");
-  sceneState.scene.fog = new THREE.Fog("#e6eee7", 170, 1600);
+  sceneState.scene.background = new THREE.Color(WORLD_STYLE.background);
+  sceneState.scene.fog = new THREE.Fog(WORLD_STYLE.fog, 170, 1600);
 
   sceneState.camera = new THREE.PerspectiveCamera(
     58,
@@ -1076,34 +1499,30 @@ function initScene() {
   sceneState.camera.position.set(0, 108, 128);
   sceneState.camera.rotation.order = "YXZ";
 
-  const ambient = new THREE.HemisphereLight("#fffdf6", "#bed9ce", 1.26);
+  const ambient = new THREE.HemisphereLight("#ffffff", "#ffe8f8", 1.48);
   ambient.position.set(0, 180, 0);
   sceneState.scene.add(ambient);
 
-  const sun = new THREE.DirectionalLight("#fff4c6", 1.08);
-  sun.position.set(120, 280, 60);
+  const sun = new THREE.DirectionalLight("#fff4be", 1.16);
+  sun.position.set(120, 280, 80);
   sceneState.scene.add(sun);
 
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(2400, 96),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color("#dfe9e1"),
+      color: new THREE.Color(WORLD_STYLE.ground),
       transparent: true,
-      opacity: 0.92,
+      opacity: 1,
     }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -2;
   sceneState.scene.add(ground);
 
-  const grid = new THREE.GridHelper(2200, 72, "#b8cec2", "#d4e1da");
-  grid.position.y = -1.8;
-  sceneState.scene.add(grid);
-
   sceneState.floorMarker = new THREE.Mesh(
     new THREE.RingGeometry(10, 12.6, 32),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color("#f26d54"),
+      color: new THREE.Color(WORLD_STYLE.accents[0]),
       transparent: true,
       opacity: 0.72,
       side: THREE.DoubleSide,
@@ -1114,6 +1533,7 @@ function initScene() {
   sceneState.scene.add(sceneState.floorMarker);
 
   sceneState.root = new THREE.Group();
+  sceneState.root.add(sceneState.decor);
   sceneState.root.add(sceneState.pillars);
   sceneState.root.add(sceneState.lines);
   sceneState.root.add(sceneState.tags);
@@ -1134,10 +1554,10 @@ function initScene() {
   sceneState.snow = new THREE.Points(
     snowGeometry,
     new THREE.PointsMaterial({
-      color: new THREE.Color("#ffffff"),
-      size: 2.6,
+      color: new THREE.Color("#f7fbff"),
+      size: 2.2,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.96,
       depthWrite: false,
       sizeAttenuation: true,
     }),
@@ -1415,7 +1835,7 @@ async function loadMeta(force = false) {
   state.meta = payload;
   const nearDistance = payload.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = payload.renderer?.fog?.farDistance ?? 720;
-  sceneState.scene.fog = new THREE.Fog("#e6eee7", nearDistance, farDistance * WORLD_STREAM.fogMultiplier);
+  sceneState.scene.fog = new THREE.Fog(WORLD_STYLE.fog, nearDistance, farDistance * WORLD_STREAM.fogMultiplier);
   updateMetaPanel();
   return payload;
 }
@@ -1533,16 +1953,48 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   const farDistance = state.meta?.renderer?.fog?.farDistance ?? 720;
   const retainedDistance = farDistance * WORLD_STREAM.fogMultiplier;
 
+  for (const entry of sceneState.animatedDecor) {
+    if (entry.kind === "orbit") {
+      entry.mesh.rotation.z += deltaSeconds * entry.speed;
+      continue;
+    }
+    if (entry.kind === "cloud") {
+      entry.mesh.position.y = entry.baseY + Math.sin(elapsedSeconds * 0.32 + entry.phase) * entry.floatRange;
+      continue;
+    }
+    if (entry.kind === "mascot") {
+      entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 2.1;
+      entry.group.rotation.y += deltaSeconds * entry.spin;
+      if (entry.halo) {
+        entry.halo.rotation.z += deltaSeconds * 1.24;
+      }
+      if (entry.orb) {
+        entry.orb.position.y = entry.orbBaseY + Math.sin(elapsedSeconds * 1.8 + entry.phase) * 0.6;
+      }
+      continue;
+    }
+    if (entry.kind === "spark") {
+      entry.mesh.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 4.6;
+      entry.mesh.rotation.x += deltaSeconds * entry.spin;
+      entry.mesh.rotation.y += deltaSeconds * entry.spin * 1.2;
+    }
+  }
+
   for (const entry of sceneState.animatedPillars) {
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
     const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
     const fade = 1 - clamp((distance - nearDistance * 0.4) / Math.max(1, retainedDistance - nearDistance * 0.4), 0, 1);
     const worldMix = activeCell ? 1 : 0.42;
-    entry.body.material.opacity = (0.18 + fade * 0.78) * worldMix;
-    entry.cap.material.opacity = (0.16 + fade * 0.72) * worldMix;
+    entry.body.material.opacity = (0.28 + fade * 0.68) * worldMix;
+    entry.outline.material.opacity = (activeCell ? 0.9 : 0.42) * fade;
+    for (const ring of entry.bands) {
+      ring.material.opacity = (activeCell ? 0.58 : 0.26) + fade * 0.18;
+    }
+    entry.cap.material.opacity = (0.24 + fade * 0.56) * worldMix;
+    entry.crown.material.opacity = (activeCell ? 0.16 : 0.08) + fade * 0.12;
     entry.label.material.opacity = activeCell
-      ? 0.18 + fade * 0.74
-      : 0.08 + fade * 0.26;
+      ? 0.26 + fade * 0.66
+      : 0.1 + fade * 0.18;
   }
 
   for (const entry of sceneState.animatedPosts) {
@@ -1577,17 +2029,20 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     const farMix = clamp((distance - nearDistance * 0.8) / Math.max(1, retainedDistance - nearDistance * 0.8), 0, 1);
     entry.label.visible = true;
     entry.label.material.opacity = entry.isOpen
-      ? (activeCell ? 0.96 - farMix * 0.16 : 0.42 - farMix * 0.12)
-      : (activeCell ? 0.68 - farMix * 0.24 : 0.26 - farMix * 0.08);
+      ? (activeCell ? 0.96 - farMix * 0.16 : 0.52 - farMix * 0.12)
+      : (activeCell ? 0.74 - farMix * 0.2 : 0.32 - farMix * 0.08);
     entry.beacon.material.opacity = entry.isOpen
-      ? (activeCell ? 0.1 + farMix * 0.08 : 0.18 + farMix * 0.1)
-      : (activeCell ? 0.14 + farMix * 0.2 : 0.2 + farMix * 0.14);
+      ? (activeCell ? 0.18 + farMix * 0.08 : 0.22 + farMix * 0.1)
+      : (activeCell ? 0.2 + farMix * 0.18 : 0.24 + farMix * 0.12);
     entry.ring.material.opacity = entry.isOpen
-      ? (activeCell ? 0.66 + farMix * 0.12 : 0.22 + farMix * 0.08)
-      : (activeCell ? 0.24 + farMix * 0.18 : 0.14 + farMix * 0.1);
+      ? (activeCell ? 0.74 + farMix * 0.12 : 0.32 + farMix * 0.08)
+      : (activeCell ? 0.34 + farMix * 0.16 : 0.18 + farMix * 0.1);
     entry.halo.material.opacity = entry.isOpen
-      ? (activeCell ? 0.16 + farMix * 0.08 : 0.08 + farMix * 0.06)
-      : (activeCell ? 0.06 + farMix * 0.08 : 0.04 + farMix * 0.05);
+      ? (activeCell ? 0.24 + farMix * 0.08 : 0.12 + farMix * 0.06)
+      : (activeCell ? 0.1 + farMix * 0.08 : 0.06 + farMix * 0.05);
+    entry.outline.material.opacity = entry.isOpen
+      ? (activeCell ? 0.92 : 0.48)
+      : (activeCell ? 0.74 : 0.36);
     entry.center.material.opacity = entry.isOpen
       ? (activeCell ? 1 : 0.54)
       : (activeCell ? 0.86 : 0.34);
@@ -1595,6 +2050,17 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
 
   for (const entry of sceneState.animatedPresence) {
     entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 1.2;
+    entry.group.rotation.y += deltaSeconds * 0.24;
+    if (entry.halo) {
+      entry.halo.rotation.z += deltaSeconds * 1.14;
+    }
+    if (entry.orb) {
+      entry.orb.position.y = entry.orbBaseY + Math.sin(elapsedSeconds * 1.4 + entry.phase) * 0.26;
+    }
+    if (entry.label) {
+      const distance = entry.group.position.distanceTo(sceneState.camera.position);
+      entry.label.material.opacity = 1 - clamp((distance - nearDistance * 0.45) / Math.max(1, retainedDistance - nearDistance * 0.45), 0, 1);
+    }
   }
 
   for (const mesh of sceneState.billboards) {
