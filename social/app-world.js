@@ -130,6 +130,7 @@ const sceneState = {
   clickable: [],
   snow: null,
   snowData: [],
+  snowBounds: null,
   playerAvatar: null,
   trailPuffs: [],
   routeGuide: null,
@@ -1247,6 +1248,62 @@ function getWorldBounds(streamPayload) {
       maxZ: Number.NEGATIVE_INFINITY,
     },
   );
+}
+
+function getConfettiFieldBounds() {
+  const fallbackCenterX = sceneState.snowBounds?.centerX
+    ?? sceneState.camera?.position.x
+    ?? state.navigationPosition.x;
+  const fallbackCenterZ = sceneState.snowBounds?.centerZ
+    ?? sceneState.camera?.position.z
+    ?? state.navigationPosition.z;
+
+  if (!state.meta?.bounds) {
+    return {
+      centerX: fallbackCenterX,
+      centerZ: fallbackCenterZ,
+      halfX: 320,
+      halfZ: 380,
+      minY: -36,
+      maxY: Math.max(CAMERA.maxY + 64, 320),
+    };
+  }
+
+  const centerX = (state.meta.bounds.minX + state.meta.bounds.maxX) / 2;
+  const centerZ = (state.meta.bounds.minZ + state.meta.bounds.maxZ) / 2;
+  const spanX = Math.max(1, state.meta.bounds.maxX - state.meta.bounds.minX);
+  const spanZ = Math.max(1, state.meta.bounds.maxZ - state.meta.bounds.minZ);
+  return {
+    centerX,
+    centerZ,
+    halfX: Math.max(360, spanX * 1.15),
+    halfZ: Math.max(420, spanZ * 1.2),
+    minY: -36,
+    maxY: Math.max(CAMERA.maxY + 72, 340),
+  };
+}
+
+function resetConfettiField() {
+  if (!sceneState.snow || !sceneState.snowData.length) {
+    return;
+  }
+
+  const bounds = getConfettiFieldBounds();
+  sceneState.snowBounds = bounds;
+  const positions = sceneState.snow.geometry.attributes.position.array;
+  const heightRange = bounds.maxY - bounds.minY;
+
+  for (let index = 0; index < sceneState.snowData.length; index += 1) {
+    const particle = sceneState.snowData[index];
+    particle.x = bounds.centerX + (Math.random() - 0.5) * bounds.halfX * 2;
+    particle.y = bounds.minY + Math.random() * heightRange;
+    particle.z = bounds.centerZ + (Math.random() - 0.5) * bounds.halfZ * 2;
+    positions[index * 3] = particle.x;
+    positions[index * 3 + 1] = particle.y;
+    positions[index * 3 + 2] = particle.z;
+  }
+
+  sceneState.snow.geometry.attributes.position.needsUpdate = true;
 }
 
 function rebuildVirtualDecor(streamPayload) {
@@ -2540,6 +2597,8 @@ function initScene() {
   };
   syncLocalAvatar(0);
 
+  const confettiBounds = getConfettiFieldBounds();
+  sceneState.snowBounds = confettiBounds;
   const snowGeometry = new THREE.BufferGeometry();
   const snowCount = 2200;
   const snowPositions = new Float32Array(snowCount * 3);
@@ -2550,13 +2609,16 @@ function initScene() {
     snowColors[index * 3] = color.r;
     snowColors[index * 3 + 1] = color.g;
     snowColors[index * 3 + 2] = color.b;
-    snowPositions[index * 3] = (Math.random() - 0.5) * 280;
-    snowPositions[index * 3 + 1] = Math.random() * 320;
-    snowPositions[index * 3 + 2] = (Math.random() - 0.5) * 360;
+    const x = confettiBounds.centerX + (Math.random() - 0.5) * confettiBounds.halfX * 2;
+    const y = confettiBounds.minY + Math.random() * (confettiBounds.maxY - confettiBounds.minY);
+    const z = confettiBounds.centerZ + (Math.random() - 0.5) * confettiBounds.halfZ * 2;
+    snowPositions[index * 3] = x;
+    snowPositions[index * 3 + 1] = y;
+    snowPositions[index * 3 + 2] = z;
     return {
-      offsetX: snowPositions[index * 3],
-      offsetY: snowPositions[index * 3 + 1],
-      offsetZ: snowPositions[index * 3 + 2],
+      x,
+      y,
+      z,
       driftX: (Math.random() - 0.5) * 4.2,
       driftZ: (Math.random() - 0.5) * 4.8,
       fallSpeed: 16 + Math.random() * 26,
@@ -2825,6 +2887,7 @@ async function loadMeta(force = false) {
   const nearDistance = payload.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = payload.renderer?.fog?.farDistance ?? 720;
   sceneState.scene.fog = new THREE.Fog(WORLD_STYLE.fog, nearDistance, farDistance * WORLD_STREAM.fogMultiplier);
+  resetConfettiField();
   updateMetaPanel();
   return payload;
 }
@@ -2932,38 +2995,39 @@ function updateSnow(deltaSeconds, elapsedSeconds) {
     return;
   }
   const positions = sceneState.snow.geometry.attributes.position.array;
-  const camera = sceneState.camera.position;
-  const volumeX = 280;
-  const volumeZ = 360;
-  const minY = -36;
-  const maxY = 320;
+  const bounds = sceneState.snowBounds ?? getConfettiFieldBounds();
+  sceneState.snowBounds = bounds;
+  const minX = bounds.centerX - bounds.halfX;
+  const maxX = bounds.centerX + bounds.halfX;
+  const minZ = bounds.centerZ - bounds.halfZ;
+  const maxZ = bounds.centerZ + bounds.halfZ;
   for (let index = 0; index < sceneState.snowData.length; index += 1) {
     const particle = sceneState.snowData[index];
-    particle.offsetX += particle.driftX * deltaSeconds;
-    particle.offsetZ += particle.driftZ * deltaSeconds;
-    particle.offsetY -= particle.fallSpeed * deltaSeconds;
-    particle.offsetX += Math.sin(elapsedSeconds * particle.sway + particle.phase) * 0.12;
-    particle.offsetZ += Math.cos(elapsedSeconds * (particle.sway * 0.82) + particle.phase) * 0.1;
+    particle.x += particle.driftX * deltaSeconds;
+    particle.z += particle.driftZ * deltaSeconds;
+    particle.y -= particle.fallSpeed * deltaSeconds;
+    particle.x += Math.sin(elapsedSeconds * particle.sway + particle.phase) * 0.12;
+    particle.z += Math.cos(elapsedSeconds * (particle.sway * 0.82) + particle.phase) * 0.1;
 
-    if (particle.offsetY < minY) {
-      particle.offsetY = maxY + Math.random() * 48;
-      particle.offsetX = (Math.random() - 0.5) * volumeX * 2;
-      particle.offsetZ = (Math.random() - 0.5) * volumeZ * 2;
+    if (particle.y < bounds.minY) {
+      particle.y = bounds.maxY + Math.random() * 48;
+      particle.x = bounds.centerX + (Math.random() - 0.5) * bounds.halfX * 2;
+      particle.z = bounds.centerZ + (Math.random() - 0.5) * bounds.halfZ * 2;
     }
-    if (particle.offsetX < -volumeX) {
-      particle.offsetX += volumeX * 2;
-    } else if (particle.offsetX > volumeX) {
-      particle.offsetX -= volumeX * 2;
+    if (particle.x < minX) {
+      particle.x += bounds.halfX * 2;
+    } else if (particle.x > maxX) {
+      particle.x -= bounds.halfX * 2;
     }
-    if (particle.offsetZ < -volumeZ) {
-      particle.offsetZ += volumeZ * 2;
-    } else if (particle.offsetZ > volumeZ) {
-      particle.offsetZ -= volumeZ * 2;
+    if (particle.z < minZ) {
+      particle.z += bounds.halfZ * 2;
+    } else if (particle.z > maxZ) {
+      particle.z -= bounds.halfZ * 2;
     }
 
-    positions[index * 3] = camera.x + particle.offsetX;
-    positions[index * 3 + 1] = camera.y + particle.offsetY;
-    positions[index * 3 + 2] = camera.z + particle.offsetZ;
+    positions[index * 3] = particle.x;
+    positions[index * 3 + 1] = particle.y;
+    positions[index * 3 + 2] = particle.z;
   }
   sceneState.snow.geometry.attributes.position.needsUpdate = true;
 }
