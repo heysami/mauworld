@@ -113,6 +113,7 @@ const sceneState = {
   animatedPresence: [],
   clickable: [],
   snow: null,
+  snowData: [],
   raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(),
   floorMarker: null,
@@ -198,6 +199,52 @@ function truncateText(value, maxLength) {
     return text;
   }
   return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}...`;
+}
+
+function fitCanvasText(context, value, maxWidth) {
+  let text = String(value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+  if (context.measureText(text).width <= maxWidth) {
+    return text;
+  }
+  while (text.length > 1 && context.measureText(`${text}...`).width > maxWidth) {
+    text = text.slice(0, -1).trimEnd();
+  }
+  return `${text || ""}...`;
+}
+
+function wrapCanvasText(context, value, maxWidth, maxLines = 2) {
+  const words = String(value ?? "").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return [""];
+  }
+
+  const lines = [];
+  let current = "";
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    const candidate = current ? `${current} ${word}` : word;
+    if (!current || context.measureText(candidate).width <= maxWidth) {
+      current = candidate;
+      continue;
+    }
+
+    lines.push(current);
+    if (lines.length >= maxLines - 1) {
+      const remainder = [word, ...words.slice(index + 1)].join(" ");
+      lines.push(fitCanvasText(context, remainder, maxWidth));
+      return lines;
+    }
+    current = word;
+  }
+
+  if (current) {
+    lines.push(fitCanvasText(context, current, maxWidth));
+  }
+
+  return lines.slice(0, maxLines);
 }
 
 function hashString(value) {
@@ -658,13 +705,26 @@ function createCompactCardTexture(title, subtitle = "", options = {}) {
   context.fillRect(width - 84, height - 22, 56, 10);
 
   context.fillStyle = bodyColor;
-  context.font = "700 44px Manrope, sans-serif";
+  const titleFontSize = options.titleFontSize ?? 44;
+  const titleLineHeight = options.titleLineHeight ?? Math.round(titleFontSize * 1.04);
+  const titleMaxLines = Math.max(1, options.titleLines ?? 1);
+  context.font = `800 ${titleFontSize}px Manrope, sans-serif`;
   context.textBaseline = "top";
-  context.fillText(truncateText(title, 28), 30, 38);
+  const titleLines = wrapCanvasText(context, title, width - 60, titleMaxLines);
+  titleLines.forEach((line, index) => {
+    context.fillText(line, 30, 34 + index * titleLineHeight);
+  });
 
-  context.fillStyle = mutedColor;
-  context.font = "600 28px Manrope, sans-serif";
-  context.fillText(truncateText(subtitle, 42), 30, 112);
+  if (subtitle) {
+    context.fillStyle = mutedColor;
+    const subtitleFontSize = options.subtitleFontSize ?? 28;
+    context.font = `600 ${subtitleFontSize}px Manrope, sans-serif`;
+    context.fillText(
+      fitCanvasText(context, subtitle, width - 60),
+      30,
+      34 + titleLines.length * titleLineHeight + 16,
+    );
+  }
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -792,11 +852,100 @@ function createOutlineShell(geometry, color, scale = 1.08) {
     new THREE.MeshBasicMaterial({
       color: new THREE.Color(color),
       side: THREE.BackSide,
+      transparent: true,
+      opacity: 1,
       fog: false,
     }),
   );
   shell.scale.setScalar(scale);
   return shell;
+}
+
+function createFloatingTower(seed, options = {}) {
+  const accents = pickAccentSet(seed);
+  const towerWidth = options.width ?? 18;
+  const towerDepth = options.depth ?? 16;
+  const towerHeight = options.height ?? 140;
+  const group = new THREE.Group();
+  const bodies = [];
+  const outlines = [];
+  const bands = [];
+  const segments = [
+    { height: towerHeight * 0.52, scale: 1 },
+    { height: towerHeight * 0.28, scale: 0.78 },
+    { height: towerHeight * 0.18, scale: 0.58 },
+  ];
+
+  let offsetY = 0;
+  segments.forEach((segment, index) => {
+    const geometry = new THREE.BoxGeometry(
+      towerWidth * segment.scale,
+      segment.height,
+      towerDepth * segment.scale,
+    );
+    const outline = createOutlineShell(geometry, pickAccent(seed, index), 1.08);
+    outline.position.y = offsetY + segment.height / 2;
+    group.add(outline);
+    outlines.push(outline);
+
+    const body = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(WORLD_STYLE.white),
+        transparent: true,
+        opacity: 0.22,
+      }),
+    );
+    body.position.copy(outline.position);
+    group.add(body);
+    bodies.push(body);
+
+    const band = new THREE.Mesh(
+      new THREE.TorusGeometry(
+        Math.max(towerWidth, towerDepth) * segment.scale * 0.78,
+        0.46,
+        10,
+        36,
+      ),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(pickAccent(seed, index + 1)),
+        transparent: true,
+        opacity: 0.28,
+        fog: false,
+      }),
+    );
+    band.rotation.x = Math.PI / 2;
+    band.position.y = offsetY + segment.height * 0.86;
+    group.add(band);
+    bands.push(band);
+
+    offsetY += segment.height * 0.82;
+  });
+
+  const halo = createBillboard(
+    createCircleTexture({
+      fill: "rgba(255, 255, 255, 0.52)",
+      stroke: accents.primary,
+      glow: `${accents.secondary}33`,
+    }),
+    towerWidth * 1.6,
+    towerWidth * 1.6,
+    {
+      opacity: 0.14,
+      fog: false,
+      renderOrder: 3,
+    },
+  );
+  halo.position.y = offsetY + 12;
+  group.add(halo);
+
+  return {
+    group,
+    bodies,
+    outlines,
+    bands,
+    halo,
+  };
 }
 
 function createMascotFigure(seed, options = {}) {
@@ -944,6 +1093,66 @@ function rebuildVirtualDecor(streamPayload) {
   const span = Math.max(180, Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * 0.78);
   const mainPillar = [...(streamPayload.pillars ?? [])]
     .sort((left, right) => (right.importance_score ?? 0) - (left.importance_score ?? 0))[0];
+  const gridY = -Math.max(72, span * 0.32);
+  const gridExtent = span * 2.8;
+  const minorStep = Math.max(18, Math.round(span / 12));
+  const majorStep = minorStep * 4;
+  const minorPositions = [];
+  const majorPositions = [];
+
+  for (let offset = -gridExtent / 2; offset <= gridExtent / 2; offset += minorStep) {
+    const target = Math.round(offset);
+    const bucket = Math.abs(target) % majorStep === 0 ? majorPositions : minorPositions;
+    bucket.push(
+      centerX + target,
+      gridY,
+      centerZ - gridExtent / 2,
+      centerX + target,
+      gridY,
+      centerZ + gridExtent / 2,
+    );
+    bucket.push(
+      centerX - gridExtent / 2,
+      gridY,
+      centerZ + target,
+      centerX + gridExtent / 2,
+      gridY,
+      centerZ + target,
+    );
+  }
+
+  const minorGrid = new THREE.LineSegments(
+    new THREE.BufferGeometry().setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(minorPositions, 3),
+    ),
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color("#b7dcff"),
+      transparent: true,
+      opacity: 0.05,
+      fog: false,
+    }),
+  );
+  const majorGrid = new THREE.LineSegments(
+    new THREE.BufferGeometry().setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(majorPositions, 3),
+    ),
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color("#ff8fc8"),
+      transparent: true,
+      opacity: 0.08,
+      fog: false,
+    }),
+  );
+  sceneState.decor.add(minorGrid);
+  sceneState.decor.add(majorGrid);
+  sceneState.animatedDecor.push({
+    kind: "altitude-grid",
+    minor: minorGrid,
+    major: majorGrid,
+    gridY,
+  });
 
   for (let index = 0; index < 4; index += 1) {
     const curve = new THREE.EllipseCurve(
@@ -970,6 +1179,32 @@ function rebuildVirtualDecor(streamPayload) {
       }),
     );
     sceneState.decor.add(line);
+  }
+
+  for (let index = 0; index < 16; index += 1) {
+    const angle = index * ((Math.PI * 2) / 16) + (index % 2) * 0.12;
+    const radiusX = span * (1.5 + (index % 4) * 0.08);
+    const radiusZ = span * (1.72 + (index % 3) * 0.1);
+    const x = centerX + Math.cos(angle) * radiusX;
+    const z = centerZ + Math.sin(angle) * radiusZ;
+    const baseY = 44 + (index % 5) * 16;
+    const tower = createFloatingTower(`skyline-${index}`, {
+      width: 14 + (index % 4) * 3.5,
+      depth: 12 + ((index + 1) % 3) * 3.2,
+      height: 92 + (index % 6) * 24,
+    });
+    tower.group.position.set(x, baseY, z);
+    tower.group.rotation.y = -angle + Math.PI / 2 + ((index % 3) - 1) * 0.08;
+    sceneState.decor.add(tower.group);
+    sceneState.animatedDecor.push({
+      kind: "skyline",
+      ...tower,
+      anchor: new THREE.Vector3(x, baseY, z),
+      baseY,
+      bob: 0.18 + (index % 4) * 0.04,
+      phase: index * 0.44,
+      spin: ((index % 2 === 0 ? 1 : -1) * (0.006 + (index % 3) * 0.002)),
+    });
   }
 
   if (mainPillar) {
@@ -1058,29 +1293,29 @@ function rebuildVirtualDecor(streamPayload) {
     });
   });
 
-  for (let index = 0; index < 18; index += 1) {
+  for (let index = 0; index < 34; index += 1) {
     const spark = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.5 + (index % 3) * 0.15, 0),
+      new THREE.OctahedronGeometry(0.34 + (index % 4) * 0.12, 0),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(pickAccent(`spark-${index}`)),
         transparent: true,
-        opacity: 0.82,
+        opacity: 0.88,
         fog: false,
       }),
     );
     spark.position.set(
-      centerX + Math.cos(index * 0.72) * (span * (0.26 + (index % 4) * 0.08)),
-      52 + (index % 5) * 18,
-      centerZ + Math.sin(index * 0.72) * (span * (0.24 + (index % 4) * 0.1)),
+      centerX + Math.cos(index * 0.54) * (span * (0.18 + (index % 6) * 0.06)),
+      34 + (index % 8) * 12,
+      centerZ + Math.sin(index * 0.54) * (span * (0.16 + (index % 6) * 0.08)),
     );
     sceneState.decor.add(spark);
     sceneState.animatedDecor.push({
       kind: "spark",
       mesh: spark,
       baseY: spark.position.y,
-      bob: 0.6 + (index % 4) * 0.08,
-      phase: index * 0.45,
-      spin: 0.3 + (index % 3) * 0.12,
+      bob: 0.52 + (index % 5) * 0.08,
+      phase: index * 0.34,
+      spin: 0.38 + (index % 4) * 0.1,
     });
   }
 }
@@ -1369,21 +1604,21 @@ function buildPostObject(entry) {
         ? accents.secondary
         : accents.tertiary;
   const width = 8.6 + entry.size_factor * 4.8 + (entry.display_tier === "hero" ? 1.6 : 0);
-  const height = 4.8 + entry.size_factor * 2.2 + (entry.display_tier === "hero" ? 0.7 : 0);
+  const height = 5.3 + entry.size_factor * 2.5 + (entry.display_tier === "hero" ? 0.9 : 0);
   const elevation = height * 0.62;
-  const subtitle = post.created_at
-    ? formatRelativeTime(post.created_at)
-    : (entry.tag?.label ? `#${entry.tag.label}` : "Post");
 
   const card = createBillboard(
     createCompactCardTexture(
       post.title || truncateText(post.body_plain || "Post", 28),
-      subtitle,
+      "",
       {
         width: 700,
-        height: 220,
+        height: entry.display_tier === "hero" ? 272 : 248,
         accent: color,
         border: accents.primary,
+        titleLines: entry.display_tier === "hero" ? 3 : 2,
+        titleFontSize: entry.display_tier === "hero" ? 46 : 42,
+        titleLineHeight: entry.display_tier === "hero" ? 48 : 44,
       },
     ),
     width,
@@ -1831,25 +2066,52 @@ function initScene() {
   sceneState.scene.add(sceneState.root);
 
   const snowGeometry = new THREE.BufferGeometry();
-  const snowCount = 1100;
+  const snowCount = 2200;
   const snowPositions = new Float32Array(snowCount * 3);
-  for (let index = 0; index < snowCount; index += 1) {
-    snowPositions[index * 3] = (Math.random() - 0.5) * 1800;
+  const snowColors = new Float32Array(snowCount * 3);
+  sceneState.snowData = Array.from({ length: snowCount }, (_, index) => {
+    const color = new THREE.Color(pickAccent(`confetti-${index}`))
+      .lerp(new THREE.Color("#ffffff"), 0.16 + Math.random() * 0.26);
+    snowColors[index * 3] = color.r;
+    snowColors[index * 3 + 1] = color.g;
+    snowColors[index * 3 + 2] = color.b;
+    snowPositions[index * 3] = (Math.random() - 0.5) * 280;
     snowPositions[index * 3 + 1] = Math.random() * 320;
-    snowPositions[index * 3 + 2] = (Math.random() - 0.5) * 1800;
-  }
+    snowPositions[index * 3 + 2] = (Math.random() - 0.5) * 360;
+    return {
+      offsetX: snowPositions[index * 3],
+      offsetY: snowPositions[index * 3 + 1],
+      offsetZ: snowPositions[index * 3 + 2],
+      driftX: (Math.random() - 0.5) * 4.2,
+      driftZ: (Math.random() - 0.5) * 4.8,
+      fallSpeed: 16 + Math.random() * 26,
+      sway: 0.6 + Math.random() * 1.2,
+      phase: Math.random() * Math.PI * 2,
+    };
+  });
   snowGeometry.setAttribute("position", new THREE.BufferAttribute(snowPositions, 3));
+  snowGeometry.setAttribute("color", new THREE.BufferAttribute(snowColors, 3));
   sceneState.snow = new THREE.Points(
     snowGeometry,
     new THREE.PointsMaterial({
-      color: new THREE.Color("#f7fbff"),
-      size: 2.2,
+      map: createCircleTexture({
+        fill: "rgba(255, 255, 255, 0.96)",
+        stroke: "rgba(255, 255, 255, 0.24)",
+        glow: "rgba(255, 255, 255, 0.14)",
+        size: 72,
+      }),
+      size: 1.9,
       transparent: true,
-      opacity: 0.96,
+      opacity: 0.92,
       depthWrite: false,
       sizeAttenuation: true,
+      alphaTest: 0.02,
+      blending: THREE.AdditiveBlending,
+      fog: false,
+      vertexColors: true,
     }),
   );
+  sceneState.snow.renderOrder = 2;
   sceneState.scene.add(sceneState.snow);
 
   updateCameraRotation();
@@ -2222,17 +2484,43 @@ async function sendPresence() {
   }
 }
 
-function updateSnow(deltaSeconds) {
-  if (!sceneState.snow) {
+function updateSnow(deltaSeconds, elapsedSeconds) {
+  if (!sceneState.snow || !sceneState.camera) {
     return;
   }
   const positions = sceneState.snow.geometry.attributes.position.array;
-  for (let index = 0; index < positions.length; index += 3) {
-    positions[index] += Math.sin((positions[index + 2] + performance.now() * 0.001) * 0.003) * 0.08;
-    positions[index + 1] -= 20 * deltaSeconds;
-    if (positions[index + 1] < -10) {
-      positions[index + 1] = 320;
+  const camera = sceneState.camera.position;
+  const volumeX = 280;
+  const volumeZ = 360;
+  const minY = -36;
+  const maxY = 320;
+  for (let index = 0; index < sceneState.snowData.length; index += 1) {
+    const particle = sceneState.snowData[index];
+    particle.offsetX += particle.driftX * deltaSeconds;
+    particle.offsetZ += particle.driftZ * deltaSeconds;
+    particle.offsetY -= particle.fallSpeed * deltaSeconds;
+    particle.offsetX += Math.sin(elapsedSeconds * particle.sway + particle.phase) * 0.12;
+    particle.offsetZ += Math.cos(elapsedSeconds * (particle.sway * 0.82) + particle.phase) * 0.1;
+
+    if (particle.offsetY < minY) {
+      particle.offsetY = maxY + Math.random() * 48;
+      particle.offsetX = (Math.random() - 0.5) * volumeX * 2;
+      particle.offsetZ = (Math.random() - 0.5) * volumeZ * 2;
     }
+    if (particle.offsetX < -volumeX) {
+      particle.offsetX += volumeX * 2;
+    } else if (particle.offsetX > volumeX) {
+      particle.offsetX -= volumeX * 2;
+    }
+    if (particle.offsetZ < -volumeZ) {
+      particle.offsetZ += volumeZ * 2;
+    } else if (particle.offsetZ > volumeZ) {
+      particle.offsetZ -= volumeZ * 2;
+    }
+
+    positions[index * 3] = camera.x + particle.offsetX;
+    positions[index * 3 + 1] = camera.y + particle.offsetY;
+    positions[index * 3 + 2] = camera.z + particle.offsetZ;
   }
   sceneState.snow.geometry.attributes.position.needsUpdate = true;
 }
@@ -2248,8 +2536,40 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
       entry.mesh.rotation.z += deltaSeconds * entry.speed;
       continue;
     }
+    if (entry.kind === "altitude-grid") {
+      const altitudeMix = clamp(
+        (sceneState.camera.position.y - CAMERA.minY) / Math.max(1, CAMERA.maxY - CAMERA.minY),
+        0,
+        1,
+      );
+      entry.minor.material.opacity = 0.04 + altitudeMix * 0.07;
+      entry.major.material.opacity = 0.075 + altitudeMix * 0.11;
+      continue;
+    }
     if (entry.kind === "cloud") {
       entry.mesh.position.y = entry.baseY + Math.sin(elapsedSeconds * 0.32 + entry.phase) * entry.floatRange;
+      continue;
+    }
+    if (entry.kind === "skyline") {
+      const distance = entry.anchor.distanceTo(sceneState.camera.position);
+      const fade = 1 - clamp(
+        (distance - nearDistance * 1.6) / Math.max(1, retainedDistance * 1.18 - nearDistance * 1.6),
+        0,
+        1,
+      );
+      entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 2.8;
+      entry.group.rotation.y += deltaSeconds * entry.spin;
+      for (const body of entry.bodies) {
+        body.material.opacity = 0.04 + fade * 0.18;
+      }
+      for (const outline of entry.outlines) {
+        outline.material.opacity = 0.08 + fade * 0.26;
+      }
+      for (const band of entry.bands) {
+        band.material.opacity = 0.06 + fade * 0.16;
+        band.rotation.z += deltaSeconds * 0.08;
+      }
+      entry.halo.material.opacity = 0.03 + fade * 0.1;
       continue;
     }
     if (entry.kind === "mascot") {
@@ -2646,7 +2966,7 @@ function animate() {
 
   applyFocusAnimation();
   updateMovement(deltaSeconds);
-  updateSnow(deltaSeconds);
+  updateSnow(deltaSeconds, elapsedSeconds);
   updateAnimatedObjects(deltaSeconds, elapsedSeconds);
   updateCameraPanel();
   sendPresence();
