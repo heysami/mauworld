@@ -3585,10 +3585,10 @@ function onWheel(event) {
   if (state.focusAnimation || state.travelAnimation) {
     return;
   }
-  state.navigationPosition.y = clamp(
-    state.navigationPosition.y + (-event.deltaY * CAMERA.wheelFactor),
-    CAMERA.minY,
-    CAMERA.maxY,
+  state.cameraRadius = clamp(
+    state.cameraRadius + event.deltaY * 0.045,
+    PLAYER_VIEW.minRadius,
+    PLAYER_VIEW.maxRadius,
   );
   syncCameraToFollowTarget();
 }
