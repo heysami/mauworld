@@ -636,8 +636,9 @@ function clearSearchResults() {
 
 function setLoading(isLoading) {
   state.loading = isLoading;
+  document.body.classList.toggle("is-world-loading", isLoading);
   if (elements.loading) {
-    elements.loading.hidden = !isLoading;
+    elements.loading.setAttribute("aria-hidden", String(!isLoading));
   }
   updateStagePanel();
 }
@@ -4364,23 +4365,67 @@ function pickSceneObject(event) {
   }
 }
 
+function getPrimaryPillar(entries = state.stream?.pillars ?? []) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return null;
+  }
+  return entries.reduce((best, entry) => {
+    if (!best) {
+      return entry;
+    }
+    return (entry.importance_score ?? 0) > (best.importance_score ?? 0) ? entry : best;
+  }, null);
+}
+
+function computeOpeningHeroFrame(anchor, options = {}) {
+  const targetHeight = Math.max(54, options.height * 0.56);
+  const target = new THREE.Vector3(
+    anchor.x,
+    anchor.y + targetHeight,
+    anchor.z,
+  );
+  const position = new THREE.Vector3(
+    anchor.x - Math.max(14, options.radius * 0.36),
+    Math.min(CAMERA.maxY - 8, target.y + Math.max(28, options.height * 0.18)),
+    anchor.z + Math.max(118, options.radius * 2.9),
+  );
+  return { position, target };
+}
+
 function positionCameraForWorldMeta() {
   if (!state.meta || state.initialViewFramed) {
     return;
   }
-  const cellSize = state.meta.renderer?.lod?.cellSize ?? 64;
   const centerX = (state.meta.bounds.minX + state.meta.bounds.maxX) / 2;
   const centerZ = (state.meta.bounds.minZ + state.meta.bounds.maxZ) / 2;
   const spanX = Math.max(1, state.meta.bounds.maxX - state.meta.bounds.minX);
   const spanZ = Math.max(1, state.meta.bounds.maxZ - state.meta.bounds.minZ);
-  const cameraDistance = Math.min(cellSize * 2.7, Math.max(136, Math.max(spanX, spanZ) * 0.58));
-  const target = new THREE.Vector3(centerX, 84, centerZ);
-  const position = new THREE.Vector3(centerX + cameraDistance * 0.44, 132, centerZ + cameraDistance);
+  const frame = computeOpeningHeroFrame(
+    new THREE.Vector3(centerX, 0, centerZ),
+    {
+      height: Math.max(150, Math.min(220, Math.max(spanX, spanZ) * 0.46)),
+      radius: Math.max(26, Math.min(42, Math.max(spanX, spanZ) * 0.08)),
+    },
+  );
+  const { position, target } = frame;
   aimCameraAt(position, target);
 }
 
 function frameInitialViewFromStream() {
   if (!state.stream || state.initialViewFramed) {
+    return;
+  }
+  const primaryPillar = getPrimaryPillar(state.stream.pillars);
+  if (primaryPillar) {
+    const frame = computeOpeningHeroFrame(
+      new THREE.Vector3(primaryPillar.position_x, primaryPillar.position_y, primaryPillar.position_z),
+      {
+        height: primaryPillar.height,
+        radius: primaryPillar.radius,
+      },
+    );
+    aimCameraAt(frame.position, frame.target);
+    state.initialViewFramed = true;
     return;
   }
   const anchors = [

@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
   </head>
-  <body class="world-body">
+  <body class="world-body is-world-loading">
     <main class="world-page">
       <section class="world-scene-shell">
         <canvas class="world-canvas" data-world-canvas></canvas>
@@ -25,6 +25,33 @@
           <div class="world-focus-veil__piece" data-world-focus-piece="right"></div>
           <div class="world-focus-veil__piece" data-world-focus-piece="bottom"></div>
           <div class="world-focus-veil__frame" data-world-focus-frame></div>
+        </div>
+
+        <div class="world-loader" data-world-loading role="status" aria-live="polite" aria-atomic="true">
+          <div class="world-loader__inner">
+            <div class="world-loader__graphic" aria-hidden="true">
+              <div class="world-loader__rings">
+                <span class="world-loader__ring world-loader__ring--outer"></span>
+                <span class="world-loader__ring world-loader__ring--inner"></span>
+              </div>
+              <div class="world-loader__streaks">
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+                <span class="world-loader__streak"></span>
+              </div>
+              <span class="world-loader__core"></span>
+            </div>
+            <p class="world-loader__label">Loading the current world</p>
+          </div>
         </div>
 
         <aside class="world-panel" aria-label="World search">
