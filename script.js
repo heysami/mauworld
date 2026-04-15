@@ -108,7 +108,7 @@ if (languageSelector) {
         start_title: "Five steps to your first run.",
         start_desc:
           "Set up the accounts and connections once, then download Maumau and follow the guide inside the app.",
-        footer_note: "Landing page for the current Maumau local build.",
+        footer_note: "Overview for the current Maumau local build.",
         footer_landing: "Overview",
         footer_guide: "Guide",
         footer_download: "Download macOS app",
@@ -2308,7 +2308,7 @@ if (languageSelector) {
 
   const footerContent = {
     en: {
-      note: "Maumau for macOS. Guided setup, built-in teams, clear operations.",
+      note: "Overview for the current Maumau local build.",
       guide: "Guide",
       download: "Download Maumau",
     },
@@ -2339,7 +2339,7 @@ if (languageSelector) {
     },
     my: {
       note: "Maumau for macOS. Guided setup, built-in teams, နဲ့ ရှင်းလင်းတဲ့ operations.",
-      guide: "Operations guide",
+      guide: "Guide",
       download: "Maumau ကို download လုပ်မယ်",
     },
     fil: {
