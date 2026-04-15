@@ -44,6 +44,10 @@ async function loadLiveKitClient() {
   return import(LIVEKIT_CLIENT_MODULE_URL);
 }
 
+function normalizePlayError(error) {
+  return String(error?.name || error?.message || "").trim();
+}
+
 function detachTrackElement(entry) {
   if (!entry) {
     return;
@@ -90,6 +94,7 @@ export function createBrowserMediaController(options = {}) {
     publishedSessions: new Map(),
     remoteTracks: new Map(),
     pendingSubscriptions: new Map(),
+    audioPlaybackState: new Map(),
   };
 
   function notifyStatus(patch = {}) {
@@ -115,6 +120,56 @@ export function createBrowserMediaController(options = {}) {
     return state.liveKitPromise;
   }
 
+  function notifyRemoteAudioState(sessionId) {
+    const key = String(sessionId ?? "").trim();
+    if (!key) {
+      return;
+    }
+    const playback = state.audioPlaybackState.get(key) ?? {};
+    options.onRemoteAudioState?.({
+      sessionId: key,
+      available: state.remoteTracks.has(getTrackKey(key, "audio")),
+      blocked: playback.blocked === true,
+      error: playback.error || "",
+    });
+  }
+
+  async function playRemoteTrackEntry(entry) {
+    if (!entry?.element) {
+      return false;
+    }
+    entry.element.autoplay = true;
+    entry.element.playsInline = true;
+    if (entry.kind === "audio") {
+      entry.element.muted = false;
+      entry.element.defaultMuted = false;
+      entry.element.volume = 1;
+    } else {
+      entry.element.muted = true;
+      entry.element.defaultMuted = true;
+    }
+    try {
+      await entry.element.play?.();
+      if (entry.kind === "audio") {
+        state.audioPlaybackState.set(entry.sessionId, {
+          blocked: false,
+          error: "",
+        });
+        notifyRemoteAudioState(entry.sessionId);
+      }
+      return true;
+    } catch (error) {
+      if (entry.kind === "audio") {
+        state.audioPlaybackState.set(entry.sessionId, {
+          blocked: true,
+          error: normalizePlayError(error),
+        });
+        notifyRemoteAudioState(entry.sessionId);
+      }
+      return false;
+    }
+  }
+
   function clearRemoteTrack(sessionId, kind, notify = true) {
     const key = getTrackKey(sessionId, kind);
     const existing = state.remoteTracks.get(key);
@@ -125,6 +180,9 @@ export function createBrowserMediaController(options = {}) {
     state.remoteTracks.delete(key);
     if (kind === "video" && notify) {
       options.onRemoteTrackRemoved?.({ sessionId });
+    } else if (kind === "audio") {
+      state.audioPlaybackState.delete(sessionId);
+      notifyRemoteAudioState(sessionId);
     }
   }
 
@@ -141,11 +199,9 @@ export function createBrowserMediaController(options = {}) {
       if (parsed.kind === "audio") {
         element.muted = false;
         audioContainer.append(element);
-        void element.play?.().catch(() => null);
       } else {
         element.muted = true;
         videoContainer.append(element);
-        void element.play?.().catch(() => null);
       }
 
       clearRemoteTrack(parsed.sessionId, parsed.kind, false);
@@ -159,6 +215,10 @@ export function createBrowserMediaController(options = {}) {
         element,
       };
       state.remoteTracks.set(entry.key, entry);
+      void playRemoteTrackEntry(entry);
+      if (parsed.kind === "audio") {
+        notifyRemoteAudioState(parsed.sessionId);
+      }
       if (parsed.kind === "video") {
         options.onRemoteTrack?.(entry);
       }
@@ -471,6 +531,26 @@ export function createBrowserMediaController(options = {}) {
       }
       applySubscription(sessionId, true);
       return true;
+    },
+
+    async resumePlayback(params = {}) {
+      const sessionId = String(params.sessionId ?? "").trim();
+      const kinds = new Set(
+        Array.isArray(params.kinds) && params.kinds.length > 0
+          ? params.kinds.map((kind) => String(kind ?? "").trim().toLowerCase()).filter(Boolean)
+          : ["audio", "video"],
+      );
+      const entries = [...state.remoteTracks.values()].filter((entry) => {
+        if (sessionId && entry.sessionId !== sessionId) {
+          return false;
+        }
+        return kinds.has(entry.kind);
+      });
+      if (entries.length === 0) {
+        return false;
+      }
+      const results = await Promise.all(entries.map((entry) => playRemoteTrackEntry(entry)));
+      return results.some(Boolean);
     },
 
     async disconnect() {

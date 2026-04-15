@@ -181,6 +181,10 @@ const state = {
     remoteVideoWidth: 0,
     remoteVideoHeight: 0,
     remoteVideoPaused: true,
+    remoteAudioSessionId: "",
+    remoteAudioAvailable: false,
+    remoteAudioBlocked: false,
+    remoteAudioError: "",
     lastPlayError: "",
   },
   worldCache: {
@@ -1064,6 +1068,10 @@ function resumeBrowserMediaPlayback() {
       ensureBrowserVideoPlayback(element);
     }
   }
+  void getBrowserMediaController().resumePlayback({
+    sessionId: state.browserPanelRemoteSessionId || state.browserMediaState.remoteAudioSessionId,
+    kinds: ["audio", "video"],
+  });
 }
 
 function mountBrowserStageVideoElement(videoElement) {
@@ -1314,6 +1322,13 @@ function getBrowserMediaController() {
         updateBrowserMediaVideoMetrics(null, "");
       }
       clearBrowserScreenVideo(sessionId);
+      updateBrowserPanel();
+    },
+    onRemoteAudioState: ({ sessionId, available, blocked, error }) => {
+      state.browserMediaState.remoteAudioSessionId = available ? String(sessionId ?? "").trim() : "";
+      state.browserMediaState.remoteAudioAvailable = available === true;
+      state.browserMediaState.remoteAudioBlocked = blocked === true;
+      state.browserMediaState.remoteAudioError = String(error ?? "").trim();
       updateBrowserPanel();
     },
     onStatus: ({ enabled, transport, connected, roomName, canPublish }) => {
@@ -5825,6 +5840,12 @@ function updateBrowserPanel() {
     hasRemotePanelSession
     && String(state.browserMediaState.lastPlayError || "").includes("NotAllowedError"),
   );
+  const needsManualAudioStart = Boolean(
+    hasRemotePanelSession
+    && state.browserMediaState.remoteAudioAvailable
+    && state.browserMediaState.remoteAudioBlocked
+    && state.browserMediaState.remoteAudioSessionId === remotePanelSession?.sessionId,
+  );
   const hasRemotePanelVideo = Boolean(
     !previewStream
     && remotePanelSession
@@ -5884,7 +5905,8 @@ function updateBrowserPanel() {
       elements.browserPlaceholder.textContent = "Browser blocked autoplay. Press start to watch this nearby stream.";
     }
     if (elements.browserResume) {
-      elements.browserResume.hidden = !needsManualPlaybackStart;
+      elements.browserResume.hidden = !(needsManualPlaybackStart || needsManualAudioStart);
+      elements.browserResume.textContent = needsManualPlaybackStart ? "Start Stream" : "Enable Sound";
     }
     return;
   }
