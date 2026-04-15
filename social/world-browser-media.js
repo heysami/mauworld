@@ -54,8 +54,27 @@ function detachTrackElement(entry) {
 
 export function createBrowserMediaController(options = {}) {
   const audioContainer = document.createElement("div");
-  audioContainer.hidden = true;
+  audioContainer.setAttribute("aria-hidden", "true");
+  audioContainer.style.position = "fixed";
+  audioContainer.style.left = "-9999px";
+  audioContainer.style.top = "-9999px";
+  audioContainer.style.width = "1px";
+  audioContainer.style.height = "1px";
+  audioContainer.style.opacity = "0";
+  audioContainer.style.pointerEvents = "none";
+  audioContainer.style.overflow = "hidden";
+  const videoContainer = document.createElement("div");
+  videoContainer.setAttribute("aria-hidden", "true");
+  videoContainer.style.position = "fixed";
+  videoContainer.style.left = "-9999px";
+  videoContainer.style.top = "-9999px";
+  videoContainer.style.width = "1px";
+  videoContainer.style.height = "1px";
+  videoContainer.style.opacity = "0";
+  videoContainer.style.pointerEvents = "none";
+  videoContainer.style.overflow = "hidden";
   document.body.append(audioContainer);
+  document.body.append(videoContainer);
 
   const state = {
     liveKit: null,
@@ -125,6 +144,8 @@ export function createBrowserMediaController(options = {}) {
         void element.play?.().catch(() => null);
       } else {
         element.muted = true;
+        videoContainer.append(element);
+        void element.play?.().catch(() => null);
       }
 
       clearRemoteTrack(parsed.sessionId, parsed.kind, false);
