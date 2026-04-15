@@ -238,6 +238,7 @@ const sceneState = {
   presence: new THREE.Group(),
   visitors: new THREE.Group(),
   effects: new THREE.Group(),
+  chatBubbleGhosts: new THREE.Group(),
   focusGhosts: new THREE.Group(),
   focusQueued: new THREE.Group(),
   routes: new THREE.Group(),
@@ -251,6 +252,7 @@ const sceneState = {
   animatedPosts: [],
   animatedTags: [],
   animatedPresence: [],
+  animatedChatBubbleGhosts: [],
   animatedBrowserScreens: [],
   presenceEntries: new Map(),
   browserScreenEntries: new Map(),
@@ -3926,6 +3928,59 @@ function createActorBubbleState(color, options = {}) {
   };
 }
 
+function removeChatBubbleGhost(entry) {
+  if (!entry?.mesh) {
+    return;
+  }
+  unregisterBillboard(entry.mesh);
+  if (entry.mesh.parent) {
+    entry.mesh.parent.remove(entry.mesh);
+  }
+  if (entry.mesh.geometry) {
+    entry.mesh.geometry.dispose();
+  }
+  disposeMaterial(entry.mesh.material);
+  const index = sceneState.animatedChatBubbleGhosts.indexOf(entry);
+  if (index >= 0) {
+    sceneState.animatedChatBubbleGhosts.splice(index, 1);
+  }
+}
+
+function spawnChatBubbleGhost(actorEntry, texture) {
+  if (!actorEntry?.bubble?.mesh || !texture || actorEntry.bubble.opacity <= 0.04) {
+    texture?.dispose?.();
+    return;
+  }
+  actorEntry.bubble.mesh.updateWorldMatrix(true, false);
+  const worldPosition = new THREE.Vector3();
+  const worldScale = new THREE.Vector3();
+  actorEntry.bubble.mesh.getWorldPosition(worldPosition);
+  actorEntry.bubble.mesh.getWorldScale(worldScale);
+  const baseWidth = Number(actorEntry.bubble.baseWidth) || CHAT_BUBBLE_BASE_WIDTH;
+  const baseHeight = Number(actorEntry.bubble.baseHeight) || CHAT_BUBBLE_BASE_HEIGHT;
+  const mesh = createBillboard(texture, baseWidth, baseHeight, {
+    opacity: actorEntry.bubble.mesh.material.opacity,
+    fog: false,
+    depthTest: false,
+    renderOrder: 10,
+  });
+  mesh.position.copy(worldPosition);
+  mesh.scale.copy(worldScale);
+  sceneState.chatBubbleGhosts.add(mesh);
+  sceneState.animatedChatBubbleGhosts.push({
+    mesh,
+    opacity: actorEntry.bubble.mesh.material.opacity,
+    lifetime: 1.55 + Math.random() * 0.35,
+    age: 0,
+    drift: new THREE.Vector3(
+      (Math.random() - 0.5) * 0.32,
+      2.6 + Math.random() * 0.8,
+      (Math.random() - 0.5) * 0.14,
+    ),
+    scaleBase: worldScale.clone(),
+  });
+}
+
 function setActorBubbleTargetSize(actorEntry, width, height) {
   if (!actorEntry?.bubble) {
     return;
@@ -3963,6 +4018,7 @@ function applyChatBubbleToActor(actorEntry, chatEvent) {
   const bubbleText = emojiOnly ? "" : text;
   const bubbleKey = `${chatEvent.mode}:${text}:${accent}`;
   if (actorEntry.bubble.currentKey !== bubbleKey) {
+    const previousKey = actorEntry.bubble.currentKey;
     const previousMap = actorEntry.bubble.mesh.material.map;
     const nextTexture = createBubbleTexture(symbol, {
       accent,
@@ -3975,7 +4031,13 @@ function applyChatBubbleToActor(actorEntry, chatEvent) {
     actorEntry.bubble.mesh.material.map = nextTexture;
     const nextSize = getChatBubbleTargetSize(nextTexture, actorEntry.bubble);
     setActorBubbleTargetSize(actorEntry, nextSize.width, nextSize.height);
-    previousMap?.dispose();
+    if (previousMap) {
+      if (previousKey && !previousKey.startsWith("placeholder:")) {
+        spawnChatBubbleGhost(actorEntry, previousMap);
+      } else {
+        previousMap.dispose();
+      }
+    }
     actorEntry.bubble.currentKey = bubbleKey;
   }
   actorEntry.bubble.mesh.visible = true;
@@ -5793,6 +5855,7 @@ function rebuildScene(streamPayload) {
   sceneState.animatedPosts = [];
   sceneState.animatedTags = [];
   sceneState.animatedPresence = [];
+  sceneState.animatedChatBubbleGhosts = [];
   sceneState.clickable = [];
   sceneState.presenceEntries = new Map();
 
@@ -5801,6 +5864,8 @@ function rebuildScene(streamPayload) {
   clearGroup(sceneState.tags);
   clearGroup(sceneState.posts);
   clearGroup(sceneState.presence);
+  unregisterBillboardsInGroup(sceneState.chatBubbleGhosts);
+  clearGroup(sceneState.chatBubbleGhosts);
 
   rebuildVirtualDecor(streamPayload);
   for (const pillar of streamPayload.pillars) {
@@ -5879,6 +5944,7 @@ function initScene() {
 
   sceneState.effects.add(sceneState.focusGhosts);
   sceneState.effects.add(sceneState.focusQueued);
+  sceneState.effects.add(sceneState.chatBubbleGhosts);
   sceneState.root = new THREE.Group();
   sceneState.root.add(sceneState.decor);
   sceneState.root.add(sceneState.pillars);
@@ -6500,7 +6566,7 @@ function openChatComposer() {
   updateChatCounter();
 }
 
-function closeChatComposer(clearValue = false) {
+function closeChatComposer(clearValue = false, options = {}) {
   if (!elements.chatInput) {
     return;
   }
@@ -6508,22 +6574,26 @@ function closeChatComposer(clearValue = false) {
     elements.chatInput.value = "";
   }
   updateChatCounter();
+  if (options.keepFocus === true) {
+    elements.chatInput.focus();
+    return;
+  }
   if (document.activeElement === elements.chatInput) {
     elements.chatInput.blur();
   }
 }
 
-function submitChatComposer() {
+function submitChatComposer(options = {}) {
   const text = String(elements.chatInput?.value ?? "").trim();
   if (!text) {
-    closeChatComposer(true);
+    closeChatComposer(true, { keepFocus: options.keepFocus === true });
     return false;
   }
   if (!state.realtimeClient?.sendChat(text)) {
     showToast("Realtime chat is offline.");
     return false;
   }
-  closeChatComposer(true);
+  closeChatComposer(true, { keepFocus: options.keepFocus === true });
   return true;
 }
 
@@ -7456,6 +7526,18 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     updateActorBubble(entry, deltaSeconds);
   }
 
+  for (let index = sceneState.animatedChatBubbleGhosts.length - 1; index >= 0; index -= 1) {
+    const entry = sceneState.animatedChatBubbleGhosts[index];
+    entry.age += deltaSeconds;
+    const life = clamp(entry.age / entry.lifetime, 0, 1);
+    entry.mesh.position.addScaledVector(entry.drift, deltaSeconds);
+    entry.mesh.scale.copy(entry.scaleBase).multiplyScalar(1 + life * 0.18);
+    entry.mesh.material.opacity = entry.opacity * Math.pow(1 - life, 1.6);
+    if (life >= 1) {
+      removeChatBubbleGhost(entry);
+    }
+  }
+
   for (const entry of sceneState.animatedBrowserScreens) {
     updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds);
   }
@@ -8329,9 +8411,9 @@ function registerInput() {
 
   elements.chatInput?.addEventListener("input", updateChatCounter);
   elements.chatInput?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
-      submitChatComposer();
+      submitChatComposer({ keepFocus: event.shiftKey === true });
       return;
     }
     if (event.key !== "Escape") {
