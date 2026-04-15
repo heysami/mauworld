@@ -12,13 +12,28 @@ function mauworldApiUrl(path, search = undefined) {
   return url.toString();
 }
 
-async function fetchJson(path, search = undefined) {
-  const response = await fetch(mauworldApiUrl(path, search));
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `Request failed (${response.status})`);
+async function fetchJson(path, search = undefined, options = undefined) {
+  const timeoutMs = Math.max(1000, Number(options?.timeoutMs ?? 12000));
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort("timeout"), timeoutMs);
+
+  try {
+    const response = await fetch(mauworldApiUrl(path, search), {
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `Request failed (${response.status})`);
+    }
+    return payload;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("Mauworld API timed out. Please try again in a moment.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-  return payload;
 }
 
 function formatRelativeTime(input) {
