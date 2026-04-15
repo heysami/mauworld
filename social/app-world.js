@@ -244,6 +244,7 @@ const sceneState = {
 
 const billboardParentQuaternion = new THREE.Quaternion();
 const browserFallbackHostPosition = new THREE.Vector3();
+const browserPlaceholderLookTarget = new THREE.Vector3();
 const defaultBrowserStageVideoElement = elements.browserVideo;
 
 const inputState = {
@@ -2045,6 +2046,20 @@ function registerBillboard(mesh, persistent = false) {
   }
 }
 
+function setBillboardRegistration(mesh, enabled, persistent = false) {
+  const registry = persistent ? sceneState.persistentBillboards : sceneState.billboards;
+  const index = registry.indexOf(mesh);
+  if (enabled) {
+    if (index < 0) {
+      registry.push(mesh);
+    }
+    return;
+  }
+  if (index >= 0) {
+    registry.splice(index, 1);
+  }
+}
+
 function unregisterBillboard(mesh, persistent = false) {
   const registry = persistent ? sceneState.persistentBillboards : sceneState.billboards;
   const index = registry.indexOf(mesh);
@@ -3778,30 +3793,35 @@ function createBrowserPlaceholderTexture(session) {
   const title = String(session?.title ?? "Shared browser").slice(0, 72) || "Shared browser";
   const url = String(session?.url ?? "").replace(/^https?:\/\//i, "");
 
-  context.fillStyle = "#0f173a";
+  context.fillStyle = "#10183a";
   context.fillRect(0, 0, width, height);
+  context.fillStyle = "rgba(255, 255, 255, 0.08)";
+  context.fillRect(40, 40, width - 80, height - 80);
   context.fillStyle = "#18265c";
-  context.fillRect(0, 0, width, 70);
+  context.fillRect(40, 40, width - 80, 82);
   context.fillStyle = "#f5f7ff";
-  context.font = "700 36px Manrope, sans-serif";
-  context.fillText(title, 46, 46);
+  context.font = "700 34px Manrope, sans-serif";
+  context.fillText(title, 72, 92);
   context.fillStyle = "rgba(245, 247, 255, 0.7)";
-  context.font = "600 24px Manrope, sans-serif";
-  context.fillText(url || "Waiting for stream", 46, 110);
+  context.font = "600 22px Manrope, sans-serif";
+  context.fillText(url || "Nearby share", 72, 130);
 
-  context.strokeStyle = "rgba(45, 216, 255, 0.26)";
-  context.lineWidth = 4;
-  context.strokeRect(46, 148, width - 92, height - 194);
-  context.fillStyle = "rgba(255, 255, 255, 0.06)";
-  context.fillRect(46, 148, width - 92, height - 194);
+  context.fillStyle = "rgba(12, 18, 44, 0.82)";
+  context.fillRect(120, 188, width - 240, height - 308);
+  context.strokeStyle = "rgba(255, 255, 255, 0.12)";
+  context.lineWidth = 2;
+  context.strokeRect(120, 188, width - 240, height - 308);
 
-  context.fillStyle = "rgba(255, 255, 255, 0.88)";
-  context.font = "800 42px Manrope, sans-serif";
-  context.fillText("LIVE WINDOW", 74, 248);
-  context.fillStyle = "rgba(255, 255, 255, 0.72)";
-  context.font = "600 26px Manrope, sans-serif";
-  context.fillText("Move closer to receive the full stream.", 74, 298);
-  context.fillText("Far viewers keep a lightweight placeholder.", 74, 340);
+  context.textAlign = "center";
+  context.fillStyle = "rgba(245, 247, 255, 0.92)";
+  context.font = "800 138px Manrope, sans-serif";
+  context.fillText("...", width / 2, 382);
+  context.fillStyle = "rgba(245, 247, 255, 0.76)";
+  context.font = "700 30px Manrope, sans-serif";
+  context.fillText("Move closer to watch", width / 2, 468);
+  context.font = "600 22px Manrope, sans-serif";
+  context.fillText("The live screen appears when you are nearby.", width / 2, 512);
+  context.textAlign = "left";
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -3886,6 +3906,24 @@ function updateBrowserScreenAspectFromVideo(entry, videoElement) {
   videoElement.addEventListener("loadedmetadata", applyAspect, { once: true });
 }
 
+function isBrowserScreenShowingLiveMedia(entry) {
+  return Boolean(entry?.deliveryMode === "full" && (entry.videoTexture || entry.currentFrameId > 0));
+}
+
+function setBrowserScreenBillboardMode(entry, enabled) {
+  if (!entry?.frame || entry.billboardEnabled === enabled) {
+    return;
+  }
+  setBillboardRegistration(entry.frame, enabled, true);
+  entry.billboardEnabled = enabled;
+  if (enabled) {
+    entry.group.rotation.set(0, 0, 0);
+    syncBillboardToCamera(entry.frame);
+    return;
+  }
+  entry.frame.quaternion.identity();
+}
+
 function ensureBrowserScreenEntry(session) {
   let entry = sceneState.browserScreenEntries.get(session.sessionId);
   if (entry) {
@@ -3957,6 +3995,7 @@ function ensureBrowserScreenEntry(session) {
     currentFrameId: 0,
     deliveryMode: "placeholder",
     geometryAspectRatio: aspectRatio,
+    billboardEnabled: true,
     clickablePayloads,
   };
   sceneState.browserScreens.add(group);
@@ -3973,11 +4012,26 @@ function updateBrowserScreenPresentation(entry) {
     : hasLiveFrame
       ? entry.liveTexture
       : entry.placeholderTexture;
-  entry.frameShell.visible = !(hasRemoteVideo || hasLiveFrame);
+  const showingPlaceholder = desiredMap === entry.placeholderTexture;
+  const scale = showingPlaceholder ? 0.44 : 1;
+  const offsetY = showingPlaceholder ? -3.6 : 0;
+  setBrowserScreenBillboardMode(entry, !showingPlaceholder);
+  entry.frame.scale.set(scale, scale, 1);
+  entry.frame.position.set(0, offsetY, 0);
+  entry.frame.material.depthTest = showingPlaceholder;
+  entry.frame.material.opacity = showingPlaceholder ? 0.9 : 1;
+  entry.frame.renderOrder = showingPlaceholder ? 6 : 10;
+  entry.frameShell.visible = showingPlaceholder;
+  entry.frameShell.scale.set(scale, scale, 1);
+  entry.frameShell.position.set(0, offsetY, -0.02);
+  entry.frameShell.material.opacity = showingPlaceholder ? 0.74 : 0.92;
+  entry.frameShell.renderOrder = showingPlaceholder ? 5 : 9;
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
   }
+  entry.frame.material.needsUpdate = true;
+  entry.frameShell.material.needsUpdate = true;
 }
 
 function setBrowserScreenVideo(sessionId, videoElement) {
@@ -4157,10 +4211,20 @@ function updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds) {
     entry.group.visible = false;
     return;
   }
+  const showingLiveMedia = isBrowserScreenShowingLiveMedia(entry);
   entry.targetPosition.copy(hostPosition);
-  entry.targetPosition.y += 18 + Math.sin(elapsedSeconds * 1.3) * 0.7;
+  entry.targetPosition.y += showingLiveMedia
+    ? 18 + Math.sin(elapsedSeconds * 1.3) * 0.7
+    : 12.4 + Math.sin(elapsedSeconds * 1.1) * 0.2;
   entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
   entry.group.position.copy(entry.position);
+  if (showingLiveMedia) {
+    entry.group.rotation.set(0, 0, 0);
+  } else if (sceneState.camera) {
+    browserPlaceholderLookTarget.copy(sceneState.camera.position);
+    browserPlaceholderLookTarget.y = entry.group.position.y;
+    entry.group.lookAt(browserPlaceholderLookTarget);
+  }
   entry.group.visible = true;
   updateBrowserScreenPresentation(entry);
 }
