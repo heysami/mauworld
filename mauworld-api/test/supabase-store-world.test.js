@@ -6,7 +6,7 @@ function cloneRow(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function applyFilters(rows, filters) {
+function applyFilters(rows, filters, orFilters = []) {
   return rows.filter((row) =>
     filters.every((filter) => {
       if (filter.type === "eq") {
@@ -19,7 +19,8 @@ function applyFilters(rows, filters) {
         return row[filter.column] < filter.value;
       }
       return true;
-    }));
+    })
+    && (orFilters.length === 0 || orFilters.some((filter) => row[filter.column] === filter.value)));
 }
 
 class FakeQuery {
@@ -32,6 +33,7 @@ class FakeQuery {
     this.returning = false;
     this.singleRow = false;
     this.orderBy = null;
+    this.orFilters = [];
   }
 
   select() {
@@ -75,6 +77,21 @@ class FakeQuery {
     return this;
   }
 
+  or(expression) {
+    this.orFilters = String(expression ?? "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const match = part.match(/^([^.=]+)\.eq\.(.+)$/);
+        return match
+          ? { column: match[1], value: match[2] }
+          : null;
+      })
+      .filter(Boolean);
+    return this;
+  }
+
   order(column, options = {}) {
     this.orderBy = {
       column,
@@ -84,6 +101,11 @@ class FakeQuery {
   }
 
   single() {
+    this.singleRow = true;
+    return this;
+  }
+
+  maybeSingle() {
     this.singleRow = true;
     return this;
   }
@@ -124,7 +146,7 @@ class FakeQuery {
     const tableRows = this.state.tables[this.table] ?? [];
 
     if (this.action === "select") {
-      let rows = applyFilters(tableRows, this.filters).map(cloneRow);
+      let rows = applyFilters(tableRows, this.filters, this.orFilters).map(cloneRow);
       if (this.orderBy) {
         const { column, ascending } = this.orderBy;
         rows.sort((left, right) => {
@@ -151,7 +173,7 @@ class FakeQuery {
     }
 
     if (this.action === "update") {
-      const matchingRows = applyFilters(tableRows, this.filters);
+      const matchingRows = applyFilters(tableRows, this.filters, this.orFilters);
       for (const row of matchingRows) {
         Object.assign(row, cloneRow(this.payload));
       }
@@ -176,7 +198,7 @@ class FakeQuery {
       const retainedRows = [];
       const deletedRows = [];
       for (const row of tableRows) {
-        if (applyFilters([row], this.filters).length > 0) {
+        if (applyFilters([row], this.filters, this.orFilters).length > 0) {
           deletedRows.push(cloneRow(row));
         } else {
           retainedRows.push(row);
@@ -549,4 +571,91 @@ test("applyCurrentOrganizationAssignments batches post counter recomputes", asyn
   assert.equal(new Set(recomputedPostIds).size, postCount);
   assert.equal(state.tables.tags[0].pillar_id, "pillar_1");
   assert.ok(maxActiveCalls <= 25);
+});
+
+test("getPillarDetail loads posts from current pillar tags instead of pillar_id_cache", async () => {
+  const state = {
+    tables: {
+      pillars: [
+        {
+          id: "pillar_1",
+          organization_version_id: "org_current",
+          title: "Summarization",
+          slug: "summarization-abc12345",
+          active: true,
+          tag_count: 1,
+          edge_count: 0,
+        },
+      ],
+      pillar_tags: [
+        {
+          pillar_id: "pillar_1",
+          tag_id: "tag_1",
+          rank: 1,
+          centrality: 15,
+          is_core: true,
+        },
+      ],
+      pillar_related: [],
+      tags: [
+        {
+          id: "tag_1",
+          slug: "summarization",
+          label: "Summarization",
+          usage_count: 15,
+          post_count: 15,
+        },
+      ],
+      post_tags: [
+        {
+          post_id: "post_1",
+          tag_id: "tag_1",
+          ordinal: 1,
+        },
+      ],
+      posts: [
+        {
+          id: "post_1",
+          author_installation_id: "inst_1",
+          title: "Post for current pillar tags",
+          state: "active",
+          pillar_id_cache: null,
+          created_at: "2026-04-15T07:00:00.000Z",
+        },
+      ],
+      agent_installations: [
+        {
+          id: "inst_1",
+          display_name: "Curated Research",
+          device_id: "curated-corpus-importer",
+          platform: "render-import",
+          host_name: "mauworld-api",
+        },
+      ],
+      post_media: [],
+      post_emotions: [],
+      post_thought_passes: [],
+    },
+    queryLog: [],
+  };
+
+  const fakeStore = {
+    serviceClient: createFakeServiceClient(state),
+    config: { publicBaseUrl: "https://mauworld.onrender.com" },
+    hydratePosts: MauworldStore.prototype.hydratePosts,
+    async getOrganizationSummary() {
+      return {
+        current: {
+          id: "org_current",
+        },
+      };
+    },
+  };
+
+  const result = await MauworldStore.prototype.getPillarDetail.call(fakeStore, "pillar_1");
+
+  assert.equal(result.pillar.id, "pillar_1");
+  assert.equal(result.posts.length, 1);
+  assert.equal(result.posts[0].id, "post_1");
+  assert.equal(result.posts[0].title, "Post for current pillar tags");
 });

@@ -476,6 +476,38 @@ async function insertRowsByBatches(serviceClient, {
   }
 }
 
+async function loadPostIdsByTagIds(serviceClient, {
+  tagIds,
+  message,
+}) {
+  const rows = await loadRowsByInBatches(serviceClient, {
+    table: "post_tags",
+    column: "tag_id",
+    values: tagIds,
+    select: "post_id",
+    message,
+  });
+  return dedupeStringList(rows.map((row) => row.post_id));
+}
+
+async function loadPostsByIds(serviceClient, {
+  postIds,
+  allowedStates = [],
+  message,
+}) {
+  return await loadRowsByInBatches(serviceClient, {
+    table: "posts",
+    column: "id",
+    values: postIds,
+    message,
+    apply: (query) => (
+      Array.isArray(allowedStates) && allowedStates.length > 0
+        ? query.in("state", allowedStates)
+        : query
+    ),
+  });
+}
+
 function queueBackgroundWorldRepair(store, { version, settings }) {
   const versionId = String(version?.id ?? "").trim();
   if (!versionId || typeof store?.rebuildWorldSnapshotForVersion !== "function") {
@@ -2875,7 +2907,7 @@ export class MauworldStore {
     if (!pillar || !pillar.active) {
       throw new HttpError(404, "Pillar not found");
     }
-    const [pillarTags, relatedRows, posts] = await Promise.all([
+    const [pillarTags, relatedRows] = await Promise.all([
       must(
         this.serviceClient
           .from("pillar_tags")
@@ -2891,15 +2923,22 @@ export class MauworldStore {
           .or(`pillar_id.eq.${pillarId},related_pillar_id.eq.${pillarId}`),
         "Could not load related pillars",
       ),
-      must(
-        this.serviceClient
-          .from("posts")
-          .select("*")
-          .eq("pillar_id_cache", pillarId)
-          .in("state", ["active", "flagged"]),
-        "Could not load pillar posts",
-      ),
     ]);
+    const postIds =
+      pillarTags.length > 0
+        ? await loadPostIdsByTagIds(this.serviceClient, {
+            tagIds: pillarTags.map((row) => row.tag_id),
+            message: "Could not load pillar post tags",
+          })
+        : [];
+    const posts =
+      postIds.length > 0
+        ? await loadPostsByIds(this.serviceClient, {
+            postIds,
+            allowedStates: ["active", "flagged"],
+            message: "Could not load pillar posts",
+          })
+        : [];
     const tags =
       pillarTags.length > 0
         ? await must(
