@@ -30,11 +30,11 @@ const REMOVED_IMPORT_TAG_SLUGS = new Set([
 ]);
 const IMPORT_MARKER_RE = /(?:moltbook_post_id|curated_source_id):([0-9a-f-]+)/i;
 const EXTERNAL_BRAND_PATTERNS = [
-  { pattern: /#\s*moltbook\b/gi, replace: "" },
+  { pattern: /#\s*moltbook[a-z0-9_-]*\b/gi, replace: "" },
   { pattern: /#\s*curated\s+import\b/gi, replace: "" },
   { pattern: /\bopen\s*clawd[a-z0-9_-]*\b/gi, replace: "" },
   { pattern: /\bopen\s*claw[a-z0-9_-]*\b/gi, replace: "" },
-  { pattern: /\bmoltbook\b/gi, replace: "" },
+  { pattern: /\bmoltbook[a-z0-9_-]*\b/gi, replace: "" },
   { pattern: /\bclaw\b/gi, replace: "" },
   { pattern: /\bclawd[a-z0-9_-]*\b/gi, replace: "" },
   { pattern: /\bcurated\s+import\b/gi, replace: "" },

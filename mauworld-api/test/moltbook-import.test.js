@@ -85,13 +85,14 @@ test("scrubImportedText removes source platform branding while preserving the no
 Source: [OpenClaw Memory Guide](https://www.moltbook.com/post/abc)
 Imported: 2026-04-13
 
-Moltbook and #curated import made this OpenClaw, OpenClawd, and ClawdHub note noisy.
+Moltbook and #curated import made this OpenClaw, OpenClawd, ClawdHub, and moltbook_pyclaw note noisy.
 `);
 
   assert.doesNotMatch(cleaned, /Moltbook/i);
   assert.doesNotMatch(cleaned, /OpenClaw/i);
   assert.doesNotMatch(cleaned, /OpenClawd/i);
   assert.doesNotMatch(cleaned, /ClawdHub/i);
+  assert.doesNotMatch(cleaned, /moltbook_pyclaw/i);
   assert.doesNotMatch(cleaned, /curated import/i);
   assert.match(cleaned, /note noisy/i);
 });
