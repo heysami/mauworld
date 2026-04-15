@@ -781,6 +781,13 @@ function clearSearchResults() {
   setSearchStatus("");
 }
 
+function clearSearchQuery() {
+  const searchInput = elements.searchForm?.querySelector('input[name="q"]');
+  if (searchInput) {
+    searchInput.value = "";
+  }
+}
+
 function setLoading(isLoading) {
   state.loading = isLoading;
   document.body.classList.toggle("is-world-loading", isLoading);
@@ -4190,7 +4197,8 @@ function renderSearchResults() {
       const result = hits.find((entry) => entry.post?.id === id);
       state.activeResultId = id;
       focusOnDestination(result);
-      elements.resultsPanel?.classList.add("is-empty");
+      clearSearchQuery();
+      clearSearchResults();
     });
   }
 }
