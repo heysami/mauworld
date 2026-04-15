@@ -1183,8 +1183,10 @@ function getBrowserMediaController() {
     onRemoteTrack: ({ sessionId, track, element }) => {
       if (!state.localBrowserShare && elements.browserVideo) {
         state.browserPanelRemoteSessionId = sessionId;
-        elements.browserVideo.srcObject = new MediaStream([track.mediaStreamTrack]);
+        elements.browserVideo.autoplay = true;
+        elements.browserVideo.playsInline = true;
         elements.browserVideo.muted = true;
+        track.attach(elements.browserVideo);
         elements.browserVideo.hidden = false;
         void elements.browserVideo.play?.().catch(() => null);
         bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
