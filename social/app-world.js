@@ -1095,6 +1095,67 @@ function unregisterBillboardsInGroup(root, persistent = false) {
   });
 }
 
+function getMeshMaterialOpacity(material) {
+  if (!material) {
+    return 1;
+  }
+  if (Array.isArray(material)) {
+    return Math.max(0, ...material.map((entry) => getMeshMaterialOpacity(entry)));
+  }
+  return typeof material.opacity === "number" ? material.opacity : 1;
+}
+
+function isObjectHierarchyVisible(object) {
+  let current = object;
+  while (current) {
+    if (current.visible === false) {
+      return false;
+    }
+    current = current.parent;
+  }
+  return true;
+}
+
+function isClickablePayloadPickable(payload) {
+  if (!payload?.mesh || !isObjectHierarchyVisible(payload.mesh)) {
+    return false;
+  }
+  if (getMeshMaterialOpacity(payload.mesh.material) <= 0.12) {
+    return false;
+  }
+
+  if (payload.type === "post") {
+    const entry = getScenePostEntry(payload.data?.post_id, payload.data?.tag_id);
+    return Boolean(
+      entry
+      && entry.targetVisible
+      && entry.group.visible
+      && entry.card.visible
+      && entry.visibilityProgress > 0.22,
+    );
+  }
+
+  if (payload.type === "tag") {
+    const entry = getAnimatedTagEntry(payload.data?.tag_id);
+    if (!entry || !entry.group.visible) {
+      return false;
+    }
+    if (payload.mesh === entry.proxy) {
+      return entry.proxy.visible && getMeshMaterialOpacity(entry.proxy.material) > 0.16;
+    }
+    if (payload.mesh === entry.label) {
+      return entry.label.visible && getMeshMaterialOpacity(entry.label.material) > 0.16;
+    }
+    return getMeshMaterialOpacity(entry.center.material) > 0.16;
+  }
+
+  if (payload.type === "pillar") {
+    return getMeshMaterialOpacity(payload.mesh.material) > 0.18;
+  }
+
+  return true;
+}
+
 function createBillboard(texture, width, height, options = {}) {
   const material = new THREE.MeshBasicMaterial({
     map: texture,
@@ -4499,13 +4560,22 @@ function pickSceneObject(event) {
   sceneState.pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
   sceneState.pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
   sceneState.raycaster.setFromCamera(sceneState.pointer, sceneState.camera);
-  const meshes = sceneState.clickable.map((entry) => entry.mesh);
-  const hits = sceneState.raycaster.intersectObjects(meshes, false);
-  const top = hits[0];
+  const clickableEntries = sceneState.clickable.filter((entry) => isClickablePayloadPickable(entry));
+  if (clickableEntries.length === 0) {
+    return;
+  }
+  const hits = sceneState.raycaster.intersectObjects(
+    clickableEntries.map((entry) => entry.mesh),
+    false,
+  );
+  const top = hits.find((hit) => {
+    const payload = clickableEntries.find((entry) => entry.mesh === hit.object);
+    return Boolean(payload && isClickablePayloadPickable(payload));
+  });
   if (!top) {
     return;
   }
-  const payload = sceneState.clickable.find((entry) => entry.mesh === top.object);
+  const payload = clickableEntries.find((entry) => entry.mesh === top.object);
   if (!payload) {
     return;
   }
