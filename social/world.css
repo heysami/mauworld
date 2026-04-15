@@ -610,6 +610,35 @@ body.is-world-loading .world-panel {
   text-align: center;
 }
 
+.world-browser-stage__resume {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  min-width: 132px;
+  padding: 10px 16px;
+  border: 1px solid rgba(45, 216, 255, 0.38);
+  border-radius: 8px;
+  background: rgba(12, 18, 44, 0.88);
+  color: #f5f7ff;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.world-browser-stage__resume:hover {
+  background: rgba(17, 27, 68, 0.94);
+}
+
+.world-browser-stage__resume:focus-visible {
+  outline: 2px solid rgba(45, 216, 255, 0.46);
+  outline-offset: 2px;
+}
+
 .world-browser-panel.is-expanded .world-browser-stage__placeholder {
   padding: clamp(18px, 3vw, 28px);
   font-size: 0.96rem;

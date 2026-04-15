@@ -41,6 +41,7 @@ const elements = {
   browserVideo: document.querySelector("[data-world-browser-video]"),
   browserFrame: document.querySelector("[data-world-browser-frame]"),
   browserPlaceholder: document.querySelector("[data-world-browser-placeholder]"),
+  browserResume: document.querySelector("[data-world-browser-resume]"),
   chatComposer: document.querySelector("[data-world-chat-composer]"),
   chatInput: document.querySelector("[data-world-chat-input]"),
   chatStatus: document.querySelector("[data-world-chat-status]"),
@@ -5829,6 +5830,10 @@ function updateBrowserPanel() {
       (session) => session.hostSessionId !== state.viewerSessionId && session.deliveryMode === "full",
     ) ?? null;
   const hasRemotePanelSession = Boolean(!previewStream && remotePanelSession);
+  const needsManualPlaybackStart = Boolean(
+    hasRemotePanelSession
+    && String(state.browserMediaState.lastPlayError || "").includes("NotAllowedError"),
+  );
   const hasRemotePanelVideo = Boolean(
     !previewStream
     && remotePanelSession
@@ -5902,7 +5907,13 @@ function updateBrowserPanel() {
     }
     elements.browserFrame.hidden = true;
     elements.browserFrame.removeAttribute("src");
-    elements.browserPlaceholder.hidden = true;
+    elements.browserPlaceholder.hidden = !needsManualPlaybackStart;
+    if (needsManualPlaybackStart) {
+      elements.browserPlaceholder.textContent = "Browser blocked autoplay. Press start to watch this nearby stream.";
+    }
+    if (elements.browserResume) {
+      elements.browserResume.hidden = !needsManualPlaybackStart;
+    }
     return;
   }
   const frameUrl = localSession?.lastFrameDataUrl ?? "";
@@ -5915,6 +5926,9 @@ function updateBrowserPanel() {
       elements.browserFrame.src = frameUrl;
     }
     elements.browserPlaceholder.hidden = true;
+    if (elements.browserResume) {
+      elements.browserResume.hidden = true;
+    }
   } else {
     if (elements.browserVideo) {
       elements.browserVideo.hidden = true;
@@ -5927,6 +5941,9 @@ function updateBrowserPanel() {
         ? "Choose a tab or window in the picker to start sharing."
         : "Opening browser worker..."
       : "Share a tab or window to project it into the world.";
+    if (elements.browserResume) {
+      elements.browserResume.hidden = true;
+    }
   }
 }
 
@@ -7111,6 +7128,11 @@ function registerInput() {
     if (sessionId) {
       state.realtimeClient?.stopBrowser(sessionId);
     }
+  });
+  elements.browserResume?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    resumeBrowserMediaPlayback();
   });
   elements.browserStage?.addEventListener("focus", () => {
     state.localBrowserFocus = true;
