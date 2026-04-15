@@ -20,3 +20,54 @@ test("shared browser allowlist keeps exact hosts when wildcard is absent", () =>
   assert.equal(manager.allowedHosts.hosts.has("youtube.com"), true);
   assert.equal(manager.allowedHosts.hosts.has("www.youtube.com"), true);
 });
+
+test("shared browser starts sessions after navigation commit", async () => {
+  const navigationCalls = [];
+  let currentUrl = "about:blank";
+  const fakePage = {
+    on() {},
+    async goto(url, options) {
+      navigationCalls.push(options);
+      currentUrl = url;
+    },
+    url() {
+      return currentUrl;
+    },
+    async title() {
+      return "Video";
+    },
+    async evaluate() {
+      return null;
+    },
+  };
+  const fakeContext = {
+    async newPage() {
+      return fakePage;
+    },
+    async close() {
+      return null;
+    },
+  };
+  const fakeBrowser = {
+    async newContext() {
+      return fakeContext;
+    },
+  };
+
+  const manager = new BrowserSessionManager({
+    allowedHosts: ["*"],
+  });
+  manager.ensureBrowser = async () => fakeBrowser;
+  manager.startFramePump = () => {};
+
+  const session = await manager.startSession({
+    hostSessionId: "viewer_host",
+    worldSnapshotId: "world_current",
+    url: "https://www.youtube.com/watch?v=6gA_qoGmKzo",
+  });
+
+  assert.equal(session.status, "ready");
+  assert.equal(navigationCalls.length, 1);
+  assert.equal(navigationCalls[0].waitUntil, "commit");
+  assert.equal(navigationCalls[0].timeout, 30000);
+});

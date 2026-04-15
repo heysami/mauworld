@@ -10,6 +10,10 @@ const LIVEKIT_CLIENT_UMD_PATH = fileURLToPath(
 );
 const PAGE_AUDIO_RELAY_PATH = fileURLToPath(new URL("./browser-page-audio-relay.js", import.meta.url));
 const PLAYWRIGHT_CLI_PATH = fileURLToPath(new URL("../../node_modules/playwright/cli.js", import.meta.url));
+const NAVIGATION_OPTIONS = {
+  waitUntil: "commit",
+  timeout: 30000,
+};
 
 function normalizeAllowedHosts(hosts = []) {
   const normalized = Array.from(hosts ?? [])
@@ -243,7 +247,7 @@ export class BrowserSessionManager extends EventEmitter {
     const existing = this.getSessionByHost(hostSessionId);
     const targetUrl = normalizeTargetUrl(input.url, this.allowedHosts);
     if (existing) {
-      await existing.page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+      await existing.page.goto(targetUrl, NAVIGATION_OPTIONS);
       existing.url = existing.page.url();
       existing.title = await existing.page.title().catch(() => existing.title);
       existing.status = "ready";
@@ -282,7 +286,7 @@ export class BrowserSessionManager extends EventEmitter {
     this.bindSessionPageEvents(session);
 
     try {
-      await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+      await page.goto(targetUrl, NAVIGATION_OPTIONS);
       session.url = page.url();
       session.title = await page.title().catch(() => session.title);
       session.status = "ready";
@@ -358,7 +362,7 @@ export class BrowserSessionManager extends EventEmitter {
 
     if (kind === "navigate") {
       const targetUrl = normalizeTargetUrl(input.url, this.allowedHosts);
-      await session.page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+      await session.page.goto(targetUrl, NAVIGATION_OPTIONS);
       session.url = session.page.url();
       session.title = await session.page.title().catch(() => session.title);
       this.emit("session", this.toClientSession(session));
@@ -366,7 +370,7 @@ export class BrowserSessionManager extends EventEmitter {
     }
 
     if (kind === "back") {
-      await session.page.goBack({ waitUntil: "domcontentloaded" }).catch(() => null);
+      await session.page.goBack(NAVIGATION_OPTIONS).catch(() => null);
       session.url = session.page.url();
       session.title = await session.page.title().catch(() => session.title);
       this.emit("session", this.toClientSession(session));
@@ -374,7 +378,7 @@ export class BrowserSessionManager extends EventEmitter {
     }
 
     if (kind === "forward") {
-      await session.page.goForward({ waitUntil: "domcontentloaded" }).catch(() => null);
+      await session.page.goForward(NAVIGATION_OPTIONS).catch(() => null);
       session.url = session.page.url();
       session.title = await session.page.title().catch(() => session.title);
       this.emit("session", this.toClientSession(session));
@@ -382,7 +386,7 @@ export class BrowserSessionManager extends EventEmitter {
     }
 
     if (kind === "reload") {
-      await session.page.reload({ waitUntil: "domcontentloaded" }).catch(() => null);
+      await session.page.reload(NAVIGATION_OPTIONS).catch(() => null);
       session.url = session.page.url();
       session.title = await session.page.title().catch(() => session.title);
       this.emit("session", this.toClientSession(session));
