@@ -354,6 +354,7 @@ export class BrowserSessionManager extends EventEmitter {
     if (!kind) {
       return this.toClientSession(session);
     }
+    await session.page.bringToFront().catch(() => null);
 
     if (kind === "navigate") {
       const targetUrl = normalizeTargetUrl(input.url, this.allowedHosts);

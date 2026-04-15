@@ -530,6 +530,7 @@ body.is-world-loading .world-panel {
   border: 1px solid rgba(61, 87, 182, 0.18);
   background: linear-gradient(180deg, rgba(36, 51, 109, 0.9) 0%, rgba(24, 35, 86, 0.92) 100%);
   outline: none;
+  touch-action: none;
 }
 
 .world-browser-stage:focus-visible {
@@ -540,6 +541,8 @@ body.is-world-loading .world-panel {
 .world-browser-stage__placeholder {
   position: absolute;
   inset: 0;
+  pointer-events: none;
+  user-select: none;
 }
 
 .world-browser-stage__frame {

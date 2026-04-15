@@ -156,6 +156,7 @@ const state = {
   browserSessions: new Map(),
   localBrowserSessionId: "",
   localBrowserFocus: false,
+  browserStagePointerId: null,
   browserMediaController: null,
   browserMediaTransport: "jpeg-sequence",
   browserMediaCanvas: null,
@@ -5303,7 +5304,25 @@ function isEditableTarget(target) {
 }
 
 function isBrowserStageFocused() {
-  return document.activeElement === elements.browserStage;
+  return state.localBrowserFocus || document.activeElement === elements.browserStage;
+}
+
+function focusBrowserStage() {
+  state.localBrowserFocus = true;
+  elements.browserStage?.focus({ preventScroll: true });
+}
+
+function releaseBrowserStagePointer(event) {
+  if (!elements.browserStage || state.browserStagePointerId == null) {
+    return;
+  }
+  if (event?.pointerId != null && event.pointerId !== state.browserStagePointerId) {
+    return;
+  }
+  if (elements.browserStage.hasPointerCapture?.(state.browserStagePointerId)) {
+    elements.browserStage.releasePointerCapture(state.browserStagePointerId);
+  }
+  state.browserStagePointerId = null;
 }
 
 function getRealtimeMovementState() {
@@ -6522,8 +6541,18 @@ function registerInput() {
   elements.browserReload?.addEventListener("click", () => {
     sendBrowserInput({ kind: "reload" });
   });
+  elements.browserStage?.addEventListener("focus", () => {
+    state.localBrowserFocus = true;
+  });
+  elements.browserStage?.addEventListener("blur", () => {
+    state.localBrowserFocus = false;
+    state.browserStagePointerId = null;
+  });
   elements.browserStage?.addEventListener("pointerdown", (event) => {
-    elements.browserStage?.focus();
+    event.preventDefault();
+    focusBrowserStage();
+    state.browserStagePointerId = event.pointerId;
+    elements.browserStage?.setPointerCapture?.(event.pointerId);
     const point = getBrowserViewportPoint(event);
     if (!point) {
       return;
@@ -6537,9 +6566,6 @@ function registerInput() {
     });
   });
   elements.browserStage?.addEventListener("pointermove", (event) => {
-    if (!event.buttons) {
-      return;
-    }
     const point = getBrowserViewportPoint(event);
     if (!point) {
       return;
@@ -6553,8 +6579,10 @@ function registerInput() {
     });
   });
   elements.browserStage?.addEventListener("pointerup", (event) => {
+    event.preventDefault();
     const point = getBrowserViewportPoint(event);
     if (!point) {
+      releaseBrowserStagePointer(event);
       return;
     }
     sendBrowserInput({
@@ -6564,9 +6592,17 @@ function registerInput() {
       y: Number(point.y.toFixed(2)),
       button: mapPointerButton(event.button),
     });
+    releaseBrowserStagePointer(event);
+  });
+  elements.browserStage?.addEventListener("pointercancel", (event) => {
+    releaseBrowserStagePointer(event);
+  });
+  elements.browserStage?.addEventListener("lostpointercapture", () => {
+    state.browserStagePointerId = null;
   });
   elements.browserStage?.addEventListener("wheel", (event) => {
     event.preventDefault();
+    focusBrowserStage();
     sendBrowserInput({
       kind: "wheel",
       deltaX: Number(event.deltaX.toFixed(2)),

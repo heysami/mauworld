@@ -145,6 +145,7 @@ export class RealtimeGateway {
       isAlive: true,
       cellKey: "",
       browserModes: new Map(),
+      messageQueue: Promise.resolve(),
     };
     this.clients.set(viewerSessionId, client);
 
@@ -152,7 +153,7 @@ export class RealtimeGateway {
       client.isAlive = true;
     });
     socket.on("message", (buffer) => {
-      void this.handleMessage(client, parseJson(buffer));
+      this.queueClientMessage(client, parseJson(buffer));
     });
     socket.on("close", () => {
       void this.handleDisconnect(client);
@@ -177,6 +178,13 @@ export class RealtimeGateway {
       client.isAlive = false;
       client.socket.ping();
     }
+  }
+
+  queueClientMessage(client, message) {
+    const run = async () => {
+      await this.handleMessage(client, message);
+    };
+    client.messageQueue = (client.messageQueue ?? Promise.resolve()).then(run, run);
   }
 
   async handleMessage(client, message) {
