@@ -4005,13 +4005,13 @@ function computeRemoteBrowserAudioVolume(session) {
   if (!hostPosition) {
     return 0;
   }
-  const listenerPosition = sceneState.playerAvatar?.group?.position ?? getNavigationPosition();
+  const listenerPosition = getNavigationPosition();
   const planarDistance = Math.hypot(
     listenerPosition.x - hostPosition.x,
     listenerPosition.z - hostPosition.z,
   );
   const maxDistance = Math.max(16, getInteractionConfig().browserRadius);
-  const fullVolumeDistance = Math.min(18, Math.max(10, maxDistance * 0.18));
+  const fullVolumeDistance = Math.min(8, Math.max(5, maxDistance * 0.08));
   if (planarDistance <= fullVolumeDistance) {
     return 1;
   }
@@ -4023,8 +4023,8 @@ function computeRemoteBrowserAudioVolume(session) {
     0,
     1,
   );
-  const gain = Math.pow(1 - t, 2.25);
-  return gain < 0.01 ? 0 : gain;
+  const gain = Math.pow(1 - t, 3.5);
+  return gain < 0.02 ? 0 : gain;
 }
 
 function updateRemoteBrowserAudioMix() {
