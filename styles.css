@@ -1497,11 +1497,16 @@ textarea {
   }
 
   .feature-card {
-    gap: 16px;
-    padding-top: 22px;
+    gap: 14px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.7);
+    box-shadow: var(--shadow-soft);
   }
 
   .feature-card__media {
+    order: 2;
     min-height: 220px;
   }
 
@@ -1510,6 +1515,7 @@ textarea {
   }
 
   .feature-card__body {
+    order: 1;
     gap: 14px;
     padding-top: 0;
   }
