@@ -144,7 +144,7 @@ export function createBrowserMediaController(options = {}) {
   }
 
   function ensureAudioGraph(entry) {
-    if (!entry?.element || entry.kind !== "audio") {
+    if (!entry?.track?.mediaStreamTrack || entry.kind !== "audio") {
       return null;
     }
     const existing = state.audioGraphs.get(entry.sessionId);
@@ -157,7 +157,7 @@ export function createBrowserMediaController(options = {}) {
     }
     let source = null;
     try {
-      source = context.createMediaElementSource(entry.element);
+      source = context.createMediaStreamSource(new MediaStream([entry.track.mediaStreamTrack]));
     } catch (_error) {
       return state.audioGraphs.get(entry.sessionId) ?? null;
     }
@@ -191,19 +191,39 @@ export function createBrowserMediaController(options = {}) {
     entry.element.autoplay = true;
     entry.element.playsInline = true;
     if (entry.kind === "audio") {
-      entry.element.muted = false;
-      entry.element.defaultMuted = false;
-      entry.element.volume = 1;
       const graph = ensureAudioGraph(entry);
-      if (graph?.context?.state === "suspended") {
+      if (graph) {
+        entry.element.muted = true;
+        entry.element.defaultMuted = true;
+        entry.element.volume = 0;
+      } else {
+        entry.element.muted = false;
+        entry.element.defaultMuted = false;
+        entry.element.volume = 1;
+      }
+      if (graph?.context && graph.context.state !== "running") {
         try {
           await graph.context.resume();
         } catch (_error) {
-          // Best effort; element playback may still succeed.
+          // Best effort; the caller can retry from a user gesture.
         }
       }
       if (graph) {
+        if (graph.context.state !== "running") {
+          state.audioPlaybackState.set(entry.sessionId, {
+            blocked: true,
+            error: "AudioContextSuspended",
+          });
+          notifyRemoteAudioState(entry.sessionId);
+          return false;
+        }
         graph.gain.gain.value = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
+        state.audioPlaybackState.set(entry.sessionId, {
+          blocked: false,
+          error: "",
+        });
+        notifyRemoteAudioState(entry.sessionId);
+        return true;
       }
     } else {
       entry.element.muted = true;
