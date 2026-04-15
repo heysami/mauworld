@@ -35,6 +35,7 @@ const elements = {
   browserLaunch: document.querySelector("[data-world-browser-launch]"),
   browserStop: document.querySelector("[data-world-browser-stop]"),
   browserStatus: document.querySelector("[data-world-browser-status]"),
+  browserDebug: document.querySelector("[data-world-browser-debug]"),
   browserBackdrop: document.querySelector("[data-world-browser-backdrop]"),
   browserStage: document.querySelector("[data-world-browser-stage]"),
   browserVideo: document.querySelector("[data-world-browser-video]"),
@@ -168,6 +169,19 @@ const state = {
   browserMediaPendingFrameId: 0,
   pendingBrowserShare: null,
   localBrowserShare: null,
+  browserPanelRemoteSessionId: "",
+  browserMediaState: {
+    enabled: null,
+    connected: false,
+    transport: "jpeg-sequence",
+    roomName: "",
+    canPublish: false,
+    remoteVideoSessionId: "",
+    remoteVideoReadyState: 0,
+    remoteVideoWidth: 0,
+    remoteVideoHeight: 0,
+    remoteVideoPaused: true,
+  },
   worldCache: {
     pillars: new Map(),
     tags: new Map(),
@@ -1015,6 +1029,30 @@ function setBrowserPreviewStream(stream) {
   }
 }
 
+function updateBrowserMediaVideoMetrics(element, sessionId = "") {
+  state.browserMediaState.remoteVideoSessionId = String(sessionId ?? "").trim();
+  state.browserMediaState.remoteVideoReadyState = Number(element?.readyState ?? 0) || 0;
+  state.browserMediaState.remoteVideoWidth = Number(element?.videoWidth ?? 0) || 0;
+  state.browserMediaState.remoteVideoHeight = Number(element?.videoHeight ?? 0) || 0;
+  state.browserMediaState.remoteVideoPaused = element ? Boolean(element.paused) : true;
+}
+
+function bindBrowserPanelVideoMetrics(sessionId, element) {
+  if (!element) {
+    updateBrowserMediaVideoMetrics(null, "");
+    return;
+  }
+  const update = () => {
+    updateBrowserMediaVideoMetrics(element, sessionId);
+    updateBrowserPanel();
+  };
+  element.onloadedmetadata = update;
+  element.onplaying = update;
+  element.onpause = update;
+  element.ontimeupdate = update;
+  update();
+}
+
 function getDisplayShareLabel(videoTrack) {
   const settings = videoTrack?.getSettings?.() ?? {};
   const displaySurface = String(settings.displaySurface ?? "").trim().toLowerCase();
@@ -1089,6 +1127,7 @@ function clearLocalBrowserShare({ stopTracks = false, sessionId = "" } = {}) {
   }
   releaseBrowserDisplayShare(activeShare, { stopTracks });
   setBrowserPreviewStream(null);
+  updateBrowserMediaVideoMetrics(null, "");
   if (activeShare.sessionId) {
     clearBrowserScreenVideo(activeShare.sessionId);
   }
@@ -1106,6 +1145,7 @@ function attachLocalBrowserShare(sessionId, share) {
   };
   setBrowserPreviewStream(share.stream);
   if (elements.browserVideo) {
+    bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
     setBrowserScreenVideo(sessionId, elements.browserVideo);
   }
   void getBrowserMediaController().publishStream({
@@ -1139,16 +1179,42 @@ function getBrowserMediaController() {
   }
   state.browserMediaController = createBrowserMediaController({
     fetchToken: ({ canPublish = false } = {}) => fetchBrowserMediaToken({ canPublish }),
-    onRemoteTrack: ({ sessionId, element }) => {
-      setBrowserScreenVideo(sessionId, element);
+    onRemoteTrack: ({ sessionId, track, element }) => {
+      if (!state.localBrowserShare && elements.browserVideo) {
+        state.browserPanelRemoteSessionId = sessionId;
+        elements.browserVideo.srcObject = new MediaStream([track.mediaStreamTrack]);
+        elements.browserVideo.muted = true;
+        elements.browserVideo.hidden = false;
+        void elements.browserVideo.play?.().catch(() => null);
+        bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
+        setBrowserScreenVideo(sessionId, elements.browserVideo);
+      } else {
+        setBrowserScreenVideo(sessionId, element);
+      }
+      state.browserMediaState.remoteVideoSessionId = sessionId;
       state.browserMediaTransport = "livekit";
       updateBrowserPanel();
     },
     onRemoteTrackRemoved: ({ sessionId }) => {
+      if (state.browserPanelRemoteSessionId === sessionId && elements.browserVideo) {
+        state.browserPanelRemoteSessionId = "";
+        elements.browserVideo.pause?.();
+        elements.browserVideo.removeAttribute("src");
+        elements.browserVideo.srcObject = null;
+        updateBrowserMediaVideoMetrics(null, "");
+      }
+      if (state.browserMediaState.remoteVideoSessionId === sessionId) {
+        updateBrowserMediaVideoMetrics(null, "");
+      }
       clearBrowserScreenVideo(sessionId);
       updateBrowserPanel();
     },
-    onStatus: ({ enabled, transport }) => {
+    onStatus: ({ enabled, transport, connected, roomName, canPublish }) => {
+      state.browserMediaState.enabled = enabled;
+      state.browserMediaState.connected = connected === true;
+      state.browserMediaState.transport = transport || state.browserMediaState.transport;
+      state.browserMediaState.roomName = roomName || "";
+      state.browserMediaState.canPublish = canPublish === true;
       if (enabled === false && transport === "jpeg-sequence") {
         state.browserMediaTransport = "jpeg-sequence";
       } else if (enabled === true && transport === "livekit") {
@@ -3772,8 +3838,19 @@ function clearBrowserScreenVideo(sessionId) {
   }
   entry.videoTexture?.dispose?.();
   entry.videoTexture = null;
-  entry.videoElement?.remove?.();
+  if (entry.videoElement && entry.videoElement !== elements.browserVideo) {
+    entry.videoElement.remove?.();
+  }
   entry.videoElement = null;
+  if (state.browserPanelRemoteSessionId === sessionId) {
+    state.browserPanelRemoteSessionId = "";
+    updateBrowserMediaVideoMetrics(null, "");
+    if (elements.browserVideo) {
+      elements.browserVideo.removeAttribute("src");
+      elements.browserVideo.srcObject = null;
+      elements.browserVideo.hidden = true;
+    }
+  }
   updateBrowserScreenPresentation(entry);
 }
 
@@ -5456,6 +5533,15 @@ function setBrowserStatus(text) {
   }
 }
 
+function setBrowserDebug(text) {
+  if (!elements.browserDebug) {
+    return;
+  }
+  const next = String(text ?? "").trim();
+  elements.browserDebug.hidden = !next;
+  elements.browserDebug.textContent = next;
+}
+
 function updateChatCounter() {
   if (!elements.chatCounter || !elements.chatInput) {
     return;
@@ -5617,10 +5703,23 @@ function publishLocalBrowserMedia(sessionId) {
 function updateBrowserPanel() {
   const localSession = getLocalBrowserSession();
   const previewStream = state.localBrowserShare?.stream ?? state.pendingBrowserShare?.stream ?? null;
+  const remotePanelSession = state.browserPanelRemoteSessionId
+    ? state.browserSessions.get(state.browserPanelRemoteSessionId) ?? null
+    : [...state.browserSessions.values()].find(
+      (session) => session.hostSessionId !== state.viewerSessionId && session.deliveryMode === "full",
+    ) ?? null;
+  const hasRemotePanelVideo = Boolean(
+    !previewStream
+    && remotePanelSession
+    && elements.browserVideo?.srcObject
+    && state.browserMediaState.remoteVideoSessionId === remotePanelSession.sessionId,
+  );
   if (!state.realtimeConnected) {
     setBrowserStatus("Realtime share offline.");
   } else if (state.pendingBrowserShare) {
     setBrowserStatus("Preparing your nearby share...");
+  } else if (remotePanelSession) {
+    setBrowserStatus(`Viewing ${remotePanelSession.title || "nearby share"} from a nearby visitor.`);
   } else if (!localSession) {
     setBrowserStatus("Share a tab or window with nearby visitors.");
   } else if (localSession.sessionMode === "display-share") {
@@ -5644,11 +5743,27 @@ function updateBrowserPanel() {
     elements.browserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
   }
 
+  const debugSession = localSession ?? remotePanelSession;
+  setBrowserDebug(
+    [
+      `room ${state.browserMediaState.connected ? "connected" : "idle"} / ${state.browserMediaState.transport}`,
+      `session ${debugSession?.sessionId?.slice(-8) || "-"} / ${debugSession?.deliveryMode || "-"} / ${debugSession?.sessionMode || "-"}`,
+      `remote ${state.browserMediaState.remoteVideoSessionId?.slice(-8) || "-"} ready ${state.browserMediaState.remoteVideoReadyState || 0} size ${state.browserMediaState.remoteVideoWidth || 0}x${state.browserMediaState.remoteVideoHeight || 0} paused ${state.browserMediaState.remoteVideoPaused ? "yes" : "no"}`,
+    ].join("\n"),
+  );
+
   if (!elements.browserFrame || !elements.browserPlaceholder) {
     return;
   }
-  setBrowserPreviewStream(previewStream);
   if (previewStream) {
+    setBrowserPreviewStream(previewStream);
+  } else if (!hasRemotePanelVideo) {
+    setBrowserPreviewStream(null);
+  }
+  if (previewStream || hasRemotePanelVideo) {
+    if (elements.browserVideo) {
+      elements.browserVideo.hidden = false;
+    }
     elements.browserFrame.hidden = true;
     elements.browserFrame.removeAttribute("src");
     elements.browserPlaceholder.hidden = true;
