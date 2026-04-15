@@ -159,22 +159,22 @@ export function checkChatRateLimit(state = {}, input = {}) {
   state.textWindow = textWindow;
   state.minuteWindow = minuteWindow;
 
-  pruneWindow(rapidWindow, now, 500);
-  pruneWindow(textWindow, now, 1000);
+  pruneWindow(rapidWindow, now, 200);
+  pruneWindow(textWindow, now, 500);
   pruneWindow(minuteWindow, now, 60000);
 
   if (rapidWindow.length >= 1) {
     return {
       allowed: false,
       reason: emojiOnly
-        ? "Quick reactions are limited to one every 0.5 seconds."
-        : "Chat is limited to one message every 0.5 seconds.",
+        ? "Quick reactions are limited to one every 0.2 seconds."
+        : "Chat is limited to one message every 0.2 seconds.",
     };
   }
   if (!emojiOnly && textWindow.length >= 1) {
     return {
       allowed: false,
-      reason: "Text chat is limited to one message every 1 second.",
+      reason: "Text chat is limited to one message every 0.5 seconds.",
     };
   }
   if (minuteWindow.length >= 40) {

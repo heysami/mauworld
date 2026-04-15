@@ -66,12 +66,12 @@ test("chat rate limit allows faster emoji reactions than text", () => {
   const minuteState = {};
 
   assert.equal(checkChatRateLimit(emojiState, { now: startedAt, text: "❤️" }).allowed, true);
-  assert.equal(checkChatRateLimit(emojiState, { now: startedAt + 300, text: "🔥" }).allowed, false);
-  assert.equal(checkChatRateLimit(emojiState, { now: startedAt + 600, text: "🔥" }).allowed, true);
+  assert.equal(checkChatRateLimit(emojiState, { now: startedAt + 100, text: "🔥" }).allowed, false);
+  assert.equal(checkChatRateLimit(emojiState, { now: startedAt + 250, text: "🔥" }).allowed, true);
 
   assert.equal(checkChatRateLimit(textState, { now: startedAt, text: "hello" }).allowed, true);
-  assert.equal(checkChatRateLimit(textState, { now: startedAt + 600, text: "again" }).allowed, false);
-  assert.equal(checkChatRateLimit(textState, { now: startedAt + 1100, text: "again" }).allowed, true);
+  assert.equal(checkChatRateLimit(textState, { now: startedAt + 300, text: "again" }).allowed, false);
+  assert.equal(checkChatRateLimit(textState, { now: startedAt + 600, text: "again" }).allowed, true);
 
   minuteState.minuteWindow = Array.from({ length: 40 }, (_, index) => startedAt + index);
   assert.equal(checkChatRateLimit(minuteState, { now: startedAt + 2000, text: "❤️" }).allowed, false);
