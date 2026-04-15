@@ -86,8 +86,8 @@ if (languageSelector) {
       text: {
         brand_eyebrow: "Maumau app",
         brand_sub: "Download, setup, and control.",
-        nav_landing: "Landing",
-        nav_guide: "Dashboard guide",
+        nav_landing: "Overview",
+        nav_guide: "Guide",
         nav_download: "Download macOS app",
         hero_kicker: "Guided from install to first real run",
         hero_lede: "Personal AI team",
@@ -109,8 +109,8 @@ if (languageSelector) {
         start_desc:
           "Set up the accounts and connections once, then download Maumau and follow the guide inside the app.",
         footer_note: "Landing page for the current Maumau local build.",
-        footer_landing: "Landing",
-        footer_guide: "Dashboard guide",
+        footer_landing: "Overview",
+        footer_guide: "Guide",
         footer_download: "Download macOS app",
       },
       featureCards: [
@@ -2309,7 +2309,7 @@ if (languageSelector) {
   const footerContent = {
     en: {
       note: "Maumau for macOS. Guided setup, built-in teams, clear operations.",
-      guide: "Operations guide",
+      guide: "Guide",
       download: "Download Maumau",
     },
     zh: {
