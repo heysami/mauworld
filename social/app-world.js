@@ -1014,6 +1014,18 @@ function stopMediaStream(stream) {
   stream?.getTracks?.().forEach((track) => track.stop());
 }
 
+function ensureBrowserVideoPlayback(element) {
+  if (!element) {
+    return;
+  }
+  element.autoplay = true;
+  element.playsInline = true;
+  element.muted = true;
+  element.defaultMuted = true;
+  const playPromise = element.play?.();
+  playPromise?.catch?.(() => null);
+}
+
 function setBrowserPreviewStream(stream) {
   if (!elements.browserVideo) {
     return;
@@ -1023,8 +1035,7 @@ function setBrowserPreviewStream(stream) {
   }
   elements.browserVideo.hidden = !stream;
   if (stream) {
-    elements.browserVideo.muted = true;
-    void elements.browserVideo.play?.().catch(() => null);
+    ensureBrowserVideoPlayback(elements.browserVideo);
   } else {
     elements.browserVideo.pause?.();
   }
@@ -1044,10 +1055,15 @@ function bindBrowserPanelVideoMetrics(sessionId, element) {
     return;
   }
   const update = () => {
+    if (element.srcObject && element.paused) {
+      ensureBrowserVideoPlayback(element);
+    }
     updateBrowserMediaVideoMetrics(element, sessionId);
     updateBrowserPanel();
   };
   element.onloadedmetadata = update;
+  element.onloadeddata = update;
+  element.oncanplay = update;
   element.onplaying = update;
   element.onpause = update;
   element.ontimeupdate = update;
@@ -1183,12 +1199,9 @@ function getBrowserMediaController() {
     onRemoteTrack: ({ sessionId, track, element }) => {
       if (!state.localBrowserShare && elements.browserVideo) {
         state.browserPanelRemoteSessionId = sessionId;
-        elements.browserVideo.autoplay = true;
-        elements.browserVideo.playsInline = true;
-        elements.browserVideo.muted = true;
         track.attach(elements.browserVideo);
         elements.browserVideo.hidden = false;
-        void elements.browserVideo.play?.().catch(() => null);
+        ensureBrowserVideoPlayback(elements.browserVideo);
         bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
         setBrowserScreenVideo(sessionId, elements.browserVideo);
       } else {
