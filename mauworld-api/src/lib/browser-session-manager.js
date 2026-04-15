@@ -14,6 +14,7 @@ const NAVIGATION_OPTIONS = {
   waitUntil: "commit",
   timeout: 30000,
 };
+const INTERACTION_CAPTURE_MIN_GAP_MS = 80;
 
 function normalizeAllowedHosts(hosts = []) {
   const normalized = Array.from(hosts ?? [])
@@ -279,6 +280,7 @@ export class BrowserSessionManager extends EventEmitter {
       lastFrameDataUrl: "",
       lastFrameAt: 0,
       captureInFlight: false,
+      captureAfterInputTimer: null,
       frameTransport: this.defaultFrameTransport,
       audioRelayReady: false,
     };
@@ -305,48 +307,69 @@ export class BrowserSessionManager extends EventEmitter {
     if (session.frameTimer) {
       clearInterval(session.frameTimer);
     }
-    const capture = async () => {
-      if (session.captureInFlight || !this.sessions.has(session.id) || !session.page) {
-        return;
-      }
-      session.captureInFlight = true;
-      try {
-        const buffer = await session.page.screenshot({
-          type: "jpeg",
-          quality: this.jpegQuality,
-          caret: "hide",
-          scale: "device",
-        });
-        const dataUrl = `data:image/jpeg;base64,${buffer.toString("base64")}`;
-        session.frameCounter += 1;
-        session.lastFrameDataUrl = dataUrl;
-        session.lastFrameAt = Date.now();
-        this.emit("frame", {
-          sessionId: session.id,
-          hostSessionId: session.hostSessionId,
-          worldSnapshotId: session.worldSnapshotId,
-          frameId: session.frameCounter,
-          dataUrl,
-          width: this.viewport.width,
-          height: this.viewport.height,
-          title: session.title,
-          url: session.url,
-        });
-      } catch (error) {
-        this.emit("error", {
-          sessionId: session.id,
-          hostSessionId: session.hostSessionId,
-          message: error.message,
-        });
-      } finally {
-        session.captureInFlight = false;
-      }
-    };
-
-    void capture();
+    void this.captureSessionFrame(session, { force: true });
     session.frameTimer = setInterval(() => {
-      void capture();
+      void this.captureSessionFrame(session, { force: true });
     }, this.frameIntervalMs);
+  }
+
+  async captureSessionFrame(session, options = {}) {
+    if (session.captureInFlight || !this.sessions.has(session.id) || !session.page) {
+      return false;
+    }
+    const now = Date.now();
+    if (!options.force && now - session.lastFrameAt < INTERACTION_CAPTURE_MIN_GAP_MS) {
+      return false;
+    }
+    session.captureInFlight = true;
+    try {
+      const buffer = await session.page.screenshot({
+        type: "jpeg",
+        quality: this.jpegQuality,
+        caret: "hide",
+        scale: "device",
+      });
+      const dataUrl = `data:image/jpeg;base64,${buffer.toString("base64")}`;
+      session.frameCounter += 1;
+      session.lastFrameDataUrl = dataUrl;
+      session.lastFrameAt = Date.now();
+      this.emit("frame", {
+        sessionId: session.id,
+        hostSessionId: session.hostSessionId,
+        worldSnapshotId: session.worldSnapshotId,
+        frameId: session.frameCounter,
+        dataUrl,
+        width: this.viewport.width,
+        height: this.viewport.height,
+        title: session.title,
+        url: session.url,
+      });
+      return true;
+    } catch (error) {
+      this.emit("error", {
+        sessionId: session.id,
+        hostSessionId: session.hostSessionId,
+        message: error.message,
+      });
+      return false;
+    } finally {
+      session.captureInFlight = false;
+    }
+  }
+
+  queueInteractionCapture(session) {
+    if (!session || !this.sessions.has(session.id)) {
+      return;
+    }
+    if (session.captureAfterInputTimer) {
+      return;
+    }
+    const elapsedMs = Date.now() - (session.lastFrameAt || 0);
+    const delayMs = session.captureInFlight ? 32 : Math.max(0, INTERACTION_CAPTURE_MIN_GAP_MS - elapsedMs);
+    session.captureAfterInputTimer = setTimeout(() => {
+      session.captureAfterInputTimer = null;
+      void this.captureSessionFrame(session);
+    }, delayMs);
   }
 
   async handleInput(sessionId, input = {}) {
@@ -366,6 +389,7 @@ export class BrowserSessionManager extends EventEmitter {
       session.url = session.page.url();
       session.title = await session.page.title().catch(() => session.title);
       this.emit("session", this.toClientSession(session));
+      this.queueInteractionCapture(session);
       return this.toClientSession(session);
     }
 
@@ -374,6 +398,7 @@ export class BrowserSessionManager extends EventEmitter {
       session.url = session.page.url();
       session.title = await session.page.title().catch(() => session.title);
       this.emit("session", this.toClientSession(session));
+      this.queueInteractionCapture(session);
       return this.toClientSession(session);
     }
 
@@ -382,6 +407,7 @@ export class BrowserSessionManager extends EventEmitter {
       session.url = session.page.url();
       session.title = await session.page.title().catch(() => session.title);
       this.emit("session", this.toClientSession(session));
+      this.queueInteractionCapture(session);
       return this.toClientSession(session);
     }
 
@@ -390,6 +416,7 @@ export class BrowserSessionManager extends EventEmitter {
       session.url = session.page.url();
       session.title = await session.page.title().catch(() => session.title);
       this.emit("session", this.toClientSession(session));
+      this.queueInteractionCapture(session);
       return this.toClientSession(session);
     }
 
@@ -406,11 +433,13 @@ export class BrowserSessionManager extends EventEmitter {
       } else if (action === "click") {
         await session.page.mouse.click(x, y, { button, clickCount: Math.max(1, Math.floor(Number(input.clickCount) || 1)) });
       }
+      this.queueInteractionCapture(session);
       return this.toClientSession(session);
     }
 
     if (kind === "wheel") {
       await session.page.mouse.wheel(Number(input.deltaX) || 0, Number(input.deltaY) || 0);
+      this.queueInteractionCapture(session);
       return this.toClientSession(session);
     }
 
@@ -429,6 +458,7 @@ export class BrowserSessionManager extends EventEmitter {
       } else {
         await session.page.keyboard.press(value);
       }
+      this.queueInteractionCapture(session);
       return this.toClientSession(session);
     }
 
@@ -444,6 +474,10 @@ export class BrowserSessionManager extends EventEmitter {
     if (session.frameTimer) {
       clearInterval(session.frameTimer);
       session.frameTimer = null;
+    }
+    if (session.captureAfterInputTimer) {
+      clearTimeout(session.captureAfterInputTimer);
+      session.captureAfterInputTimer = null;
     }
     try {
       await session.page?.evaluate(() => window.MauworldBrowserAudioRelay?.stop?.()).catch(() => null);

@@ -144,7 +144,7 @@ export function loadConfig() {
     ),
     sharedBrowserViewportWidth: readOptionalNumber("MAUWORLD_SHARED_BROWSER_VIEWPORT_WIDTH", 1280),
     sharedBrowserViewportHeight: readOptionalNumber("MAUWORLD_SHARED_BROWSER_VIEWPORT_HEIGHT", 720),
-    sharedBrowserFrameRate: readOptionalNumber("MAUWORLD_SHARED_BROWSER_FRAME_RATE", 4),
+    sharedBrowserFrameRate: readOptionalNumber("MAUWORLD_SHARED_BROWSER_FRAME_RATE", 8),
     sharedBrowserJpegQuality: readOptionalNumber("MAUWORLD_SHARED_BROWSER_JPEG_QUALITY", 58),
     liveKitUrl: process.env.MAUWORLD_LIVEKIT_URL?.trim() || "",
     liveKitApiKey: process.env.MAUWORLD_LIVEKIT_API_KEY?.trim() || "",

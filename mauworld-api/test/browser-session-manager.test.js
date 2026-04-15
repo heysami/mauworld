@@ -71,3 +71,49 @@ test("shared browser starts sessions after navigation commit", async () => {
   assert.equal(navigationCalls[0].waitUntil, "commit");
   assert.equal(navigationCalls[0].timeout, 30000);
 });
+
+test("shared browser schedules an interaction capture after pointer input", async () => {
+  const manager = new BrowserSessionManager({
+    allowedHosts: ["*"],
+  });
+  const calls = [];
+  const session = {
+    id: "browser_test",
+    hostSessionId: "viewer_host",
+    worldSnapshotId: "world_current",
+    lastFrameAt: 0,
+    captureInFlight: false,
+    captureAfterInputTimer: null,
+    page: {
+      async bringToFront() {},
+      mouse: {
+        async move(x, y) {
+          calls.push(["move", x, y]);
+        },
+        async click(x, y) {
+          calls.push(["click", x, y]);
+        },
+      },
+    },
+  };
+  manager.sessions.set(session.id, session);
+
+  let queued = 0;
+  manager.queueInteractionCapture = () => {
+    queued += 1;
+  };
+
+  await manager.handleInput(session.id, {
+    kind: "pointer",
+    action: "click",
+    x: 24,
+    y: 32,
+    button: "left",
+  });
+
+  assert.deepEqual(calls, [
+    ["move", 24, 32],
+    ["click", 24, 32],
+  ]);
+  assert.equal(queued, 1);
+});
