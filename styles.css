@@ -178,6 +178,13 @@ textarea {
   text-transform: uppercase;
 }
 
+.guide-card__group {
+  margin: 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
 .brand__name {
   display: block;
   margin: 0;
@@ -618,14 +625,18 @@ textarea {
 .feature-card__head {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
   align-items: start;
+}
+
+.feature-card__head > div {
+  display: grid;
+  gap: 6px;
 }
 
 .guide-card__head {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   align-items: start;
 }
 
@@ -913,27 +924,6 @@ textarea {
 
 .section-block--why .feature-card:nth-child(even) .feature-card__body {
   order: 1;
-}
-
-.guide-card__glyph {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(239, 246, 255, 0.88));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96);
-}
-
-.guide-card__glyph {
-  width: 52px;
-  height: 52px;
-}
-
-.guide-card__glyph svg {
-  width: 24px;
-  height: 24px;
-  color: var(--accent-strong);
 }
 
 .feature-card h3 {
@@ -1243,21 +1233,9 @@ textarea {
   box-shadow: var(--shadow-soft);
 }
 
-.guide-card__number {
-  display: inline-flex;
-  align-items: flex-start;
-  justify-content: center;
-  min-height: 58px;
-  padding-top: 2px;
-  font-family: "Outfit", system-ui, sans-serif;
-  font-size: 2.2rem;
-  font-weight: 800;
-  color: var(--sky-strong);
-}
-
 .guide-card__body {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .guide-card h3 {
@@ -1452,9 +1430,4 @@ textarea {
     padding: 16px 0;
   }
 
-  .feature-card__glyph,
-  .guide-card__glyph {
-    width: 42px;
-    height: 42px;
-  }
 }
