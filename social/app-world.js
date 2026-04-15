@@ -163,6 +163,7 @@ const state = {
   localBrowserFocus: false,
   browserOverlayOpen: false,
   browserStagePointerId: null,
+  browserPointerGesture: null,
   browserMediaController: null,
   browserMediaTransport: "jpeg-sequence",
   browserMediaCanvas: null,
@@ -5350,6 +5351,7 @@ function releaseBrowserStagePointer(event) {
     elements.browserStage.releasePointerCapture(state.browserStagePointerId);
   }
   state.browserStagePointerId = null;
+  state.browserPointerGesture = null;
 }
 
 function getRealtimeMovementState() {
@@ -5489,7 +5491,7 @@ function updateBrowserSessionState(sessionPatch) {
   state.browserSessions.set(next.sessionId, next);
   if (next.hostSessionId === state.viewerSessionId) {
     state.localBrowserSessionId = next.sessionId;
-    if (elements.browserUrl && !elements.browserUrl.value) {
+    if (elements.browserUrl && document.activeElement !== elements.browserUrl) {
       elements.browserUrl.value = next.url ?? "";
     }
     if (next.frameTransport === "livekit-canvas" && state.meta?.worldSnapshotId) {
@@ -6368,15 +6370,45 @@ function mapPointerButton(button) {
   return "left";
 }
 
-function getBrowserViewportPoint(event) {
+function getBrowserViewportMetrics() {
   const rect = elements.browserStage?.getBoundingClientRect();
   if (!rect) {
     return null;
   }
   const config = getInteractionConfig();
+  const aspectRatio = config.browserViewportWidth / Math.max(1, config.browserViewportHeight);
+  let width = rect.width;
+  let height = width / Math.max(0.001, aspectRatio);
+  if (height > rect.height) {
+    height = rect.height;
+    width = height * aspectRatio;
+  }
   return {
-    x: clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1) * config.browserViewportWidth,
-    y: clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1) * config.browserViewportHeight,
+    left: rect.left + (rect.width - width) / 2,
+    top: rect.top + (rect.height - height) / 2,
+    width,
+    height,
+    viewportWidth: config.browserViewportWidth,
+    viewportHeight: config.browserViewportHeight,
+  };
+}
+
+function getBrowserViewportPoint(event) {
+  const metrics = getBrowserViewportMetrics();
+  if (!metrics) {
+    return null;
+  }
+  if (
+    event.clientX < metrics.left
+    || event.clientX > metrics.left + metrics.width
+    || event.clientY < metrics.top
+    || event.clientY > metrics.top + metrics.height
+  ) {
+    return null;
+  }
+  return {
+    x: clamp((event.clientX - metrics.left) / Math.max(1, metrics.width), 0, 1) * metrics.viewportWidth,
+    y: clamp((event.clientY - metrics.top) / Math.max(1, metrics.height), 0, 1) * metrics.viewportHeight,
   };
 }
 
@@ -6589,6 +6621,7 @@ function registerInput() {
   elements.browserStage?.addEventListener("blur", () => {
     state.localBrowserFocus = false;
     state.browserStagePointerId = null;
+    state.browserPointerGesture = null;
   });
   elements.browserStage?.addEventListener("pointerdown", (event) => {
     event.preventDefault();
@@ -6599,17 +6632,45 @@ function registerInput() {
     if (!point) {
       return;
     }
-    sendBrowserInput({
-      kind: "pointer",
-      action: "down",
-      x: Number(point.x.toFixed(2)),
-      y: Number(point.y.toFixed(2)),
+    state.browserPointerGesture = {
+      pointerId: event.pointerId,
       button: mapPointerButton(event.button),
-    });
+      startX: point.x,
+      startY: point.y,
+      lastX: point.x,
+      lastY: point.y,
+      dragging: false,
+    };
   });
   elements.browserStage?.addEventListener("pointermove", (event) => {
     const point = getBrowserViewportPoint(event);
     if (!point) {
+      return;
+    }
+    const gesture = state.browserPointerGesture;
+    if (gesture && gesture.pointerId === event.pointerId) {
+      gesture.lastX = point.x;
+      gesture.lastY = point.y;
+      const distance = Math.hypot(point.x - gesture.startX, point.y - gesture.startY);
+      if (!gesture.dragging && distance > 8) {
+        gesture.dragging = true;
+        sendBrowserInput({
+          kind: "pointer",
+          action: "down",
+          x: Number(gesture.startX.toFixed(2)),
+          y: Number(gesture.startY.toFixed(2)),
+          button: gesture.button,
+        });
+      }
+      if (gesture.dragging) {
+        sendBrowserInput({
+          kind: "pointer",
+          action: "move",
+          x: Number(point.x.toFixed(2)),
+          y: Number(point.y.toFixed(2)),
+          button: gesture.button,
+        });
+      }
       return;
     }
     sendBrowserInput({
@@ -6627,13 +6688,27 @@ function registerInput() {
       releaseBrowserStagePointer(event);
       return;
     }
-    sendBrowserInput({
-      kind: "pointer",
-      action: "up",
-      x: Number(point.x.toFixed(2)),
-      y: Number(point.y.toFixed(2)),
-      button: mapPointerButton(event.button),
-    });
+    const gesture = state.browserPointerGesture;
+    if (gesture && gesture.pointerId === event.pointerId) {
+      if (gesture.dragging) {
+        sendBrowserInput({
+          kind: "pointer",
+          action: "up",
+          x: Number(point.x.toFixed(2)),
+          y: Number(point.y.toFixed(2)),
+          button: gesture.button,
+        });
+      } else {
+        sendBrowserInput({
+          kind: "pointer",
+          action: "click",
+          x: Number(point.x.toFixed(2)),
+          y: Number(point.y.toFixed(2)),
+          button: gesture.button,
+          clickCount: 1,
+        });
+      }
+    }
     releaseBrowserStagePointer(event);
   });
   elements.browserStage?.addEventListener("pointercancel", (event) => {
@@ -6641,6 +6716,7 @@ function registerInput() {
   });
   elements.browserStage?.addEventListener("lostpointercapture", () => {
     state.browserStagePointerId = null;
+    state.browserPointerGesture = null;
   });
   elements.browserStage?.addEventListener("wheel", (event) => {
     event.preventDefault();
