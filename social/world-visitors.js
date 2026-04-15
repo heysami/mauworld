@@ -77,16 +77,6 @@ function isChaseRoutineType(routineType) {
   return routineType === CHASE_PAIR_ROUTINE || routineType === CHASE_GROUP_ROUTINE;
 }
 
-function pickAmbientRoutineType(slotKey) {
-  if (slotKey === "pair") {
-    return randomChoice(["pair", CHASE_PAIR_ROUTINE]);
-  }
-  if (slotKey === "group") {
-    return randomChoice(["group", CHASE_GROUP_ROUTINE]);
-  }
-  return "solo";
-}
-
 function pickLoopCount(routine) {
   if (routine.sourceKind === "queued") {
     return randomInteger(1, 3);
@@ -1179,7 +1169,7 @@ export function createWorldVisitorSystem(options = {}) {
     if (!system.ambientRoutines.has(slot.key)) {
       system.ambientRoutines.set(slot.key, buildRoutine(system, {
         sourceKind: "ambient",
-        routineType: pickAmbientRoutineType(slot.key),
+        routineType: slot.routineType ?? slot.key,
         slotKey: slot.key,
       }));
     }
@@ -1205,10 +1195,23 @@ export function createWorldVisitorSystem(options = {}) {
         system.tagAnchors.size === 0
           ? []
           : system.tagAnchors.size < 3
-            ? [{ key: "solo" }]
+            ? [
+              { key: "solo", routineType: "solo" },
+              { key: CHASE_PAIR_ROUTINE, routineType: CHASE_PAIR_ROUTINE },
+            ]
             : system.tagAnchors.size < 6
-              ? [{ key: "solo" }, { key: "pair" }]
-              : [{ key: "solo" }, { key: "pair" }, { key: "group" }];
+              ? [
+                { key: "solo", routineType: "solo" },
+                { key: "pair", routineType: "pair" },
+                { key: CHASE_PAIR_ROUTINE, routineType: CHASE_PAIR_ROUTINE },
+              ]
+              : [
+                { key: "solo", routineType: "solo" },
+                { key: "pair", routineType: "pair" },
+                { key: "group", routineType: "group" },
+                { key: CHASE_PAIR_ROUTINE, routineType: CHASE_PAIR_ROUTINE },
+                { key: CHASE_GROUP_ROUTINE, routineType: CHASE_GROUP_ROUTINE },
+              ];
       const desiredSlotKeys = new Set(desiredSlots.map((entry) => entry.key));
 
       for (const [slotKey, routine] of system.ambientRoutines.entries()) {
