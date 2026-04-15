@@ -153,10 +153,17 @@ export function createBrowserMediaController(options = {}) {
 
     room.on(liveKit.RoomEvent.TrackPublished, (publication) => {
       const parsed = parsePublication(publication);
-      if (!parsed.sessionId || state.pendingSubscriptions.get(parsed.sessionId) !== true) {
+      if (!parsed.sessionId) {
         return;
       }
-      publication.setSubscribed?.(true);
+      const desired = state.pendingSubscriptions.get(parsed.sessionId);
+      if (desired === false) {
+        publication.setSubscribed?.(false);
+        return;
+      }
+      if (desired === true) {
+        publication.setSubscribed?.(true);
+      }
     });
 
     room.on(liveKit.RoomEvent.Disconnected, () => {
@@ -248,7 +255,7 @@ export function createBrowserMediaController(options = {}) {
       });
       bindRoomEvents(room, liveKit);
       await room.connect(tokenPayload.serverUrl, tokenPayload.token, {
-        autoSubscribe: false,
+        autoSubscribe: true,
       });
       state.room = room;
       state.enabled = true;
@@ -262,17 +269,7 @@ export function createBrowserMediaController(options = {}) {
         roomName: tokenPayload.roomName,
       });
       for (const [sessionId, subscribed] of state.pendingSubscriptions.entries()) {
-        if (!subscribed) {
-          continue;
-        }
-        for (const participant of room.remoteParticipants.values()) {
-          for (const publication of participant.trackPublications.values()) {
-            const parsed = parsePublication(publication);
-            if (parsed.sessionId === sessionId) {
-              publication.setSubscribed?.(true);
-            }
-          }
-        }
+        applySubscription(sessionId, subscribed === true);
       }
       return true;
     })().catch((error) => {
