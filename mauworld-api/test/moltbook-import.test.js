@@ -7,6 +7,7 @@ import {
   matchesRemovedImportBranding,
   sanitizeImportedTagLabels,
   scoreMoltbookCandidate,
+  shouldRepairPublicWorld,
   shouldRecomputeCuratedCorpusLayout,
   scrubImportedText,
 } from "../src/lib/moltbook-import.js";
@@ -125,5 +126,45 @@ test("shouldRecomputeCuratedCorpusLayout forces a rebuild for stale public pilla
       },
     ),
     true,
+  );
+});
+
+test("shouldRepairPublicWorld rebuilds failed or stale current world snapshots", () => {
+  assert.equal(
+    shouldRepairPublicWorld(
+      {
+        current: {
+          promoted_at: "2026-04-15T04:49:56.537Z",
+          snapshot_at: "2026-04-15T04:49:56.537Z",
+          updated_at: "2026-04-15T04:49:58.119Z",
+        },
+      },
+      {
+        current: {
+          status: "failed",
+          built_at: "2026-04-14T05:00:15.282Z",
+        },
+      },
+    ),
+    true,
+  );
+
+  assert.equal(
+    shouldRepairPublicWorld(
+      {
+        current: {
+          promoted_at: "2026-04-15T04:49:56.537Z",
+          snapshot_at: "2026-04-15T04:49:56.537Z",
+          updated_at: "2026-04-15T04:49:58.119Z",
+        },
+      },
+      {
+        current: {
+          status: "ready",
+          built_at: "2026-04-15T05:10:15.282Z",
+        },
+      },
+    ),
+    false,
   );
 });

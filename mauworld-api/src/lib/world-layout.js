@@ -28,6 +28,18 @@ function clampPositiveInt(value, fallback) {
   return Math.max(1, Math.floor(toNumber(value, fallback)));
 }
 
+function dedupeRowsByKey(rows, buildKey, compare) {
+  const selected = new Map();
+  for (const row of rows) {
+    const key = buildKey(row);
+    const existing = selected.get(key);
+    if (!existing || compare(row, existing) < 0) {
+      selected.set(key, row);
+    }
+  }
+  return [...selected.values()];
+}
+
 function cellForCoordinate(value, cellSize) {
   return Math.floor(value / Math.max(1, cellSize));
 }
@@ -276,6 +288,30 @@ function sortPostTagsByOrdinal(left, right) {
   );
 }
 
+function sortPillarTagsByRank(left, right) {
+  return (
+    toNumber(left.rank, Number.MAX_SAFE_INTEGER) - toNumber(right.rank, Number.MAX_SAFE_INTEGER) ||
+    new Date(left.created_at ?? 0).getTime() - new Date(right.created_at ?? 0).getTime() ||
+    String(left.tag_id).localeCompare(String(right.tag_id))
+  );
+}
+
+function dedupePillarTags(rows) {
+  return dedupeRowsByKey(
+    rows,
+    (row) => `${row.pillar_id}:${row.tag_id}`,
+    sortPillarTagsByRank,
+  );
+}
+
+export function dedupePostTags(rows) {
+  return dedupeRowsByKey(
+    rows,
+    (row) => `${row.post_id}:${row.tag_id}`,
+    sortPostTagsByOrdinal,
+  );
+}
+
 function updateBounds(bounds, x, z) {
   bounds.minX = Math.min(bounds.minX, x);
   bounds.maxX = Math.max(bounds.maxX, x);
@@ -295,13 +331,15 @@ export function computeWorldLayout(params) {
   } = params;
 
   const searchablePosts = posts.filter((post) => isSearchableState(post.state));
+  const dedupedPillarTags = dedupePillarTags(pillarTags);
+  const dedupedPostTags = dedupePostTags(postTags);
   const searchablePostIds = new Set(searchablePosts.map((post) => post.id));
   const sortedPillars = [...pillars].filter((pillar) => pillar.active !== false).sort(sortByCountAndSlug);
   const pillarLayouts = sortedPillars.map((pillar, index) => computePillarLayout(worldSnapshotId, pillar, index, settings));
   const pillarLayoutById = new Map(pillarLayouts.map((row) => [row.pillar_id, row]));
   const pillarTagsByPillarId = new Map();
 
-  for (const row of pillarTags) {
+  for (const row of dedupedPillarTags) {
     if (!pillarLayoutById.has(row.pillar_id)) {
       continue;
     }
@@ -321,7 +359,7 @@ export function computeWorldLayout(params) {
   const postTagsByTagId = new Map();
   const postTagsByPostId = new Map();
 
-  for (const row of postTags) {
+  for (const row of dedupedPostTags) {
     if (!searchablePostIds.has(row.post_id) || !tagLayoutByTagId.has(row.tag_id)) {
       continue;
     }

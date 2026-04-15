@@ -267,6 +267,31 @@ export function shouldRecomputeCuratedCorpusLayout(scrubbed, imported) {
     || (imported?.importedCount ?? 0) > 0;
 }
 
+export function shouldRepairPublicWorld(organization, worldSummary) {
+  const currentVersion = organization?.current ?? null;
+  const currentWorld = worldSummary?.current ?? null;
+  if (!currentVersion || !currentWorld) {
+    return true;
+  }
+  if (currentWorld.status !== "ready") {
+    return true;
+  }
+
+  const builtAtMs = new Date(currentWorld.built_at ?? 0).getTime();
+  const requiredFreshnessMs = Math.max(
+    new Date(currentVersion.promoted_at ?? 0).getTime(),
+    new Date(currentVersion.snapshot_at ?? 0).getTime(),
+    new Date(currentVersion.updated_at ?? 0).getTime(),
+  );
+  if (!Number.isFinite(builtAtMs)) {
+    return true;
+  }
+  if (!Number.isFinite(requiredFreshnessMs) || requiredFreshnessMs <= 0) {
+    return false;
+  }
+  return builtAtMs < requiredFreshnessMs;
+}
+
 function buildImportProgress(existingCount, importedCount) {
   const totalCount = existingCount + importedCount;
   return {
@@ -1286,8 +1311,14 @@ async function scrubLegacyImportedContent(store) {
 export async function runCuratedCorpusSync(store) {
   const scrubbed = await scrubLegacyImportedContent(store);
   const imported = await runMoltbookImport(store);
+  const [organization, worldSummary] = await Promise.all([
+    store.getOrganizationSummary(),
+    store.getWorldSummary(),
+  ]);
+  const shouldRepairWorld = shouldRepairPublicWorld(organization, worldSummary);
   const recompute =
-    shouldRecomputeCuratedCorpusLayout(scrubbed, imported) && (imported.importedCount ?? 0) === 0
+    (shouldRecomputeCuratedCorpusLayout(scrubbed, imported) && (imported.importedCount ?? 0) === 0)
+    || shouldRepairWorld
       ? await store.recomputePillars({ forcePromoteCurrent: true })
       : null;
   return {
@@ -1304,6 +1335,7 @@ export async function runCuratedCorpusSync(store) {
     batchSize: imported.batchSize ?? 0,
     skipped: Boolean(imported.skipped),
     recomputed: Boolean(recompute),
+    repairedWorld: shouldRepairWorld,
     world: recompute?.world ?? null,
     worldQueue: recompute?.worldQueue ?? null,
   };

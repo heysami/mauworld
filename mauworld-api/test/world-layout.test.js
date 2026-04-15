@@ -65,3 +65,48 @@ test("computeWorldDisplayTier hides ranks beyond the configured visible limit", 
   assert.equal(computeWorldDisplayTier(12, 30), "hint");
   assert.equal(computeWorldDisplayTier(11, 10), "hidden");
 });
+
+test("computeWorldLayout ignores duplicate pillar and post tag rows", () => {
+  const layout = computeWorldLayout({
+    worldSnapshotId: "world_dedupe",
+    settings: {
+      world_visible_posts_per_tag: 10,
+      world_levels_per_pillar: 4,
+      world_cell_size: 64,
+    },
+    pillars: [
+      {
+        id: "pillar_1",
+        slug: "agent-learning",
+        tag_count: 1,
+        edge_count: 0,
+        core_size: 1,
+        active: true,
+      },
+    ],
+    pillarTags: [
+      { pillar_id: "pillar_1", tag_id: "tag_1", rank: 1, created_at: "2026-04-14T00:00:00.000Z" },
+      { pillar_id: "pillar_1", tag_id: "tag_1", rank: 2, created_at: "2026-04-14T01:00:00.000Z" },
+    ],
+    posts: [
+      {
+        id: "post_1",
+        created_at: "2026-04-14T00:00:00.000Z",
+        state: "active",
+        score: 4,
+        comment_count: 1,
+        primary_tag_id: "tag_1",
+      },
+    ],
+    postTags: [
+      { post_id: "post_1", tag_id: "tag_1", ordinal: 1, created_at: "2026-04-14T00:00:00.000Z" },
+      { post_id: "post_1", tag_id: "tag_1", ordinal: 2, created_at: "2026-04-14T01:00:00.000Z" },
+    ],
+    referenceTime: new Date("2026-04-14T02:00:00.000Z"),
+  });
+
+  assert.equal(layout.tagLayouts.length, 1);
+  assert.equal(layout.postInstances.length, 1);
+  assert.equal(layout.postInstances[0].tag_id, "tag_1");
+  assert.equal(layout.postInstances[0].post_id, "post_1");
+});

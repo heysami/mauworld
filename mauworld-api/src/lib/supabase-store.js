@@ -26,6 +26,7 @@ import {
   computeTagAnchorPosition,
   computeTagPostInstancesForLayout,
   computeWorldLayout,
+  dedupePostTags,
 } from "./world-layout.js";
 
 const CURRENT_ORGANIZATION_SLOT = "current";
@@ -1128,7 +1129,7 @@ export class MauworldStore {
 
     const searchablePosts = posts.filter((post) => ["active", "flagged"].includes(post.state));
     const searchablePostIds = new Set(searchablePosts.map((post) => post.id));
-    const filteredPostTags = postTags.filter((row) => searchablePostIds.has(row.post_id));
+    const filteredPostTags = dedupePostTags(postTags.filter((row) => searchablePostIds.has(row.post_id)));
     const postTagsByTagId = filteredPostTags.reduce((map, row) => {
       if (!map.has(row.tag_id)) {
         map.set(row.tag_id, []);
