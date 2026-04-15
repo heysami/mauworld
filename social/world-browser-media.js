@@ -48,10 +48,6 @@ function normalizePlayError(error) {
   return String(error?.name || error?.message || "").trim();
 }
 
-function clampUnit(value) {
-  return Math.min(1, Math.max(0, Number(value) || 0));
-}
-
 function detachTrackElement(entry) {
   if (!entry) {
     return;
@@ -99,7 +95,6 @@ export function createBrowserMediaController(options = {}) {
     remoteTracks: new Map(),
     pendingSubscriptions: new Map(),
     audioPlaybackState: new Map(),
-    audioVolumes: new Map(),
   };
 
   function notifyStatus(patch = {}) {
@@ -146,11 +141,9 @@ export function createBrowserMediaController(options = {}) {
     entry.element.autoplay = true;
     entry.element.playsInline = true;
     if (entry.kind === "audio") {
-      const volume = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
-      const shouldMute = volume <= 0.001;
-      entry.element.muted = shouldMute ? true : false;
-      entry.element.defaultMuted = shouldMute ? true : false;
-      entry.element.volume = volume;
+      entry.element.muted = false;
+      entry.element.defaultMuted = false;
+      entry.element.volume = 1;
     } else {
       entry.element.muted = true;
       entry.element.defaultMuted = true;
@@ -189,7 +182,6 @@ export function createBrowserMediaController(options = {}) {
       options.onRemoteTrackRemoved?.({ sessionId });
     } else if (kind === "audio") {
       state.audioPlaybackState.delete(sessionId);
-      state.audioVolumes.delete(sessionId);
       notifyRemoteAudioState(sessionId);
     }
   }
@@ -559,23 +551,6 @@ export function createBrowserMediaController(options = {}) {
       }
       const results = await Promise.all(entries.map((entry) => playRemoteTrackEntry(entry)));
       return results.some(Boolean);
-    },
-
-    setRemoteAudioVolume(params = {}) {
-      const sessionId = String(params.sessionId ?? "").trim();
-      if (!sessionId) {
-        return false;
-      }
-      const volume = clampUnit(params.volume);
-      state.audioVolumes.set(sessionId, volume);
-      const entry = state.remoteTracks.get(getTrackKey(sessionId, "audio"));
-      if (entry?.element) {
-        entry.element.volume = volume;
-        const shouldMute = volume <= 0.001;
-        entry.element.muted = shouldMute ? true : false;
-        entry.element.defaultMuted = shouldMute ? true : false;
-      }
-      return true;
     },
 
     async disconnect() {
