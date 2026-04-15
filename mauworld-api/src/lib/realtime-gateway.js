@@ -325,16 +325,20 @@ export class RealtimeGateway {
           .map((entry) => buildViewerPresencePayload(entry)),
       });
       const browserSessions = this.browserManager.listSessionsForWorld(worldSnapshotId);
-      for (const session of browserSessions) {
+      for (const rawSession of browserSessions) {
+        const session = typeof this.browserManager.toClientSession === "function"
+          ? this.browserManager.toClientSession(rawSession)
+          : rawSession;
+        const sessionId = session.sessionId ?? rawSession.sessionId ?? rawSession.id;
         sendJson(client, {
           type: "browser:session",
           session,
         });
-        const deliveryMode = session.subscribers?.has(client.viewerSessionId) ? "full" : "placeholder";
-        client.browserModes.set(session.sessionId ?? session.id, deliveryMode);
+        const deliveryMode = rawSession.subscribers?.has(client.viewerSessionId) ? "full" : "placeholder";
+        client.browserModes.set(sessionId, deliveryMode);
         sendJson(client, {
           type: deliveryMode === "full" ? "browser:subscribe" : "browser:unsubscribe",
-          sessionId: session.sessionId ?? session.id,
+          sessionId,
           hostSessionId: session.hostSessionId,
         });
       }

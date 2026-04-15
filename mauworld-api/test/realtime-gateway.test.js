@@ -101,3 +101,40 @@ test("presence snapshot replays current browser subscribe state for reconnecting
 
   await gateway.dispose();
 });
+
+test("presence snapshot normalizes browser session payloads for late joiners", async () => {
+  const gateway = new RealtimeGateway({ config: {} });
+  const socket = createFakeSocket();
+  const requestUrl = new URL("http://localhost/api/ws/public/world/current?viewerSessionId=viewer_late");
+
+  gateway.browserManager.listSessionsForWorld = () => [{
+    id: "browser_session_2",
+    hostSessionId: "viewer_host",
+    worldSnapshotId: "world_current",
+    status: "ready",
+    startedAt: new Date().toISOString(),
+    frameTransport: "livekit-display",
+    sessionMode: "display-share",
+    title: "Shared tab",
+    url: "",
+    aspectRatio: 16 / 9,
+    subscribers: new Set(["viewer_host"]),
+  }];
+  gateway.rebalanceBrowserSessions = async () => {};
+
+  gateway.handleConnection(socket, requestUrl);
+  await gateway.handleMessage(gateway.clients.get("viewer_late"), {
+    type: "presence:update",
+    worldSnapshotId: "world_current",
+    position_x: 1,
+    position_y: 0,
+    position_z: 1,
+  });
+
+  const browserSessionMessage = socket.sent.find((message) => message.type === "browser:session");
+  assert.equal(browserSessionMessage?.session?.sessionId, "browser_session_2");
+  assert.equal(browserSessionMessage?.session?.hostSessionId, "viewer_host");
+  assert.equal(browserSessionMessage?.session?.sessionMode, "display-share");
+
+  await gateway.dispose();
+});

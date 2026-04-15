@@ -233,6 +233,7 @@ const sceneState = {
 };
 
 const billboardParentQuaternion = new THREE.Quaternion();
+const browserFallbackHostPosition = new THREE.Vector3();
 
 const inputState = {
   keys: new Set(),
@@ -3858,7 +3859,19 @@ function getBrowserHostPosition(hostSessionId) {
   if (hostSessionId === state.viewerSessionId) {
     return sceneState.playerAvatar?.group?.position ?? state.navigationPosition;
   }
-  return sceneState.presenceEntries.get(hostSessionId)?.group?.position ?? null;
+  const renderedPosition = sceneState.presenceEntries.get(hostSessionId)?.group?.position ?? null;
+  if (renderedPosition) {
+    return renderedPosition;
+  }
+  const livePresence = state.livePresence.get(hostSessionId);
+  const x = Number(livePresence?.position_x);
+  const y = Number(livePresence?.position_y);
+  const z = Number(livePresence?.position_z);
+  if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+    browserFallbackHostPosition.set(x, y, z);
+    return browserFallbackHostPosition;
+  }
+  return null;
 }
 
 function updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds) {
@@ -5744,11 +5757,20 @@ function updateBrowserPanel() {
   }
 
   const debugSession = localSession ?? remotePanelSession;
+  const debugHostSessionId = String(debugSession?.hostSessionId ?? "").trim();
+  const debugHostRendered = debugHostSessionId
+    ? debugHostSessionId === state.viewerSessionId || sceneState.presenceEntries.has(debugHostSessionId)
+    : false;
+  const debugHostLive = debugHostSessionId
+    ? debugHostSessionId === state.viewerSessionId || state.livePresence.has(debugHostSessionId)
+    : false;
+  const debugScreenEntry = debugSession ? sceneState.browserScreenEntries.get(debugSession.sessionId) ?? null : null;
   setBrowserDebug(
     [
       `room ${state.browserMediaState.connected ? "connected" : "idle"} / ${state.browserMediaState.transport}`,
       `session ${debugSession?.sessionId?.slice(-8) || "-"} / ${debugSession?.deliveryMode || "-"} / ${debugSession?.sessionMode || "-"}`,
       `remote ${state.browserMediaState.remoteVideoSessionId?.slice(-8) || "-"} ready ${state.browserMediaState.remoteVideoReadyState || 0} size ${state.browserMediaState.remoteVideoWidth || 0}x${state.browserMediaState.remoteVideoHeight || 0} paused ${state.browserMediaState.remoteVideoPaused ? "yes" : "no"}`,
+      `sessions ${state.browserSessions.size} host live ${debugHostLive ? "yes" : "no"} rendered ${debugHostRendered ? "yes" : "no"} screen ${debugScreenEntry?.group?.visible ? "visible" : debugScreenEntry ? "hidden" : "none"}`,
     ].join("\n"),
   );
 
