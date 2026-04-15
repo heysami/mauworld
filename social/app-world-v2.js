@@ -2781,10 +2781,12 @@ function buildPostObject(entry) {
     cellX: entry.cell_x,
     cellZ: entry.cell_z,
     displayTier: entry.display_tier,
+    sourceDisplayTier: entry.source_display_tier ?? entry.display_tier,
     rankInTag: entry.rank_in_tag ?? Number.MAX_SAFE_INTEGER,
     targetVisible: false,
     visibilityProgress: 0,
     visibilitySpeed: 10 + (hashString(`${entry.post_id}:${entry.tag_id}`) % 4),
+    syntheticFocusReveal: entry.synthetic_focus_reveal === true,
   });
 
   const clickablePayload = {
@@ -2794,6 +2796,31 @@ function buildPostObject(entry) {
   };
   sceneState.clickable.push(clickablePayload);
   return group;
+}
+
+function removeAnimatedPostEntry(entry) {
+  if (!entry) {
+    return;
+  }
+  unregisterBillboardsInGroup(entry.group);
+  if (entry.group.parent) {
+    entry.group.parent.remove(entry.group);
+  }
+  entry.group.traverse((node) => {
+    if (node.geometry) {
+      node.geometry.dispose();
+    }
+    if (Array.isArray(node.material)) {
+      node.material.forEach(disposeMaterial);
+    } else {
+      disposeMaterial(node.material);
+    }
+  });
+  const animatedIndex = sceneState.animatedPosts.indexOf(entry);
+  if (animatedIndex >= 0) {
+    sceneState.animatedPosts.splice(animatedIndex, 1);
+  }
+  sceneState.clickable = sceneState.clickable.filter((payload) => payload.mesh !== entry.card);
 }
 
 function buildPresenceObject(entry) {
@@ -3096,6 +3123,20 @@ function hasVisibleFocusedPost(result) {
   );
 }
 
+function hasRenderableFocusedPost(result) {
+  if (!result?.destination) {
+    return false;
+  }
+  if (state.openTagId !== result.destination.tag_id) {
+    return false;
+  }
+  return sceneState.animatedPosts.some(
+    (entry) =>
+      entry.postId === result.destination.post_id
+      && entry.tagId === result.destination.tag_id,
+  );
+}
+
 function hasPresenceCheckingFocusedPost(result) {
   if (!result?.destination || !state.stream?.presence?.length) {
     return false;
@@ -3142,10 +3183,7 @@ function syncFocusedGhost() {
   if (!result?.destination) {
     return;
   }
-  const shouldGhost =
-    queueStatus !== "ready"
-    || result.destination.display_tier === "hidden"
-    || !hasVisibleFocusedPost(result);
+  const shouldGhost = queueStatus !== "ready" || !hasRenderableFocusedPost(result);
   if (!shouldGhost) {
     return;
   }
@@ -3230,6 +3268,83 @@ function getRenderedTagAnchorById(tagId) {
 function getAnimatedPostEntry(postId, tagId = null) {
   return sceneState.animatedPosts.find((entry) =>
     entry.postId === postId && (tagId == null || entry.tagId === tagId)) ?? null;
+}
+
+function getScenePostEntry(postId, tagId, options = {}) {
+  return sceneState.animatedPosts.find((entry) => {
+    if (entry.postId !== postId || entry.tagId !== tagId) {
+      return false;
+    }
+    if (options.syntheticOnly && !entry.syntheticFocusReveal) {
+      return false;
+    }
+    if (options.excludeSynthetic && entry.syntheticFocusReveal) {
+      return false;
+    }
+    return true;
+  }) ?? null;
+}
+
+function buildFocusedRevealPostPayload() {
+  const result = state.focusedResult;
+  const queueStatus = resolveResultQueueStatus(result);
+  if (queueStatus !== "ready" || !result?.destination) {
+    return null;
+  }
+  if (state.openTagId !== result.destination.tag_id) {
+    return null;
+  }
+  if (result.destination.display_tier !== "hidden") {
+    return null;
+  }
+
+  const cellSize = Math.max(1, state.meta?.renderer?.lod?.cellSize ?? 64);
+  const score = Math.max(0, Number(result.post?.score ?? 0));
+  const commentCount = Math.max(0, Number(result.post?.comment_count ?? 0));
+  const sizeFactor = clamp(0.96 + Math.log1p(score * 4 + commentCount * 2) / 4.8, 0.96, 1.26);
+
+  return {
+    world_snapshot_id: result.destination.world_snapshot_id ?? state.meta?.worldSnapshotId ?? null,
+    post_id: result.destination.post_id,
+    tag_id: result.destination.tag_id,
+    position_x: result.destination.position_x,
+    position_y: result.destination.position_y ?? 0,
+    position_z: result.destination.position_z,
+    heading_y: result.destination.heading_y ?? 0,
+    display_tier: "standard",
+    source_display_tier: result.destination.display_tier,
+    rank_in_tag: Number.MAX_SAFE_INTEGER - 1,
+    size_factor: sizeFactor,
+    cell_x: Math.floor((result.destination.position_x ?? 0) / cellSize),
+    cell_z: Math.floor((result.destination.position_z ?? 0) / cellSize),
+    post: result.post ?? null,
+    synthetic_focus_reveal: true,
+  };
+}
+
+function syncFocusedRevealedPost() {
+  const desired = buildFocusedRevealPostPayload();
+  const syntheticEntry = sceneState.animatedPosts.find((entry) => entry.syntheticFocusReveal) ?? null;
+  const actualEntry = desired
+    ? getScenePostEntry(desired.post_id, desired.tag_id, { excludeSynthetic: true })
+    : null;
+
+  if (syntheticEntry) {
+    const matchesDesired =
+      desired
+      && syntheticEntry.postId === desired.post_id
+      && syntheticEntry.tagId === desired.tag_id;
+    if (!matchesDesired || actualEntry) {
+      removeAnimatedPostEntry(syntheticEntry);
+    }
+  }
+
+  if (!desired || actualEntry || getScenePostEntry(desired.post_id, desired.tag_id, { syntheticOnly: true })) {
+    return;
+  }
+
+  const group = buildPostObject(desired);
+  sceneState.posts.add(group);
 }
 
 function getRenderedPostAnchor(post) {
@@ -3564,6 +3679,8 @@ function syncFocusedFloorMarker() {
 }
 
 function syncExpandedTagState() {
+  syncFocusedRevealedPost();
+
   for (const entry of sceneState.animatedPosts) {
     entry.targetVisible = state.openTagId === entry.tagId;
     if (entry.targetVisible) {
@@ -3783,17 +3900,16 @@ function rebuildConnections(pillars, tags, posts) {
     sceneState.lines.add(new THREE.LineSegments(geometry, material));
   }
 
-  for (const post of posts) {
-    if (state.openTagId !== post.tag_id || post.display_tier === "hidden") {
+  for (const entry of sceneState.animatedPosts) {
+    if (state.openTagId !== entry.tagId || entry.displayTier === "hidden") {
       continue;
     }
-    const tag = tagById.get(post.tag_id);
+    const tag = tagById.get(entry.tagId);
     if (!tag) {
       continue;
     }
-    const { elevation } = getPostCardLayout(post);
     const renderedTagAnchor = getRenderedTagAnchor(tag);
-    const renderedPostAnchor = getRenderedPostAnchor(post);
+    const renderedPostAnchor = entry.displayAnchor ?? entry.anchor;
     const start = new THREE.Vector3(
       renderedTagAnchor.x,
       renderedTagAnchor.y + 0.18,
@@ -3801,15 +3917,15 @@ function rebuildConnections(pillars, tags, posts) {
     );
     const end = new THREE.Vector3(
       renderedPostAnchor.x,
-      renderedPostAnchor.y + elevation * 0.76,
+      renderedPostAnchor.y + entry.cardElevation * 0.76,
       renderedPostAnchor.z,
     );
-    const accents = pickAccentSet(post.post_id || post.post?.title || `${post.tag_id}:${post.post_id}`);
+    const accents = pickAccentSet(entry.postId || `${entry.tagId}:${entry.postId}`);
     const branch = createBranchConnection(start, end, {
-      accent: post.display_tier === "hero" ? accents.primary : accents.secondary,
-      outerRadius: post.display_tier === "hero" ? 0.16 : post.display_tier === "standard" ? 0.12 : 0.095,
-      outerOpacity: post.display_tier === "hero" ? 0.38 : 0.3,
-      innerOpacity: post.display_tier === "hero" ? 0.8 : 0.68,
+      accent: entry.displayTier === "hero" ? accents.primary : accents.secondary,
+      outerRadius: entry.displayTier === "hero" ? 0.16 : entry.displayTier === "standard" ? 0.12 : 0.095,
+      outerOpacity: entry.displayTier === "hero" ? 0.38 : 0.3,
+      innerOpacity: entry.displayTier === "hero" ? 0.8 : 0.68,
     });
     sceneState.lines.add(branch);
   }
@@ -3820,11 +3936,7 @@ function rebuildConnections(pillars, tags, posts) {
   const shouldLinkFocusedGhost =
     focusedDestination?.tag_id
     && state.openTagId === focusedDestination.tag_id
-    && (
-      focusedQueueStatus !== "ready"
-      || focusedDestination.display_tier === "hidden"
-      || !hasVisibleFocusedPost(focusedResult)
-    );
+    && (focusedQueueStatus !== "ready" || !hasRenderableFocusedPost(focusedResult));
   if (!shouldLinkFocusedGhost) {
     return;
   }
