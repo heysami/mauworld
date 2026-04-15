@@ -423,6 +423,7 @@ function dedupeStringList(values) {
 }
 
 const SUPABASE_IN_FILTER_BATCH_SIZE = 100;
+const SUPABASE_MUTATION_BATCH_SIZE = 100;
 const DERIVED_POST_COUNTER_BATCH_SIZE = 25;
 
 async function loadRowsByInBatches(serviceClient, {
@@ -458,6 +459,19 @@ async function runByBatches(items, worker, {
   for (let index = 0; index < rows.length; index += batchSize) {
     const batch = rows.slice(index, index + batchSize);
     await Promise.all(batch.map((item, batchIndex) => worker(item, index + batchIndex)));
+  }
+}
+
+async function insertRowsByBatches(serviceClient, {
+  table,
+  rows,
+  batchSize = SUPABASE_MUTATION_BATCH_SIZE,
+  message,
+}) {
+  const scopedRows = Array.isArray(rows) ? rows : [];
+  for (let index = 0; index < scopedRows.length; index += batchSize) {
+    const batchRows = scopedRows.slice(index, index + batchSize);
+    await must(serviceClient.from(table).insert(batchRows), message);
   }
 }
 
@@ -1064,22 +1078,25 @@ export class MauworldStore {
       ]);
 
       if (layout.pillarLayouts.length > 0) {
-        await must(
-          this.serviceClient.from("world_pillar_layouts").insert(layout.pillarLayouts),
-          "Could not insert world pillar layouts",
-        );
+        await insertRowsByBatches(this.serviceClient, {
+          table: "world_pillar_layouts",
+          rows: layout.pillarLayouts,
+          message: "Could not insert world pillar layouts",
+        });
       }
       if (layout.tagLayouts.length > 0) {
-        await must(
-          this.serviceClient.from("world_tag_layouts").insert(layout.tagLayouts),
-          "Could not insert world tag layouts",
-        );
+        await insertRowsByBatches(this.serviceClient, {
+          table: "world_tag_layouts",
+          rows: layout.tagLayouts,
+          message: "Could not insert world tag layouts",
+        });
       }
       if (layout.postInstances.length > 0) {
-        await must(
-          this.serviceClient.from("world_post_instances").insert(layout.postInstances),
-          "Could not insert world post instances",
-        );
+        await insertRowsByBatches(this.serviceClient, {
+          table: "world_post_instances",
+          rows: layout.postInstances,
+          message: "Could not insert world post instances",
+        });
       }
 
       const updated = await must(
@@ -1295,10 +1312,11 @@ export class MauworldStore {
     );
 
     if (nextInstances.length > 0) {
-      await must(
-        this.serviceClient.from("world_post_instances").insert(nextInstances),
-        "Could not insert world post instances for tag refresh",
-      );
+      await insertRowsByBatches(this.serviceClient, {
+        table: "world_post_instances",
+        rows: nextInstances,
+        message: "Could not insert world post instances for tag refresh",
+      });
     }
     if (nextTagLayouts.length > 0) {
       await must(

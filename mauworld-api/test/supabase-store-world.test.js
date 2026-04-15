@@ -98,10 +98,21 @@ class FakeQuery {
       table: this.table,
       action: this.action,
       filters: this.filters.map((filter) => ({ ...filter })),
+      payloadSize: Array.isArray(this.payload) ? this.payload.length : null,
     });
 
     const limit = this.state.failOnInCount?.[this.table];
     if (limit && inFilter && inFilter.values.length > limit) {
+      return {
+        data: null,
+        error: {
+          message: "Bad Request",
+        },
+      };
+    }
+
+    const insertLimit = this.state.failOnInsertCount?.[this.table];
+    if (this.action === "insert" && insertLimit && Array.isArray(this.payload) && this.payload.length > insertLimit) {
       return {
         data: null,
         error: {
@@ -446,6 +457,9 @@ test("rebuildWorldSnapshotForVersion batches large post tag lookups", async () =
     failOnInCount: {
       post_tags: 100,
     },
+    failOnInsertCount: {
+      world_post_instances: 100,
+    },
     queryLog: [],
   };
 
@@ -472,8 +486,12 @@ test("rebuildWorldSnapshotForVersion batches large post tag lookups", async () =
   const postTagBatchSizes = state.queryLog
     .filter((entry) => entry.table === "post_tags" && entry.action === "select")
     .map((entry) => entry.filters.find((filter) => filter.type === "in" && filter.column === "post_id")?.values.length ?? 0);
+  const worldPostInsertBatchSizes = state.queryLog
+    .filter((entry) => entry.table === "world_post_instances" && entry.action === "insert")
+    .map((entry) => entry.payloadSize ?? 0);
 
   assert.deepEqual(postTagBatchSizes, [100, 1]);
+  assert.deepEqual(worldPostInsertBatchSizes, [100, 1]);
   assert.equal(failedSnapshotMarks, 0);
   assert.equal(result.worldSnapshot.status, "ready");
   assert.equal(state.tables.world_post_instances.length, postCount);
