@@ -4900,6 +4900,12 @@ function computeOpeningShot(anchor, options = {}) {
   return { position, target, player };
 }
 
+function getLevelOpeningCameraPosition(position, target) {
+  const leveled = position.clone();
+  leveled.y = target.y;
+  return leveled;
+}
+
 function positionCameraForWorldMeta() {
   if (!state.meta || state.initialViewFramed) {
     return;
@@ -4916,7 +4922,7 @@ function positionCameraForWorldMeta() {
     },
   );
   const { position, target } = frame;
-  aimCameraAt(position, target);
+  aimCameraAt(getLevelOpeningCameraPosition(position, target), target);
 }
 
 function frameInitialViewFromStream() {
@@ -4932,7 +4938,7 @@ function frameInitialViewFromStream() {
         radius: primaryPillar.radius,
       },
     );
-    aimCameraAt(frame.position, frame.target);
+    aimCameraAt(getLevelOpeningCameraPosition(frame.position, frame.target), frame.target);
     state.initialViewFramed = true;
     return;
   }
@@ -4979,7 +4985,7 @@ function frameInitialViewFromStream() {
     Math.max(112, center.y + spanY * 0.44 + 56),
     center.z + cameraDistance,
   );
-  aimCameraAt(position, target);
+  aimCameraAt(getLevelOpeningCameraPosition(position, target), target);
   state.initialViewFramed = true;
 }
 
