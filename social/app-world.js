@@ -35,7 +35,6 @@ const elements = {
   browserLaunch: document.querySelector("[data-world-browser-launch]"),
   browserStop: document.querySelector("[data-world-browser-stop]"),
   browserStatus: document.querySelector("[data-world-browser-status]"),
-  browserDebug: document.querySelector("[data-world-browser-debug]"),
   browserBackdrop: document.querySelector("[data-world-browser-backdrop]"),
   browserStage: document.querySelector("[data-world-browser-stage]"),
   browserVideo: document.querySelector("[data-world-browser-video]"),
@@ -3913,6 +3912,7 @@ function updateBrowserScreenPresentation(entry) {
     : hasLiveFrame
       ? entry.liveTexture
       : entry.placeholderTexture;
+  entry.frameShell.visible = !(hasRemoteVideo || hasLiveFrame);
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
@@ -5654,15 +5654,6 @@ function setBrowserStatus(text) {
   }
 }
 
-function setBrowserDebug(text) {
-  if (!elements.browserDebug) {
-    return;
-  }
-  const next = String(text ?? "").trim();
-  elements.browserDebug.hidden = !next;
-  elements.browserDebug.textContent = next;
-}
-
 function updateChatCounter() {
   if (!elements.chatCounter || !elements.chatInput) {
     return;
@@ -5840,6 +5831,9 @@ function updateBrowserPanel() {
     && elements.browserVideo?.srcObject
     && state.browserMediaState.remoteVideoSessionId === remotePanelSession.sessionId,
   );
+  const frameUrl = localSession?.lastFrameDataUrl ?? "";
+  const hasActiveBrowserMedia = Boolean(previewStream || hasRemotePanelVideo || hasRemotePanelSession || frameUrl);
+  elements.browserStage?.classList.toggle("is-active", hasActiveBrowserMedia);
   if (!state.realtimeConnected) {
     setBrowserStatus("Realtime share offline.");
   } else if (state.pendingBrowserShare) {
@@ -5869,28 +5863,6 @@ function updateBrowserPanel() {
     elements.browserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
   }
 
-  const debugSession = localSession ?? remotePanelSession;
-  const debugHostSessionId = String(debugSession?.hostSessionId ?? "").trim();
-  const debugHostRendered = debugHostSessionId
-    ? debugHostSessionId === state.viewerSessionId || sceneState.presenceEntries.has(debugHostSessionId)
-    : false;
-  const debugHostLive = debugHostSessionId
-    ? debugHostSessionId === state.viewerSessionId || state.livePresence.has(debugHostSessionId)
-    : false;
-  const debugScreenEntry = debugSession ? sceneState.browserScreenEntries.get(debugSession.sessionId) ?? null : null;
-  const debugScreenVideo = debugScreenEntry?.videoElement ?? null;
-  setBrowserDebug(
-    [
-      `room ${state.browserMediaState.connected ? "connected" : "idle"} / ${state.browserMediaState.transport}`,
-      `session ${debugSession?.sessionId?.slice(-8) || "-"} / ${debugSession?.deliveryMode || "-"} / ${debugSession?.sessionMode || "-"}`,
-      `remote ${state.browserMediaState.remoteVideoSessionId?.slice(-8) || "-"} ready ${state.browserMediaState.remoteVideoReadyState || 0} size ${state.browserMediaState.remoteVideoWidth || 0}x${state.browserMediaState.remoteVideoHeight || 0} paused ${state.browserMediaState.remoteVideoPaused ? "yes" : "no"}`,
-      `sessions ${state.browserSessions.size} host live ${debugHostLive ? "yes" : "no"} rendered ${debugHostRendered ? "yes" : "no"} screen ${debugScreenEntry?.group?.visible ? "visible" : debugScreenEntry ? "hidden" : "none"}`,
-      `panel stream ${elements.browserVideo?.srcObject ? "yes" : "no"} time ${Number(elements.browserVideo?.currentTime ?? 0).toFixed(2)}`,
-      `texture stream ${debugScreenVideo?.srcObject ? "yes" : "no"} time ${Number(debugScreenVideo?.currentTime ?? 0).toFixed(2)} paused ${debugScreenVideo ? (debugScreenVideo.paused ? "yes" : "no") : "-"}`,
-      `play ${state.browserMediaState.lastPlayError || "ok"}`,
-    ].join("\n"),
-  );
-
   if (!elements.browserFrame || !elements.browserPlaceholder) {
     return;
   }
@@ -5916,7 +5888,6 @@ function updateBrowserPanel() {
     }
     return;
   }
-  const frameUrl = localSession?.lastFrameDataUrl ?? "";
   if (frameUrl) {
     if (elements.browserVideo) {
       elements.browserVideo.hidden = true;
