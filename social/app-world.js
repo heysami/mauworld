@@ -942,6 +942,15 @@ function getPresenceDisplayNameForSessionId(viewerSessionId) {
   return getDefaultViewerDisplayName(sessionId);
 }
 
+function isEmojiOnlyChatText(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return false;
+  }
+  const compact = trimmed.replace(/\s+/gu, "");
+  return /^(?:\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)+$/u.test(compact);
+}
+
 function getRenderablePresenceRows() {
   return getCachedWorldPayload(getLivePresenceRows()).presence;
 }
@@ -3913,16 +3922,18 @@ function applyChatBubbleToActor(actorEntry, chatEvent) {
   }
   const accent = actorEntry.bubbleAccent ?? WORLD_STYLE.accents[1];
   const text = String(chatEvent.text ?? "").trim();
-  const symbol = chatEvent.mode === "placeholder" ? "..." : "💬";
+  const emojiOnly = chatEvent.mode !== "placeholder" && isEmojiOnlyChatText(text);
+  const symbol = chatEvent.mode === "placeholder" ? "..." : emojiOnly ? text : "💬";
+  const bubbleText = emojiOnly ? "" : text;
   const bubbleKey = `${chatEvent.mode}:${text}:${accent}`;
   if (actorEntry.bubble.currentKey !== bubbleKey) {
     const previousMap = actorEntry.bubble.mesh.material.map;
     actorEntry.bubble.mesh.material.map = createBubbleTexture(symbol, {
       accent,
       stroke: WORLD_STYLE.outline,
-      text,
-      width: text ? 560 : undefined,
-      height: text ? 360 : undefined,
+      text: bubbleText,
+      width: bubbleText ? 560 : undefined,
+      height: bubbleText ? 360 : undefined,
     });
     previousMap?.dispose();
     actorEntry.bubble.currentKey = bubbleKey;
