@@ -114,19 +114,28 @@ async function runCuratedCorpusJob() {
       };
 
       if (completedTarget || (result.importedCount ?? 0) === 0 || totalCount === lastTotal) {
-        externalCleanupStatus = {
-          ...externalCleanupStatus,
-          running: false,
-          state: completedTarget ? "completed" : "stalled",
-          finishedAt: new Date().toISOString(),
-        };
-        return {
+        const finalResult = {
           ...result,
           batchesCompleted: externalCleanupStatus.batchesCompleted,
           totalCount,
           remainingCount,
           completedTarget,
         };
+        const organizationAfterSync = await store.getOrganizationSummary();
+        if (shouldForcePromoteCurrentFromNext(organizationAfterSync)) {
+          const promoted = await store.recomputePillars({ forcePromoteCurrent: true });
+          finalResult.recomputed = true;
+          finalResult.world = promoted.world ?? finalResult.world ?? null;
+          finalResult.worldQueue = promoted.worldQueue ?? finalResult.worldQueue ?? null;
+        }
+        externalCleanupStatus = {
+          ...externalCleanupStatus,
+          running: false,
+          state: completedTarget ? "completed" : "stalled",
+          finishedAt: new Date().toISOString(),
+          lastResult: finalResult,
+        };
+        return finalResult;
       }
 
       lastTotal = totalCount;
