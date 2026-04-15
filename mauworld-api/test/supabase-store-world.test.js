@@ -195,7 +195,7 @@ function createFakeServiceClient(state) {
   };
 }
 
-test("ensureCurrentWorldContext rebuilds failed current world snapshots before serving public world", async () => {
+test("ensureCurrentWorldContext serves the last built world while repairing failed current snapshots", async () => {
   let rebuildCallCount = 0;
   const fakeStore = {
     async getSettings() {
@@ -241,8 +241,8 @@ test("ensureCurrentWorldContext rebuilds failed current world snapshots before s
   const result = await MauworldStore.prototype.ensureCurrentWorldContext.call(fakeStore);
 
   assert.equal(rebuildCallCount, 1);
-  assert.equal(result.worldSnapshot.id, "world_rebuilt");
-  assert.equal(result.worldSummary.current.id, "world_rebuilt");
+  assert.equal(result.worldSnapshot.id, "world_failed");
+  assert.equal(result.worldSummary.current.id, "world_failed");
 });
 
 test("ensureCurrentWorldContext keeps serving a fresh ready current world without rebuilding", async () => {
@@ -292,7 +292,55 @@ test("ensureCurrentWorldContext keeps serving a fresh ready current world withou
   assert.equal(result.worldSnapshot.id, "world_ready");
 });
 
-test("ensureCurrentWorldContext serves the last built world when repair fails", async () => {
+test("ensureCurrentWorldContext rebuilds when there is no built world to serve", async () => {
+  let rebuildCallCount = 0;
+  const fakeStore = {
+    async getSettings() {
+      return { world_queue_batch_size: 100 };
+    },
+    async getOrganizationSummary() {
+      return {
+        current: {
+          id: "org_current",
+          promoted_at: "2026-04-15T05:37:36.951Z",
+          snapshot_at: "2026-04-15T05:37:36.951Z",
+          updated_at: "2026-04-15T05:37:43.781Z",
+        },
+        next: null,
+      };
+    },
+    async getWorldSummary() {
+      return {
+        current: {
+          id: "world_failed",
+          organization_version_id: "org_current",
+          status: "failed",
+          built_at: null,
+        },
+        next: null,
+      };
+    },
+    async rebuildWorldSnapshotForVersion() {
+      rebuildCallCount += 1;
+      return {
+        worldSnapshot: {
+          id: "world_rebuilt",
+          organization_version_id: "org_current",
+          status: "ready",
+          built_at: "2026-04-15T06:00:00.000Z",
+        },
+      };
+    },
+  };
+
+  const result = await MauworldStore.prototype.ensureCurrentWorldContext.call(fakeStore);
+
+  assert.equal(rebuildCallCount, 1);
+  assert.equal(result.worldSnapshot.id, "world_rebuilt");
+  assert.equal(result.worldSummary.current.id, "world_rebuilt");
+});
+
+test("ensureCurrentWorldContext serves the last built world when background repair fails", async () => {
   const fakeStore = {
     async getSettings() {
       return { world_queue_batch_size: 100 };
@@ -324,10 +372,23 @@ test("ensureCurrentWorldContext serves the last built world when repair fails", 
     },
   };
 
-  const result = await MauworldStore.prototype.ensureCurrentWorldContext.call(fakeStore);
+  const originalConsoleError = console.error;
+  const logged = [];
+  console.error = (...args) => {
+    logged.push(args);
+  };
 
-  assert.equal(result.worldSnapshot.id, "world_failed");
-  assert.equal(result.worldSummary.current.id, "world_failed");
+  try {
+    const result = await MauworldStore.prototype.ensureCurrentWorldContext.call(fakeStore);
+
+    assert.equal(result.worldSnapshot.id, "world_failed");
+    assert.equal(result.worldSummary.current.id, "world_failed");
+    await Promise.resolve();
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(logged.length, 1);
 });
 
 test("rebuildWorldSnapshotForVersion batches large post tag lookups", async () => {

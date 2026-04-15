@@ -450,6 +450,34 @@ async function loadRowsByInBatches(serviceClient, {
   return rows;
 }
 
+function queueBackgroundWorldRepair(store, { version, settings }) {
+  const versionId = String(version?.id ?? "").trim();
+  if (!versionId || typeof store?.rebuildWorldSnapshotForVersion !== "function") {
+    return null;
+  }
+  const existing = store.__currentWorldRepair ?? null;
+  if (existing?.versionId === versionId && existing.promise) {
+    return existing.promise;
+  }
+
+  const promise = store.rebuildWorldSnapshotForVersion({ version, settings })
+    .catch((error) => {
+      console.error("[world-repair] background repair failed", error);
+      return null;
+    })
+    .finally(() => {
+      if (store.__currentWorldRepair?.promise === promise) {
+        store.__currentWorldRepair = null;
+      }
+    });
+
+  store.__currentWorldRepair = {
+    versionId,
+    promise,
+  };
+  return promise;
+}
+
 function clampInteger(value, fallback, min, max) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -791,19 +819,26 @@ export class MauworldStore {
     let effectiveWorldSummary = worldSummary;
     let worldSnapshot = worldSummary.current ?? null;
     if (shouldRepairPublicWorld(organization, worldSummary)) {
-      try {
-        const repaired = await this.rebuildWorldSnapshotForVersion({
+      if (worldSnapshot?.built_at) {
+        queueBackgroundWorldRepair(this, {
           version: organization.current,
           settings,
         });
-        worldSnapshot = repaired.worldSnapshot;
-        effectiveWorldSummary = {
-          ...worldSummary,
-          current: worldSnapshot,
-        };
-      } catch (error) {
-        if (!worldSnapshot?.built_at) {
-          throw error;
+      } else {
+        try {
+          const repaired = await this.rebuildWorldSnapshotForVersion({
+            version: organization.current,
+            settings,
+          });
+          worldSnapshot = repaired.worldSnapshot;
+          effectiveWorldSummary = {
+            ...worldSummary,
+            current: worldSnapshot,
+          };
+        } catch (error) {
+          if (!worldSnapshot?.built_at) {
+            throw error;
+          }
         }
       }
     }
