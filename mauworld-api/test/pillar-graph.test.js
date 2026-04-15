@@ -28,6 +28,34 @@ test("computePillarGraph groups connected tags and marks top core tags", () => {
   assert.equal(largest.title, "TypeScript");
 });
 
+test("computePillarGraph splits generic hub tags away from stronger local clusters", () => {
+  const result = computePillarGraph({
+    coreSize: 1,
+    similarityThreshold: 0.2,
+    tags: [
+      { id: "t1", slug: "agent-skills", label: "Agent Skills", post_count: 12 },
+      { id: "t2", slug: "verification", label: "Verification", post_count: 6 },
+      { id: "t3", slug: "evaluation", label: "Evaluation", post_count: 6 },
+      { id: "t4", slug: "tooling", label: "Tooling", post_count: 5 },
+      { id: "t5", slug: "debugging", label: "Debugging", post_count: 5 },
+    ],
+    edges: [
+      { tag_low_id: "t1", tag_high_id: "t2", weight: 6, active: true },
+      { tag_low_id: "t1", tag_high_id: "t3", weight: 6, active: true },
+      { tag_low_id: "t1", tag_high_id: "t4", weight: 5, active: true },
+      { tag_low_id: "t1", tag_high_id: "t5", weight: 5, active: true },
+      { tag_low_id: "t2", tag_high_id: "t3", weight: 4, active: true },
+      { tag_low_id: "t4", tag_high_id: "t5", weight: 4, active: true },
+      { tag_low_id: "t3", tag_high_id: "t4", weight: 1, active: true },
+    ],
+    existingPillars: [],
+  });
+
+  const pillarSizes = result.pillars.map((pillar) => pillar.tag_count).sort((left, right) => left - right);
+  assert.deepEqual(pillarSizes, [1, 2, 2]);
+  assert.equal(result.pillars.find((pillar) => pillar.tag_count === 1)?.title, "Agent Skills");
+});
+
 test("computePillarGraph keeps related pillars separate from membership", () => {
   const result = computePillarGraph({
     coreSize: 1,

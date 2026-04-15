@@ -3,6 +3,8 @@ import { tokenizeLabel } from "./text.js";
 
 const LEGACY_EXTERNAL_PILLAR_PHRASES = ["moltbook", "curated import", "openclaw", "open claw"];
 const LEGACY_EXTERNAL_PILLAR_WORDS = ["claw"];
+const MEMBERSHIP_MIN_EDGE_WEIGHT = 2;
+const MEMBERSHIP_ASSOCIATION_THRESHOLD = 1.05;
 
 function addEdge(map, from, to, weight) {
   if (!map.has(from)) {
@@ -11,13 +13,69 @@ function addEdge(map, from, to, weight) {
   map.get(from).push({ to, weight });
 }
 
-function buildAdjacency(tags, edges) {
+function getTagPostCount(tag) {
+  const count = Number(tag?.post_count ?? tag?.usage_count ?? 0);
+  if (!Number.isFinite(count)) {
+    return 0;
+  }
+  return Math.max(0, count);
+}
+
+function computeMembershipTotalPostCount(tags, edges) {
+  return Math.max(
+    0,
+    ...tags.map((tag) => getTagPostCount(tag)),
+    ...edges.map((edge) => Math.max(0, Number(edge?.weight) || 0)),
+  );
+}
+
+function computeMembershipMetrics(edge, tagById, totalPostCount) {
+  const leftTag = tagById.get(edge.tag_low_id);
+  const rightTag = tagById.get(edge.tag_high_id);
+  const leftCount = getTagPostCount(leftTag);
+  const rightCount = getTagPostCount(rightTag);
+  if (leftCount <= 0 || rightCount <= 0 || totalPostCount <= 0) {
+    return null;
+  }
+
+  const sharedCount = Math.min(Math.max(0, Number(edge.weight) || 0), leftCount, rightCount);
+  const union = leftCount + rightCount - sharedCount;
+  const similarity = union > 0 ? sharedCount / union : 0;
+  const association = (sharedCount * totalPostCount) / (leftCount * rightCount);
+  return {
+    sharedCount,
+    similarity,
+    association,
+  };
+}
+
+function shouldKeepMembershipEdge(edge, tagById, totalPostCount, similarityThreshold) {
+  const weight = Math.max(0, Number(edge?.weight) || 0);
+  if (!edge?.active || weight <= 0) {
+    return false;
+  }
+
+  const metrics = computeMembershipMetrics(edge, tagById, totalPostCount);
+  if (!metrics) {
+    return true;
+  }
+
+  return (
+    metrics.sharedCount >= MEMBERSHIP_MIN_EDGE_WEIGHT
+    && metrics.similarity >= similarityThreshold
+    && metrics.association > MEMBERSHIP_ASSOCIATION_THRESHOLD
+  );
+}
+
+function buildAdjacency(tags, edges, similarityThreshold) {
   const adjacency = new Map();
+  const tagById = new Map(tags.map((tag) => [tag.id, tag]));
+  const totalPostCount = computeMembershipTotalPostCount(tags, edges);
   for (const tag of tags) {
     adjacency.set(tag.id, []);
   }
   for (const edge of edges) {
-    if (!edge.active || edge.weight <= 0) {
+    if (!shouldKeepMembershipEdge(edge, tagById, totalPostCount, similarityThreshold)) {
       continue;
     }
     addEdge(adjacency, edge.tag_low_id, edge.tag_high_id, edge.weight);
@@ -145,7 +203,7 @@ export function computePillarGraph(params) {
   const existingPillarsByComponentKey = new Map(
     (params.existingPillars ?? []).map((pillar) => [pillar.component_key, pillar]),
   );
-  const adjacency = buildAdjacency(tags, edges);
+  const adjacency = buildAdjacency(tags, edges, similarityThreshold);
   const components = connectedComponents(tags, adjacency);
   const nextPillars = [];
   const nextPillarTags = [];

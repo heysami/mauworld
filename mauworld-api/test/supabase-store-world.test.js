@@ -458,7 +458,7 @@ test("rebuildWorldSnapshotForVersion batches large post tag lookups", async () =
       post_tags: 100,
     },
     failOnInsertCount: {
-      world_post_instances: 100,
+      world_post_instances: 25,
     },
     queryLog: [],
   };
@@ -491,7 +491,7 @@ test("rebuildWorldSnapshotForVersion batches large post tag lookups", async () =
     .map((entry) => entry.payloadSize ?? 0);
 
   assert.deepEqual(postTagBatchSizes, [100, 1]);
-  assert.deepEqual(worldPostInsertBatchSizes, [100, 1]);
+  assert.deepEqual(worldPostInsertBatchSizes, [25, 25, 25, 25, 1]);
   assert.equal(failedSnapshotMarks, 0);
   assert.equal(result.worldSnapshot.status, "ready");
   assert.equal(state.tables.world_post_instances.length, postCount);

@@ -423,7 +423,7 @@ function dedupeStringList(values) {
 }
 
 const SUPABASE_IN_FILTER_BATCH_SIZE = 100;
-const SUPABASE_MUTATION_BATCH_SIZE = 100;
+const SUPABASE_MUTATION_BATCH_SIZE = 25;
 const DERIVED_POST_COUNTER_BATCH_SIZE = 25;
 
 async function loadRowsByInBatches(serviceClient, {
