@@ -5928,6 +5928,7 @@ function setBrowserOverlayOpen(open) {
   if (!state.browserOverlayOpen) {
     releaseBrowserStagePointer();
   }
+  updateBrowserPanel();
 }
 
 function focusBrowserStage() {
@@ -6052,8 +6053,18 @@ function updateBrowserPanel() {
   );
   const frameUrl = localSession?.lastFrameDataUrl ?? "";
   const hasActiveBrowserMedia = Boolean(previewStream || hasRemotePanelVideo || hasRemotePanelSession || frameUrl);
+  const needsPermissionAction = Boolean(needsManualPlaybackStart || needsManualAudioStart);
+  const collapseDockedStage = !state.browserOverlayOpen && !needsPermissionAction;
+  const permissionOnlyDockedStage = !state.browserOverlayOpen && needsPermissionAction;
+  elements.browserPanel?.classList.toggle("is-docked-compact", collapseDockedStage);
   elements.browserStage?.classList.toggle("is-active", hasActiveBrowserMedia);
+  elements.browserStage?.classList.toggle("is-collapsed", collapseDockedStage);
+  elements.browserStage?.classList.toggle("is-permission-only", permissionOnlyDockedStage);
   elements.browserStage?.classList.toggle("needs-video-start", needsManualPlaybackStart);
+  if (elements.browserStage) {
+    elements.browserStage.tabIndex = state.browserOverlayOpen ? 0 : -1;
+    elements.browserStage.setAttribute("aria-hidden", collapseDockedStage ? "true" : "false");
+  }
   if (!state.realtimeConnected) {
     setBrowserStatus("Realtime share offline.");
   } else if (state.pendingBrowserShare) {
