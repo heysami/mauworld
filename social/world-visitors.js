@@ -208,15 +208,65 @@ function wrapBubbleText(context, value, maxWidth, maxLines = 4) {
   return lines;
 }
 
+function measureSpeechBubbleTextLayout(options = {}) {
+  const maxWidth = Math.max(220, Math.floor(Number(options.maxWidth ?? options.width) || 384));
+  const maxHeight = Math.max(160, Math.floor(Number(options.maxHeight ?? options.height) || 280));
+  const minWidth = Math.min(maxWidth, Math.max(212, Math.floor(Number(options.minWidth) || 212)));
+  const minHeight = Math.min(maxHeight, Math.max(164, Math.floor(Number(options.minHeight) || 164)));
+  const label = String(options.label ?? "").trim();
+  const text = String(options.text ?? "").trim();
+  const canvas = document.createElement("canvas");
+  canvas.width = maxWidth;
+  canvas.height = maxHeight;
+  const context = canvas.getContext("2d");
+  const left = 64;
+  const horizontalPadding = 128;
+  const extraWidth = 28;
+  const lineHeight = 38;
+
+  context.font = "800 28px Manrope, sans-serif";
+  const labelWidth = label ? context.measureText(label).width : 0;
+  context.font = "700 30px Manrope, sans-serif";
+
+  let lines = wrapBubbleText(context, text, maxWidth - horizontalPadding, 4);
+  let longestLineWidth = lines.reduce((maxLine, line) => Math.max(maxLine, context.measureText(line).width), 0);
+  let width = clamp(Math.ceil(Math.max(labelWidth, longestLineWidth) + horizontalPadding + extraWidth), minWidth, maxWidth);
+  lines = wrapBubbleText(context, text, width - horizontalPadding, 4);
+  longestLineWidth = lines.reduce((maxLine, line) => Math.max(maxLine, context.measureText(line).width), 0);
+  width = clamp(Math.ceil(Math.max(labelWidth, longestLineWidth) + horizontalPadding + extraWidth), minWidth, maxWidth);
+  lines = wrapBubbleText(context, text, width - horizontalPadding, 4);
+
+  const startY = label ? 100 : 78;
+  const contentBottom = startY + lines.length * lineHeight;
+  const height = clamp(Math.ceil(contentBottom + 68), minHeight, maxHeight);
+
+  return {
+    width,
+    height,
+    lines,
+    startY,
+  };
+}
+
 export function createBubbleTexture(content, options = {}) {
-  const width = options.width ?? 384;
-  const height = options.height ?? 280;
+  const requestedWidth = options.width ?? 384;
+  const requestedHeight = options.height ?? 280;
   const thought = options.type === "thought";
   const hasText = typeof options.text === "string" && options.text.trim().length > 0;
   const badge = String(options.badge ?? "").trim();
   const accent = options.accent ?? "#2dd8ff";
   const stroke = options.stroke ?? "#33407a";
   const background = options.background ?? "rgba(255, 255, 255, 0.96)";
+  const textLayout = !thought && hasText
+    ? measureSpeechBubbleTextLayout({
+      text: options.text,
+      label: options.label,
+      maxWidth: requestedWidth,
+      maxHeight: requestedHeight,
+    })
+    : null;
+  const width = textLayout?.width ?? requestedWidth;
+  const height = textLayout?.height ?? requestedHeight;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -282,8 +332,8 @@ export function createBubbleTexture(content, options = {}) {
     context.textAlign = "left";
     context.textBaseline = "top";
     context.font = "700 30px Manrope, sans-serif";
-    const lines = wrapBubbleText(context, options.text, maxWidth, 4);
-    const startY = label ? 100 : 78;
+    const lines = textLayout?.lines ?? wrapBubbleText(context, options.text, maxWidth, 4);
+    const startY = textLayout?.startY ?? (label ? 100 : 78);
     lines.forEach((line, index) => {
       context.fillText(line, left, startY + index * 38);
     });
@@ -323,6 +373,15 @@ export function createBubbleTexture(content, options = {}) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.needsUpdate = true;
+  texture.userData = {
+    bubbleLayout: {
+      hasText,
+      width,
+      height,
+      maxWidth: requestedWidth,
+      maxHeight: requestedHeight,
+    },
+  };
   return texture;
 }
 

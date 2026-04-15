@@ -3881,14 +3881,16 @@ function getPresenceEntryId(entry = {}) {
 }
 
 function createActorBubbleState(color, options = {}) {
+  const baseWidth = 14.2;
+  const baseHeight = 9.2;
   const bubble = createBillboard(
     createBubbleTexture("💬", {
       accent: color,
       stroke: WORLD_STYLE.outline,
       text: "",
     }),
-    14.2,
-    9.2,
+    baseWidth,
+    baseHeight,
     {
       opacity: 0,
       fog: false,
@@ -3909,7 +3911,35 @@ function createActorBubbleState(color, options = {}) {
     highEnergy: false,
     bounceCount: 0,
     anchorY: 15.2,
+    baseWidth,
+    baseHeight,
+    width: baseWidth,
+    height: baseHeight,
+    targetWidth: baseWidth,
+    targetHeight: baseHeight,
   };
+}
+
+function setActorBubbleTargetSize(actorEntry, width, height) {
+  if (!actorEntry?.bubble) {
+    return;
+  }
+  actorEntry.bubble.targetWidth = width;
+  actorEntry.bubble.targetHeight = height;
+}
+
+function getChatBubbleTargetSize(texture, bubble) {
+  const baseWidth = Number(bubble?.baseWidth) || 14.2;
+  const baseHeight = Number(bubble?.baseHeight) || 9.2;
+  const layout = texture?.userData?.bubbleLayout ?? null;
+  if (!layout?.hasText) {
+    return { width: baseWidth, height: baseHeight };
+  }
+  const maxTextureWidth = Math.max(1, Number(layout.maxWidth) || Number(layout.width) || 560);
+  const maxTextureHeight = Math.max(1, Number(layout.maxHeight) || Number(layout.height) || 360);
+  const width = clamp(baseWidth * ((Number(layout.width) || maxTextureWidth) / maxTextureWidth), 5.8, baseWidth);
+  const height = clamp(baseHeight * ((Number(layout.height) || maxTextureHeight) / maxTextureHeight), 4.2, baseHeight);
+  return { width, height };
 }
 
 function applyChatBubbleToActor(actorEntry, chatEvent) {
@@ -3928,13 +3958,16 @@ function applyChatBubbleToActor(actorEntry, chatEvent) {
   const bubbleKey = `${chatEvent.mode}:${text}:${accent}`;
   if (actorEntry.bubble.currentKey !== bubbleKey) {
     const previousMap = actorEntry.bubble.mesh.material.map;
-    actorEntry.bubble.mesh.material.map = createBubbleTexture(symbol, {
+    const nextTexture = createBubbleTexture(symbol, {
       accent,
       stroke: WORLD_STYLE.outline,
       text: bubbleText,
       width: bubbleText ? 560 : undefined,
       height: bubbleText ? 360 : undefined,
     });
+    actorEntry.bubble.mesh.material.map = nextTexture;
+    const nextSize = getChatBubbleTargetSize(nextTexture, actorEntry.bubble);
+    setActorBubbleTargetSize(actorEntry, nextSize.width, nextSize.height);
     previousMap?.dispose();
     actorEntry.bubble.currentKey = bubbleKey;
   }
@@ -3950,6 +3983,8 @@ function updateActorBubble(actorEntry, deltaSeconds) {
   if (!actorEntry?.bubble) {
     return;
   }
+  actorEntry.bubble.width += (actorEntry.bubble.targetWidth - actorEntry.bubble.width) * (1 - Math.exp(-deltaSeconds * 12));
+  actorEntry.bubble.height += (actorEntry.bubble.targetHeight - actorEntry.bubble.height) * (1 - Math.exp(-deltaSeconds * 12));
   actorEntry.bubble.opacity += (actorEntry.bubble.targetOpacity - actorEntry.bubble.opacity) * (1 - Math.exp(-deltaSeconds * 10));
   if (Math.abs(actorEntry.bubble.opacity - actorEntry.bubble.targetOpacity) < 0.004) {
     actorEntry.bubble.opacity = actorEntry.bubble.targetOpacity;
@@ -3966,7 +4001,12 @@ function updateActorBubble(actorEntry, deltaSeconds) {
       : 0;
   actorEntry.bubble.mesh.visible = actorEntry.bubble.opacity > 0.01 && actorEntry.group.visible !== false;
   actorEntry.bubble.mesh.position.y = actorEntry.bubble.anchorY + bounce;
-  actorEntry.bubble.mesh.scale.setScalar(0.92 + actorEntry.bubble.opacity * 0.08);
+  const pulse = 0.92 + actorEntry.bubble.opacity * 0.08;
+  actorEntry.bubble.mesh.scale.set(
+    (actorEntry.bubble.width / actorEntry.bubble.baseWidth) * pulse,
+    (actorEntry.bubble.height / actorEntry.bubble.baseHeight) * pulse,
+    1,
+  );
   actorEntry.bubble.mesh.material.opacity = actorEntry.bubble.opacity * (actorEntry.opacity ?? 1);
 }
 
