@@ -477,7 +477,7 @@ body.is-world-loading .world-panel {
   position: fixed;
   inset: clamp(10px, 2vw, 24px);
   z-index: 5;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
   padding: clamp(12px, 2vw, 18px);
   border-color: rgba(61, 87, 182, 0.22);
