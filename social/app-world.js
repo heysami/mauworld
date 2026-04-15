@@ -28,13 +28,18 @@ const elements = {
   resultsPanel: document.querySelector(".world-results-panel"),
   inspector: document.querySelector(".world-inspector"),
   inspectorClose: document.querySelector("[data-world-inspector-close]"),
+  browserPanel: document.querySelector("[data-world-browser-panel]"),
+  browserDock: document.querySelector("[data-world-browser-dock]"),
+  browserOverlayRoot: document.querySelector("[data-world-browser-overlay-root]"),
   browserForm: document.querySelector("[data-world-browser-form]"),
+  browserExpand: document.querySelector("[data-world-browser-expand]"),
   browserLaunch: document.querySelector("[data-world-browser-launch]"),
   browserStop: document.querySelector("[data-world-browser-stop]"),
   browserBack: document.querySelector("[data-world-browser-back]"),
   browserForward: document.querySelector("[data-world-browser-forward]"),
   browserReload: document.querySelector("[data-world-browser-reload]"),
   browserStatus: document.querySelector("[data-world-browser-status]"),
+  browserBackdrop: document.querySelector("[data-world-browser-backdrop]"),
   browserUrl: document.querySelector("[data-world-browser-url]"),
   browserStage: document.querySelector("[data-world-browser-stage]"),
   browserFrame: document.querySelector("[data-world-browser-frame]"),
@@ -156,6 +161,7 @@ const state = {
   browserSessions: new Map(),
   localBrowserSessionId: "",
   localBrowserFocus: false,
+  browserOverlayOpen: false,
   browserStagePointerId: null,
   browserMediaController: null,
   browserMediaTransport: "jpeg-sequence",
@@ -5307,6 +5313,27 @@ function isBrowserStageFocused() {
   return state.localBrowserFocus || document.activeElement === elements.browserStage;
 }
 
+function setBrowserOverlayOpen(open) {
+  state.browserOverlayOpen = Boolean(open);
+  if (state.browserOverlayOpen) {
+    if (elements.browserOverlayRoot && elements.browserPanel?.parentElement !== elements.browserOverlayRoot) {
+      elements.browserOverlayRoot.append(elements.browserPanel);
+    }
+  } else if (elements.browserDock) {
+    elements.browserDock.before(elements.browserPanel);
+  }
+  elements.browserPanel?.classList.toggle("is-expanded", state.browserOverlayOpen);
+  elements.browserBackdrop?.classList.toggle("is-visible", state.browserOverlayOpen);
+  elements.browserBackdrop?.setAttribute("aria-hidden", state.browserOverlayOpen ? "false" : "true");
+  if (elements.browserExpand) {
+    elements.browserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
+    elements.browserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
+  }
+  if (!state.browserOverlayOpen) {
+    releaseBrowserStagePointer();
+  }
+}
+
 function focusBrowserStage() {
   state.localBrowserFocus = true;
   elements.browserStage?.focus({ preventScroll: true });
@@ -5420,6 +5447,10 @@ function updateBrowserPanel() {
   }
   if (elements.browserReload) {
     elements.browserReload.disabled = !localSession;
+  }
+  if (elements.browserExpand) {
+    elements.browserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
+    elements.browserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
   }
 
   if (!elements.browserFrame || !elements.browserPlaceholder) {
@@ -6441,6 +6472,11 @@ function registerInput() {
       }
       return;
     }
+    if (event.key === "Escape" && state.browserOverlayOpen && !isEditableTarget(event.target)) {
+      event.preventDefault();
+      setBrowserOverlayOpen(false);
+      return;
+    }
     if (isEditableTarget(event.target)) {
       return;
     }
@@ -6522,6 +6558,12 @@ function registerInput() {
   elements.browserForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     launchSharedBrowser(elements.browserUrl?.value);
+  });
+  elements.browserExpand?.addEventListener("click", () => {
+    setBrowserOverlayOpen(!state.browserOverlayOpen);
+    if (state.browserOverlayOpen) {
+      focusBrowserStage();
+    }
   });
   elements.browserLaunch?.addEventListener("click", () => {
     launchSharedBrowser(elements.browserUrl?.value);
@@ -6609,6 +6651,9 @@ function registerInput() {
       deltaY: Number(event.deltaY.toFixed(2)),
     });
   }, { passive: false });
+  elements.browserBackdrop?.addEventListener("click", () => {
+    setBrowserOverlayOpen(false);
+  });
 }
 
 function animate() {

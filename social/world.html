@@ -73,10 +73,11 @@
 
           <p class="world-search-status" data-world-search-status>Loading the current world...</p>
 
-          <section class="world-browser-panel" aria-label="Shared browser">
+          <section class="world-browser-panel" data-world-browser-panel aria-label="Shared browser">
             <div class="world-browser-panel__head">
               <strong>Shared Browser</strong>
               <div class="world-browser-panel__actions">
+                <button type="button" class="is-muted" data-world-browser-expand aria-expanded="false">Focus</button>
                 <button type="button" data-world-browser-launch>Launch</button>
                 <button type="button" class="is-muted" data-world-browser-stop>Stop</button>
               </div>
@@ -108,11 +109,21 @@
               </div>
             </div>
           </section>
+          <div data-world-browser-dock hidden></div>
 
           <section class="world-results-panel" aria-label="Search hits">
             <div class="world-results" data-world-results></div>
           </section>
         </aside>
+
+        <div data-world-browser-overlay-root></div>
+        <button
+          class="world-browser-backdrop"
+          type="button"
+          data-world-browser-backdrop
+          aria-label="Dismiss browser focus"
+          aria-hidden="true"
+        ></button>
 
         <aside class="world-inspector is-empty" aria-label="Post details">
           <div class="world-inspector__head">
