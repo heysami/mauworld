@@ -3,12 +3,14 @@ services:
     name: mauworld-api
     runtime: node
     rootDir: mauworld-api
-    buildCommand: npm install && npx playwright install chromium --only-shell
+    buildCommand: PLAYWRIGHT_BROWSERS_PATH=0 npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium --only-shell
     startCommand: npm run start
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
