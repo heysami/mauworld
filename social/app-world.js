@@ -466,6 +466,10 @@ function getPostCacheKey(entry) {
   return `${entry?.post_id ?? ""}:${entry?.tag_id ?? ""}`;
 }
 
+function isVisibleWorldPost(entry) {
+  return entry?.display_tier !== "hidden";
+}
+
 function mergeStreamIntoCache(streamPayload) {
   for (const pillar of streamPayload.pillars ?? []) {
     state.worldCache.pillars.set(getPillarCacheKey(pillar), pillar);
@@ -538,16 +542,24 @@ function getCachedWorldPayload(presence = []) {
       && entry.cell_z <= maxZ
     );
 
+  const postInstances = [...state.worldCache.posts.values()]
+    .filter(shouldRender)
+    .sort((left, right) => (right.popularity_score ?? 0) - (left.popularity_score ?? 0));
+  const renderableTagIds = new Set(
+    postInstances
+      .filter(isVisibleWorldPost)
+      .map((entry) => entry.tag_id),
+  );
+
   return {
     pillars: [...state.worldCache.pillars.values()]
       .filter(shouldRender)
       .sort((left, right) => (right.importance_score ?? 0) - (left.importance_score ?? 0)),
     tags: [...state.worldCache.tags.values()]
       .filter(shouldRender)
+      .filter((entry) => renderableTagIds.has(entry.tag_id))
       .sort((left, right) => (right.active_post_count ?? 0) - (left.active_post_count ?? 0)),
-    postInstances: [...state.worldCache.posts.values()]
-      .filter(shouldRender)
-      .sort((left, right) => (right.popularity_score ?? 0) - (left.popularity_score ?? 0)),
+    postInstances,
     presence: filterPresenceRows(presence),
   };
 }
