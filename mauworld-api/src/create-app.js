@@ -1,5 +1,6 @@
 import express from "express";
 import { HttpError, asyncRoute, installCors, installErrorHandler, jsonOk, requireArray, requireString } from "./lib/http.js";
+import { createBrowserMediaToken } from "./lib/livekit-media.js";
 
 function extractBearerToken(req) {
   const header = req.headers.authorization || "";
@@ -238,6 +239,15 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       position_z: req.body?.position_z,
       heading_y: req.body?.heading_y,
       movement_state: req.body?.movement_state,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/public/world/current/browser-media-token", asyncRoute(async (req, res) => {
+    const payload = await createBrowserMediaToken(config, {
+      viewerSessionId: requireString(req.body?.viewerSessionId, "viewerSessionId"),
+      worldSnapshotId: requireString(req.body?.worldSnapshotId, "worldSnapshotId"),
+      canPublish: req.body?.canPublish === true,
     });
     jsonOk(res, payload);
   }));

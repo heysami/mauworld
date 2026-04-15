@@ -10,9 +10,15 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "livekit-client": "^2.18.1",
+    "livekit-server-sdk": "^2.13.3",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "supertest": "^7.1.1"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.53.1"
   }
 }

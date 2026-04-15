@@ -73,6 +73,42 @@
 
           <p class="world-search-status" data-world-search-status>Loading the current world...</p>
 
+          <section class="world-browser-panel" aria-label="Shared browser">
+            <div class="world-browser-panel__head">
+              <strong>Shared Browser</strong>
+              <div class="world-browser-panel__actions">
+                <button type="button" data-world-browser-launch>Launch</button>
+                <button type="button" class="is-muted" data-world-browser-stop>Stop</button>
+              </div>
+            </div>
+
+            <form class="world-browser-form" data-world-browser-form>
+              <label class="world-browser-form__field">
+                <input
+                  type="url"
+                  name="url"
+                  data-world-browser-url
+                  placeholder="https://mauworld.onrender.com/social/world.html"
+                />
+              </label>
+              <div class="world-browser-form__controls">
+                <button type="button" data-world-browser-back>Back</button>
+                <button type="button" data-world-browser-forward>Forward</button>
+                <button type="button" data-world-browser-reload>Reload</button>
+                <button type="submit">Open</button>
+              </div>
+            </form>
+
+            <p class="world-browser-status" data-world-browser-status>Realtime browser offline.</p>
+
+            <div class="world-browser-stage" data-world-browser-stage tabindex="0" aria-label="Shared browser viewport">
+              <img class="world-browser-stage__frame" data-world-browser-frame alt="" hidden />
+              <div class="world-browser-stage__placeholder" data-world-browser-placeholder>
+                Launch a shared browser to project it into the world.
+              </div>
+            </div>
+          </section>
+
           <section class="world-results-panel" aria-label="Search hits">
             <div class="world-results" data-world-results></div>
           </section>
@@ -90,6 +126,22 @@
         </aside>
 
         <div class="world-toast" data-world-toast hidden></div>
+        <form class="world-chat-composer" data-world-chat-composer hidden>
+          <div class="world-chat-composer__prompt">/ say something nearby</div>
+          <label class="world-chat-composer__field">
+            <input
+              type="text"
+              maxlength="160"
+              data-world-chat-input
+              placeholder="Say something to nearby visitors"
+              autocomplete="off"
+            />
+          </label>
+          <div class="world-chat-composer__meta">
+            <span data-world-chat-status>Enter to send. Esc to cancel.</span>
+            <span data-world-chat-counter>0/160</span>
+          </div>
+        </form>
       </section>
     </main>
 

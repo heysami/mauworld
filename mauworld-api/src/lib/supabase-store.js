@@ -678,6 +678,20 @@ function buildWorldRendererConfig(settings) {
       actorProxyDistance,
       actorProxyHysteresis,
     },
+    interaction: {
+      chat: {
+        maxChars: Math.max(1, Math.floor(Number(settings.world_chat_max_chars) || 160)),
+        ttlSeconds: Math.max(1, Math.floor(Number(settings.world_chat_ttl_seconds) || 8)),
+        detailRadius: Math.max(16, Math.floor(Number(settings.world_chat_detail_radius) || 180)),
+      },
+      browser: {
+        radius: Math.max(16, Math.floor(Number(settings.world_browser_radius) || 96)),
+        maxRecipients: Math.max(1, Math.floor(Number(settings.world_interaction_max_recipients) || 20)),
+        aspectRatio: 16 / 9,
+        viewportWidth: 1280,
+        viewportHeight: 720,
+      },
+    },
   };
 }
 
@@ -759,6 +773,26 @@ export class MauworldStore {
         typeof input.world_billboard_distance === "number"
           ? Math.max(16, Math.min(8192, Math.floor(input.world_billboard_distance)))
           : current.world_billboard_distance,
+      world_chat_max_chars:
+        typeof input.world_chat_max_chars === "number"
+          ? Math.max(1, Math.min(500, Math.floor(input.world_chat_max_chars)))
+          : current.world_chat_max_chars,
+      world_chat_ttl_seconds:
+        typeof input.world_chat_ttl_seconds === "number"
+          ? Math.max(1, Math.min(60, Math.floor(input.world_chat_ttl_seconds)))
+          : current.world_chat_ttl_seconds,
+      world_chat_detail_radius:
+        typeof input.world_chat_detail_radius === "number"
+          ? Math.max(16, Math.min(4096, Math.floor(input.world_chat_detail_radius)))
+          : current.world_chat_detail_radius,
+      world_browser_radius:
+        typeof input.world_browser_radius === "number"
+          ? Math.max(16, Math.min(4096, Math.floor(input.world_browser_radius)))
+          : current.world_browser_radius,
+      world_interaction_max_recipients:
+        typeof input.world_interaction_max_recipients === "number"
+          ? Math.max(1, Math.min(200, Math.floor(input.world_interaction_max_recipients)))
+          : current.world_interaction_max_recipients,
       updated_at: nowIso(),
     };
     const updated = await must(

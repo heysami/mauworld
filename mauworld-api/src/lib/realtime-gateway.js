@@ -1,0 +1,609 @@
+import { WebSocket, WebSocketServer } from "ws";
+import { BrowserSessionManager } from "./browser-session-manager.js";
+import { isLiveKitConfigured } from "./livekit-media.js";
+import {
+  buildViewerPresencePayload,
+  checkChatRateLimit,
+  getCellCoordinate,
+  getCellKey,
+  normalizeInteractionSettings,
+  sanitizeChatText,
+  selectNearestRecipients,
+} from "./realtime-state.js";
+
+const REALTIME_PATH = "/api/ws/public/world/current";
+
+function parseJson(buffer) {
+  try {
+    return JSON.parse(String(buffer ?? ""));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function buildBaseUrl(publicBaseUrl) {
+  if (/^https?:\/\//i.test(publicBaseUrl)) {
+    return publicBaseUrl;
+  }
+  return "http://localhost";
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function positionFromMessage(message = {}) {
+  return {
+    x: Number(message.position_x ?? 0) || 0,
+    y: Number(message.position_y ?? 0) || 0,
+    z: Number(message.position_z ?? 0) || 0,
+  };
+}
+
+function sendJson(client, payload) {
+  if (!client?.socket || client.socket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  client.socket.send(JSON.stringify(payload));
+  return true;
+}
+
+export class RealtimeGateway {
+  constructor(options = {}) {
+    this.config = options.config ?? {};
+    this.store = options.store;
+    this.clients = new Map();
+    this.worldMembers = new Map();
+    this.worldCells = new Map();
+    this.interactionSettings = {
+      expiresAt: 0,
+      value: normalizeInteractionSettings(),
+    };
+    this.browserManager = new BrowserSessionManager({
+      allowedHosts: options.config?.sharedBrowserAllowedHosts,
+      viewport: {
+        width: options.config?.sharedBrowserViewportWidth,
+        height: options.config?.sharedBrowserViewportHeight,
+      },
+      frameRate: options.config?.sharedBrowserFrameRate,
+      jpegQuality: options.config?.sharedBrowserJpegQuality,
+      liveKitConfig: options.config,
+    });
+    this.browserManager.on("frame", (frame) => {
+      this.broadcastBrowserFrame(frame);
+    });
+    this.browserManager.on("session", (session) => {
+      void this.broadcastBrowserSession(session);
+    });
+    this.browserManager.on("stop", (payload) => {
+      this.broadcastBrowserStop(payload);
+    });
+    this.browserManager.on("error", (payload) => {
+      this.notifyBrowserError(payload);
+    });
+    this.healthInterval = setInterval(() => {
+      this.pingClients();
+    }, 30000);
+  }
+
+  async getInteractionSettings(force = false) {
+    if (!force && this.interactionSettings.expiresAt > Date.now()) {
+      return this.interactionSettings.value;
+    }
+    if (typeof this.store?.getSettings !== "function") {
+      return this.interactionSettings.value;
+    }
+    const settings = await this.store.getSettings().catch(() => null);
+    const value = normalizeInteractionSettings(settings ?? {});
+    this.interactionSettings = {
+      value,
+      expiresAt: Date.now() + 15000,
+    };
+    return value;
+  }
+
+  install(server) {
+    this.server = server;
+    this.wss = new WebSocketServer({ noServer: true });
+
+    server.on("upgrade", (request, socket, head) => {
+      const requestUrl = new URL(request.url ?? "/", buildBaseUrl(this.config.publicBaseUrl));
+      if (requestUrl.pathname !== REALTIME_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      this.wss.handleUpgrade(request, socket, head, (websocket) => {
+        this.handleConnection(websocket, requestUrl);
+      });
+    });
+  }
+
+  handleConnection(socket, requestUrl) {
+    const viewerSessionId = String(requestUrl.searchParams.get("viewerSessionId") ?? "").trim();
+    if (!viewerSessionId) {
+      socket.close(1008, "viewerSessionId is required");
+      return;
+    }
+
+    const existing = this.clients.get(viewerSessionId);
+    if (existing?.socket && existing.socket.readyState === WebSocket.OPEN) {
+      existing.socket.close(1012, "superseded");
+    }
+
+    const client = {
+      viewerSessionId,
+      socket,
+      worldSnapshotId: "",
+      joinedWorldSnapshotId: "",
+      position: { x: 0, y: 0, z: 0 },
+      headingY: 0,
+      movementState: {},
+      lastPresenceAt: Date.now(),
+      lastHeartbeatAt: Date.now(),
+      rateLimit: {},
+      isAlive: true,
+      cellKey: "",
+      browserModes: new Map(),
+    };
+    this.clients.set(viewerSessionId, client);
+
+    socket.on("pong", () => {
+      client.isAlive = true;
+    });
+    socket.on("message", (buffer) => {
+      void this.handleMessage(client, parseJson(buffer));
+    });
+    socket.on("close", () => {
+      void this.handleDisconnect(client);
+    });
+    socket.on("error", () => {
+      void this.handleDisconnect(client);
+    });
+
+    sendJson(client, {
+      type: "session:ready",
+      viewerSessionId,
+      connectedAt: nowIso(),
+    });
+  }
+
+  pingClients() {
+    for (const client of this.clients.values()) {
+      if (!client.isAlive) {
+        client.socket.terminate();
+        continue;
+      }
+      client.isAlive = false;
+      client.socket.ping();
+    }
+  }
+
+  async handleMessage(client, message) {
+    if (!message || typeof message !== "object") {
+      return;
+    }
+    const type = String(message.type ?? "").trim();
+    if (type === "presence:update") {
+      await this.handlePresenceUpdate(client, message);
+      return;
+    }
+    if (type === "chat:send") {
+      await this.handleChatSend(client, message);
+      return;
+    }
+    if (type === "browser:start") {
+      await this.handleBrowserStart(client, message);
+      return;
+    }
+    if (type === "browser:stop") {
+      await this.handleBrowserStop(client, message);
+      return;
+    }
+    if (type === "browser:input") {
+      await this.handleBrowserInput(client, message);
+    }
+  }
+
+  getWorldMemberIds(worldSnapshotId) {
+    if (!this.worldMembers.has(worldSnapshotId)) {
+      this.worldMembers.set(worldSnapshotId, new Set());
+    }
+    return this.worldMembers.get(worldSnapshotId);
+  }
+
+  getWorldCellMap(worldSnapshotId) {
+    if (!this.worldCells.has(worldSnapshotId)) {
+      this.worldCells.set(worldSnapshotId, new Map());
+    }
+    return this.worldCells.get(worldSnapshotId);
+  }
+
+  updateClientCell(client, interactionSettings) {
+    const worldSnapshotId = client.worldSnapshotId;
+    if (!worldSnapshotId) {
+      return;
+    }
+    const cellX = getCellCoordinate(client.position.x, interactionSettings.worldCellSize);
+    const cellZ = getCellCoordinate(client.position.z, interactionSettings.worldCellSize);
+    client.cellX = cellX;
+    client.cellZ = cellZ;
+    const nextKey = getCellKey(cellX, cellZ);
+    if (client.cellKey === nextKey) {
+      return;
+    }
+    if (client.cellKey) {
+      const cells = this.getWorldCellMap(worldSnapshotId);
+      const previous = cells.get(client.cellKey);
+      previous?.delete(client.viewerSessionId);
+      if (previous?.size === 0) {
+        cells.delete(client.cellKey);
+      }
+    }
+    client.cellKey = nextKey;
+    const cells = this.getWorldCellMap(worldSnapshotId);
+    if (!cells.has(nextKey)) {
+      cells.set(nextKey, new Set());
+    }
+    cells.get(nextKey).add(client.viewerSessionId);
+  }
+
+  moveClientWorldMembership(client, nextWorldSnapshotId) {
+    const previousWorld = client.worldSnapshotId;
+    if (previousWorld && previousWorld !== nextWorldSnapshotId) {
+      this.getWorldMemberIds(previousWorld).delete(client.viewerSessionId);
+      const previousCells = this.getWorldCellMap(previousWorld);
+      if (client.cellKey) {
+        previousCells.get(client.cellKey)?.delete(client.viewerSessionId);
+      }
+      client.cellKey = "";
+      this.broadcastToWorld(previousWorld, {
+        type: "presence:remove",
+        viewerSessionId: client.viewerSessionId,
+      }, new Set([client.viewerSessionId]));
+      const ownedSession = this.browserManager.getSessionByHost(client.viewerSessionId);
+      if (ownedSession) {
+        void this.browserManager.stopSession(ownedSession.sessionId ?? ownedSession.id);
+      }
+    }
+    client.worldSnapshotId = nextWorldSnapshotId;
+    if (nextWorldSnapshotId) {
+      this.getWorldMemberIds(nextWorldSnapshotId).add(client.viewerSessionId);
+    }
+  }
+
+  getWorldClients(worldSnapshotId) {
+    return [...this.getWorldMemberIds(worldSnapshotId)]
+      .map((viewerSessionId) => this.clients.get(viewerSessionId))
+      .filter(Boolean);
+  }
+
+  broadcastToWorld(worldSnapshotId, payload, excludeSessionIds = new Set()) {
+    for (const member of this.getWorldClients(worldSnapshotId)) {
+      if (excludeSessionIds.has(member.viewerSessionId)) {
+        continue;
+      }
+      sendJson(member, payload);
+    }
+  }
+
+  async handlePresenceUpdate(client, message) {
+    const interactionSettings = await this.getInteractionSettings();
+    const worldSnapshotId = String(message.worldSnapshotId ?? message.world_snapshot_id ?? "").trim();
+    if (!worldSnapshotId) {
+      return;
+    }
+
+    const worldChanged = client.worldSnapshotId !== worldSnapshotId;
+    this.moveClientWorldMembership(client, worldSnapshotId);
+    client.position = positionFromMessage(message);
+    client.headingY = Number(message.heading_y ?? 0) || 0;
+    client.movementState =
+      typeof message.movement_state === "object" && message.movement_state
+        ? message.movement_state
+        : {};
+    client.lastPresenceAt = Date.now();
+    client.lastHeartbeatAt = Date.now();
+    this.updateClientCell(client, interactionSettings);
+
+    const presence = buildViewerPresencePayload(client);
+    if (worldChanged || client.joinedWorldSnapshotId !== worldSnapshotId) {
+      client.joinedWorldSnapshotId = worldSnapshotId;
+      sendJson(client, {
+        type: "presence:snapshot",
+        worldSnapshotId,
+        presence: this.getWorldClients(worldSnapshotId)
+          .filter((entry) => entry.viewerSessionId !== client.viewerSessionId)
+          .map((entry) => buildViewerPresencePayload(entry)),
+      });
+      const browserSessions = this.browserManager.listSessionsForWorld(worldSnapshotId);
+      for (const session of browserSessions) {
+        sendJson(client, {
+          type: "browser:session",
+          session,
+        });
+      }
+    }
+
+    this.broadcastToWorld(worldSnapshotId, {
+      type: "presence:update",
+      worldSnapshotId,
+      presence,
+    }, new Set([client.viewerSessionId]));
+    await this.rebalanceBrowserSessions(worldSnapshotId);
+  }
+
+  async handleChatSend(client, message) {
+    if (!client.worldSnapshotId) {
+      return;
+    }
+    const interactionSettings = await this.getInteractionSettings();
+    const text = sanitizeChatText(message.text, interactionSettings.chatMaxChars);
+    if (!text) {
+      return;
+    }
+    const rateLimit = checkChatRateLimit(client.rateLimit, Date.now());
+    client.rateLimit = rateLimit.state ?? client.rateLimit;
+    if (!rateLimit.allowed) {
+      sendJson(client, {
+        type: "chat:error",
+        message: rateLimit.reason,
+      });
+      return;
+    }
+
+    const worldClients = this.getWorldClients(client.worldSnapshotId);
+    const fullRecipients = new Set(
+      selectNearestRecipients({
+        senderSessionId: client.viewerSessionId,
+        senderPosition: client.position,
+        candidates: worldClients,
+        radius: interactionSettings.chatDetailRadius,
+        maxRecipients: interactionSettings.interactionMaxRecipients,
+      }),
+    );
+    fullRecipients.add(client.viewerSessionId);
+    const expiresAt = new Date(Date.now() + interactionSettings.chatTtlSeconds * 1000).toISOString();
+
+    for (const entry of worldClients) {
+      sendJson(entry, {
+        type: "chat:event",
+        worldSnapshotId: client.worldSnapshotId,
+        actorSessionId: client.viewerSessionId,
+        mode: fullRecipients.has(entry.viewerSessionId) ? "full" : "placeholder",
+        text: fullRecipients.has(entry.viewerSessionId) ? text : "...",
+        expiresAt,
+      });
+    }
+  }
+
+  async handleBrowserStart(client, message) {
+    if (!client.worldSnapshotId) {
+      return;
+    }
+    try {
+      const session = await this.browserManager.startSession({
+        hostSessionId: client.viewerSessionId,
+        worldSnapshotId: client.worldSnapshotId,
+        url: message.url,
+      });
+      const internal = this.browserManager.getSession(session.sessionId);
+      if (internal) {
+        internal.subscribers = internal.subscribers ?? new Set();
+      }
+      await this.broadcastBrowserSession(session);
+    } catch (error) {
+      sendJson(client, {
+        type: "browser:error",
+        message: error.message,
+      });
+    }
+  }
+
+  async handleBrowserStop(client, message) {
+    const requestedSessionId = String(message.sessionId ?? "").trim();
+    const session = requestedSessionId
+      ? this.browserManager.getSession(requestedSessionId)
+      : this.browserManager.getSessionByHost(client.viewerSessionId);
+    if (!session || session.hostSessionId !== client.viewerSessionId) {
+      return;
+    }
+    await this.browserManager.stopSession(session.id ?? session.sessionId);
+  }
+
+  async handleBrowserInput(client, message) {
+    const sessionId = String(message.sessionId ?? "").trim();
+    const session = this.browserManager.getSession(sessionId);
+    if (!session || session.hostSessionId !== client.viewerSessionId) {
+      return;
+    }
+    try {
+      await this.browserManager.handleInput(sessionId, message.input ?? {});
+    } catch (error) {
+      sendJson(client, {
+        type: "browser:error",
+        message: error.message,
+      });
+    }
+  }
+
+  async broadcastBrowserSession(sessionPayload) {
+    const worldSnapshotId = String(sessionPayload.worldSnapshotId ?? "").trim();
+    if (!worldSnapshotId) {
+      return;
+    }
+    this.broadcastToWorld(worldSnapshotId, {
+      type: "browser:session",
+      session: sessionPayload,
+    });
+    await this.rebalanceBrowserSessions(worldSnapshotId);
+  }
+
+  broadcastBrowserFrame(frame) {
+    const session = this.browserManager.getSession(frame.sessionId);
+    if (!session) {
+      return;
+    }
+    const recipients = String(session.frameTransport ?? "").startsWith("livekit")
+      ? new Set([session.hostSessionId])
+      : session.subscribers ?? new Set([session.hostSessionId]);
+    for (const viewerSessionId of recipients) {
+      const client = this.clients.get(viewerSessionId);
+      if (!client) {
+        continue;
+      }
+      sendJson(client, {
+        type: "browser:frame",
+        sessionId: frame.sessionId,
+        hostSessionId: frame.hostSessionId,
+        frameId: frame.frameId,
+        dataUrl: frame.dataUrl,
+        width: frame.width,
+        height: frame.height,
+        title: frame.title,
+        url: frame.url,
+      });
+    }
+  }
+
+  broadcastBrowserStop(payload) {
+    const worldSnapshotId = String(payload.worldSnapshotId ?? "").trim();
+    if (!worldSnapshotId) {
+      return;
+    }
+    for (const client of this.getWorldClients(worldSnapshotId)) {
+      client.browserModes.delete(payload.sessionId);
+    }
+    this.broadcastToWorld(worldSnapshotId, {
+      type: "browser:stop",
+      sessionId: payload.sessionId,
+      hostSessionId: payload.hostSessionId,
+    });
+  }
+
+  notifyBrowserError(payload) {
+    const session = payload.sessionId ? this.browserManager.getSession(payload.sessionId) : null;
+    const client = payload.hostSessionId ? this.clients.get(payload.hostSessionId) : session ? this.clients.get(session.hostSessionId) : null;
+    if (!client) {
+      return;
+    }
+    sendJson(client, {
+      type: "browser:error",
+      sessionId: payload.sessionId,
+      message: payload.message,
+    });
+  }
+
+  async rebalanceBrowserSessions(worldSnapshotId) {
+    const interactionSettings = await this.getInteractionSettings();
+    const sessions = this.browserManager.listSessionsForWorld(worldSnapshotId);
+    const worldClients = this.getWorldClients(worldSnapshotId);
+
+    for (const session of sessions) {
+      const hostClient = this.clients.get(session.hostSessionId);
+      if (!hostClient) {
+        await this.browserManager.stopSession(session.id ?? session.sessionId);
+        continue;
+      }
+      const fullRecipients = new Set(
+        selectNearestRecipients({
+          senderSessionId: hostClient.viewerSessionId,
+          senderPosition: hostClient.position,
+          candidates: worldClients,
+          radius: interactionSettings.browserRadius,
+          maxRecipients: interactionSettings.interactionMaxRecipients,
+        }),
+      );
+      fullRecipients.add(hostClient.viewerSessionId);
+      const previousRecipients = new Set(session.subscribers ?? []);
+      session.subscribers = fullRecipients;
+
+      for (const viewerSessionId of fullRecipients) {
+        if (previousRecipients.has(viewerSessionId)) {
+          continue;
+        }
+        const client = this.clients.get(viewerSessionId);
+        if (!client) {
+          continue;
+        }
+        client.browserModes.set(session.id, "full");
+        sendJson(client, {
+          type: "browser:subscribe",
+          sessionId: session.id,
+          hostSessionId: session.hostSessionId,
+        });
+      }
+
+      for (const viewerSessionId of previousRecipients) {
+        if (fullRecipients.has(viewerSessionId)) {
+          continue;
+        }
+        const client = this.clients.get(viewerSessionId);
+        if (!client) {
+          continue;
+        }
+        client.browserModes.set(session.id, "placeholder");
+        sendJson(client, {
+          type: "browser:unsubscribe",
+          sessionId: session.id,
+          hostSessionId: session.hostSessionId,
+        });
+      }
+
+      for (const client of worldClients) {
+        if (fullRecipients.has(client.viewerSessionId)) {
+          client.browserModes.set(session.id, "full");
+          continue;
+        }
+        if (client.browserModes.get(session.id) !== "placeholder") {
+          client.browserModes.set(session.id, "placeholder");
+          sendJson(client, {
+            type: "browser:unsubscribe",
+            sessionId: session.id,
+            hostSessionId: session.hostSessionId,
+          });
+        }
+      }
+    }
+  }
+
+  async handleDisconnect(client) {
+    if (!this.clients.has(client.viewerSessionId)) {
+      return;
+    }
+    this.clients.delete(client.viewerSessionId);
+    const worldSnapshotId = client.worldSnapshotId;
+    if (worldSnapshotId) {
+      this.getWorldMemberIds(worldSnapshotId).delete(client.viewerSessionId);
+      if (client.cellKey) {
+        this.getWorldCellMap(worldSnapshotId).get(client.cellKey)?.delete(client.viewerSessionId);
+      }
+      this.broadcastToWorld(worldSnapshotId, {
+        type: "presence:remove",
+        viewerSessionId: client.viewerSessionId,
+      });
+    }
+    const browserSession = this.browserManager.getSessionByHost(client.viewerSessionId);
+    if (browserSession) {
+      await this.browserManager.stopSession(browserSession.id ?? browserSession.sessionId);
+    }
+    if (worldSnapshotId) {
+      await this.rebalanceBrowserSessions(worldSnapshotId);
+    }
+  }
+
+  async dispose() {
+    clearInterval(this.healthInterval);
+    await this.browserManager.dispose();
+    for (const client of this.clients.values()) {
+      client.socket.close(1001, "server shutdown");
+    }
+    this.clients.clear();
+  }
+}
+
+export function installRealtimeGateway(options = {}) {
+  const gateway = new RealtimeGateway(options);
+  gateway.install(options.server);
+  return gateway;
+}

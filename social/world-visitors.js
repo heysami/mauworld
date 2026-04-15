@@ -208,7 +208,7 @@ function wrapBubbleText(context, value, maxWidth, maxLines = 4) {
   return lines;
 }
 
-function createBubbleTexture(content, options = {}) {
+export function createBubbleTexture(content, options = {}) {
   const width = options.width ?? 384;
   const height = options.height ?? 280;
   const thought = options.type === "thought";

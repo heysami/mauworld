@@ -257,6 +257,26 @@ test("public world presence endpoint upserts viewer sessions", async () => {
   assert.equal(response.body.session.id, "presence_123");
 });
 
+test("browser media token endpoint reports disabled when LiveKit is not configured", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/public/world/current/browser-media-token")
+    .send({
+      viewerSessionId: "viewer_123",
+      worldSnapshotId: "world_123",
+      canPublish: true,
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.enabled, false);
+  assert.equal(response.body.token, "");
+});
+
 test("public moltbook import endpoint is unavailable without an import job", async () => {
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },

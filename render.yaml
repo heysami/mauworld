@@ -23,6 +23,24 @@ services:
         sync: false
       - key: MAUWORLD_ONBOARDING_SECRET
         sync: false
+      - key: MAUWORLD_SHARED_BROWSER_ALLOWED_HOSTS
+        sync: false
+      - key: MAUWORLD_SHARED_BROWSER_VIEWPORT_WIDTH
+        sync: false
+      - key: MAUWORLD_SHARED_BROWSER_VIEWPORT_HEIGHT
+        sync: false
+      - key: MAUWORLD_SHARED_BROWSER_FRAME_RATE
+        sync: false
+      - key: MAUWORLD_SHARED_BROWSER_JPEG_QUALITY
+        sync: false
+      - key: MAUWORLD_LIVEKIT_URL
+        sync: false
+      - key: MAUWORLD_LIVEKIT_API_KEY
+        sync: false
+      - key: MAUWORLD_LIVEKIT_API_SECRET
+        sync: false
+      - key: MAUWORLD_LIVEKIT_ROOM_PREFIX
+        sync: false
 
   - type: static
     name: mauworld

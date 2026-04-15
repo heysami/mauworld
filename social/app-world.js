@@ -1,5 +1,7 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
-import { createWorldVisitorSystem, updateMascotMotion } from "./world-visitors.js";
+import { createBubbleTexture, createWorldVisitorSystem, updateMascotMotion } from "./world-visitors.js";
+import { createBrowserMediaController } from "./world-browser-media.js";
+import { createWorldRealtimeClient } from "./world-realtime.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 
@@ -26,6 +28,21 @@ const elements = {
   resultsPanel: document.querySelector(".world-results-panel"),
   inspector: document.querySelector(".world-inspector"),
   inspectorClose: document.querySelector("[data-world-inspector-close]"),
+  browserForm: document.querySelector("[data-world-browser-form]"),
+  browserLaunch: document.querySelector("[data-world-browser-launch]"),
+  browserStop: document.querySelector("[data-world-browser-stop]"),
+  browserBack: document.querySelector("[data-world-browser-back]"),
+  browserForward: document.querySelector("[data-world-browser-forward]"),
+  browserReload: document.querySelector("[data-world-browser-reload]"),
+  browserStatus: document.querySelector("[data-world-browser-status]"),
+  browserUrl: document.querySelector("[data-world-browser-url]"),
+  browserStage: document.querySelector("[data-world-browser-stage]"),
+  browserFrame: document.querySelector("[data-world-browser-frame]"),
+  browserPlaceholder: document.querySelector("[data-world-browser-placeholder]"),
+  chatComposer: document.querySelector("[data-world-chat-composer]"),
+  chatInput: document.querySelector("[data-world-chat-input]"),
+  chatStatus: document.querySelector("[data-world-chat-status]"),
+  chatCounter: document.querySelector("[data-world-chat-counter]"),
 };
 
 elements.focusPieces = {
@@ -40,6 +57,7 @@ const WORLD_API = {
   stream: "/public/world/current/stream",
   search: "/public/world/search",
   presence: "/public/world/current/presence",
+  browserMediaToken: "/public/world/current/browser-media-token",
 };
 
 const CAMERA = {
@@ -84,6 +102,17 @@ const WORLD_STYLE = {
   accents: ["#ff4fa8", "#2dd8ff", "#ffd84d", "#7ce85b", "#ff9548", "#7ed7ff"],
 };
 
+const INTERACTION_DEFAULTS = {
+  chatMaxChars: 160,
+  chatTtlSeconds: 8,
+  chatDetailRadius: 180,
+  browserRadius: 96,
+  maxRecipients: 20,
+  browserAspectRatio: 16 / 9,
+  browserViewportWidth: 1280,
+  browserViewportHeight: 720,
+};
+
 const SKYLINE_BAND_ASSETS = {
   "skyline-band-primary": new URL("./assets/skyline-band-primary.svg", import.meta.url).href,
   "skyline-band-secondary": new URL("./assets/skyline-band-secondary.svg", import.meta.url).href,
@@ -120,6 +149,19 @@ const state = {
   postFocusMixTarget: 0,
   focusReturnRadius: PLAYER_VIEW.defaultRadius,
   trailAccumulator: 0,
+  realtimeClient: null,
+  realtimeConnected: false,
+  livePresence: new Map(),
+  activeChats: new Map(),
+  browserSessions: new Map(),
+  localBrowserSessionId: "",
+  localBrowserFocus: false,
+  browserMediaController: null,
+  browserMediaTransport: "jpeg-sequence",
+  browserMediaCanvas: null,
+  browserMediaCanvasContext: null,
+  browserMediaImage: null,
+  browserMediaPendingFrameId: 0,
   worldCache: {
     pillars: new Map(),
     tags: new Map(),
@@ -146,6 +188,7 @@ const sceneState = {
   routes: new THREE.Group(),
   trails: new THREE.Group(),
   player: new THREE.Group(),
+  browserScreens: new THREE.Group(),
   billboards: [],
   persistentBillboards: [],
   animatedDecor: [],
@@ -153,6 +196,9 @@ const sceneState = {
   animatedPosts: [],
   animatedTags: [],
   animatedPresence: [],
+  animatedBrowserScreens: [],
+  presenceEntries: new Map(),
+  browserScreenEntries: new Map(),
   clickable: [],
   snow: null,
   snowData: [],
@@ -725,6 +771,114 @@ function getCachedWorldPayload(presence = []) {
   };
 }
 
+function getLivePresenceRows() {
+  return [...state.livePresence.values()];
+}
+
+function getRenderablePresenceRows() {
+  return getCachedWorldPayload(getLivePresenceRows()).presence;
+}
+
+function syncStreamPresence() {
+  if (!state.stream) {
+    return;
+  }
+  state.stream = {
+    ...state.stream,
+    presence: getRenderablePresenceRows(),
+  };
+}
+
+function reconcilePresenceScene() {
+  const renderable = getRenderablePresenceRows();
+  const desiredIds = new Set(renderable.map((entry) => getPresenceEntryId(entry)).filter(Boolean));
+
+  for (const presenceId of [...sceneState.presenceEntries.keys()]) {
+    if (!desiredIds.has(presenceId)) {
+      removePresenceObject(presenceId);
+    }
+  }
+
+  for (const entry of renderable) {
+    upsertPresenceObject(entry);
+  }
+}
+
+function upsertLivePresence(entry) {
+  const presenceId = getPresenceEntryId(entry);
+  if (!presenceId) {
+    return;
+  }
+  state.livePresence.set(presenceId, {
+    ...entry,
+  });
+  syncStreamPresence();
+  reconcilePresenceScene();
+}
+
+function mergeLivePresenceRows(rows = [], options = {}) {
+  if (options.replaceViewerSnapshot) {
+    for (const [presenceId, entry] of state.livePresence.entries()) {
+      if (entry?.actor_type === "viewer") {
+        state.livePresence.delete(presenceId);
+      }
+    }
+  }
+  for (const entry of rows) {
+    const presenceId = getPresenceEntryId(entry);
+    if (!presenceId) {
+      continue;
+    }
+    state.livePresence.set(presenceId, {
+      ...entry,
+    });
+  }
+  syncStreamPresence();
+  reconcilePresenceScene();
+}
+
+function removeLivePresence(presenceId) {
+  state.livePresence.delete(presenceId);
+  syncStreamPresence();
+  removePresenceObject(presenceId);
+}
+
+function pruneExpiredChatEvents() {
+  const now = Date.now();
+  for (const [presenceId, event] of state.activeChats.entries()) {
+    if (Date.parse(event.expiresAt ?? 0) > now) {
+      continue;
+    }
+    state.activeChats.delete(presenceId);
+    const presenceEntry = sceneState.presenceEntries.get(presenceId);
+    if (presenceEntry?.bubble) {
+      presenceEntry.bubble.targetOpacity = 0;
+    }
+    if (presenceId === state.viewerSessionId && sceneState.playerAvatar?.bubble) {
+      sceneState.playerAvatar.bubble.targetOpacity = 0;
+    }
+  }
+}
+
+function handleChatEvent(payload) {
+  const actorSessionId = String(payload.actorSessionId ?? "").trim();
+  if (!actorSessionId) {
+    return;
+  }
+  state.activeChats.set(actorSessionId, {
+    text: String(payload.text ?? "").slice(0, getInteractionConfig().chatMaxChars),
+    mode: payload.mode === "placeholder" ? "placeholder" : "full",
+    expiresAt: payload.expiresAt,
+  });
+  const presenceEntry = sceneState.presenceEntries.get(actorSessionId);
+  if (presenceEntry) {
+    applyChatBubbleToActor(presenceEntry, state.activeChats.get(actorSessionId));
+  }
+  if (actorSessionId === state.viewerSessionId && sceneState.playerAvatar) {
+    applyChatBubbleToActor(sceneState.playerAvatar, state.activeChats.get(actorSessionId));
+  }
+}
+
 function formatQueueLabel(status) {
   if (status === "processing") {
     return "Queue processing";
@@ -765,6 +919,101 @@ async function postJson(path, body) {
     throw new Error(payload.error || `Request failed (${response.status})`);
   }
   return payload;
+}
+
+async function fetchBrowserMediaToken({ canPublish = false } = {}) {
+  if (!state.meta?.worldSnapshotId || !state.viewerSessionId) {
+    return { enabled: false };
+  }
+  try {
+    return await postJson(WORLD_API.browserMediaToken, {
+      viewerSessionId: state.viewerSessionId,
+      worldSnapshotId: state.meta.worldSnapshotId,
+      canPublish,
+    });
+  } catch (_error) {
+    return { enabled: false };
+  }
+}
+
+function getBrowserMediaCanvas() {
+  if (!state.browserMediaCanvas) {
+    const config = getInteractionConfig();
+    state.browserMediaCanvas = document.createElement("canvas");
+    state.browserMediaCanvas.width = config.browserViewportWidth;
+    state.browserMediaCanvas.height = config.browserViewportHeight;
+    state.browserMediaCanvasContext = state.browserMediaCanvas.getContext("2d");
+    state.browserMediaImage = new Image();
+  }
+  const config = getInteractionConfig();
+  if (
+    state.browserMediaCanvas.width !== config.browserViewportWidth
+    || state.browserMediaCanvas.height !== config.browserViewportHeight
+  ) {
+    state.browserMediaCanvas.width = config.browserViewportWidth;
+    state.browserMediaCanvas.height = config.browserViewportHeight;
+  }
+  return state.browserMediaCanvas;
+}
+
+function drawBrowserMediaFrame(frame) {
+  if (!frame?.dataUrl) {
+    return;
+  }
+  const nextFrameId = Math.max(0, Math.floor(Number(frame.frameId) || 0));
+  if (nextFrameId < state.browserMediaPendingFrameId) {
+    return;
+  }
+  state.browserMediaPendingFrameId = nextFrameId;
+  const canvas = getBrowserMediaCanvas();
+  const context = state.browserMediaCanvasContext;
+  const image = state.browserMediaImage;
+  if (!canvas || !context || !image) {
+    return;
+  }
+  image.onload = () => {
+    if (nextFrameId < state.browserMediaPendingFrameId) {
+      return;
+    }
+    const sourceWidth = image.naturalWidth || frame.width || canvas.width;
+    const sourceHeight = image.naturalHeight || frame.height || canvas.height;
+    const scale = Math.min(canvas.width / Math.max(1, sourceWidth), canvas.height / Math.max(1, sourceHeight));
+    const drawWidth = Math.max(1, sourceWidth * scale);
+    const drawHeight = Math.max(1, sourceHeight * scale);
+    const offsetX = (canvas.width - drawWidth) / 2;
+    const offsetY = (canvas.height - drawHeight) / 2;
+    context.fillStyle = "#02050f";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+  };
+  image.src = frame.dataUrl;
+}
+
+function getBrowserMediaController() {
+  if (state.browserMediaController) {
+    return state.browserMediaController;
+  }
+  state.browserMediaController = createBrowserMediaController({
+    fetchToken: ({ canPublish = false } = {}) => fetchBrowserMediaToken({ canPublish }),
+    onRemoteTrack: ({ sessionId, element }) => {
+      setBrowserScreenVideo(sessionId, element);
+      state.browserMediaTransport = "livekit";
+      updateBrowserPanel();
+    },
+    onRemoteTrackRemoved: ({ sessionId }) => {
+      clearBrowserScreenVideo(sessionId);
+      updateBrowserPanel();
+    },
+    onStatus: ({ enabled, transport }) => {
+      if (enabled === false && transport === "jpeg-sequence") {
+        state.browserMediaTransport = "jpeg-sequence";
+      } else if (enabled === true && transport === "livekit") {
+        state.browserMediaTransport = "livekit";
+      }
+      updateBrowserPanel();
+    },
+  });
+  return state.browserMediaController;
 }
 
 function disposeMaterial(material) {
@@ -2909,7 +3158,143 @@ function removeAnimatedPostEntry(entry) {
   sceneState.clickable = sceneState.clickable.filter((payload) => payload.mesh !== entry.card);
 }
 
+function getInteractionConfig() {
+  const interaction = state.meta?.renderer?.interaction ?? {};
+  const chat = interaction.chat ?? {};
+  const browser = interaction.browser ?? {};
+  return {
+    chatMaxChars: Math.max(1, Math.floor(Number(chat.maxChars) || INTERACTION_DEFAULTS.chatMaxChars)),
+    chatTtlSeconds: Math.max(1, Math.floor(Number(chat.ttlSeconds) || INTERACTION_DEFAULTS.chatTtlSeconds)),
+    chatDetailRadius: Math.max(16, Math.floor(Number(chat.detailRadius) || INTERACTION_DEFAULTS.chatDetailRadius)),
+    browserRadius: Math.max(16, Math.floor(Number(browser.radius) || INTERACTION_DEFAULTS.browserRadius)),
+    maxRecipients: Math.max(1, Math.floor(Number(browser.maxRecipients) || INTERACTION_DEFAULTS.maxRecipients)),
+    browserAspectRatio: Number(browser.aspectRatio) || INTERACTION_DEFAULTS.browserAspectRatio,
+    browserViewportWidth: Math.max(320, Math.floor(Number(browser.viewportWidth) || INTERACTION_DEFAULTS.browserViewportWidth)),
+    browserViewportHeight: Math.max(180, Math.floor(Number(browser.viewportHeight) || INTERACTION_DEFAULTS.browserViewportHeight)),
+  };
+}
+
+function getPresenceEntryId(entry = {}) {
+  return String(entry.viewer_session_id ?? entry.viewerSessionId ?? entry.installation_id ?? entry.installationId ?? entry.id ?? "")
+    .trim();
+}
+
+function createActorBubbleState(color, options = {}) {
+  const bubble = createBillboard(
+    createBubbleTexture("💬", {
+      accent: color,
+      stroke: WORLD_STYLE.outline,
+      text: "",
+    }),
+    14.2,
+    9.2,
+    {
+      opacity: 0,
+      fog: false,
+      depthTest: false,
+      renderOrder: 11,
+      persistent: options.persistent === true,
+    },
+  );
+  bubble.visible = false;
+  bubble.position.set(0, 15.2, 0);
+  return {
+    mesh: bubble,
+    currentKey: "",
+    opacity: 0,
+    targetOpacity: 0,
+    duration: 0,
+    elapsed: 0,
+    highEnergy: false,
+    bounceCount: 0,
+    anchorY: 15.2,
+  };
+}
+
+function applyChatBubbleToActor(actorEntry, chatEvent) {
+  if (!actorEntry?.bubble) {
+    return;
+  }
+  if (!chatEvent || Date.parse(chatEvent.expiresAt ?? 0) <= Date.now()) {
+    actorEntry.bubble.targetOpacity = 0;
+    return;
+  }
+  const accent = actorEntry.bubbleAccent ?? WORLD_STYLE.accents[1];
+  const text = String(chatEvent.text ?? "").trim();
+  const symbol = chatEvent.mode === "placeholder" ? "..." : "💬";
+  const bubbleKey = `${chatEvent.mode}:${text}:${accent}`;
+  if (actorEntry.bubble.currentKey !== bubbleKey) {
+    const previousMap = actorEntry.bubble.mesh.material.map;
+    actorEntry.bubble.mesh.material.map = createBubbleTexture(symbol, {
+      accent,
+      stroke: WORLD_STYLE.outline,
+      text,
+      width: text ? 560 : undefined,
+      height: text ? 360 : undefined,
+    });
+    previousMap?.dispose();
+    actorEntry.bubble.currentKey = bubbleKey;
+  }
+  actorEntry.bubble.mesh.visible = true;
+  actorEntry.bubble.targetOpacity = 1;
+  actorEntry.bubble.duration = Math.max(0.5, (Date.parse(chatEvent.expiresAt) - Date.now()) / 1000);
+  actorEntry.bubble.elapsed = 0;
+  actorEntry.bubble.highEnergy = chatEvent.mode !== "placeholder";
+  actorEntry.bubble.bounceCount = actorEntry.bubble.highEnergy ? 2 : 0;
+}
+
+function updateActorBubble(actorEntry, deltaSeconds) {
+  if (!actorEntry?.bubble) {
+    return;
+  }
+  actorEntry.bubble.opacity += (actorEntry.bubble.targetOpacity - actorEntry.bubble.opacity) * (1 - Math.exp(-deltaSeconds * 10));
+  if (Math.abs(actorEntry.bubble.opacity - actorEntry.bubble.targetOpacity) < 0.004) {
+    actorEntry.bubble.opacity = actorEntry.bubble.targetOpacity;
+  }
+  if (actorEntry.bubble.targetOpacity > 0) {
+    actorEntry.bubble.elapsed += deltaSeconds;
+    if (actorEntry.bubble.elapsed >= actorEntry.bubble.duration) {
+      actorEntry.bubble.targetOpacity = 0;
+    }
+  }
+  const bounce =
+    actorEntry.bubble.highEnergy && actorEntry.bubble.duration > 0
+      ? Math.abs(Math.sin((actorEntry.bubble.elapsed / actorEntry.bubble.duration) * Math.PI * actorEntry.bubble.bounceCount)) * 0.9
+      : 0;
+  actorEntry.bubble.mesh.visible = actorEntry.bubble.opacity > 0.01 && actorEntry.group.visible !== false;
+  actorEntry.bubble.mesh.position.y = actorEntry.bubble.anchorY + bounce;
+  actorEntry.bubble.mesh.scale.setScalar(0.92 + actorEntry.bubble.opacity * 0.08);
+  actorEntry.bubble.mesh.material.opacity = actorEntry.bubble.opacity * (actorEntry.opacity ?? 1);
+}
+
+function removePresenceObject(presenceId) {
+  const entry = sceneState.presenceEntries.get(presenceId);
+  if (!entry) {
+    return;
+  }
+  unregisterBillboardsInGroup(entry.group);
+  if (entry.group.parent) {
+    entry.group.parent.remove(entry.group);
+  }
+  entry.group.traverse((node) => {
+    if (node.geometry) {
+      node.geometry.dispose();
+    }
+    if (Array.isArray(node.material)) {
+      node.material.forEach(disposeMaterial);
+    } else {
+      disposeMaterial(node.material);
+    }
+  });
+  const animatedIndex = sceneState.animatedPresence.indexOf(entry);
+  if (animatedIndex >= 0) {
+    sceneState.animatedPresence.splice(animatedIndex, 1);
+  }
+  sceneState.presenceEntries.delete(presenceId);
+}
+
 function buildPresenceObject(entry) {
+  const presenceId = getPresenceEntryId(entry);
   const actor = entry.actor ?? {};
   const group = new THREE.Group();
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
@@ -2950,7 +3335,11 @@ function buildPresenceObject(entry) {
   label.position.set(0, 13.8, 0);
   group.add(label);
 
-  sceneState.animatedPresence.push({
+  const bubble = createActorBubbleState(color);
+  group.add(bubble.mesh);
+
+  const animatedEntry = {
+    id: presenceId,
     group,
     lod: mascot.lod,
     halo: mascot.halo,
@@ -2959,11 +3348,43 @@ function buildPresenceObject(entry) {
     proxy: mascot.proxy,
     proxyBaseY: mascot.proxyBaseY,
     label,
+    bubble,
+    bubbleAccent: color,
+    opacity: 1,
     baseY: entry.position_y,
+    position: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
+    targetPosition: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
     bob: 0.55 + Math.random() * 0.4,
     phase: Math.random() * Math.PI * 2,
-  });
-  return group;
+  };
+  const chatEvent = state.activeChats.get(presenceId);
+  if (chatEvent) {
+    applyChatBubbleToActor(animatedEntry, chatEvent);
+  }
+  sceneState.animatedPresence.push(animatedEntry);
+  sceneState.presenceEntries.set(presenceId, animatedEntry);
+  return animatedEntry;
+}
+
+function upsertPresenceObject(entry) {
+  const presenceId = getPresenceEntryId(entry);
+  if (!presenceId) {
+    return null;
+  }
+  const existing = sceneState.presenceEntries.get(presenceId);
+  if (!existing) {
+    const next = buildPresenceObject(entry);
+    sceneState.presence.add(next.group);
+    return next;
+  }
+  existing.targetPosition.set(entry.position_x, entry.position_y, entry.position_z);
+  existing.baseY = entry.position_y;
+  existing.presence = entry;
+  const chatEvent = state.activeChats.get(presenceId);
+  if (chatEvent) {
+    applyChatBubbleToActor(existing, chatEvent);
+  }
+  return existing;
 }
 
 function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
@@ -2987,6 +3408,230 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
     bobAmplitude: 0.16,
     bobSpeed: 1.6,
   });
+  updateActorBubble(avatar, deltaSeconds);
+}
+
+function createBrowserPlaceholderTexture(session) {
+  const width = 1280;
+  const height = 720;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const title = String(session?.title ?? "Shared browser").slice(0, 72) || "Shared browser";
+  const url = String(session?.url ?? "").replace(/^https?:\/\//i, "");
+
+  context.fillStyle = "#0f173a";
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = "#18265c";
+  context.fillRect(0, 0, width, 70);
+  context.fillStyle = "#f5f7ff";
+  context.font = "700 36px Manrope, sans-serif";
+  context.fillText(title, 46, 46);
+  context.fillStyle = "rgba(245, 247, 255, 0.7)";
+  context.font = "600 24px Manrope, sans-serif";
+  context.fillText(url || "Waiting for stream", 46, 110);
+
+  context.strokeStyle = "rgba(45, 216, 255, 0.26)";
+  context.lineWidth = 4;
+  context.strokeRect(46, 148, width - 92, height - 194);
+  context.fillStyle = "rgba(255, 255, 255, 0.06)";
+  context.fillRect(46, 148, width - 92, height - 194);
+
+  context.fillStyle = "rgba(255, 255, 255, 0.88)";
+  context.font = "800 42px Manrope, sans-serif";
+  context.fillText("LIVE WINDOW", 74, 248);
+  context.fillStyle = "rgba(255, 255, 255, 0.72)";
+  context.font = "600 26px Manrope, sans-serif";
+  context.fillText("Move closer to receive the full stream.", 74, 298);
+  context.fillText("Far viewers keep a lightweight placeholder.", 74, 340);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function removeBrowserScreenEntry(sessionId) {
+  const entry = sceneState.browserScreenEntries.get(sessionId);
+  if (!entry) {
+    return;
+  }
+  clearBrowserScreenVideo(sessionId);
+  entry.liveTexture?.dispose?.();
+  entry.placeholderTexture?.dispose?.();
+  unregisterBillboardsInGroup(entry.group, true);
+  entry.group.parent?.remove(entry.group);
+  entry.group.traverse((node) => {
+    if (node.geometry) {
+      node.geometry.dispose();
+    }
+    if (Array.isArray(node.material)) {
+      node.material.forEach(disposeMaterial);
+    } else {
+      disposeMaterial(node.material);
+    }
+  });
+  sceneState.browserScreenEntries.delete(sessionId);
+  const animatedIndex = sceneState.animatedBrowserScreens.indexOf(entry);
+  if (animatedIndex >= 0) {
+    sceneState.animatedBrowserScreens.splice(animatedIndex, 1);
+  }
+}
+
+function ensureBrowserScreenEntry(session) {
+  let entry = sceneState.browserScreenEntries.get(session.sessionId);
+  if (entry) {
+    entry.session = { ...entry.session, ...session };
+    return entry;
+  }
+
+  const aspectRatio = Number(session.aspectRatio) || getInteractionConfig().browserAspectRatio;
+  const width = 20;
+  const height = width / Math.max(0.1, aspectRatio);
+  const group = new THREE.Group();
+  const frameShell = new THREE.Mesh(
+    new THREE.PlaneGeometry(width + 1.2, height + 1.2),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#0d1537"),
+      transparent: true,
+      opacity: 0.92,
+      fog: false,
+      depthWrite: false,
+    }),
+  );
+  frameShell.renderOrder = 9;
+  group.add(frameShell);
+
+  const liveImage = new Image();
+  const liveTexture = new THREE.Texture(liveImage);
+  liveTexture.colorSpace = THREE.SRGBColorSpace;
+  liveImage.addEventListener("load", () => {
+    liveTexture.needsUpdate = true;
+  });
+  const placeholderTexture = createBrowserPlaceholderTexture(session);
+  const frame = createBillboard(placeholderTexture, width, height, {
+    opacity: 1,
+    fog: false,
+    depthTest: false,
+    renderOrder: 10,
+    persistent: true,
+  });
+  group.add(frame);
+
+  entry = {
+    sessionId: session.sessionId,
+    hostSessionId: session.hostSessionId,
+    session,
+    group,
+    frame,
+    liveImage,
+    liveTexture,
+    placeholderTexture,
+    videoElement: null,
+    videoTexture: null,
+    position: new THREE.Vector3(),
+    targetPosition: new THREE.Vector3(),
+    currentFrameId: 0,
+    deliveryMode: "placeholder",
+  };
+  sceneState.browserScreens.add(group);
+  sceneState.browserScreenEntries.set(session.sessionId, entry);
+  sceneState.animatedBrowserScreens.push(entry);
+  return entry;
+}
+
+function updateBrowserScreenPresentation(entry) {
+  const hasRemoteVideo = entry.deliveryMode === "full" && entry.videoTexture;
+  const hasLiveFrame = entry.deliveryMode === "full" && entry.currentFrameId > 0;
+  const desiredMap = hasRemoteVideo
+    ? entry.videoTexture
+    : hasLiveFrame
+      ? entry.liveTexture
+      : entry.placeholderTexture;
+  if (entry.frame.material.map !== desiredMap) {
+    entry.frame.material.map = desiredMap;
+    entry.frame.material.needsUpdate = true;
+  }
+}
+
+function setBrowserScreenVideo(sessionId, videoElement) {
+  const entry = sceneState.browserScreenEntries.get(sessionId);
+  if (!entry || !videoElement) {
+    return;
+  }
+  if (entry.videoElement === videoElement && entry.videoTexture) {
+    updateBrowserScreenPresentation(entry);
+    return;
+  }
+  clearBrowserScreenVideo(sessionId);
+  entry.videoElement = videoElement;
+  entry.videoTexture = new THREE.VideoTexture(videoElement);
+  entry.videoTexture.colorSpace = THREE.SRGBColorSpace;
+  entry.videoTexture.generateMipmaps = false;
+  entry.videoTexture.minFilter = THREE.LinearFilter;
+  entry.videoTexture.magFilter = THREE.LinearFilter;
+  updateBrowserScreenPresentation(entry);
+}
+
+function clearBrowserScreenVideo(sessionId) {
+  const entry = sceneState.browserScreenEntries.get(sessionId);
+  if (!entry) {
+    return;
+  }
+  entry.videoTexture?.dispose?.();
+  entry.videoTexture = null;
+  entry.videoElement?.remove?.();
+  entry.videoElement = null;
+  updateBrowserScreenPresentation(entry);
+}
+
+function getBrowserHostPosition(hostSessionId) {
+  if (hostSessionId === state.viewerSessionId) {
+    return sceneState.playerAvatar?.group?.position ?? state.navigationPosition;
+  }
+  return sceneState.presenceEntries.get(hostSessionId)?.group?.position ?? null;
+}
+
+function updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds) {
+  const hostPosition = getBrowserHostPosition(entry.hostSessionId);
+  if (!hostPosition) {
+    entry.group.visible = false;
+    return;
+  }
+  entry.targetPosition.copy(hostPosition);
+  entry.targetPosition.y += 18 + Math.sin(elapsedSeconds * 1.3) * 0.7;
+  entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
+  entry.group.position.copy(entry.position);
+  entry.group.visible = true;
+  updateBrowserScreenPresentation(entry);
+}
+
+function updateBrowserFrame(sessionId, frame) {
+  const entry = sceneState.browserScreenEntries.get(sessionId);
+  if (!entry || !frame?.dataUrl || frame.frameId <= entry.currentFrameId) {
+    return;
+  }
+  entry.currentFrameId = frame.frameId;
+  entry.liveImage.src = frame.dataUrl;
+  updateBrowserScreenPresentation(entry);
+}
+
+function reconcileBrowserScreens() {
+  const activeIds = new Set([...state.browserSessions.keys()]);
+  for (const sessionId of [...sceneState.browserScreenEntries.keys()]) {
+    if (!activeIds.has(sessionId)) {
+      removeBrowserScreenEntry(sessionId);
+    }
+  }
+  for (const session of state.browserSessions.values()) {
+    const entry = ensureBrowserScreenEntry(session);
+    entry.deliveryMode = session.deliveryMode ?? "placeholder";
+    entry.session = session;
+    entry.hostSessionId = session.hostSessionId;
+    entry.placeholderTexture.dispose();
+    entry.placeholderTexture = createBrowserPlaceholderTexture(session);
+    updateBrowserScreenPresentation(entry);
+  }
 }
 
 function clearRouteGuide() {
@@ -4078,6 +4723,7 @@ function rebuildScene(streamPayload) {
   sceneState.animatedTags = [];
   sceneState.animatedPresence = [];
   sceneState.clickable = [];
+  sceneState.presenceEntries = new Map();
 
   clearGroup(sceneState.decor);
   clearGroup(sceneState.pillars);
@@ -4096,7 +4742,8 @@ function rebuildScene(streamPayload) {
     sceneState.posts.add(buildPostObject(post));
   }
   for (const presence of streamPayload.presence) {
-    sceneState.presence.add(buildPresenceObject(presence));
+    const presenceEntry = buildPresenceObject(presence);
+    sceneState.presence.add(presenceEntry.group);
   }
   rebuildConnections(streamPayload.pillars, streamPayload.tags, streamPayload.postInstances);
   sceneState.visitorSystem?.syncAmbient(streamPayload.tags);
@@ -4168,6 +4815,7 @@ function initScene() {
   sceneState.root.add(sceneState.tags);
   sceneState.root.add(sceneState.posts);
   sceneState.root.add(sceneState.presence);
+  sceneState.root.add(sceneState.browserScreens);
   sceneState.root.add(sceneState.visitors);
   sceneState.root.add(sceneState.player);
   sceneState.root.add(sceneState.trails);
@@ -4197,7 +4845,10 @@ function initScene() {
     targetLeanX: 0,
     targetLeanZ: 0,
     facingYaw: normalizeAngle(inputState.yaw + Math.PI),
+    bubbleAccent: WORLD_STYLE.accents[0],
+    bubble: createActorBubbleState(WORLD_STYLE.accents[0], { persistent: true }),
   };
+  sceneState.playerAvatar.group.add(sceneState.playerAvatar.bubble.mesh);
   sceneState.visitorSystem = createWorldVisitorSystem({
     ambientRoot: sceneState.visitors,
     queuedRoot: sceneState.focusQueued,
@@ -4552,8 +5203,9 @@ async function loadStreamForPosition(position, force = false) {
     const payload = await fetchJson(WORLD_API.stream, nextWindow);
     state.activeCellWindow = nextWindow;
     mergeStreamIntoCache(payload);
+    mergeLivePresenceRows(payload.presence ?? []);
     pruneWorldCache();
-    state.stream = getCachedWorldPayload(payload.presence);
+    state.stream = getCachedWorldPayload(getLivePresenceRows());
     state.currentCellKey = nextWindow.key;
     rebuildScene(state.stream);
     frameInitialViewFromStream();
@@ -4606,18 +5258,333 @@ async function runSearch() {
   }
 }
 
+function setBrowserStatus(text) {
+  if (elements.browserStatus) {
+    elements.browserStatus.textContent = text;
+  }
+}
+
+function updateChatCounter() {
+  if (!elements.chatCounter || !elements.chatInput) {
+    return;
+  }
+  const maxChars = getInteractionConfig().chatMaxChars;
+  const length = String(elements.chatInput.value ?? "").length;
+  elements.chatCounter.textContent = `${length}/${maxChars}`;
+}
+
+function openChatComposer() {
+  if (!elements.chatComposer || !elements.chatInput) {
+    return;
+  }
+  elements.chatComposer.hidden = false;
+  elements.chatInput.maxLength = getInteractionConfig().chatMaxChars;
+  elements.chatInput.focus();
+  elements.chatInput.select();
+  updateChatCounter();
+}
+
+function closeChatComposer(clearValue = false) {
+  if (!elements.chatComposer || !elements.chatInput) {
+    return;
+  }
+  elements.chatComposer.hidden = true;
+  if (clearValue) {
+    elements.chatInput.value = "";
+    updateChatCounter();
+  }
+}
+
+function isEditableTarget(target) {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function isBrowserStageFocused() {
+  return document.activeElement === elements.browserStage;
+}
+
+function getRealtimeMovementState() {
+  const movementKeysActive = [...inputState.keys].some((key) => MOVEMENT_KEYS.has(key));
+  const moving = Boolean(movementKeysActive || state.moveButtons.size > 0 || state.travelAnimation || state.focusAnimation);
+  const forward = new THREE.Vector3();
+  forward.copy(getFlatForwardVector(inputState.yaw));
+  return {
+    moving,
+    forward: Number(forward.x.toFixed(4)),
+    lift: Number(state.navigationPosition.y.toFixed(4)),
+  };
+}
+
+function buildRealtimePresencePayload() {
+  if (!state.meta?.worldSnapshotId) {
+    return null;
+  }
+  const movementState = getRealtimeMovementState();
+  return {
+    worldSnapshotId: state.meta.worldSnapshotId,
+    position_x: Number(state.navigationPosition.x.toFixed(4)),
+    position_y: Number(state.navigationPosition.y.toFixed(4)),
+    position_z: Number(state.navigationPosition.z.toFixed(4)),
+    heading_y: Number(inputState.yaw.toFixed(4)),
+    movement_state: movementState,
+    isMoving: movementState.moving,
+  };
+}
+
+function getLocalBrowserSession() {
+  return state.localBrowserSessionId ? state.browserSessions.get(state.localBrowserSessionId) ?? null : null;
+}
+
+function isLiveKitBrowserTransport(frameTransport) {
+  return String(frameTransport ?? "").startsWith("livekit");
+}
+
+function syncBrowserMediaSubscription(sessionId, subscribed) {
+  const session = state.browserSessions.get(sessionId);
+  if (!session || !isLiveKitBrowserTransport(session.frameTransport)) {
+    if (!subscribed) {
+      clearBrowserScreenVideo(sessionId);
+    }
+    return;
+  }
+  void getBrowserMediaController().setSubscribed({
+    sessionId,
+    subscribed,
+    viewerSessionId: state.viewerSessionId,
+    worldSnapshotId: state.meta?.worldSnapshotId,
+    canPublish: session.frameTransport === "livekit-canvas" && session.hostSessionId === state.viewerSessionId,
+  });
+}
+
+function publishLocalBrowserMedia(sessionId) {
+  const session = state.browserSessions.get(sessionId);
+  if (
+    !session
+    || session.hostSessionId !== state.viewerSessionId
+    || session.frameTransport !== "livekit-canvas"
+    || !state.meta?.worldSnapshotId
+  ) {
+    return;
+  }
+  void getBrowserMediaController().publishCanvas({
+    sessionId,
+    canvas: getBrowserMediaCanvas(),
+    fps: 24,
+    viewerSessionId: state.viewerSessionId,
+    worldSnapshotId: state.meta.worldSnapshotId,
+  });
+}
+
+function updateBrowserPanel() {
+  const localSession = getLocalBrowserSession();
+  if (!state.realtimeConnected) {
+    setBrowserStatus("Realtime browser offline.");
+  } else if (!localSession) {
+    setBrowserStatus("Launch a shared browser for nearby visitors.");
+  } else if (isLiveKitBrowserTransport(localSession.frameTransport) && state.browserMediaTransport === "livekit") {
+    setBrowserStatus(`Streaming ${localSession.url || "browser"} over WebRTC to nearby visitors.`);
+  } else {
+    setBrowserStatus(`Streaming ${localSession.url || "browser"} to nearby visitors.`);
+  }
+
+  if (elements.browserStop) {
+    elements.browserStop.disabled = !localSession;
+  }
+  if (elements.browserBack) {
+    elements.browserBack.disabled = !localSession;
+  }
+  if (elements.browserForward) {
+    elements.browserForward.disabled = !localSession;
+  }
+  if (elements.browserReload) {
+    elements.browserReload.disabled = !localSession;
+  }
+
+  if (!elements.browserFrame || !elements.browserPlaceholder) {
+    return;
+  }
+  const frameUrl = localSession?.lastFrameDataUrl ?? "";
+  if (frameUrl) {
+    elements.browserFrame.hidden = false;
+    if (elements.browserFrame.getAttribute("src") !== frameUrl) {
+      elements.browserFrame.src = frameUrl;
+    }
+    elements.browserPlaceholder.hidden = true;
+  } else {
+    elements.browserFrame.hidden = true;
+    elements.browserFrame.removeAttribute("src");
+    elements.browserPlaceholder.hidden = false;
+    elements.browserPlaceholder.textContent = localSession
+      ? "Opening browser worker..."
+      : "Launch a shared browser to project it into the world.";
+  }
+}
+
+function updateBrowserSessionState(sessionPatch) {
+  if (!sessionPatch?.sessionId) {
+    return;
+  }
+  const previous = state.browserSessions.get(sessionPatch.sessionId) ?? {};
+  const next = {
+    ...previous,
+    ...sessionPatch,
+    deliveryMode: sessionPatch.deliveryMode ?? previous.deliveryMode ?? "placeholder",
+    frameTransport: sessionPatch.frameTransport ?? previous.frameTransport ?? "jpeg-sequence",
+    lastFrameDataUrl: sessionPatch.lastFrameDataUrl ?? previous.lastFrameDataUrl ?? "",
+    lastFrameId: sessionPatch.lastFrameId ?? previous.lastFrameId ?? 0,
+  };
+  state.browserSessions.set(next.sessionId, next);
+  if (next.hostSessionId === state.viewerSessionId) {
+    state.localBrowserSessionId = next.sessionId;
+    if (elements.browserUrl && !elements.browserUrl.value) {
+      elements.browserUrl.value = next.url ?? "";
+    }
+    if (next.frameTransport === "livekit-canvas" && state.meta?.worldSnapshotId) {
+      void getBrowserMediaController().connect({
+        viewerSessionId: state.viewerSessionId,
+        worldSnapshotId: state.meta.worldSnapshotId,
+        canPublish: true,
+      });
+    }
+  }
+  reconcileBrowserScreens();
+  updateBrowserPanel();
+}
+
+function handleBrowserStop(payload) {
+  const sessionId = String(payload.sessionId ?? "").trim();
+  if (!sessionId) {
+    return;
+  }
+  clearBrowserScreenVideo(sessionId);
+  void getBrowserMediaController().unpublishSession(sessionId);
+  state.browserSessions.delete(sessionId);
+  removeBrowserScreenEntry(sessionId);
+  if (state.localBrowserSessionId === sessionId) {
+    state.localBrowserSessionId = "";
+    state.browserMediaTransport = "jpeg-sequence";
+  }
+  updateBrowserPanel();
+}
+
+function handleBrowserFrame(payload) {
+  const sessionId = String(payload.sessionId ?? "").trim();
+  const existing = state.browserSessions.get(sessionId);
+  if (!existing) {
+    return;
+  }
+  const next = {
+    ...existing,
+    lastFrameDataUrl: payload.dataUrl,
+    lastFrameId: payload.frameId,
+    title: payload.title ?? existing.title,
+    url: payload.url ?? existing.url,
+  };
+  state.browserSessions.set(sessionId, next);
+  if (sessionId === state.localBrowserSessionId) {
+    drawBrowserMediaFrame(payload);
+    publishLocalBrowserMedia(sessionId);
+  }
+  updateBrowserFrame(sessionId, payload);
+  updateBrowserPanel();
+}
+
+function handleRealtimeMessage(payload) {
+  if (payload.type === "presence:snapshot") {
+    mergeLivePresenceRows(payload.presence ?? [], { replaceViewerSnapshot: true });
+    return;
+  }
+  if (payload.type === "presence:update") {
+    upsertLivePresence(payload.presence);
+    return;
+  }
+  if (payload.type === "presence:remove") {
+    removeLivePresence(String(payload.viewerSessionId ?? ""));
+    return;
+  }
+  if (payload.type === "chat:event") {
+    handleChatEvent(payload);
+    return;
+  }
+  if (payload.type === "chat:error") {
+    showToast(payload.message || "Could not send chat.");
+    return;
+  }
+  if (payload.type === "browser:session") {
+    updateBrowserSessionState(payload.session ?? {});
+    return;
+  }
+  if (payload.type === "browser:subscribe") {
+    updateBrowserSessionState({
+      ...(state.browserSessions.get(payload.sessionId) ?? {}),
+      sessionId: payload.sessionId,
+      hostSessionId: payload.hostSessionId,
+      deliveryMode: "full",
+    });
+    syncBrowserMediaSubscription(payload.sessionId, true);
+    return;
+  }
+  if (payload.type === "browser:unsubscribe") {
+    updateBrowserSessionState({
+      ...(state.browserSessions.get(payload.sessionId) ?? {}),
+      sessionId: payload.sessionId,
+      hostSessionId: payload.hostSessionId,
+      deliveryMode: "placeholder",
+    });
+    syncBrowserMediaSubscription(payload.sessionId, false);
+    return;
+  }
+  if (payload.type === "browser:frame") {
+    handleBrowserFrame(payload);
+    return;
+  }
+  if (payload.type === "browser:stop") {
+    handleBrowserStop(payload);
+    return;
+  }
+  if (payload.type === "browser:error") {
+    setBrowserStatus(payload.message || "Shared browser failed.");
+    showToast(payload.message || "Shared browser failed.");
+  }
+}
+
+function initRealtimeClient() {
+  if (state.realtimeClient) {
+    return;
+  }
+  state.realtimeClient = createWorldRealtimeClient({
+    viewerSessionId: state.viewerSessionId,
+    getPresencePayload: buildRealtimePresencePayload,
+    onMessage: handleRealtimeMessage,
+    onStatus: ({ connected }) => {
+      state.realtimeConnected = connected;
+      updateBrowserPanel();
+      if (connected) {
+        state.realtimeClient?.sendPresenceNow();
+      }
+    },
+    onError: (_error) => {
+      state.realtimeConnected = false;
+      updateBrowserPanel();
+    },
+  });
+  state.realtimeClient.start();
+}
+
 async function sendPresence() {
   if (!state.meta) {
     return;
   }
   const now = Date.now();
-  if (now - state.lastPresenceAt < 4000) {
+  if (now - state.lastPresenceAt < 8000) {
     return;
   }
   state.lastPresenceAt = now;
 
-  const forward = new THREE.Vector3();
-  forward.copy(getFlatForwardVector(inputState.yaw));
+  const movementState = getRealtimeMovementState();
   try {
     await postJson(WORLD_API.presence, {
       viewerSessionId: state.viewerSessionId,
@@ -4625,10 +5592,7 @@ async function sendPresence() {
       position_y: Number(state.navigationPosition.y.toFixed(4)),
       position_z: Number(state.navigationPosition.z.toFixed(4)),
       heading_y: Number(inputState.yaw.toFixed(4)),
-      movement_state: {
-        forward: Number(forward.x.toFixed(4)),
-        lift: Number(state.navigationPosition.y.toFixed(4)),
-      },
+      movement_state: movementState,
     });
   } catch (_error) {
     // Presence is best-effort.
@@ -4901,6 +5865,10 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
       entry.lod.levels[1].distance = actorLod.proxyDistance;
       entry.lod.levels[1].hysteresis = actorLod.proxyHysteresis;
     }
+    if (entry.position && entry.targetPosition) {
+      entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 7.5));
+      entry.group.position.copy(entry.position);
+    }
     entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 1.2;
     entry.group.rotation.y += deltaSeconds * 0.24;
     if (entry.halo) {
@@ -4917,6 +5885,11 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
       entry.proxy.position.y = entry.proxyBaseY + Math.sin(elapsedSeconds * 1.1 + entry.phase) * 0.2;
       entry.proxy.material.opacity = 0.54;
     }
+    updateActorBubble(entry, deltaSeconds);
+  }
+
+  for (const entry of sceneState.animatedBrowserScreens) {
+    updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds);
   }
 
   if (sceneState.routeGuide) {
@@ -5331,10 +6304,125 @@ function onWheel(event) {
   syncCameraToFollowTarget();
 }
 
+function getActiveBrowserSessionId() {
+  return String(state.localBrowserSessionId ?? "").trim();
+}
+
+function mapPointerButton(button) {
+  if (button === 1) {
+    return "middle";
+  }
+  if (button === 2) {
+    return "right";
+  }
+  return "left";
+}
+
+function getBrowserViewportPoint(event) {
+  const rect = elements.browserStage?.getBoundingClientRect();
+  if (!rect) {
+    return null;
+  }
+  const config = getInteractionConfig();
+  return {
+    x: clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1) * config.browserViewportWidth,
+    y: clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1) * config.browserViewportHeight,
+  };
+}
+
+function sendBrowserInput(input) {
+  const sessionId = getActiveBrowserSessionId();
+  if (!sessionId || !state.realtimeClient?.isConnected()) {
+    return false;
+  }
+  return state.realtimeClient.sendBrowserInput(sessionId, input);
+}
+
+function normalizeBrowserKey(event) {
+  const aliases = {
+    " ": "Space",
+    Escape: "Escape",
+    Enter: "Enter",
+    Backspace: "Backspace",
+    Delete: "Delete",
+    Tab: "Tab",
+    ArrowUp: "ArrowUp",
+    ArrowDown: "ArrowDown",
+    ArrowLeft: "ArrowLeft",
+    ArrowRight: "ArrowRight",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
+  };
+  const baseKey = aliases[event.key] ?? event.key;
+  const modifiers = [];
+  if (event.ctrlKey && baseKey !== "Control") {
+    modifiers.push("Control");
+  }
+  if (event.altKey && baseKey !== "Alt") {
+    modifiers.push("Alt");
+  }
+  if (event.metaKey && baseKey !== "Meta") {
+    modifiers.push("Meta");
+  }
+  if (event.shiftKey && baseKey !== "Shift" && baseKey.length > 1) {
+    modifiers.push("Shift");
+  }
+  modifiers.push(baseKey);
+  return modifiers.filter(Boolean).join("+");
+}
+
+function launchSharedBrowser(rawUrl = elements.browserUrl?.value ?? "") {
+  if (!state.realtimeClient?.isConnected()) {
+    showToast("Realtime browser is offline.");
+    return;
+  }
+  const targetUrl = String(rawUrl ?? "").trim() || elements.browserUrl?.placeholder || "";
+  if (!targetUrl) {
+    showToast("Enter an allowlisted URL.");
+    return;
+  }
+  setBrowserStatus("Starting browser worker...");
+  state.realtimeClient.startBrowser(targetUrl);
+}
+
 function registerInput() {
   window.addEventListener("resize", resizeScene);
   window.addEventListener("keydown", (event) => {
-    if (["INPUT", "SELECT", "TEXTAREA"].includes(event.target?.tagName)) {
+    if (
+      event.key === "/"
+      && !event.ctrlKey
+      && !event.metaKey
+      && !event.altKey
+      && !isEditableTarget(event.target)
+      && !isBrowserStageFocused()
+    ) {
+      event.preventDefault();
+      openChatComposer();
+      return;
+    }
+    if (isBrowserStageFocused() && getActiveBrowserSessionId()) {
+      event.preventDefault();
+      const key = normalizeBrowserKey(event);
+      if (key) {
+        if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          sendBrowserInput({
+            kind: "key",
+            action: "type",
+            value: event.key,
+          });
+        } else {
+          sendBrowserInput({
+            kind: "key",
+            action: "press",
+            value: key,
+          });
+        }
+      }
+      return;
+    }
+    if (isEditableTarget(event.target)) {
       return;
     }
     const key = event.key.toLowerCase();
@@ -5343,10 +6431,14 @@ function registerInput() {
     }
     inputState.keys.add(key);
     if (key === "escape") {
+      closeChatComposer(true);
       closeSelectedPost();
     }
   });
   window.addEventListener("keyup", (event) => {
+    if (isEditableTarget(event.target) || isBrowserStageFocused()) {
+      return;
+    }
     const key = event.key.toLowerCase();
     if (MOVEMENT_KEYS.has(key)) {
       event.preventDefault();
@@ -5385,6 +6477,102 @@ function registerInput() {
     }
     clearSearchResults();
   });
+
+  elements.chatInput?.addEventListener("input", updateChatCounter);
+  elements.chatInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    event.preventDefault();
+    closeChatComposer(true);
+  });
+  elements.chatComposer?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = String(elements.chatInput?.value ?? "").trim();
+    if (!text) {
+      closeChatComposer(true);
+      return;
+    }
+    if (!state.realtimeClient?.sendChat(text)) {
+      showToast("Realtime chat is offline.");
+      return;
+    }
+    closeChatComposer(true);
+  });
+
+  elements.browserForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    launchSharedBrowser(elements.browserUrl?.value);
+  });
+  elements.browserLaunch?.addEventListener("click", () => {
+    launchSharedBrowser(elements.browserUrl?.value);
+  });
+  elements.browserStop?.addEventListener("click", () => {
+    const sessionId = getActiveBrowserSessionId();
+    if (sessionId) {
+      state.realtimeClient?.stopBrowser(sessionId);
+    }
+  });
+  elements.browserBack?.addEventListener("click", () => {
+    sendBrowserInput({ kind: "back" });
+  });
+  elements.browserForward?.addEventListener("click", () => {
+    sendBrowserInput({ kind: "forward" });
+  });
+  elements.browserReload?.addEventListener("click", () => {
+    sendBrowserInput({ kind: "reload" });
+  });
+  elements.browserStage?.addEventListener("pointerdown", (event) => {
+    elements.browserStage?.focus();
+    const point = getBrowserViewportPoint(event);
+    if (!point) {
+      return;
+    }
+    sendBrowserInput({
+      kind: "pointer",
+      action: "down",
+      x: Number(point.x.toFixed(2)),
+      y: Number(point.y.toFixed(2)),
+      button: mapPointerButton(event.button),
+    });
+  });
+  elements.browserStage?.addEventListener("pointermove", (event) => {
+    if (!event.buttons) {
+      return;
+    }
+    const point = getBrowserViewportPoint(event);
+    if (!point) {
+      return;
+    }
+    sendBrowserInput({
+      kind: "pointer",
+      action: "move",
+      x: Number(point.x.toFixed(2)),
+      y: Number(point.y.toFixed(2)),
+      button: mapPointerButton(event.button),
+    });
+  });
+  elements.browserStage?.addEventListener("pointerup", (event) => {
+    const point = getBrowserViewportPoint(event);
+    if (!point) {
+      return;
+    }
+    sendBrowserInput({
+      kind: "pointer",
+      action: "up",
+      x: Number(point.x.toFixed(2)),
+      y: Number(point.y.toFixed(2)),
+      button: mapPointerButton(event.button),
+    });
+  });
+  elements.browserStage?.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    sendBrowserInput({
+      kind: "wheel",
+      deltaX: Number(event.deltaX.toFixed(2)),
+      deltaY: Number(event.deltaY.toFixed(2)),
+    });
+  }, { passive: false });
 }
 
 function animate() {
@@ -5400,6 +6588,8 @@ function animate() {
   updateAnimatedObjects(deltaSeconds, elapsedSeconds);
   updateFocusVeil();
   updateCameraPanel();
+  pruneExpiredChatEvents();
+  state.realtimeClient?.tick();
   sendPresence();
   if (now - state.lastStreamCheckAt > 450) {
     state.lastStreamCheckAt = now;
@@ -5416,8 +6606,11 @@ async function bootstrapWorld() {
   registerInput();
   renderSelected(null);
   renderSearchResults();
+  updateChatCounter();
+  updateBrowserPanel();
   try {
     await loadMeta(true);
+    initRealtimeClient();
     positionCameraForWorldMeta();
     await loadStream(true);
     frameInitialViewFromStream();

@@ -1,5 +1,7 @@
+import http from "node:http";
 import { createApp } from "./create-app.js";
 import { loadConfig } from "./config.js";
+import { installRealtimeGateway } from "./lib/realtime-gateway.js";
 import { shouldRepairPublicWorld } from "./lib/moltbook-import.js";
 import { MauworldStore } from "./lib/supabase-store.js";
 
@@ -164,7 +166,14 @@ const app = createApp({
   getMoltbookImportJobStatus: getCuratedCorpusJobStatus,
 });
 
-app.listen(config.port, () => {
+const server = http.createServer(app);
+const realtimeGateway = installRealtimeGateway({
+  server,
+  config,
+  store,
+});
+
+server.listen(config.port, () => {
   console.log(`mauworld-api listening on :${config.port}`);
   if (shouldRunStartupMaintenance) {
     setTimeout(() => {
@@ -202,3 +211,9 @@ app.listen(config.port, () => {
     }, 500);
   }
 });
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    void realtimeGateway.dispose();
+  });
+}
