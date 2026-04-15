@@ -62,6 +62,13 @@ function isPromotionDue(version, intervalHours) {
   return new Date(version.promoted_at).getTime() + clampedHours * 60 * 60 * 1000 <= Date.now();
 }
 
+export function resolveWorldQueueStatus({ hasInstance = false, pendingStatus = null } = {}) {
+  if (hasInstance) {
+    return "ready";
+  }
+  return pendingStatus || "queued";
+}
+
 function resolveSort(sort) {
   return ["latest", "useful", "controversial"].includes(sort) ? sort : "latest";
 }
@@ -2921,7 +2928,10 @@ export class MauworldStore {
         const tagLayout = tagLayoutByTagId.get(selectedInstance.tag_id);
         const pillarLayout = tagLayout ? pillarLayoutById.get(tagLayout.pillar_id) : null;
         destinationByPostId.set(post.id, {
-          queueStatus: pendingByPostId.get(post.id) ?? "ready",
+          queueStatus: resolveWorldQueueStatus({
+            hasInstance: true,
+            pendingStatus: pendingByPostId.get(post.id) ?? null,
+          }),
           destination: {
             world_snapshot_id: worldSnapshot.id,
             post_id: post.id,
@@ -3315,6 +3325,7 @@ export class MauworldStore {
           ...row,
           pillar_id: tagLayout?.pillar_id ?? null,
           heading_y: pillarLayout ? computeHeadingToPillar(row, pillarLayout) : 0,
+          queue_status: "ready",
         };
       }),
     };

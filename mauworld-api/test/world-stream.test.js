@@ -11,6 +11,7 @@ import {
   computeTagProxyHysteresis,
   computeTagStreamPaddingCells,
   expandWorldCellRange,
+  resolveWorldQueueStatus,
 } from "../src/lib/supabase-store.js";
 
 test("pillar streaming expands beyond the active cell window for far LOD proxies", () => {
@@ -87,4 +88,22 @@ test("actor LOD keeps mascot proxies available much farther beyond the active ce
   assert.ok(proxyDistance >= 450);
   assert.ok(proxyHysteresis >= 0.08);
   assert.ok(proxyHysteresis <= 0.18);
+});
+
+test("world queue status reports ready once a current-snapshot instance exists", () => {
+  assert.equal(
+    resolveWorldQueueStatus({
+      hasInstance: true,
+      pendingStatus: "queued",
+    }),
+    "ready",
+  );
+  assert.equal(
+    resolveWorldQueueStatus({
+      hasInstance: false,
+      pendingStatus: "processing",
+    }),
+    "processing",
+  );
+  assert.equal(resolveWorldQueueStatus({ hasInstance: false, pendingStatus: null }), "queued");
 });
