@@ -710,6 +710,23 @@ function formatQueueLabel(status) {
   return "Live in world";
 }
 
+function resolveResultQueueStatus(result) {
+  if (result?.destination) {
+    return "ready";
+  }
+  return result?.worldQueueStatus || "queued";
+}
+
+function normalizeWorldResult(result) {
+  if (!result) {
+    return result;
+  }
+  return {
+    ...result,
+    worldQueueStatus: resolveResultQueueStatus(result),
+  };
+}
+
 async function postJson(path, body) {
   const response = await fetch(mauworldApiUrl(path), {
     method: "POST",
@@ -3118,6 +3135,7 @@ function hasNewerPostForFocusedNode(result) {
 function syncFocusedGhost() {
   clearFocusGhost();
   const result = state.focusedResult;
+  const queueStatus = resolveResultQueueStatus(result);
   sceneState.visitorSystem?.syncQueuedResult(result, {
     interrupted: hasPresenceCheckingFocusedPost(result) || hasNewerPostForFocusedNode(result),
   });
@@ -3125,7 +3143,7 @@ function syncFocusedGhost() {
     return;
   }
   const shouldGhost =
-    result.worldQueueStatus !== "ready"
+    queueStatus !== "ready"
     || result.destination.display_tier === "hidden"
     || !hasVisibleFocusedPost(result);
   if (!shouldGhost) {
@@ -3133,7 +3151,7 @@ function syncFocusedGhost() {
   }
 
   const post = result.post ?? {};
-  const accent = result.worldQueueStatus === "ready" ? WORLD_STYLE.accents[1] : WORLD_STYLE.accents[0];
+  const accent = queueStatus === "ready" ? WORLD_STYLE.accents[1] : WORLD_STYLE.accents[0];
   const group = new THREE.Group();
   group.position.set(
     result.destination.position_x,
@@ -3146,7 +3164,7 @@ function syncFocusedGhost() {
   const card = createBillboard(
     createCompactCardTexture(
       post.title || truncateText(post.body_plain || "Post", 26),
-      result.worldQueueStatus === "ready" ? "Revealed from hidden tier" : "Queued for world placement",
+      queueStatus === "ready" ? "Revealed from hidden tier" : "Queued for world placement",
       {
         width: 640,
         height: 200,
@@ -4130,11 +4148,12 @@ function renderSelected(result) {
   const fullBody = renderFullPostBody(post.body_md, post.body_plain);
   const tagSummary = post.tags?.slice(0, 5).map((tag) => `#${tag.label}`).join(" ") || "No visible tags";
   const postHref = post.id ? `/social/post.html?id=${encodeURIComponent(post.id)}` : "";
+  const queueStatus = resolveResultQueueStatus(result);
   elements.focusKind.textContent = result.destination ? "Post" : "Queued";
   elements.selected.innerHTML = `
     <div class="world-selected__meta">
       <span class="world-chip">${htmlEscape(post.source_mode?.replaceAll("_", " ") || "post")}</span>
-      <span class="world-chip ${result.worldQueueStatus === "ready" ? "world-chip--ready" : "world-chip--queue"}">${htmlEscape(formatQueueLabel(result.worldQueueStatus))}</span>
+      <span class="world-chip ${queueStatus === "ready" ? "world-chip--ready" : "world-chip--queue"}">${htmlEscape(formatQueueLabel(queueStatus))}</span>
       <span class="world-chip">${htmlEscape(post.pillar?.title || "Unassigned pillar")}</span>
     </div>
     <div class="world-selected__title">${htmlEscape(post.title || truncateText(post.body_plain || "Post", 80))}</div>
@@ -4153,7 +4172,7 @@ function renderSelected(result) {
 }
 
 function focusOnDestination(result) {
-  startGuidedTravel(result);
+  startGuidedTravel(normalizeWorldResult(result));
 }
 
 function renderSearchResults() {
@@ -4175,6 +4194,7 @@ function renderSearchResults() {
       const post = hit.post ?? {};
       const isActive = state.activeResultId === post.id;
       const summary = summarizeBodyMarkdown(post.body_md, post.body_plain, 120);
+      const queueStatus = resolveResultQueueStatus(hit);
       const metaBits = [
         post.tags?.slice(0, 2).map((tag) => `#${tag.label}`).join(" ") || post.pillar?.title || "",
         post.created_at ? formatRelativeTime(post.created_at) : "now",
@@ -4185,7 +4205,7 @@ function renderSearchResults() {
           <p class="world-result__body">${htmlEscape(summary)}</p>
           <div class="world-result__meta">
             ${metaBits.map((entry) => `<span>${htmlEscape(entry)}</span>`).join("")}
-            ${hit.worldQueueStatus === "ready" ? "" : `<span class="world-chip world-chip--queue">${htmlEscape(formatQueueLabel(hit.worldQueueStatus))}</span>`}
+            ${queueStatus === "ready" ? "" : `<span class="world-chip world-chip--queue">${htmlEscape(formatQueueLabel(queueStatus))}</span>`}
           </div>
         </button>
       `;
@@ -4306,10 +4326,14 @@ async function runSearch() {
       sort: formData.get("sort") || "latest",
       limit: 12,
     });
-    state.searchPayload = payload;
-    if (!state.activeResultId && payload.hits[0]?.post?.id) {
-      state.activeResultId = payload.hits[0].post.id;
-      renderSelected(payload.hits[0]);
+    const normalizedPayload = {
+      ...payload,
+      hits: (payload.hits ?? []).map((hit) => normalizeWorldResult(hit)),
+    };
+    state.searchPayload = normalizedPayload;
+    if (!state.activeResultId && normalizedPayload.hits[0]?.post?.id) {
+      state.activeResultId = normalizedPayload.hits[0].post.id;
+      renderSelected(normalizedPayload.hits[0]);
     }
     renderSearchResults();
     setSearchStatus("");
