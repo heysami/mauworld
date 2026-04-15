@@ -166,6 +166,8 @@ const sceneState = {
   floorMarker: null,
 };
 
+const billboardParentQuaternion = new THREE.Quaternion();
+
 const inputState = {
   keys: new Set(),
   pointerDown: false,
@@ -1409,6 +1411,19 @@ function unregisterBillboardsInGroup(root, persistent = false) {
   root.traverse((node) => {
     unregisterBillboard(node, persistent);
   });
+}
+
+function syncBillboardToCamera(mesh) {
+  if (!mesh || !sceneState.camera) {
+    return;
+  }
+  const parent = mesh.parent;
+  if (!parent) {
+    mesh.quaternion.copy(sceneState.camera.quaternion);
+    return;
+  }
+  parent.getWorldQuaternion(billboardParentQuaternion);
+  mesh.quaternion.copy(billboardParentQuaternion).invert().multiply(sceneState.camera.quaternion);
 }
 
 function createBillboard(texture, width, height, options = {}) {
@@ -4645,7 +4660,7 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   sceneState.visitorSystem?.update(deltaSeconds, elapsedSeconds);
 
   for (const mesh of [...sceneState.billboards, ...sceneState.persistentBillboards]) {
-    mesh.quaternion.copy(sceneState.camera.quaternion);
+    syncBillboardToCamera(mesh);
   }
 }
 
