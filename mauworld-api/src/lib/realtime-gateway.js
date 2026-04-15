@@ -330,6 +330,13 @@ export class RealtimeGateway {
           type: "browser:session",
           session,
         });
+        const deliveryMode = session.subscribers?.has(client.viewerSessionId) ? "full" : "placeholder";
+        client.browserModes.set(session.sessionId ?? session.id, deliveryMode);
+        sendJson(client, {
+          type: deliveryMode === "full" ? "browser:subscribe" : "browser:unsubscribe",
+          sessionId: session.sessionId ?? session.id,
+          hostSessionId: session.hostSessionId,
+        });
       }
     }
 
