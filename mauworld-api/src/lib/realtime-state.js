@@ -42,6 +42,16 @@ export function sanitizeChatText(input, maxChars = DEFAULT_CHAT_MAX_CHARS) {
   return normalized.slice(0, Math.max(1, maxChars));
 }
 
+export function isEmojiOnlyChatText(input) {
+  const compact = String(input ?? "")
+    .trim()
+    .replace(/\s+/gu, "");
+  if (!compact) {
+    return false;
+  }
+  return /^(?:\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)+$/u.test(compact);
+}
+
 export function sanitizeViewerDisplayName(input, fallback = DEFAULT_VIEWER_NAME, maxChars = DEFAULT_VIEWER_NAME_MAX_CHARS) {
   const normalized = String(input ?? "")
     .replace(/[\u0000-\u001f\u007f]/g, " ")
@@ -139,45 +149,51 @@ function pruneWindow(timestamps, now, windowMs) {
   }
 }
 
-export function checkChatRateLimit(state = {}, now = Date.now()) {
-  const fastWindow = state.fastWindow ?? [];
-  const burstWindow = state.burstWindow ?? [];
+export function checkChatRateLimit(state = {}, input = {}) {
+  const now = Number(input?.now ?? input) || Date.now();
+  const emojiOnly = isEmojiOnlyChatText(input?.text ?? "");
+  const rapidWindow = state.rapidWindow ?? [];
+  const textWindow = state.textWindow ?? [];
   const minuteWindow = state.minuteWindow ?? [];
-  state.fastWindow = fastWindow;
-  state.burstWindow = burstWindow;
+  state.rapidWindow = rapidWindow;
+  state.textWindow = textWindow;
   state.minuteWindow = minuteWindow;
 
-  pruneWindow(fastWindow, now, 2000);
-  pruneWindow(burstWindow, now, 10000);
+  pruneWindow(rapidWindow, now, 500);
+  pruneWindow(textWindow, now, 1000);
   pruneWindow(minuteWindow, now, 60000);
 
-  if (fastWindow.length >= 1) {
+  if (rapidWindow.length >= 1) {
     return {
       allowed: false,
-      reason: "Chat is limited to one message every 2 seconds.",
+      reason: emojiOnly
+        ? "Quick reactions are limited to one every 0.5 seconds."
+        : "Chat is limited to one message every 0.5 seconds.",
     };
   }
-  if (burstWindow.length >= 3) {
+  if (!emojiOnly && textWindow.length >= 1) {
     return {
       allowed: false,
-      reason: "Chat burst limit reached. Please wait a moment.",
+      reason: "Text chat is limited to one message every 1 second.",
     };
   }
-  if (minuteWindow.length >= 20) {
+  if (minuteWindow.length >= 40) {
     return {
       allowed: false,
       reason: "Chat minute limit reached. Please slow down.",
     };
   }
 
-  fastWindow.push(now);
-  burstWindow.push(now);
+  rapidWindow.push(now);
+  if (!emojiOnly) {
+    textWindow.push(now);
+  }
   minuteWindow.push(now);
   return {
     allowed: true,
     state: {
-      fastWindow,
-      burstWindow,
+      rapidWindow,
+      textWindow,
       minuteWindow,
     },
   };

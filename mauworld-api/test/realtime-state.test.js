@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildViewerPresencePayload,
   checkChatRateLimit,
+  isEmojiOnlyChatText,
   normalizeInteractionSettings,
   sanitizeChatText,
   sanitizeViewerDisplayName,
@@ -29,6 +30,13 @@ test("chat sanitization trims control characters and caps length", () => {
   assert.equal(sanitizeChatText("\u0000\u0007  "), "");
 });
 
+test("emoji-only chat detection distinguishes reactions from text", () => {
+  assert.equal(isEmojiOnlyChatText("❤️"), true);
+  assert.equal(isEmojiOnlyChatText("👍 👍"), true);
+  assert.equal(isEmojiOnlyChatText("hello"), false);
+  assert.equal(isEmojiOnlyChatText("🔥 ok"), false);
+});
+
 test("viewer display names trim whitespace and control characters", () => {
   assert.equal(sanitizeViewerDisplayName("  samia\t\n"), "samia");
   assert.equal(sanitizeViewerDisplayName("\u0000\u0007", "visitor 1234"), "visitor 1234");
@@ -51,22 +59,22 @@ test("nearest recipients are deterministic by distance then session id", () => {
   assert.deepEqual(recipients, ["viewer_a", "viewer_b", "viewer_c"]);
 });
 
-test("chat rate limit enforces fast, burst, and minute windows", () => {
-  const state = {};
+test("chat rate limit allows faster emoji reactions than text", () => {
   const startedAt = 1000;
+  const emojiState = {};
+  const textState = {};
+  const minuteState = {};
 
-  assert.equal(checkChatRateLimit(state, startedAt).allowed, true);
-  assert.equal(checkChatRateLimit(state, startedAt + 100).allowed, false);
+  assert.equal(checkChatRateLimit(emojiState, { now: startedAt, text: "❤️" }).allowed, true);
+  assert.equal(checkChatRateLimit(emojiState, { now: startedAt + 300, text: "🔥" }).allowed, false);
+  assert.equal(checkChatRateLimit(emojiState, { now: startedAt + 600, text: "🔥" }).allowed, true);
 
-  state.fastWindow = [];
-  state.burstWindow = [startedAt - 1000, startedAt - 900, startedAt - 800];
-  state.minuteWindow = [startedAt - 1000, startedAt - 900, startedAt - 800];
-  assert.equal(checkChatRateLimit(state, startedAt + 1200).allowed, false);
+  assert.equal(checkChatRateLimit(textState, { now: startedAt, text: "hello" }).allowed, true);
+  assert.equal(checkChatRateLimit(textState, { now: startedAt + 600, text: "again" }).allowed, false);
+  assert.equal(checkChatRateLimit(textState, { now: startedAt + 1100, text: "again" }).allowed, true);
 
-  state.fastWindow = [];
-  state.burstWindow = [];
-  state.minuteWindow = Array.from({ length: 20 }, (_, index) => startedAt + index);
-  assert.equal(checkChatRateLimit(state, startedAt + 2000).allowed, false);
+  minuteState.minuteWindow = Array.from({ length: 40 }, (_, index) => startedAt + index);
+  assert.equal(checkChatRateLimit(minuteState, { now: startedAt + 2000, text: "❤️" }).allowed, false);
 });
 
 test("presence payload exposes viewer identity and position", () => {

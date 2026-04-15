@@ -393,7 +393,10 @@ export class RealtimeGateway {
     if (!text) {
       return;
     }
-    const rateLimit = checkChatRateLimit(client.rateLimit, Date.now());
+    const rateLimit = checkChatRateLimit(client.rateLimit, {
+      now: Date.now(),
+      text,
+    });
     client.rateLimit = rateLimit.state ?? client.rateLimit;
     if (!rateLimit.allowed) {
       sendJson(client, {
