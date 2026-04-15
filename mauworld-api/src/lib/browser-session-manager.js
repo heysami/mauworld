@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +9,7 @@ const LIVEKIT_CLIENT_UMD_PATH = fileURLToPath(
   new URL("../../node_modules/livekit-client/dist/livekit-client.umd.js", import.meta.url),
 );
 const PAGE_AUDIO_RELAY_PATH = fileURLToPath(new URL("./browser-page-audio-relay.js", import.meta.url));
+const PLAYWRIGHT_CLI_PATH = fileURLToPath(new URL("../../node_modules/playwright/cli.js", import.meta.url));
 
 function normalizeAllowedHosts(hosts = []) {
   const normalized = Array.from(hosts ?? [])
@@ -48,6 +50,40 @@ async function loadPlaywrightModule() {
   }
 }
 
+function isMissingExecutableError(error) {
+  return /Executable doesn't exist/i.test(String(error?.message ?? ""));
+}
+
+function installLocalPlaywrightBrowser() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [PLAYWRIGHT_CLI_PATH, "install", "chromium", "--only-shell"],
+      {
+        env: {
+          ...process.env,
+          PLAYWRIGHT_BROWSERS_PATH: "0",
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const message = stderr.trim() || `Playwright install exited with code ${code}.`;
+      reject(new Error(message));
+    });
+  });
+}
+
 export class BrowserSessionManager extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -63,6 +99,7 @@ export class BrowserSessionManager extends EventEmitter {
     this.defaultFrameTransport = this.liveKitEnabled ? "livekit-canvas" : "jpeg-sequence";
     this.sessions = new Map();
     this.browserByKind = new Map();
+    this.browserInstallPromise = null;
   }
 
   listSessionsForWorld(worldSnapshotId) {
@@ -86,14 +123,29 @@ export class BrowserSessionManager extends EventEmitter {
     if (!launcher) {
       throw new Error(`Playwright browser kind "${kind}" is not available.`);
     }
-    const browser = await launcher.launch({
+    const launchOptions = {
       headless: true,
       args: [
         "--autoplay-policy=no-user-gesture-required",
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
       ],
-    });
+    };
+    let browser;
+    try {
+      browser = await launcher.launch(launchOptions);
+    } catch (error) {
+      if (!isMissingExecutableError(error)) {
+        throw error;
+      }
+      if (!this.browserInstallPromise) {
+        this.browserInstallPromise = installLocalPlaywrightBrowser().finally(() => {
+          this.browserInstallPromise = null;
+        });
+      }
+      await this.browserInstallPromise;
+      browser = await launcher.launch(launchOptions);
+    }
     this.browserByKind.set(kind, browser);
     return browser;
   }
