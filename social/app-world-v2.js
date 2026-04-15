@@ -3161,15 +3161,17 @@ function syncFocusedGhost() {
 
   const ghostCardWidth = 15.5;
   const ghostCardHeight = ghostCardWidth * (200 / 640);
+  const ghostSubtitle = queueStatus === "ready" ? "" : "Queued for world placement";
   const card = createBillboard(
     createCompactCardTexture(
       post.title || truncateText(post.body_plain || "Post", 26),
-      queueStatus === "ready" ? "Revealed from hidden tier" : "Queued for world placement",
+      ghostSubtitle,
       {
         width: 640,
         height: 200,
         accent,
         background: "rgba(255, 255, 255, 0.94)",
+        titleLines: ghostSubtitle ? 1 : 2,
       },
     ),
     ghostCardWidth,
