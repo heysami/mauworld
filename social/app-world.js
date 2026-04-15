@@ -2148,8 +2148,12 @@ function isClickablePayloadPickable(payload) {
   if (payload.type === "browser-screen") {
     const sessionId = String(payload.data?.sessionId ?? "").trim();
     const entry = sceneState.browserScreenEntries.get(sessionId);
+    const session = state.browserSessions.get(sessionId);
+    const hostSessionId = String(session?.hostSessionId ?? entry?.hostSessionId ?? "").trim();
     return Boolean(
       entry
+      && hostSessionId
+      && hostSessionId !== state.viewerSessionId
       && entry.group.visible
       && entry.deliveryMode === "full"
       && (entry.videoTexture || entry.currentFrameId > 0),
@@ -5088,6 +5092,9 @@ function focusBrowserScreen(sessionId) {
     return false;
   }
   const session = state.browserSessions.get(key);
+  if (session?.hostSessionId === state.viewerSessionId) {
+    return false;
+  }
   const focusView = computeFocusedBrowserView(key, getNavigationPosition());
   if (!focusView) {
     return false;
