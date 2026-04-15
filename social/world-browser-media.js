@@ -134,7 +134,6 @@ export function createBrowserMediaController(options = {}) {
     audioVolumes: new Map(),
     audioElements: new Map(),
     audioContext: null,
-    audioGraphs: new Map(),
     useAudioGraph: isAppleMobileWebKit() && Boolean(getAudioContextConstructor()),
   };
 
@@ -213,31 +212,16 @@ export function createBrowserMediaController(options = {}) {
     return context.state === "running" ? context : null;
   }
 
-  function ensureAudioGraph(entry) {
-    if (!state.useAudioGraph || entry?.kind !== "audio" || !entry.element) {
-      return null;
+  async function startRoomAudioPlayback() {
+    if (!state.room?.startAudio) {
+      return false;
     }
-    const existing = state.audioGraphs.get(entry.sessionId);
-    if (existing) {
-      return existing;
-    }
-    const context = state.audioContext;
-    if (!context || context.state !== "running") {
-      return null;
-    }
-    let source = null;
     try {
-      source = context.createMediaElementSource(entry.element);
+      await state.room.startAudio();
+      return true;
     } catch (_error) {
-      return state.audioGraphs.get(entry.sessionId) ?? null;
+      return false;
     }
-    const gain = context.createGain();
-    gain.gain.value = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
-    source.connect(gain);
-    gain.connect(context.destination);
-    const graph = { context, source, gain };
-    state.audioGraphs.set(entry.sessionId, graph);
-    return graph;
   }
 
   function applyAudioOutputState(entry) {
@@ -246,29 +230,48 @@ export function createBrowserMediaController(options = {}) {
     }
     const volume = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
     const shouldMute = volume <= 0.001;
-    const graph = ensureAudioGraph(entry);
-    if (graph) {
-      entry.element.muted = false;
-      entry.element.defaultMuted = false;
-      entry.element.volume = 1;
-      graph.gain.gain.value = volume;
-      return;
+    const canUseLiveKitAudioContext = Boolean(
+      state.useAudioGraph
+      && state.audioContext?.state === "running"
+      && typeof entry.track?.setAudioContext === "function"
+      && typeof entry.track?.setVolume === "function",
+    );
+    if (canUseLiveKitAudioContext) {
+      try {
+        entry.track.setAudioContext(state.audioContext);
+        entry.track.setVolume(volume);
+        entry.element.muted = true;
+        entry.element.defaultMuted = true;
+        entry.element.volume = 0;
+        return;
+      } catch (_error) {
+        // Fall through to plain element volume if the SDK hook is unavailable.
+      }
+    }
+    if (typeof entry.track?.setAudioContext === "function") {
+      try {
+        entry.track.setAudioContext(undefined);
+      } catch (_error) {
+        // Best effort.
+      }
+    }
+    if (typeof entry.track?.setVolume === "function") {
+      try {
+        entry.track.setVolume(volume);
+      } catch (_error) {
+        entry.element.volume = volume;
+      }
+    } else {
+      entry.element.volume = volume;
     }
     entry.element.muted = shouldMute ? true : false;
     entry.element.defaultMuted = shouldMute ? true : false;
-    entry.element.volume = volume;
   }
 
   function disposeAudioSession(sessionId) {
     const key = String(sessionId ?? "").trim();
     if (!key) {
       return;
-    }
-    const graph = state.audioGraphs.get(key);
-    if (graph) {
-      graph.source.disconnect();
-      graph.gain.disconnect();
-      state.audioGraphs.delete(key);
     }
     const element = state.audioElements.get(key);
     if (element) {
@@ -357,6 +360,17 @@ export function createBrowserMediaController(options = {}) {
       clearRemoteTrack(parsed.sessionId, parsed.kind, false);
       let element = null;
       if (parsed.kind === "audio") {
+        if (
+          state.useAudioGraph
+          && state.audioContext?.state === "running"
+          && typeof track?.setAudioContext === "function"
+        ) {
+          try {
+            track.setAudioContext(state.audioContext);
+          } catch (_error) {
+            // Best effort.
+          }
+        }
         element = getOrCreateAudioElement(parsed.sessionId);
         try {
           track.attach(element);
@@ -713,6 +727,7 @@ export function createBrowserMediaController(options = {}) {
           : ["audio", "video"],
       );
       if (kinds.has("audio")) {
+        await startRoomAudioPlayback();
         await resumeAudioContext();
       }
       const entries = [...state.remoteTracks.values()].filter((entry) => {
