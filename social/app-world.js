@@ -5896,6 +5896,7 @@ function updateBrowserPanel() {
   const frameUrl = localSession?.lastFrameDataUrl ?? "";
   const hasActiveBrowserMedia = Boolean(previewStream || hasRemotePanelVideo || hasRemotePanelSession || frameUrl);
   elements.browserStage?.classList.toggle("is-active", hasActiveBrowserMedia);
+  elements.browserStage?.classList.toggle("needs-video-start", needsManualPlaybackStart);
   if (!state.realtimeConnected) {
     setBrowserStatus("Realtime share offline.");
   } else if (state.pendingBrowserShare) {

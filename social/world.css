@@ -611,6 +611,14 @@ body.is-world-loading .world-panel {
   text-align: center;
 }
 
+.world-browser-stage.is-active .world-browser-stage__placeholder {
+  display: none;
+}
+
+.world-browser-stage.is-active.needs-video-start .world-browser-stage__placeholder {
+  display: grid;
+}
+
 .world-browser-stage__resume {
   position: absolute;
   left: 50%;
