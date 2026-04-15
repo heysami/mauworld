@@ -74,8 +74,8 @@ function buildComponentKey(tags) {
 }
 
 function buildPillarTitle(coreTags) {
-  const labels = coreTags.slice(0, 3).map((entry) => entry.tag.label);
-  return labels.length > 0 ? labels.join(" / ") : "Untitled Pillar";
+  const primaryLabel = coreTags[0]?.tag?.label;
+  return primaryLabel || "Untitled Pillar";
 }
 
 function buildPillarSlug(coreTags, componentKey) {

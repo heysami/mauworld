@@ -25,6 +25,7 @@ test("computePillarGraph groups connected tags and marks top core tags", () => {
   const largestTags = result.pillarTags.filter((row) => row.pillar_id === largest.id);
   assert.equal(largestTags.length, 3);
   assert.equal(largestTags.filter((row) => row.is_core).length, 2);
+  assert.equal(largest.title, "TypeScript");
 });
 
 test("computePillarGraph keeps related pillars separate from membership", () => {
