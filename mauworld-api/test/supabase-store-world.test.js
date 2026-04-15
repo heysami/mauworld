@@ -478,3 +478,57 @@ test("rebuildWorldSnapshotForVersion batches large post tag lookups", async () =
   assert.equal(result.worldSnapshot.status, "ready");
   assert.equal(state.tables.world_post_instances.length, postCount);
 });
+
+test("applyCurrentOrganizationAssignments batches post counter recomputes", async () => {
+  const postCount = 51;
+  const state = {
+    tables: {
+      tags: [
+        {
+          id: "tag_1",
+          pillar_id: null,
+          pillar_rank: null,
+          is_pillar_core: false,
+        },
+      ],
+      posts: Array.from({ length: postCount }, (_, index) => ({
+        id: `post_${index + 1}`,
+      })),
+    },
+    queryLog: [],
+  };
+
+  let activeCalls = 0;
+  let maxActiveCalls = 0;
+  const recomputedPostIds = [];
+  const fakeStore = {
+    serviceClient: createFakeServiceClient(state),
+    async recomputeDerivedCounts(postId) {
+      recomputedPostIds.push(postId);
+      activeCalls += 1;
+      maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      activeCalls -= 1;
+    },
+  };
+
+  await MauworldStore.prototype.applyCurrentOrganizationAssignments.call(
+    fakeStore,
+    {
+      tagAssignments: [
+        {
+          tag_id: "tag_1",
+          pillar_id: "pillar_placeholder",
+          pillar_rank: 1,
+          is_pillar_core: true,
+        },
+      ],
+    },
+    new Map([["pillar_placeholder", "pillar_1"]]),
+  );
+
+  assert.equal(recomputedPostIds.length, postCount);
+  assert.equal(new Set(recomputedPostIds).size, postCount);
+  assert.equal(state.tables.tags[0].pillar_id, "pillar_1");
+  assert.ok(maxActiveCalls <= 25);
+});

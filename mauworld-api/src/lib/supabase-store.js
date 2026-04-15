@@ -423,6 +423,7 @@ function dedupeStringList(values) {
 }
 
 const SUPABASE_IN_FILTER_BATCH_SIZE = 100;
+const DERIVED_POST_COUNTER_BATCH_SIZE = 25;
 
 async function loadRowsByInBatches(serviceClient, {
   table,
@@ -448,6 +449,16 @@ async function loadRowsByInBatches(serviceClient, {
     rows.push(...await must(query, message));
   }
   return rows;
+}
+
+async function runByBatches(items, worker, {
+  batchSize = DERIVED_POST_COUNTER_BATCH_SIZE,
+} = {}) {
+  const rows = Array.isArray(items) ? items : [];
+  for (let index = 0; index < rows.length; index += batchSize) {
+    const batch = rows.slice(index, index + batchSize);
+    await Promise.all(batch.map((item, batchIndex) => worker(item, index + batchIndex)));
+  }
 }
 
 function queueBackgroundWorldRepair(store, { version, settings }) {
@@ -1573,7 +1584,9 @@ export class MauworldStore {
       this.serviceClient.from("posts").select("id"),
       "Could not load posts for pillar backfill",
     );
-    await Promise.all(postIds.map((post) => this.recomputeDerivedCounts(post.id)));
+    await runByBatches(postIds, async (post) => {
+      await this.recomputeDerivedCounts(post.id);
+    });
   }
 
   async createLinkCodes(input) {
