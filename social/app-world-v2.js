@@ -546,6 +546,19 @@ function isCellWithinWindow(cellX, cellZ, window = state.activeCellWindow) {
   );
 }
 
+function expandCellWindow(window = state.activeCellWindow, padding = 0) {
+  if (!window) {
+    return null;
+  }
+  const extra = Math.max(0, Math.floor(Number(padding) || 0));
+  return {
+    cell_x_min: window.cell_x_min - extra,
+    cell_x_max: window.cell_x_max + extra,
+    cell_z_min: window.cell_z_min - extra,
+    cell_z_max: window.cell_z_max + extra,
+  };
+}
+
 function getPillarCacheKey(entry) {
   return String(entry?.pillar_id ?? "");
 }
@@ -4664,6 +4677,7 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   const pillarLod = getPillarLodSettings();
   const tagLod = getTagLodSettings();
   const actorLod = getActorLodSettings();
+  const pillarActiveWindow = expandCellWindow(state.activeCellWindow, getPillarRenderPadding());
   const retainedDistance = farDistance * WORLD_STREAM.fogMultiplier;
   const focusedDestination = state.focusedResult?.destination;
   const focusIsolation = clamp(state.postFocusMix / 0.62, 0, 1);
@@ -4747,7 +4761,7 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     }
     entry.lod?.update(sceneState.camera);
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
-    const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
+    const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ, pillarActiveWindow);
     const fade = 1 - clamp((distance - nearDistance * 0.4) / Math.max(1, retainedDistance - nearDistance * 0.4), 0, 1);
     const worldMix = activeCell ? 1 : 0.42;
     entry.body.material.opacity = (0.28 + fade * 0.68) * worldMix;
