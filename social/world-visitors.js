@@ -341,9 +341,20 @@ function classifyEmotionEnergy(emotion) {
 }
 
 function buildActor(system, seed, root, options = {}) {
+  const actorLod = typeof system.getActorLodSettings === "function"
+    ? system.getActorLodSettings()
+    : null;
   const mascot = system.createMascotFigure(seed, {
     scale: options.scale ?? 0.72,
     outlineColor: options.outlineColor ?? system.pickAccent(seed, 2),
+    lod: actorLod
+      ? {
+        enabled: true,
+        autoUpdate: true,
+        distance: actorLod.proxyDistance,
+        hysteresis: actorLod.proxyHysteresis,
+      }
+      : undefined,
   });
   root.add(mascot.group);
   const actor = {
@@ -354,6 +365,9 @@ function buildActor(system, seed, root, options = {}) {
     halo: mascot.halo,
     orb: mascot.orb,
     orbBaseY: mascot.orb.position.y,
+    lod: mascot.lod,
+    proxy: mascot.proxy,
+    proxyBaseY: mascot.proxyBaseY,
     materialEntries: collectMaterialEntries(mascot.group),
     bubble: createBubbleMesh(system, seed, root),
     position: new THREE.Vector3(),
@@ -533,6 +547,9 @@ function disposeActor(system, actor) {
     actor.bubble.mesh.geometry.dispose();
     actor.bubble.mesh.material.dispose();
   }
+  actor.group.traverse((node) => {
+    system.unregisterBillboard?.(node);
+  });
   actor.group.parent?.remove(actor.group);
   disposeObject3D(actor.group);
 }
@@ -1154,6 +1171,7 @@ export function createWorldVisitorSystem(options = {}) {
     ambientRoot: options.ambientRoot,
     queuedRoot: options.queuedRoot,
     createMascotFigure: options.createMascotFigure,
+    getActorLodSettings: options.getActorLodSettings,
     createBillboard: options.createBillboard,
     unregisterBillboard: options.unregisterBillboard,
     pickAccent: options.pickAccent,

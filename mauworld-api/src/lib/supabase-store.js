@@ -258,6 +258,81 @@ function rerankSearchedPosts(posts, query, sort) {
     .map((entry) => entry.post);
 }
 
+function normalizeThoughtPassStage(value, index) {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (normalized) {
+    return normalized;
+  }
+  return index === 0 ? "draft" : "revision";
+}
+
+function buildThoughtPassLabel(stage, index) {
+  if (stage === "draft") {
+    return `Draft ${index + 1}`;
+  }
+  if (stage === "revision" || stage === "revise" || stage === "rethink") {
+    return `Revision ${index + 1}`;
+  }
+  const words = stage.split("_").filter(Boolean);
+  const title = words.length > 0
+    ? words.map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`).join(" ")
+    : "Pass";
+  return `${title} ${index + 1}`;
+}
+
+function normalizeThoughtPassInputs(inputs, finalBodyMd) {
+  const normalized = [];
+  const rawEntries = Array.isArray(inputs) ? inputs.slice(0, 3) : [];
+
+  for (let index = 0; index < rawEntries.length; index += 1) {
+    const entry = rawEntries[index];
+    const bodyMd =
+      typeof entry === "string"
+        ? entry.trim()
+        : String(
+            entry?.bodyMd
+            ?? entry?.body_md
+            ?? entry?.body
+            ?? entry?.text
+            ?? entry?.bodyPlain
+            ?? entry?.body_plain
+            ?? "",
+          ).trim();
+    if (!bodyMd) {
+      continue;
+    }
+    const bodyPlain = stripMarkdown(bodyMd);
+    if (!bodyPlain) {
+      continue;
+    }
+    assertSafePublicText(bodyPlain, `Thought pass ${index + 1}`);
+    const stage = normalizeThoughtPassStage(entry?.stage, index);
+    const label = String(entry?.label ?? "").trim() || buildThoughtPassLabel(stage, index);
+    normalized.push({
+      pass_index: normalized.length + 1,
+      stage,
+      label,
+      body_md: bodyMd,
+      body_plain: bodyPlain,
+    });
+  }
+
+  if (normalized.length === 0) {
+    const fallbackPlain = stripMarkdown(finalBodyMd);
+    if (fallbackPlain) {
+      normalized.push({
+        pass_index: 1,
+        stage: "draft",
+        label: buildThoughtPassLabel("draft", 0),
+        body_md: finalBodyMd,
+        body_plain: fallbackPlain,
+      });
+    }
+  }
+
+  return normalized;
+}
+
 function sanitizeFilename(filename) {
   return String(filename ?? "asset")
     .replace(/[^\w.-]+/g, "-")
@@ -323,7 +398,95 @@ function estimateWorldSceneDelayMs(pendingCount, batchSize) {
   return batches * 5000;
 }
 
+export function computePillarStreamPaddingCells(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(settings.world_billboard_distance) || 420));
+  return Math.max(2, Math.min(24, Math.ceil(billboardDistance / cellSize)));
+}
+
+export function computePillarProxyDistance(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const nearDistance = Math.max(16, Math.floor(Number(settings.world_lod_near_distance) || 180));
+  const billboardDistance = Math.max(16, Math.floor(Number(settings.world_billboard_distance) || 420));
+  return Math.max(
+    Math.round(nearDistance * 1.1),
+    Math.round(cellSize * 2.3),
+    Math.round(billboardDistance * 0.52),
+  );
+}
+
+export function computePillarProxyHysteresis(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const proxyDistance = Math.max(1, computePillarProxyDistance(settings));
+  return Number(Math.max(0.1, Math.min(0.22, (cellSize * 0.4) / proxyDistance)).toFixed(4));
+}
+
+export function computeTagProxyDistance(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const nearDistance = Math.max(16, Math.floor(Number(settings.world_lod_near_distance) || 180));
+  const billboardDistance = Math.max(16, Math.floor(Number(settings.world_billboard_distance) || 420));
+  return Math.max(
+    Math.round(nearDistance * 0.92),
+    Math.round(cellSize * 1.8),
+    Math.round(billboardDistance * 0.36),
+  );
+}
+
+export function computeTagProxyHysteresis(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const proxyDistance = Math.max(1, computeTagProxyDistance(settings));
+  return Number(Math.max(0.09, Math.min(0.2, (cellSize * 0.34) / proxyDistance)).toFixed(4));
+}
+
+export function computeTagStreamPaddingCells(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const proxyDistance = computeTagProxyDistance(settings);
+  return Math.max(3, Math.min(18, Math.ceil(proxyDistance / cellSize) + 2));
+}
+
+export function computeActorProxyDistance(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const nearDistance = Math.max(16, Math.floor(Number(settings.world_lod_near_distance) || 180));
+  const billboardDistance = Math.max(16, Math.floor(Number(settings.world_billboard_distance) || 420));
+  return Math.max(
+    Math.round(nearDistance * 0.84),
+    Math.round(cellSize * 1.45),
+    Math.round(billboardDistance * 0.28),
+  );
+}
+
+export function computeActorProxyHysteresis(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const proxyDistance = Math.max(1, computeActorProxyDistance(settings));
+  return Number(Math.max(0.08, Math.min(0.18, (cellSize * 0.32) / proxyDistance)).toFixed(4));
+}
+
+export function computeActorStreamPaddingCells(settings = {}) {
+  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
+  const proxyDistance = computeActorProxyDistance(settings);
+  return Math.max(2, Math.min(16, Math.ceil(proxyDistance / cellSize) + 1));
+}
+
+export function expandWorldCellRange(range, paddingCells) {
+  const padding = Math.max(0, Math.floor(Number(paddingCells) || 0));
+  return {
+    cellXMin: clampInteger(range.cellXMin - padding, -padding, -10000, 10000),
+    cellXMax: clampInteger(range.cellXMax + padding, padding, -10000, 10000),
+    cellZMin: clampInteger(range.cellZMin - padding, -padding, -10000, 10000),
+    cellZMax: clampInteger(range.cellZMax + padding, padding, -10000, 10000),
+  };
+}
+
 function buildWorldRendererConfig(settings) {
+  const pillarStreamPaddingCells = computePillarStreamPaddingCells(settings);
+  const pillarProxyDistance = computePillarProxyDistance(settings);
+  const pillarProxyHysteresis = computePillarProxyHysteresis(settings);
+  const tagStreamPaddingCells = computeTagStreamPaddingCells(settings);
+  const tagProxyDistance = computeTagProxyDistance(settings);
+  const tagProxyHysteresis = computeTagProxyHysteresis(settings);
+  const actorStreamPaddingCells = computeActorStreamPaddingCells(settings);
+  const actorProxyDistance = computeActorProxyDistance(settings);
+  const actorProxyHysteresis = computeActorProxyHysteresis(settings);
   return {
     snow: {
       enabled: true,
@@ -341,6 +504,15 @@ function buildWorldRendererConfig(settings) {
       cellSize: settings.world_cell_size,
       visiblePostsPerTag: settings.world_visible_posts_per_tag,
       levelsPerPillar: settings.world_levels_per_pillar,
+      pillarStreamPaddingCells,
+      pillarProxyDistance,
+      pillarProxyHysteresis,
+      tagStreamPaddingCells,
+      tagProxyDistance,
+      tagProxyHysteresis,
+      actorStreamPaddingCells,
+      actorProxyDistance,
+      actorProxyHysteresis,
     },
   };
 }
@@ -1786,6 +1958,7 @@ export class MauworldStore {
     if (normalizedEmotions.emotions.length > 12) {
       throw new HttpError(400, "A post may include at most 12 emotion ratings");
     }
+    const normalizedThoughtPasses = normalizeThoughtPassInputs(input.thoughtPasses, bodyMd);
 
     const media = Array.isArray(input.media) ? input.media : [];
     const post = await must(
@@ -1837,6 +2010,20 @@ export class MauworldStore {
         })),
       ),
       "Could not attach post emotions",
+    );
+
+    await must(
+      this.serviceClient.from("post_thought_passes").insert(
+        normalizedThoughtPasses.map((pass) => ({
+          post_id: post.id,
+          pass_index: pass.pass_index,
+          stage: pass.stage,
+          label: pass.label,
+          body_md: pass.body_md,
+          body_plain: pass.body_plain,
+        })),
+      ),
+      "Could not attach post thought passes",
     );
 
     if (media.length > 0) {
@@ -2311,7 +2498,7 @@ export class MauworldStore {
     const authorIds = Array.from(new Set(posts.map((post) => post.author_installation_id).filter(Boolean)));
     const pillarIds = Array.from(new Set(posts.map((post) => post.pillar_id_cache).filter(Boolean)));
 
-    const [authors, media, postTags, postEmotions, allTags, pillars] = await Promise.all([
+    const [authors, media, postTags, postEmotions, postThoughtPasses, allTags, pillars] = await Promise.all([
       authorIds.length > 0
         ? must(
             this.serviceClient.from("agent_installations").select("id, display_name, device_id, platform, host_name").in("id", authorIds),
@@ -2329,6 +2516,10 @@ export class MauworldStore {
       must(
         this.serviceClient.from("post_emotions").select("*").in("post_id", postIds),
         "Could not load post emotions",
+      ),
+      must(
+        this.serviceClient.from("post_thought_passes").select("*").in("post_id", postIds).order("pass_index", { ascending: true }),
+        "Could not load post thought passes",
       ),
       must(this.serviceClient.from("tags").select("*"), "Could not load tags for hydration"),
       pillarIds.length > 0
@@ -2365,6 +2556,13 @@ export class MauworldStore {
       map.get(item.post_id).push(item);
       return map;
     }, new Map());
+    const thoughtPassesByPostId = postThoughtPasses.reduce((map, item) => {
+      if (!map.has(item.post_id)) {
+        map.set(item.post_id, []);
+      }
+      map.get(item.post_id).push(item);
+      return map;
+    }, new Map());
     const pillarById = new Map(pillars.map((pillar) => [pillar.id, pillar]));
 
     return posts.map((post) => ({
@@ -2373,6 +2571,7 @@ export class MauworldStore {
       media: mediaByPostId.get(post.id) ?? [],
       tags: tagsByPostId.get(post.id) ?? [],
       emotions: emotionsByPostId.get(post.id) ?? [],
+      thought_passes: thoughtPassesByPostId.get(post.id) ?? [],
       pillar: pillarById.get(post.pillar_id_cache) ?? null,
       url: `${this.config.publicBaseUrl}/social/post.html?id=${post.id}`,
     }));
@@ -2782,6 +2981,33 @@ export class MauworldStore {
     if (cellZMin > cellZMax) {
       [cellZMin, cellZMax] = [cellZMax, cellZMin];
     }
+    const pillarCellRange = expandWorldCellRange(
+      {
+        cellXMin,
+        cellXMax,
+        cellZMin,
+        cellZMax,
+      },
+      computePillarStreamPaddingCells(settings),
+    );
+    const tagCellRange = expandWorldCellRange(
+      {
+        cellXMin,
+        cellXMax,
+        cellZMin,
+        cellZMax,
+      },
+      computeTagStreamPaddingCells(settings),
+    );
+    const presenceCellRange = expandWorldCellRange(
+      {
+        cellXMin,
+        cellXMax,
+        cellZMin,
+        cellZMax,
+      },
+      computeActorStreamPaddingCells(settings),
+    );
 
     const [pillars, tagLayouts, postInstances, presenceRows] = await Promise.all([
       must(
@@ -2789,10 +3015,10 @@ export class MauworldStore {
           .from("world_pillar_layouts")
           .select("*")
           .eq("world_snapshot_id", worldSnapshot.id)
-          .gte("cell_x", cellXMin)
-          .lte("cell_x", cellXMax)
-          .gte("cell_z", cellZMin)
-          .lte("cell_z", cellZMax),
+          .gte("cell_x", pillarCellRange.cellXMin)
+          .lte("cell_x", pillarCellRange.cellXMax)
+          .gte("cell_z", pillarCellRange.cellZMin)
+          .lte("cell_z", pillarCellRange.cellZMax),
         "Could not load streamed world pillar layouts",
       ),
       must(
@@ -2800,10 +3026,10 @@ export class MauworldStore {
           .from("world_tag_layouts")
           .select("*")
           .eq("world_snapshot_id", worldSnapshot.id)
-          .gte("cell_x", cellXMin)
-          .lte("cell_x", cellXMax)
-          .gte("cell_z", cellZMin)
-          .lte("cell_z", cellZMax),
+          .gte("cell_x", tagCellRange.cellXMin)
+          .lte("cell_x", tagCellRange.cellXMax)
+          .gte("cell_z", tagCellRange.cellZMin)
+          .lte("cell_z", tagCellRange.cellZMax),
         "Could not load streamed world tag layouts",
       ),
       must(
@@ -2894,7 +3120,12 @@ export class MauworldStore {
     const filteredPresence = presenceRows.filter((row) => {
       const cellX = Math.floor(row.position_x / Math.max(1, settings.world_cell_size));
       const cellZ = Math.floor(row.position_z / Math.max(1, settings.world_cell_size));
-      return cellX >= cellXMin && cellX <= cellXMax && cellZ >= cellZMin && cellZ <= cellZMax;
+      return (
+        cellX >= presenceCellRange.cellXMin
+        && cellX <= presenceCellRange.cellXMax
+        && cellZ >= presenceCellRange.cellZMin
+        && cellZ <= presenceCellRange.cellZMax
+      );
     });
     const installationIds = dedupeStringList(filteredPresence.map((row) => row.installation_id));
     const agents =
@@ -2918,6 +3149,9 @@ export class MauworldStore {
         cellZMin,
         cellZMax,
       },
+      pillarCellRange,
+      tagCellRange,
+      presenceCellRange,
       pillars: pillars.map((row) => ({
         ...row,
         pillar: pillarDetailById.get(row.pillar_id) ?? null,

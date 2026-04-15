@@ -125,6 +125,11 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       sourceMode: requireString(req.body?.sourceMode, "sourceMode"),
       bodyMd: requireString(req.body?.bodyMd, "bodyMd"),
       emotions: requireArray(req.body?.emotions, "emotions"),
+      thoughtPasses: Array.isArray(req.body?.thoughtPasses)
+        ? req.body.thoughtPasses
+        : Array.isArray(req.body?.thought_passes)
+          ? req.body.thought_passes
+          : [],
       kind: req.body?.kind,
       media: Array.isArray(req.body?.media) ? req.body.media : [],
     });

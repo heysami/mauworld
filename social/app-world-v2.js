@@ -195,6 +195,93 @@ function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+function getPillarLodSettings() {
+  const lod = state.meta?.renderer?.lod ?? {};
+  const fog = state.meta?.renderer?.fog ?? {};
+  const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
+  const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const proxyDistance = Math.max(
+    48,
+    Math.floor(Number(lod.pillarProxyDistance) || Math.max(nearDistance * 1.1, cellSize * 2.3, billboardDistance * 0.52)),
+  );
+  return {
+    cellSize,
+    streamPaddingCells: Math.max(
+      2,
+      Math.floor(Number(lod.pillarStreamPaddingCells) || Math.ceil(billboardDistance / cellSize)),
+    ),
+    proxyDistance,
+    proxyHysteresis: clamp(
+      Number(lod.pillarProxyHysteresis) || Math.max(0.1, Math.min(0.22, (cellSize * 0.4) / Math.max(1, proxyDistance))),
+      0.01,
+      0.4,
+    ),
+  };
+}
+
+function getTagLodSettings() {
+  const lod = state.meta?.renderer?.lod ?? {};
+  const fog = state.meta?.renderer?.fog ?? {};
+  const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
+  const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const proxyDistance = Math.max(
+    36,
+    Math.floor(Number(lod.tagProxyDistance) || Math.max(nearDistance * 0.92, cellSize * 1.8, billboardDistance * 0.36)),
+  );
+  return {
+    cellSize,
+    streamPaddingCells: Math.max(
+      2,
+      Math.floor(Number(lod.tagStreamPaddingCells) || Math.ceil(proxyDistance / cellSize) + 2),
+    ),
+    proxyDistance,
+    proxyHysteresis: clamp(
+      Number(lod.tagProxyHysteresis) || Math.max(0.09, Math.min(0.2, (cellSize * 0.34) / Math.max(1, proxyDistance))),
+      0.01,
+      0.35,
+    ),
+  };
+}
+
+function getActorLodSettings() {
+  const lod = state.meta?.renderer?.lod ?? {};
+  const fog = state.meta?.renderer?.fog ?? {};
+  const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
+  const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const proxyDistance = Math.max(
+    28,
+    Math.floor(Number(lod.actorProxyDistance) || Math.max(nearDistance * 0.84, cellSize * 1.45, billboardDistance * 0.28)),
+  );
+  return {
+    cellSize,
+    streamPaddingCells: Math.max(
+      2,
+      Math.floor(Number(lod.actorStreamPaddingCells) || Math.ceil(proxyDistance / cellSize) + 1),
+    ),
+    proxyDistance,
+    proxyHysteresis: clamp(
+      Number(lod.actorProxyHysteresis) || Math.max(0.08, Math.min(0.18, (cellSize * 0.32) / Math.max(1, proxyDistance))),
+      0.01,
+      0.3,
+    ),
+  };
+}
+
+function getConnectionLodSettings() {
+  const fog = state.meta?.renderer?.fog ?? {};
+  const cellSize = Math.max(16, Math.floor(Number(state.meta?.renderer?.lod?.cellSize) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
+  const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const proxyDistance = Math.max(44, Math.floor(Math.max(nearDistance * 0.88, cellSize * 1.8, billboardDistance * 0.3)));
+  return {
+    proxyDistance,
+    proxyHysteresis: clamp(Math.max(0.08, Math.min(0.18, (cellSize * 0.34) / Math.max(1, proxyDistance))), 0.01, 0.3),
+  };
+}
+
 function normalizeAngle(angle) {
   let next = angle;
   while (next > Math.PI) {
@@ -466,6 +553,22 @@ function getPostCacheKey(entry) {
   return `${entry?.post_id ?? ""}:${entry?.tag_id ?? ""}`;
 }
 
+function getPillarRenderPadding() {
+  return Math.max(WORLD_STREAM.renderPadding, getPillarLodSettings().streamPaddingCells);
+}
+
+function getPillarRetainPadding() {
+  return Math.max(WORLD_STREAM.retainPadding, getPillarRenderPadding() + 1);
+}
+
+function getTagRenderPadding() {
+  return Math.max(WORLD_STREAM.renderPadding, getTagLodSettings().streamPaddingCells);
+}
+
+function getTagRetainPadding() {
+  return Math.max(WORLD_STREAM.retainPadding, getTagRenderPadding() + 1);
+}
+
 function mergeStreamIntoCache(streamPayload) {
   for (const pillar of streamPayload.pillars ?? []) {
     state.worldCache.pillars.set(getPillarCacheKey(pillar), pillar);
@@ -487,28 +590,48 @@ function pruneWorldCache() {
   const maxX = window.cell_x_max + WORLD_STREAM.retainPadding;
   const minZ = window.cell_z_min - WORLD_STREAM.retainPadding;
   const maxZ = window.cell_z_max + WORLD_STREAM.retainPadding;
-  const shouldKeep = (entry) =>
+  const pillarPadding = getPillarRetainPadding();
+  const tagPadding = getTagRetainPadding();
+  const pillarMinX = window.cell_x_min - pillarPadding;
+  const pillarMaxX = window.cell_x_max + pillarPadding;
+  const pillarMinZ = window.cell_z_min - pillarPadding;
+  const pillarMaxZ = window.cell_z_max + pillarPadding;
+  const tagMinX = window.cell_x_min - tagPadding;
+  const tagMaxX = window.cell_x_max + tagPadding;
+  const tagMinZ = window.cell_z_min - tagPadding;
+  const tagMaxZ = window.cell_z_max + tagPadding;
+  const shouldKeep = (entry, bounds) =>
     !Number.isFinite(entry?.cell_x)
     || !Number.isFinite(entry?.cell_z)
     || (
-      entry.cell_x >= minX
-      && entry.cell_x <= maxX
-      && entry.cell_z >= minZ
-      && entry.cell_z <= maxZ
+      entry.cell_x >= bounds.minX
+      && entry.cell_x <= bounds.maxX
+      && entry.cell_z >= bounds.minZ
+      && entry.cell_z <= bounds.maxZ
     );
 
   for (const [key, entry] of state.worldCache.pillars.entries()) {
-    if (!shouldKeep(entry)) {
+    if (!shouldKeep(entry, {
+      minX: pillarMinX,
+      maxX: pillarMaxX,
+      minZ: pillarMinZ,
+      maxZ: pillarMaxZ,
+    })) {
       state.worldCache.pillars.delete(key);
     }
   }
   for (const [key, entry] of state.worldCache.tags.entries()) {
-    if (!shouldKeep(entry)) {
+    if (!shouldKeep(entry, {
+      minX: tagMinX,
+      maxX: tagMaxX,
+      minZ: tagMinZ,
+      maxZ: tagMaxZ,
+    })) {
       state.worldCache.tags.delete(key);
     }
   }
   for (const [key, entry] of state.worldCache.posts.entries()) {
-    if (!shouldKeep(entry)) {
+    if (!shouldKeep(entry, { minX, maxX, minZ, maxZ })) {
       state.worldCache.posts.delete(key);
     }
   }
@@ -523,30 +646,50 @@ function filterPresenceRows(presence = []) {
 
 function getCachedWorldPayload(presence = []) {
   const window = state.activeCellWindow;
+  const pillarPadding = getPillarRenderPadding();
+  const tagPadding = getTagRenderPadding();
   const minX = window ? window.cell_x_min - WORLD_STREAM.renderPadding : Number.NEGATIVE_INFINITY;
   const maxX = window ? window.cell_x_max + WORLD_STREAM.renderPadding : Number.POSITIVE_INFINITY;
   const minZ = window ? window.cell_z_min - WORLD_STREAM.renderPadding : Number.NEGATIVE_INFINITY;
   const maxZ = window ? window.cell_z_max + WORLD_STREAM.renderPadding : Number.POSITIVE_INFINITY;
-  const shouldRender = (entry) =>
+  const pillarMinX = window ? window.cell_x_min - pillarPadding : Number.NEGATIVE_INFINITY;
+  const pillarMaxX = window ? window.cell_x_max + pillarPadding : Number.POSITIVE_INFINITY;
+  const pillarMinZ = window ? window.cell_z_min - pillarPadding : Number.NEGATIVE_INFINITY;
+  const pillarMaxZ = window ? window.cell_z_max + pillarPadding : Number.POSITIVE_INFINITY;
+  const tagMinX = window ? window.cell_x_min - tagPadding : Number.NEGATIVE_INFINITY;
+  const tagMaxX = window ? window.cell_x_max + tagPadding : Number.POSITIVE_INFINITY;
+  const tagMinZ = window ? window.cell_z_min - tagPadding : Number.NEGATIVE_INFINITY;
+  const tagMaxZ = window ? window.cell_z_max + tagPadding : Number.POSITIVE_INFINITY;
+  const shouldRender = (entry, bounds) =>
     !window
     || !Number.isFinite(entry?.cell_x)
     || !Number.isFinite(entry?.cell_z)
     || (
-      entry.cell_x >= minX
-      && entry.cell_x <= maxX
-      && entry.cell_z >= minZ
-      && entry.cell_z <= maxZ
+      entry.cell_x >= bounds.minX
+      && entry.cell_x <= bounds.maxX
+      && entry.cell_z >= bounds.minZ
+      && entry.cell_z <= bounds.maxZ
     );
 
   return {
     pillars: [...state.worldCache.pillars.values()]
-      .filter(shouldRender)
+      .filter((entry) => shouldRender(entry, {
+        minX: pillarMinX,
+        maxX: pillarMaxX,
+        minZ: pillarMinZ,
+        maxZ: pillarMaxZ,
+      }))
       .sort((left, right) => (right.importance_score ?? 0) - (left.importance_score ?? 0)),
     tags: [...state.worldCache.tags.values()]
-      .filter(shouldRender)
+      .filter((entry) => shouldRender(entry, {
+        minX: tagMinX,
+        maxX: tagMaxX,
+        minZ: tagMinZ,
+        maxZ: tagMaxZ,
+      }))
       .sort((left, right) => (right.active_post_count ?? 0) - (left.active_post_count ?? 0)),
     postInstances: [...state.worldCache.posts.values()]
-      .filter(shouldRender)
+      .filter((entry) => shouldRender(entry, { minX, maxX, minZ, maxZ }))
       .sort((left, right) => (right.popularity_score ?? 0) - (left.popularity_score ?? 0)),
     presence: filterPresenceRows(presence),
   };
@@ -1008,6 +1151,177 @@ function createCircleTexture(options = {}) {
   return texture;
 }
 
+function createPillarProxyTexture(options = {}) {
+  const canvas = document.createElement("canvas");
+  const width = options.width ?? 320;
+  const height = options.height ?? 640;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const primary = options.primary ?? WORLD_STYLE.accents[0];
+  const secondary = options.secondary ?? WORLD_STYLE.accents[1];
+  const fill = options.fill ?? "rgba(255, 255, 255, 0.94)";
+  const outline = options.outline ?? WORLD_STYLE.outline;
+  const glow = options.glow ?? `${primary}33`;
+
+  const drawRoundedRect = (x, y, rectWidth, rectHeight, radius) => {
+    const safeRadius = Math.min(radius, rectWidth / 2, rectHeight / 2);
+    context.beginPath();
+    context.moveTo(x + safeRadius, y);
+    context.lineTo(x + rectWidth - safeRadius, y);
+    context.quadraticCurveTo(x + rectWidth, y, x + rectWidth, y + safeRadius);
+    context.lineTo(x + rectWidth, y + rectHeight - safeRadius);
+    context.quadraticCurveTo(x + rectWidth, y + rectHeight, x + rectWidth - safeRadius, y + rectHeight);
+    context.lineTo(x + safeRadius, y + rectHeight);
+    context.quadraticCurveTo(x, y + rectHeight, x, y + rectHeight - safeRadius);
+    context.lineTo(x, y + safeRadius);
+    context.quadraticCurveTo(x, y, x + safeRadius, y);
+    context.closePath();
+  };
+
+  const centerX = width / 2;
+  const bodyWidth = width * 0.28;
+  const bodyX = centerX - bodyWidth / 2;
+  const bodyTop = height * 0.14;
+  const bodyHeight = height * 0.7;
+  const capHeight = height * 0.065;
+  const bandWidth = bodyWidth * 1.26;
+  const bandX = centerX - bandWidth / 2;
+  const baseY = bodyTop + bodyHeight;
+
+  context.clearRect(0, 0, width, height);
+
+  const glowGradient = context.createRadialGradient(
+    centerX,
+    bodyTop + bodyHeight * 0.28,
+    bodyWidth * 0.12,
+    centerX,
+    bodyTop + bodyHeight * 0.28,
+    width * 0.34,
+  );
+  glowGradient.addColorStop(0, glow);
+  glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+  context.fillStyle = glowGradient;
+  context.beginPath();
+  context.ellipse(centerX, bodyTop + bodyHeight * 0.28, width * 0.26, height * 0.34, 0, 0, Math.PI * 2);
+  context.fill();
+
+  drawRoundedRect(bodyX, bodyTop, bodyWidth, bodyHeight, bodyWidth * 0.42);
+  context.fillStyle = fill;
+  context.fill();
+  context.lineWidth = width * 0.028;
+  context.strokeStyle = outline;
+  context.stroke();
+
+  context.fillStyle = primary;
+  drawRoundedRect(centerX - bodyWidth * 0.72, bodyTop - capHeight * 0.46, bodyWidth * 1.44, capHeight, capHeight * 0.48);
+  context.fill();
+
+  context.fillStyle = secondary;
+  for (const offset of [0.24, 0.48, 0.7]) {
+    drawRoundedRect(bandX, bodyTop + bodyHeight * offset, bandWidth, height * 0.032, height * 0.016);
+    context.fill();
+  }
+
+  context.fillStyle = `${secondary}66`;
+  context.beginPath();
+  context.ellipse(centerX, bodyTop + bodyHeight * 0.12, bodyWidth * 0.72, height * 0.055, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = `${primary}55`;
+  context.beginPath();
+  context.ellipse(centerX, baseY + height * 0.018, bodyWidth * 0.92, height * 0.042, 0, 0, Math.PI * 2);
+  context.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createMascotProxyTexture(options = {}) {
+  const canvas = document.createElement("canvas");
+  const width = options.width ?? 256;
+  const height = options.height ?? 320;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const primary = options.primary ?? WORLD_STYLE.accents[0];
+  const secondary = options.secondary ?? WORLD_STYLE.accents[1];
+  const outline = options.outline ?? WORLD_STYLE.outline;
+
+  const drawRoundedRect = (x, y, rectWidth, rectHeight, radius) => {
+    const safeRadius = Math.min(radius, rectWidth / 2, rectHeight / 2);
+    context.beginPath();
+    context.moveTo(x + safeRadius, y);
+    context.lineTo(x + rectWidth - safeRadius, y);
+    context.quadraticCurveTo(x + rectWidth, y, x + rectWidth, y + safeRadius);
+    context.lineTo(x + rectWidth, y + rectHeight - safeRadius);
+    context.quadraticCurveTo(x + rectWidth, y + rectHeight, x + rectWidth - safeRadius, y + rectHeight);
+    context.lineTo(x + safeRadius, y + rectHeight);
+    context.quadraticCurveTo(x, y + rectHeight, x, y + rectHeight - safeRadius);
+    context.lineTo(x, y + safeRadius);
+    context.quadraticCurveTo(x, y, x + safeRadius, y);
+    context.closePath();
+  };
+
+  context.clearRect(0, 0, width, height);
+
+  context.fillStyle = `${primary}26`;
+  context.beginPath();
+  context.ellipse(width * 0.5, height * 0.5, width * 0.34, height * 0.42, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = "rgba(255, 255, 255, 0.95)";
+  context.strokeStyle = outline;
+  context.lineWidth = width * 0.022;
+  context.beginPath();
+  context.arc(width * 0.5, height * 0.32, width * 0.16, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+
+  drawRoundedRect(width * 0.37, height * 0.43, width * 0.26, height * 0.23, width * 0.08);
+  context.fill();
+  context.stroke();
+
+  context.fillStyle = primary;
+  context.beginPath();
+  context.moveTo(width * 0.38, height * 0.23);
+  context.lineTo(width * 0.31, height * 0.09);
+  context.lineTo(width * 0.44, height * 0.18);
+  context.closePath();
+  context.fill();
+
+  context.fillStyle = secondary;
+  context.beginPath();
+  context.moveTo(width * 0.62, height * 0.23);
+  context.lineTo(width * 0.69, height * 0.09);
+  context.lineTo(width * 0.56, height * 0.18);
+  context.closePath();
+  context.fill();
+
+  context.fillStyle = outline;
+  context.beginPath();
+  context.arc(width * 0.46, height * 0.32, width * 0.015, 0, Math.PI * 2);
+  context.arc(width * 0.54, height * 0.32, width * 0.015, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = `${primary}aa`;
+  context.beginPath();
+  context.ellipse(width * 0.5, height * 0.47, width * 0.16, height * 0.038, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = `${secondary}cc`;
+  context.beginPath();
+  context.arc(width * 0.5, height * 0.78, width * 0.05, 0, Math.PI * 2);
+  context.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function createConfettiTexture(options = {}) {
   const canvas = document.createElement("canvas");
   const size = options.size ?? 192;
@@ -1131,12 +1445,15 @@ function createBranchConnection(start, end, options = {}) {
   const accent = options.accent ?? WORLD_STYLE.accents[1];
   const outerRadius = options.outerRadius ?? 0.11;
   const innerRadius = outerRadius * 0.54;
+  const connectionLod = getConnectionLodSettings();
   const distance = start.distanceTo(end);
   const midpoint = start.clone().lerp(end, 0.5);
   midpoint.y += clamp(distance * 0.18, 2.6, 10.5);
   const curve = new THREE.CatmullRomCurve3([start.clone(), midpoint, end.clone()]);
   const segments = clamp(Math.round(distance * 2.4), 16, 42);
-  const group = new THREE.Group();
+  const detailGroup = new THREE.Group();
+  const lod = new THREE.LOD();
+  lod.autoUpdate = true;
 
   const outer = new THREE.Mesh(
     new THREE.TubeGeometry(curve, segments, outerRadius, 8, false),
@@ -1149,7 +1466,7 @@ function createBranchConnection(start, end, options = {}) {
     }),
   );
   outer.renderOrder = 4;
-  group.add(outer);
+  detailGroup.add(outer);
 
   const inner = new THREE.Mesh(
     new THREE.TubeGeometry(curve, segments, innerRadius, 8, false),
@@ -1162,7 +1479,7 @@ function createBranchConnection(start, end, options = {}) {
     }),
   );
   inner.renderOrder = 5;
-  group.add(inner);
+  detailGroup.add(inner);
 
   const endpointRadius = outerRadius * 1.85;
   const startOrb = new THREE.Mesh(
@@ -1177,7 +1494,7 @@ function createBranchConnection(start, end, options = {}) {
   );
   startOrb.position.copy(start);
   startOrb.renderOrder = 4;
-  group.add(startOrb);
+  detailGroup.add(startOrb);
 
   const endOrb = new THREE.Mesh(
     new THREE.SphereGeometry(endpointRadius * 0.92, 10, 10),
@@ -1191,9 +1508,24 @@ function createBranchConnection(start, end, options = {}) {
   );
   endOrb.position.copy(end);
   endOrb.renderOrder = 4;
-  group.add(endOrb);
+  detailGroup.add(endOrb);
 
-  return group;
+  const proxyGeometry = new THREE.BufferGeometry().setFromPoints([start.clone(), end.clone()]);
+  const proxy = new THREE.Line(
+    proxyGeometry,
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color(accent),
+      transparent: true,
+      opacity: Math.max(options.outerOpacity ?? 0.32, 0.24),
+      fog: false,
+    }),
+  );
+  proxy.renderOrder = 4;
+  proxy.visible = false;
+
+  lod.addLevel(detailGroup, 0);
+  lod.addLevel(proxy, connectionLod.proxyDistance, connectionLod.proxyHysteresis);
+  return lod;
 }
 
 function createCloudTexture(options = {}) {
@@ -1421,8 +1753,9 @@ function createMascotFigure(seed, options = {}) {
   const scale = options.scale ?? 1;
   const outlineColor = options.outlineColor ?? WORLD_STYLE.outline;
   const group = new THREE.Group();
+  const detailGroup = new THREE.Group();
   const poseRoot = new THREE.Group();
-  group.add(poseRoot);
+  detailGroup.add(poseRoot);
 
   const bodyGeometry = new THREE.CapsuleGeometry(1.45 * scale, 2.4 * scale, 6, 16);
   const headGeometry = new THREE.SphereGeometry(2.15 * scale, 24, 24);
@@ -1505,11 +1838,43 @@ function createMascotFigure(seed, options = {}) {
   orb.position.set(0, 12.8 * scale, 0);
   poseRoot.add(orb);
 
+  let lod = null;
+  let proxy = null;
+  if (options.lod?.enabled) {
+    lod = new THREE.LOD();
+    lod.autoUpdate = options.lod.autoUpdate !== false;
+    proxy = createBillboard(
+      createMascotProxyTexture({
+        primary: accents.primary,
+        secondary: accents.secondary,
+        outline: outlineColor,
+      }),
+      7.6 * scale,
+      9.4 * scale,
+      {
+        opacity: 0.9,
+        fog: false,
+        renderOrder: 7,
+      },
+    );
+    proxy.position.set(0, 6.1 * scale, 0);
+    proxy.visible = false;
+    lod.addLevel(detailGroup, 0);
+    lod.addLevel(proxy, options.lod.distance ?? 150, options.lod.hysteresis ?? 0.12);
+    group.add(lod);
+  } else {
+    group.add(detailGroup);
+  }
+
   return {
     group,
+    detailGroup,
     poseRoot,
     halo,
     orb,
+    lod,
+    proxy,
+    proxyBaseY: proxy?.position.y ?? 0,
   };
 }
 
@@ -1895,12 +2260,17 @@ function buildPillarObject(entry) {
   const accents = pickAccentSet(entry.pillar_id || pillar.title);
   const group = new THREE.Group();
   const anchor = new THREE.Vector3(entry.position_x, entry.position_y + entry.height * 0.5, entry.position_z);
+  const detailGroup = new THREE.Group();
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
+
+  const pillarLod = getPillarLodSettings();
+  const lod = new THREE.LOD();
+  lod.autoUpdate = false;
 
   const pillarGeometry = new THREE.CylinderGeometry(entry.radius, entry.radius * 1.08, entry.height, 28, 1, false);
   const outline = createOutlineShell(pillarGeometry, accents.primary, 1.04);
   outline.position.y = entry.height / 2;
-  group.add(outline);
+  detailGroup.add(outline);
 
   const baseMaterial = new THREE.MeshBasicMaterial({
     color: new THREE.Color(WORLD_STYLE.white),
@@ -1909,7 +2279,7 @@ function buildPillarObject(entry) {
   });
   const pillarMesh = new THREE.Mesh(pillarGeometry, baseMaterial);
   pillarMesh.position.y = entry.height / 2;
-  group.add(pillarMesh);
+  detailGroup.add(pillarMesh);
 
   const bands = [accents.primary, accents.secondary, accents.tertiary].map((color, index) => {
     const baseY = entry.height * (0.22 + index * 0.2);
@@ -1924,7 +2294,7 @@ function buildPillarObject(entry) {
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.y = baseY;
-    group.add(ring);
+    detailGroup.add(ring);
     return {
       mesh: ring,
       baseY,
@@ -1945,7 +2315,7 @@ function buildPillarObject(entry) {
   const cap = new THREE.Mesh(capGeometry, capMaterial);
   cap.rotation.x = Math.PI / 2;
   cap.position.y = entry.height + 2.4;
-  group.add(cap);
+  detailGroup.add(cap);
 
   const flowTexture = createCircleTexture({
     fill: "rgba(255, 255, 255, 0.74)",
@@ -1989,7 +2359,7 @@ function buildPillarObject(entry) {
     }),
   );
   flow.position.y = 0.8;
-  group.add(flow);
+  detailGroup.add(flow);
 
   const crown = createBillboard(
     createCircleTexture({
@@ -2006,7 +2376,7 @@ function buildPillarObject(entry) {
     },
   );
   crown.position.set(0, entry.height + 6.4, 0);
-  group.add(crown);
+  detailGroup.add(crown);
 
   const label = createBillboard(
     createCompactCardTexture(
@@ -2022,8 +2392,35 @@ function buildPillarObject(entry) {
     7.2,
   );
   label.position.set(0, entry.height + 15.2, 0);
-  group.add(label);
+  detailGroup.add(label);
+
+  const proxy = createBillboard(
+    createPillarProxyTexture({
+      primary: accents.primary,
+      secondary: accents.secondary,
+      outline: accents.primary,
+      glow: `${accents.secondary}2d`,
+    }),
+    Math.max(16, entry.radius * 3),
+    Math.max(44, entry.height * 0.94),
+    {
+      opacity: 0.82,
+      renderOrder: 5,
+    },
+  );
+  proxy.position.set(0, entry.height * 0.47, 0);
+  proxy.visible = false;
+
+  lod.addLevel(detailGroup, 0);
+  lod.addLevel(proxy, pillarLod.proxyDistance, pillarLod.proxyHysteresis);
+  group.add(lod);
+  if (sceneState.camera) {
+    lod.update(sceneState.camera);
+  }
+
   sceneState.animatedPillars.push({
+    lod,
+    detailGroup,
     anchor,
     body: pillarMesh,
     outline,
@@ -2034,6 +2431,8 @@ function buildPillarObject(entry) {
     label,
     flow,
     flowData,
+    proxy,
+    proxyBaseY: proxy.position.y,
     height: entry.height,
     phase: (hashString(entry.pillar_id || pillar.title) % 360) * 0.024,
     cellX: entry.cell_x,
@@ -2095,7 +2494,11 @@ function buildTagObject(entry) {
   const tag = entry.tag ?? {};
   const accents = pickAccentSet(entry.tag_id || tag.label);
   const group = new THREE.Group();
+  const detailGroup = new THREE.Group();
   const homeAnchor = computeTagHomeAnchor(entry);
+  const tagLod = getTagLodSettings();
+  const lod = new THREE.LOD();
+  lod.autoUpdate = true;
   group.position.copy(homeAnchor);
 
   const ring = new THREE.Mesh(
@@ -2108,7 +2511,7 @@ function buildTagObject(entry) {
     }),
   );
   ring.rotation.x = Math.PI / 2;
-  group.add(ring);
+  detailGroup.add(ring);
 
   const halo = new THREE.Mesh(
     new THREE.RingGeometry(4.4, 5.5, 40),
@@ -2122,11 +2525,11 @@ function buildTagObject(entry) {
   );
   halo.rotation.x = Math.PI / 2;
   halo.position.y = 0.1;
-  group.add(halo);
+  detailGroup.add(halo);
 
   const centerGeometry = new THREE.SphereGeometry(1.45, 18, 18);
   const outline = createOutlineShell(centerGeometry, accents.primary, 1.18);
-  group.add(outline);
+  detailGroup.add(outline);
 
   const center = new THREE.Mesh(
     centerGeometry,
@@ -2136,7 +2539,7 @@ function buildTagObject(entry) {
       opacity: 0.96,
     }),
   );
-  group.add(center);
+  detailGroup.add(center);
 
   const beacon = createBillboard(
     createCircleTexture({
@@ -2153,7 +2556,7 @@ function buildTagObject(entry) {
     },
   );
   beacon.position.set(0, 0.2, 0);
-  group.add(beacon);
+  detailGroup.add(beacon);
 
   const labelWidth = clamp(15 + ((tag.label ?? "").length * 0.5), 18, 30);
   const labelHeight = labelWidth * (160 / 768);
@@ -2175,11 +2578,39 @@ function buildTagObject(entry) {
     },
   );
   label.position.set(0, 7.9, 0);
-  group.add(label);
+  detailGroup.add(label);
+
+  const proxyWidth = clamp(10 + ((tag.label ?? "").length * 0.32), 12, 20);
+  const proxyHeight = proxyWidth * (140 / 640);
+  const proxy = createBillboard(
+    createTagTextTexture(
+      tag.label || "tag",
+      {
+        accent: accents.primary,
+        secondary: accents.secondary,
+      },
+    ),
+    proxyWidth,
+    proxyHeight,
+    {
+      opacity: 0.9,
+      fog: false,
+      depthTest: false,
+      renderOrder: 8,
+    },
+  );
+  proxy.position.set(0, 5.8, 0);
+  proxy.visible = false;
+
+  lod.addLevel(detailGroup, 0);
+  lod.addLevel(proxy, tagLod.proxyDistance, tagLod.proxyHysteresis);
+  group.add(lod);
 
   sceneState.animatedTags.push({
     tagId: entry.tag_id,
     group,
+    lod,
+    detailGroup,
     anchor: homeAnchor.clone(),
     homeAnchor: homeAnchor.clone(),
     displayAnchor: homeAnchor.clone(),
@@ -2189,6 +2620,8 @@ function buildTagObject(entry) {
     halo,
     beacon,
     label,
+    proxy,
+    proxyBaseY: proxy.position.y,
     cellX: entry.cell_x,
     cellZ: entry.cell_z,
     speed: 0.18 + entry.branch_depth * 0.05,
@@ -2201,6 +2634,11 @@ function buildTagObject(entry) {
     },
     {
       mesh: label,
+      type: "tag",
+      data: entry,
+    },
+    {
+      mesh: proxy,
       type: "tag",
       data: entry,
     },
@@ -2322,9 +2760,16 @@ function buildPresenceObject(entry) {
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
   const seed = actor.id || actor.display_name || entry.actor_type;
   const color = entry.actor_type === "agent" ? pickAccent(seed, 1) : pickAccent(seed, 3);
+  const actorLod = getActorLodSettings();
   const mascot = createMascotFigure(seed, {
     scale: 0.72,
     outlineColor: color,
+    lod: {
+      enabled: true,
+      autoUpdate: true,
+      distance: actorLod.proxyDistance,
+      hysteresis: actorLod.proxyHysteresis,
+    },
   });
   group.add(mascot.group);
 
@@ -2352,9 +2797,12 @@ function buildPresenceObject(entry) {
 
   sceneState.animatedPresence.push({
     group,
+    lod: mascot.lod,
     halo: mascot.halo,
     orb: mascot.orb,
     orbBaseY: mascot.orb.position.y,
+    proxy: mascot.proxy,
+    proxyBaseY: mascot.proxyBaseY,
     label,
     baseY: entry.position_y,
     bob: 0.55 + Math.random() * 0.4,
@@ -3454,6 +3902,7 @@ function initScene() {
     ambientRoot: sceneState.visitors,
     queuedRoot: sceneState.focusQueued,
     createMascotFigure,
+    getActorLodSettings,
     createBillboard,
     unregisterBillboard,
     pickAccent,
@@ -3915,6 +4364,9 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   const billboardDistance = state.meta?.renderer?.fog?.billboardDistance ?? 420;
   const nearDistance = state.meta?.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = state.meta?.renderer?.fog?.farDistance ?? 720;
+  const pillarLod = getPillarLodSettings();
+  const tagLod = getTagLodSettings();
+  const actorLod = getActorLodSettings();
   const retainedDistance = farDistance * WORLD_STREAM.fogMultiplier;
   const focusedDestination = state.focusedResult?.destination;
   const focusIsolation = clamp(state.postFocusMix / 0.62, 0, 1);
@@ -3992,6 +4444,11 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   }
 
   for (const entry of sceneState.animatedPillars) {
+    if (entry.lod?.levels?.[1]) {
+      entry.lod.levels[1].distance = pillarLod.proxyDistance;
+      entry.lod.levels[1].hysteresis = pillarLod.proxyHysteresis;
+    }
+    entry.lod?.update(sceneState.camera);
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
     const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
     const fade = 1 - clamp((distance - nearDistance * 0.4) / Math.max(1, retainedDistance - nearDistance * 0.4), 0, 1);
@@ -4012,6 +4469,12 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     entry.label.material.opacity = activeCell
       ? 0.26 + fade * 0.66
       : 0.1 + fade * 0.18;
+    entry.proxy.position.y = entry.proxyBaseY + Math.sin(elapsedSeconds * 0.42 + entry.phase) * 0.4;
+    entry.proxy.material.opacity = (
+      activeCell
+        ? 0.34 + fade * 0.48
+        : 0.16 + fade * 0.22
+    ) * (entry.proxy.visible ? 1 : 0);
     if (entry.flow && entry.flowData?.length) {
       const positions = entry.flow.geometry.attributes.position.array;
       for (let index = 0; index < entry.flowData.length; index += 1) {
@@ -4083,6 +4546,10 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   }
 
   for (const entry of sceneState.animatedTags) {
+    if (entry.lod?.levels?.[1]) {
+      entry.lod.levels[1].distance = tagLod.proxyDistance;
+      entry.lod.levels[1].hysteresis = tagLod.proxyHysteresis;
+    }
     entry.ring.rotation.z += deltaSeconds * entry.speed;
     entry.halo.rotation.z -= deltaSeconds * entry.speed * 0.62;
     const distance = (entry.displayAnchor ?? entry.anchor).distanceTo(sceneState.camera.position);
@@ -4107,9 +4574,19 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     entry.center.material.opacity = entry.isOpen
       ? (activeCell ? 1 : 0.54)
       : (activeCell ? 0.86 : 0.34);
+    if (entry.proxy) {
+      entry.proxy.position.y = entry.proxyBaseY + Math.sin(elapsedSeconds * (0.8 + entry.speed) + entry.speed * 10) * 0.18;
+      entry.proxy.material.opacity = entry.isOpen
+        ? (activeCell ? 0.86 - farMix * 0.14 : 0.46 - farMix * 0.1)
+        : (activeCell ? 0.72 - farMix * 0.18 : 0.3 - farMix * 0.08);
+    }
   }
 
   for (const entry of sceneState.animatedPresence) {
+    if (entry.lod?.levels?.[1]) {
+      entry.lod.levels[1].distance = actorLod.proxyDistance;
+      entry.lod.levels[1].hysteresis = actorLod.proxyHysteresis;
+    }
     entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 1.2;
     entry.group.rotation.y += deltaSeconds * 0.24;
     if (entry.halo) {
@@ -4121,6 +4598,10 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     if (entry.label) {
       const distance = entry.group.position.distanceTo(sceneState.camera.position);
       entry.label.material.opacity = 1 - clamp((distance - nearDistance * 0.45) / Math.max(1, retainedDistance - nearDistance * 0.45), 0, 1);
+    }
+    if (entry.proxy) {
+      entry.proxy.position.y = entry.proxyBaseY + Math.sin(elapsedSeconds * 1.1 + entry.phase) * 0.2;
+      entry.proxy.material.opacity = 0.54;
     }
   }
 

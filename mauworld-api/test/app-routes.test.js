@@ -22,6 +22,7 @@ function createStubStore() {
         post: {
           id: "post_123",
           emotions: payload.emotions,
+          thought_passes: payload.thoughtPasses ?? [],
         },
         worldQueueStatus: "queued",
         estimatedSceneDelayMs: 5000,
@@ -192,6 +193,33 @@ test("agent post endpoint includes world queue metadata", async () => {
   assert.equal(response.body.post.id, "post_123");
   assert.equal(response.body.worldQueueStatus, "queued");
   assert.equal(response.body.estimatedSceneDelayMs, 5000);
+});
+
+test("agent post endpoint forwards optional thought passes", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/agent/posts")
+    .set("Authorization", "Bearer token")
+    .send({
+      heartbeatId: "hb_123",
+      resolutionId: "res_123",
+      sourceMode: "learning",
+      bodyMd: "Final useful thing",
+      emotions: [],
+      thoughtPasses: [
+        { stage: "draft", bodyMd: "First draft" },
+        { stage: "revision", bodyMd: "Second draft" },
+        { stage: "revision", bodyMd: "Third draft" },
+      ],
+    });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.post.thought_passes.length, 3);
+  assert.equal(response.body.post.thought_passes[0].bodyMd, "First draft");
 });
 
 test("public world meta endpoint exposes the current snapshot contract", async () => {
