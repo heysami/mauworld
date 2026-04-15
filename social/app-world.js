@@ -112,7 +112,7 @@ const state = {
   initialViewFramed: false,
   viewerSessionId: "",
   moveButtons: new Set(),
-  navigationPosition: new THREE.Vector3(0, 96, 112),
+  navigationPosition: new THREE.Vector3(0, 76, 156),
   cameraRadius: PLAYER_VIEW.defaultRadius,
   travelAnimation: null,
   postFocusTagId: null,
@@ -166,6 +166,8 @@ const sceneState = {
   floorMarker: null,
 };
 
+const billboardParentQuaternion = new THREE.Quaternion();
+
 const inputState = {
   keys: new Set(),
   pointerDown: false,
@@ -173,8 +175,8 @@ const inputState = {
   lastPointerX: 0,
   lastPointerY: 0,
   pointerMoved: false,
-  yaw: Math.PI,
-  pitch: -0.25,
+  yaw: 0,
+  pitch: 0.66,
 };
 
 function createViewerSessionId() {
@@ -193,6 +195,96 @@ function clamp(value, min, max) {
 
 function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function getPillarLodSettings() {
+  const lod = state.meta?.renderer?.lod ?? {};
+  const fog = state.meta?.renderer?.fog ?? {};
+  const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
+  const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const configuredProxyHysteresis = Number(lod.pillarProxyHysteresis);
+  const baseProxyDistance = Math.max(nearDistance * 1.1, cellSize * 2.3, billboardDistance * 0.52);
+  const proxyDistance = Math.max(
+    48,
+    Math.floor(Number(lod.pillarProxyDistance) || baseProxyDistance * 10),
+  );
+  return {
+    cellSize,
+    streamPaddingCells: Math.max(
+      2,
+      Math.floor(Number(lod.pillarStreamPaddingCells) || Math.ceil(proxyDistance / cellSize) + 2),
+    ),
+    proxyDistance,
+    proxyHysteresis: clamp(
+      Number.isFinite(configuredProxyHysteresis) ? configuredProxyHysteresis : 0,
+      0,
+      0.4,
+    ),
+  };
+}
+
+function getTagLodSettings() {
+  const lod = state.meta?.renderer?.lod ?? {};
+  const fog = state.meta?.renderer?.fog ?? {};
+  const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
+  const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const proxyDistance = Math.max(
+    36,
+    Math.floor(Number(lod.tagProxyDistance) || Math.max(nearDistance * 0.92, cellSize * 1.8, billboardDistance * 0.36)),
+  );
+  return {
+    cellSize,
+    streamPaddingCells: Math.max(
+      2,
+      Math.floor(Number(lod.tagStreamPaddingCells) || Math.ceil(proxyDistance / cellSize) + 2),
+    ),
+    proxyDistance,
+    proxyHysteresis: clamp(
+      Number(lod.tagProxyHysteresis) || Math.max(0.09, Math.min(0.2, (cellSize * 0.34) / Math.max(1, proxyDistance))),
+      0.01,
+      0.35,
+    ),
+  };
+}
+
+function getActorLodSettings() {
+  const lod = state.meta?.renderer?.lod ?? {};
+  const fog = state.meta?.renderer?.fog ?? {};
+  const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
+  const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const baseProxyDistance = Math.max(nearDistance * 0.84, cellSize * 1.45, billboardDistance * 0.28);
+  const proxyDistance = Math.max(
+    28,
+    Math.floor(Number(lod.actorProxyDistance) || baseProxyDistance * 3),
+  );
+  return {
+    cellSize,
+    streamPaddingCells: Math.max(
+      2,
+      Math.floor(Number(lod.actorStreamPaddingCells) || Math.ceil(proxyDistance / cellSize) + 1),
+    ),
+    proxyDistance,
+    proxyHysteresis: clamp(
+      Number(lod.actorProxyHysteresis) || Math.max(0.08, Math.min(0.18, (cellSize * 0.32) / Math.max(1, proxyDistance))),
+      0.01,
+      0.3,
+    ),
+  };
+}
+
+function getConnectionLodSettings() {
+  const fog = state.meta?.renderer?.fog ?? {};
+  const cellSize = Math.max(16, Math.floor(Number(state.meta?.renderer?.lod?.cellSize) || 64));
+  const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
+  const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const proxyDistance = Math.max(44, Math.floor(Math.max(nearDistance * 0.88, cellSize * 1.8, billboardDistance * 0.3)));
+  return {
+    proxyDistance,
+    proxyHysteresis: clamp(Math.max(0.08, Math.min(0.18, (cellSize * 0.34) / Math.max(1, proxyDistance))), 0.01, 0.3),
+  };
 }
 
 function normalizeAngle(angle) {
@@ -454,6 +546,19 @@ function isCellWithinWindow(cellX, cellZ, window = state.activeCellWindow) {
   );
 }
 
+function expandCellWindow(window = state.activeCellWindow, padding = 0) {
+  if (!window) {
+    return null;
+  }
+  const extra = Math.max(0, Math.floor(Number(padding) || 0));
+  return {
+    cell_x_min: window.cell_x_min - extra,
+    cell_x_max: window.cell_x_max + extra,
+    cell_z_min: window.cell_z_min - extra,
+    cell_z_max: window.cell_z_max + extra,
+  };
+}
+
 function getPillarCacheKey(entry) {
   return String(entry?.pillar_id ?? "");
 }
@@ -468,6 +573,22 @@ function getPostCacheKey(entry) {
 
 function isVisibleWorldPost(entry) {
   return entry?.display_tier !== "hidden";
+}
+
+function getPillarRenderPadding() {
+  return Math.max(WORLD_STREAM.renderPadding, getPillarLodSettings().streamPaddingCells);
+}
+
+function getPillarRetainPadding() {
+  return Math.max(WORLD_STREAM.retainPadding, getPillarRenderPadding() + 1);
+}
+
+function getTagRenderPadding() {
+  return Math.max(WORLD_STREAM.renderPadding, getTagLodSettings().streamPaddingCells);
+}
+
+function getTagRetainPadding() {
+  return Math.max(WORLD_STREAM.retainPadding, getTagRenderPadding() + 1);
 }
 
 function mergeStreamIntoCache(streamPayload) {
@@ -491,28 +612,48 @@ function pruneWorldCache() {
   const maxX = window.cell_x_max + WORLD_STREAM.retainPadding;
   const minZ = window.cell_z_min - WORLD_STREAM.retainPadding;
   const maxZ = window.cell_z_max + WORLD_STREAM.retainPadding;
-  const shouldKeep = (entry) =>
+  const pillarPadding = getPillarRetainPadding();
+  const tagPadding = getTagRetainPadding();
+  const pillarMinX = window.cell_x_min - pillarPadding;
+  const pillarMaxX = window.cell_x_max + pillarPadding;
+  const pillarMinZ = window.cell_z_min - pillarPadding;
+  const pillarMaxZ = window.cell_z_max + pillarPadding;
+  const tagMinX = window.cell_x_min - tagPadding;
+  const tagMaxX = window.cell_x_max + tagPadding;
+  const tagMinZ = window.cell_z_min - tagPadding;
+  const tagMaxZ = window.cell_z_max + tagPadding;
+  const shouldKeep = (entry, bounds) =>
     !Number.isFinite(entry?.cell_x)
     || !Number.isFinite(entry?.cell_z)
     || (
-      entry.cell_x >= minX
-      && entry.cell_x <= maxX
-      && entry.cell_z >= minZ
-      && entry.cell_z <= maxZ
+      entry.cell_x >= bounds.minX
+      && entry.cell_x <= bounds.maxX
+      && entry.cell_z >= bounds.minZ
+      && entry.cell_z <= bounds.maxZ
     );
 
   for (const [key, entry] of state.worldCache.pillars.entries()) {
-    if (!shouldKeep(entry)) {
+    if (!shouldKeep(entry, {
+      minX: pillarMinX,
+      maxX: pillarMaxX,
+      minZ: pillarMinZ,
+      maxZ: pillarMaxZ,
+    })) {
       state.worldCache.pillars.delete(key);
     }
   }
   for (const [key, entry] of state.worldCache.tags.entries()) {
-    if (!shouldKeep(entry)) {
+    if (!shouldKeep(entry, {
+      minX: tagMinX,
+      maxX: tagMaxX,
+      minZ: tagMinZ,
+      maxZ: tagMaxZ,
+    })) {
       state.worldCache.tags.delete(key);
     }
   }
   for (const [key, entry] of state.worldCache.posts.entries()) {
-    if (!shouldKeep(entry)) {
+    if (!shouldKeep(entry, { minX, maxX, minZ, maxZ })) {
       state.worldCache.posts.delete(key);
     }
   }
@@ -527,23 +668,33 @@ function filterPresenceRows(presence = []) {
 
 function getCachedWorldPayload(presence = []) {
   const window = state.activeCellWindow;
+  const pillarPadding = getPillarRenderPadding();
+  const tagPadding = getTagRenderPadding();
   const minX = window ? window.cell_x_min - WORLD_STREAM.renderPadding : Number.NEGATIVE_INFINITY;
   const maxX = window ? window.cell_x_max + WORLD_STREAM.renderPadding : Number.POSITIVE_INFINITY;
   const minZ = window ? window.cell_z_min - WORLD_STREAM.renderPadding : Number.NEGATIVE_INFINITY;
   const maxZ = window ? window.cell_z_max + WORLD_STREAM.renderPadding : Number.POSITIVE_INFINITY;
-  const shouldRender = (entry) =>
+  const pillarMinX = window ? window.cell_x_min - pillarPadding : Number.NEGATIVE_INFINITY;
+  const pillarMaxX = window ? window.cell_x_max + pillarPadding : Number.POSITIVE_INFINITY;
+  const pillarMinZ = window ? window.cell_z_min - pillarPadding : Number.NEGATIVE_INFINITY;
+  const pillarMaxZ = window ? window.cell_z_max + pillarPadding : Number.POSITIVE_INFINITY;
+  const tagMinX = window ? window.cell_x_min - tagPadding : Number.NEGATIVE_INFINITY;
+  const tagMaxX = window ? window.cell_x_max + tagPadding : Number.POSITIVE_INFINITY;
+  const tagMinZ = window ? window.cell_z_min - tagPadding : Number.NEGATIVE_INFINITY;
+  const tagMaxZ = window ? window.cell_z_max + tagPadding : Number.POSITIVE_INFINITY;
+  const shouldRender = (entry, bounds) =>
     !window
     || !Number.isFinite(entry?.cell_x)
     || !Number.isFinite(entry?.cell_z)
     || (
-      entry.cell_x >= minX
-      && entry.cell_x <= maxX
-      && entry.cell_z >= minZ
-      && entry.cell_z <= maxZ
+      entry.cell_x >= bounds.minX
+      && entry.cell_x <= bounds.maxX
+      && entry.cell_z >= bounds.minZ
+      && entry.cell_z <= bounds.maxZ
     );
 
   const postInstances = [...state.worldCache.posts.values()]
-    .filter(shouldRender)
+    .filter((entry) => shouldRender(entry, { minX, maxX, minZ, maxZ }))
     .sort((left, right) => (right.popularity_score ?? 0) - (left.popularity_score ?? 0));
   const renderableTagIds = new Set(
     postInstances
@@ -553,10 +704,20 @@ function getCachedWorldPayload(presence = []) {
 
   return {
     pillars: [...state.worldCache.pillars.values()]
-      .filter(shouldRender)
+      .filter((entry) => shouldRender(entry, {
+        minX: pillarMinX,
+        maxX: pillarMaxX,
+        minZ: pillarMinZ,
+        maxZ: pillarMaxZ,
+      }))
       .sort((left, right) => (right.importance_score ?? 0) - (left.importance_score ?? 0)),
     tags: [...state.worldCache.tags.values()]
-      .filter(shouldRender)
+      .filter((entry) => shouldRender(entry, {
+        minX: tagMinX,
+        maxX: tagMaxX,
+        minZ: tagMinZ,
+        maxZ: tagMaxZ,
+      }))
       .filter((entry) => renderableTagIds.has(entry.tag_id))
       .sort((left, right) => (right.active_post_count ?? 0) - (left.active_post_count ?? 0)),
     postInstances,
@@ -572,6 +733,23 @@ function formatQueueLabel(status) {
     return "Queued for world";
   }
   return "Live in world";
+}
+
+function resolveResultQueueStatus(result) {
+  if (result?.destination) {
+    return "ready";
+  }
+  return result?.worldQueueStatus || "queued";
+}
+
+function normalizeWorldResult(result) {
+  if (!result) {
+    return result;
+  }
+  return {
+    ...result,
+    worldQueueStatus: resolveResultQueueStatus(result),
+  };
 }
 
 async function postJson(path, body) {
@@ -646,10 +824,18 @@ function clearSearchResults() {
   setSearchStatus("");
 }
 
+function clearSearchQuery() {
+  const searchInput = elements.searchForm?.querySelector('input[name="q"]');
+  if (searchInput) {
+    searchInput.value = "";
+  }
+}
+
 function setLoading(isLoading) {
   state.loading = isLoading;
+  document.body.classList.toggle("is-world-loading", isLoading);
   if (elements.loading) {
-    elements.loading.hidden = !isLoading;
+    elements.loading.setAttribute("aria-hidden", String(!isLoading));
   }
   updateStagePanel();
 }
@@ -1019,6 +1205,177 @@ function createCircleTexture(options = {}) {
   return texture;
 }
 
+function createPillarProxyTexture(options = {}) {
+  const canvas = document.createElement("canvas");
+  const width = options.width ?? 320;
+  const height = options.height ?? 640;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const primary = options.primary ?? WORLD_STYLE.accents[0];
+  const secondary = options.secondary ?? WORLD_STYLE.accents[1];
+  const fill = options.fill ?? "rgba(255, 255, 255, 0.94)";
+  const outline = options.outline ?? WORLD_STYLE.outline;
+  const glow = options.glow ?? `${primary}33`;
+
+  const drawRoundedRect = (x, y, rectWidth, rectHeight, radius) => {
+    const safeRadius = Math.min(radius, rectWidth / 2, rectHeight / 2);
+    context.beginPath();
+    context.moveTo(x + safeRadius, y);
+    context.lineTo(x + rectWidth - safeRadius, y);
+    context.quadraticCurveTo(x + rectWidth, y, x + rectWidth, y + safeRadius);
+    context.lineTo(x + rectWidth, y + rectHeight - safeRadius);
+    context.quadraticCurveTo(x + rectWidth, y + rectHeight, x + rectWidth - safeRadius, y + rectHeight);
+    context.lineTo(x + safeRadius, y + rectHeight);
+    context.quadraticCurveTo(x, y + rectHeight, x, y + rectHeight - safeRadius);
+    context.lineTo(x, y + safeRadius);
+    context.quadraticCurveTo(x, y, x + safeRadius, y);
+    context.closePath();
+  };
+
+  const centerX = width / 2;
+  const bodyWidth = width * 0.28;
+  const bodyX = centerX - bodyWidth / 2;
+  const bodyTop = height * 0.14;
+  const bodyHeight = height * 0.7;
+  const capHeight = height * 0.065;
+  const bandWidth = bodyWidth * 1.26;
+  const bandX = centerX - bandWidth / 2;
+  const baseY = bodyTop + bodyHeight;
+
+  context.clearRect(0, 0, width, height);
+
+  const glowGradient = context.createRadialGradient(
+    centerX,
+    bodyTop + bodyHeight * 0.28,
+    bodyWidth * 0.12,
+    centerX,
+    bodyTop + bodyHeight * 0.28,
+    width * 0.34,
+  );
+  glowGradient.addColorStop(0, glow);
+  glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+  context.fillStyle = glowGradient;
+  context.beginPath();
+  context.ellipse(centerX, bodyTop + bodyHeight * 0.28, width * 0.26, height * 0.34, 0, 0, Math.PI * 2);
+  context.fill();
+
+  drawRoundedRect(bodyX, bodyTop, bodyWidth, bodyHeight, bodyWidth * 0.42);
+  context.fillStyle = fill;
+  context.fill();
+  context.lineWidth = width * 0.028;
+  context.strokeStyle = outline;
+  context.stroke();
+
+  context.fillStyle = primary;
+  drawRoundedRect(centerX - bodyWidth * 0.72, bodyTop - capHeight * 0.46, bodyWidth * 1.44, capHeight, capHeight * 0.48);
+  context.fill();
+
+  context.fillStyle = secondary;
+  for (const offset of [0.24, 0.48, 0.7]) {
+    drawRoundedRect(bandX, bodyTop + bodyHeight * offset, bandWidth, height * 0.032, height * 0.016);
+    context.fill();
+  }
+
+  context.fillStyle = `${secondary}66`;
+  context.beginPath();
+  context.ellipse(centerX, bodyTop + bodyHeight * 0.12, bodyWidth * 0.72, height * 0.055, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = `${primary}55`;
+  context.beginPath();
+  context.ellipse(centerX, baseY + height * 0.018, bodyWidth * 0.92, height * 0.042, 0, 0, Math.PI * 2);
+  context.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createMascotProxyTexture(options = {}) {
+  const canvas = document.createElement("canvas");
+  const width = options.width ?? 256;
+  const height = options.height ?? 320;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const primary = options.primary ?? WORLD_STYLE.accents[0];
+  const secondary = options.secondary ?? WORLD_STYLE.accents[1];
+  const outline = options.outline ?? WORLD_STYLE.outline;
+
+  const drawRoundedRect = (x, y, rectWidth, rectHeight, radius) => {
+    const safeRadius = Math.min(radius, rectWidth / 2, rectHeight / 2);
+    context.beginPath();
+    context.moveTo(x + safeRadius, y);
+    context.lineTo(x + rectWidth - safeRadius, y);
+    context.quadraticCurveTo(x + rectWidth, y, x + rectWidth, y + safeRadius);
+    context.lineTo(x + rectWidth, y + rectHeight - safeRadius);
+    context.quadraticCurveTo(x + rectWidth, y + rectHeight, x + rectWidth - safeRadius, y + rectHeight);
+    context.lineTo(x + safeRadius, y + rectHeight);
+    context.quadraticCurveTo(x, y + rectHeight, x, y + rectHeight - safeRadius);
+    context.lineTo(x, y + safeRadius);
+    context.quadraticCurveTo(x, y, x + safeRadius, y);
+    context.closePath();
+  };
+
+  context.clearRect(0, 0, width, height);
+
+  context.fillStyle = `${primary}26`;
+  context.beginPath();
+  context.ellipse(width * 0.5, height * 0.5, width * 0.34, height * 0.42, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = "rgba(255, 255, 255, 0.95)";
+  context.strokeStyle = outline;
+  context.lineWidth = width * 0.022;
+  context.beginPath();
+  context.arc(width * 0.5, height * 0.32, width * 0.16, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+
+  drawRoundedRect(width * 0.37, height * 0.43, width * 0.26, height * 0.23, width * 0.08);
+  context.fill();
+  context.stroke();
+
+  context.fillStyle = primary;
+  context.beginPath();
+  context.moveTo(width * 0.38, height * 0.23);
+  context.lineTo(width * 0.31, height * 0.09);
+  context.lineTo(width * 0.44, height * 0.18);
+  context.closePath();
+  context.fill();
+
+  context.fillStyle = secondary;
+  context.beginPath();
+  context.moveTo(width * 0.62, height * 0.23);
+  context.lineTo(width * 0.69, height * 0.09);
+  context.lineTo(width * 0.56, height * 0.18);
+  context.closePath();
+  context.fill();
+
+  context.fillStyle = outline;
+  context.beginPath();
+  context.arc(width * 0.46, height * 0.32, width * 0.015, 0, Math.PI * 2);
+  context.arc(width * 0.54, height * 0.32, width * 0.015, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = `${primary}aa`;
+  context.beginPath();
+  context.ellipse(width * 0.5, height * 0.47, width * 0.16, height * 0.038, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = `${secondary}cc`;
+  context.beginPath();
+  context.arc(width * 0.5, height * 0.78, width * 0.05, 0, Math.PI * 2);
+  context.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function createConfettiTexture(options = {}) {
   const canvas = document.createElement("canvas");
   const size = options.size ?? 192;
@@ -1105,6 +1462,19 @@ function unregisterBillboardsInGroup(root, persistent = false) {
   root.traverse((node) => {
     unregisterBillboard(node, persistent);
   });
+}
+
+function syncBillboardToCamera(mesh) {
+  if (!mesh || !sceneState.camera) {
+    return;
+  }
+  const parent = mesh.parent;
+  if (!parent) {
+    mesh.quaternion.copy(sceneState.camera.quaternion);
+    return;
+  }
+  parent.getWorldQuaternion(billboardParentQuaternion);
+  mesh.quaternion.copy(billboardParentQuaternion).invert().multiply(sceneState.camera.quaternion);
 }
 
 function getMeshMaterialOpacity(material) {
@@ -1203,12 +1573,15 @@ function createBranchConnection(start, end, options = {}) {
   const accent = options.accent ?? WORLD_STYLE.accents[1];
   const outerRadius = options.outerRadius ?? 0.11;
   const innerRadius = outerRadius * 0.54;
+  const connectionLod = getConnectionLodSettings();
   const distance = start.distanceTo(end);
   const midpoint = start.clone().lerp(end, 0.5);
   midpoint.y += clamp(distance * 0.18, 2.6, 10.5);
   const curve = new THREE.CatmullRomCurve3([start.clone(), midpoint, end.clone()]);
   const segments = clamp(Math.round(distance * 2.4), 16, 42);
-  const group = new THREE.Group();
+  const detailGroup = new THREE.Group();
+  const lod = new THREE.LOD();
+  lod.autoUpdate = true;
 
   const outer = new THREE.Mesh(
     new THREE.TubeGeometry(curve, segments, outerRadius, 8, false),
@@ -1221,7 +1594,7 @@ function createBranchConnection(start, end, options = {}) {
     }),
   );
   outer.renderOrder = 4;
-  group.add(outer);
+  detailGroup.add(outer);
 
   const inner = new THREE.Mesh(
     new THREE.TubeGeometry(curve, segments, innerRadius, 8, false),
@@ -1234,7 +1607,7 @@ function createBranchConnection(start, end, options = {}) {
     }),
   );
   inner.renderOrder = 5;
-  group.add(inner);
+  detailGroup.add(inner);
 
   const endpointRadius = outerRadius * 1.85;
   const startOrb = new THREE.Mesh(
@@ -1249,7 +1622,7 @@ function createBranchConnection(start, end, options = {}) {
   );
   startOrb.position.copy(start);
   startOrb.renderOrder = 4;
-  group.add(startOrb);
+  detailGroup.add(startOrb);
 
   const endOrb = new THREE.Mesh(
     new THREE.SphereGeometry(endpointRadius * 0.92, 10, 10),
@@ -1263,9 +1636,24 @@ function createBranchConnection(start, end, options = {}) {
   );
   endOrb.position.copy(end);
   endOrb.renderOrder = 4;
-  group.add(endOrb);
+  detailGroup.add(endOrb);
 
-  return group;
+  const proxyGeometry = new THREE.BufferGeometry().setFromPoints([start.clone(), end.clone()]);
+  const proxy = new THREE.Line(
+    proxyGeometry,
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color(accent),
+      transparent: true,
+      opacity: Math.max(options.outerOpacity ?? 0.32, 0.24),
+      fog: false,
+    }),
+  );
+  proxy.renderOrder = 4;
+  proxy.visible = false;
+
+  lod.addLevel(detailGroup, 0);
+  lod.addLevel(proxy, connectionLod.proxyDistance, connectionLod.proxyHysteresis);
+  return lod;
 }
 
 function createCloudTexture(options = {}) {
@@ -1493,8 +1881,9 @@ function createMascotFigure(seed, options = {}) {
   const scale = options.scale ?? 1;
   const outlineColor = options.outlineColor ?? WORLD_STYLE.outline;
   const group = new THREE.Group();
+  const detailGroup = new THREE.Group();
   const poseRoot = new THREE.Group();
-  group.add(poseRoot);
+  detailGroup.add(poseRoot);
 
   const bodyGeometry = new THREE.CapsuleGeometry(1.45 * scale, 2.4 * scale, 6, 16);
   const headGeometry = new THREE.SphereGeometry(2.15 * scale, 24, 24);
@@ -1577,11 +1966,43 @@ function createMascotFigure(seed, options = {}) {
   orb.position.set(0, 12.8 * scale, 0);
   poseRoot.add(orb);
 
+  let lod = null;
+  let proxy = null;
+  if (options.lod?.enabled) {
+    lod = new THREE.LOD();
+    lod.autoUpdate = options.lod.autoUpdate !== false;
+    proxy = createBillboard(
+      createMascotProxyTexture({
+        primary: accents.primary,
+        secondary: accents.secondary,
+        outline: outlineColor,
+      }),
+      7.6 * scale,
+      9.4 * scale,
+      {
+        opacity: 0.9,
+        fog: false,
+        renderOrder: 7,
+      },
+    );
+    proxy.position.set(0, 6.1 * scale, 0);
+    proxy.visible = false;
+    lod.addLevel(detailGroup, 0);
+    lod.addLevel(proxy, options.lod.distance ?? 150, options.lod.hysteresis ?? 0.12);
+    group.add(lod);
+  } else {
+    group.add(detailGroup);
+  }
+
   return {
     group,
+    detailGroup,
     poseRoot,
     halo,
     orb,
+    lod,
+    proxy,
+    proxyBaseY: proxy?.position.y ?? 0,
   };
 }
 
@@ -1967,12 +2388,17 @@ function buildPillarObject(entry) {
   const accents = pickAccentSet(entry.pillar_id || pillar.title);
   const group = new THREE.Group();
   const anchor = new THREE.Vector3(entry.position_x, entry.position_y + entry.height * 0.5, entry.position_z);
+  const detailGroup = new THREE.Group();
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
+
+  const pillarLod = getPillarLodSettings();
+  const lod = new THREE.LOD();
+  lod.autoUpdate = false;
 
   const pillarGeometry = new THREE.CylinderGeometry(entry.radius, entry.radius * 1.08, entry.height, 28, 1, false);
   const outline = createOutlineShell(pillarGeometry, accents.primary, 1.04);
   outline.position.y = entry.height / 2;
-  group.add(outline);
+  detailGroup.add(outline);
 
   const baseMaterial = new THREE.MeshBasicMaterial({
     color: new THREE.Color(WORLD_STYLE.white),
@@ -1981,7 +2407,7 @@ function buildPillarObject(entry) {
   });
   const pillarMesh = new THREE.Mesh(pillarGeometry, baseMaterial);
   pillarMesh.position.y = entry.height / 2;
-  group.add(pillarMesh);
+  detailGroup.add(pillarMesh);
 
   const bands = [accents.primary, accents.secondary, accents.tertiary].map((color, index) => {
     const baseY = entry.height * (0.22 + index * 0.2);
@@ -1996,7 +2422,7 @@ function buildPillarObject(entry) {
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.y = baseY;
-    group.add(ring);
+    detailGroup.add(ring);
     return {
       mesh: ring,
       baseY,
@@ -2017,7 +2443,7 @@ function buildPillarObject(entry) {
   const cap = new THREE.Mesh(capGeometry, capMaterial);
   cap.rotation.x = Math.PI / 2;
   cap.position.y = entry.height + 2.4;
-  group.add(cap);
+  detailGroup.add(cap);
 
   const flowTexture = createCircleTexture({
     fill: "rgba(255, 255, 255, 0.74)",
@@ -2061,7 +2487,7 @@ function buildPillarObject(entry) {
     }),
   );
   flow.position.y = 0.8;
-  group.add(flow);
+  detailGroup.add(flow);
 
   const crown = createBillboard(
     createCircleTexture({
@@ -2078,7 +2504,7 @@ function buildPillarObject(entry) {
     },
   );
   crown.position.set(0, entry.height + 6.4, 0);
-  group.add(crown);
+  detailGroup.add(crown);
 
   const label = createBillboard(
     createCompactCardTexture(
@@ -2094,8 +2520,35 @@ function buildPillarObject(entry) {
     7.2,
   );
   label.position.set(0, entry.height + 15.2, 0);
-  group.add(label);
+  detailGroup.add(label);
+
+  const proxy = createBillboard(
+    createPillarProxyTexture({
+      primary: accents.primary,
+      secondary: accents.secondary,
+      outline: accents.primary,
+      glow: `${accents.secondary}2d`,
+    }),
+    Math.max(16, entry.radius * 3),
+    Math.max(44, entry.height * 0.94),
+    {
+      opacity: 0.82,
+      renderOrder: 5,
+    },
+  );
+  proxy.position.set(0, entry.height * 0.47, 0);
+  proxy.visible = false;
+
+  lod.addLevel(detailGroup, 0);
+  lod.addLevel(proxy, pillarLod.proxyDistance, pillarLod.proxyHysteresis);
+  group.add(lod);
+  if (sceneState.camera) {
+    lod.update(sceneState.camera);
+  }
+
   sceneState.animatedPillars.push({
+    lod,
+    detailGroup,
     anchor,
     body: pillarMesh,
     outline,
@@ -2106,6 +2559,8 @@ function buildPillarObject(entry) {
     label,
     flow,
     flowData,
+    proxy,
+    proxyBaseY: proxy.position.y,
     height: entry.height,
     phase: (hashString(entry.pillar_id || pillar.title) % 360) * 0.024,
     cellX: entry.cell_x,
@@ -2167,7 +2622,11 @@ function buildTagObject(entry) {
   const tag = entry.tag ?? {};
   const accents = pickAccentSet(entry.tag_id || tag.label);
   const group = new THREE.Group();
+  const detailGroup = new THREE.Group();
   const homeAnchor = computeTagHomeAnchor(entry);
+  const tagLod = getTagLodSettings();
+  const lod = new THREE.LOD();
+  lod.autoUpdate = true;
   group.position.copy(homeAnchor);
 
   const ring = new THREE.Mesh(
@@ -2180,7 +2639,7 @@ function buildTagObject(entry) {
     }),
   );
   ring.rotation.x = Math.PI / 2;
-  group.add(ring);
+  detailGroup.add(ring);
 
   const halo = new THREE.Mesh(
     new THREE.RingGeometry(4.4, 5.5, 40),
@@ -2194,11 +2653,11 @@ function buildTagObject(entry) {
   );
   halo.rotation.x = Math.PI / 2;
   halo.position.y = 0.1;
-  group.add(halo);
+  detailGroup.add(halo);
 
   const centerGeometry = new THREE.SphereGeometry(1.45, 18, 18);
   const outline = createOutlineShell(centerGeometry, accents.primary, 1.18);
-  group.add(outline);
+  detailGroup.add(outline);
 
   const center = new THREE.Mesh(
     centerGeometry,
@@ -2208,7 +2667,7 @@ function buildTagObject(entry) {
       opacity: 0.96,
     }),
   );
-  group.add(center);
+  detailGroup.add(center);
 
   const beacon = createBillboard(
     createCircleTexture({
@@ -2225,7 +2684,7 @@ function buildTagObject(entry) {
     },
   );
   beacon.position.set(0, 0.2, 0);
-  group.add(beacon);
+  detailGroup.add(beacon);
 
   const labelWidth = clamp(15 + ((tag.label ?? "").length * 0.5), 18, 30);
   const labelHeight = labelWidth * (160 / 768);
@@ -2247,11 +2706,39 @@ function buildTagObject(entry) {
     },
   );
   label.position.set(0, 7.9, 0);
-  group.add(label);
+  detailGroup.add(label);
+
+  const proxyWidth = clamp(10 + ((tag.label ?? "").length * 0.32), 12, 20);
+  const proxyHeight = proxyWidth * (140 / 640);
+  const proxy = createBillboard(
+    createTagTextTexture(
+      tag.label || "tag",
+      {
+        accent: accents.primary,
+        secondary: accents.secondary,
+      },
+    ),
+    proxyWidth,
+    proxyHeight,
+    {
+      opacity: 0.9,
+      fog: false,
+      depthTest: false,
+      renderOrder: 8,
+    },
+  );
+  proxy.position.set(0, 5.8, 0);
+  proxy.visible = false;
+
+  lod.addLevel(detailGroup, 0);
+  lod.addLevel(proxy, tagLod.proxyDistance, tagLod.proxyHysteresis);
+  group.add(lod);
 
   sceneState.animatedTags.push({
     tagId: entry.tag_id,
     group,
+    lod,
+    detailGroup,
     anchor: homeAnchor.clone(),
     homeAnchor: homeAnchor.clone(),
     displayAnchor: homeAnchor.clone(),
@@ -2261,6 +2748,8 @@ function buildTagObject(entry) {
     halo,
     beacon,
     label,
+    proxy,
+    proxyBaseY: proxy.position.y,
     cellX: entry.cell_x,
     cellZ: entry.cell_z,
     speed: 0.18 + entry.branch_depth * 0.05,
@@ -2273,6 +2762,11 @@ function buildTagObject(entry) {
     },
     {
       mesh: label,
+      type: "tag",
+      data: entry,
+    },
+    {
+      mesh: proxy,
       type: "tag",
       data: entry,
     },
@@ -2421,9 +2915,16 @@ function buildPresenceObject(entry) {
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
   const seed = actor.id || actor.display_name || entry.actor_type;
   const color = entry.actor_type === "agent" ? pickAccent(seed, 1) : pickAccent(seed, 3);
+  const actorLod = getActorLodSettings();
   const mascot = createMascotFigure(seed, {
     scale: 0.72,
     outlineColor: color,
+    lod: {
+      enabled: true,
+      autoUpdate: true,
+      distance: actorLod.proxyDistance,
+      hysteresis: actorLod.proxyHysteresis,
+    },
   });
   group.add(mascot.group);
 
@@ -2451,9 +2952,12 @@ function buildPresenceObject(entry) {
 
   sceneState.animatedPresence.push({
     group,
+    lod: mascot.lod,
     halo: mascot.halo,
     orb: mascot.orb,
     orbBaseY: mascot.orb.position.y,
+    proxy: mascot.proxy,
+    proxyBaseY: mascot.proxyBaseY,
     label,
     baseY: entry.position_y,
     bob: 0.55 + Math.random() * 0.4,
@@ -2758,19 +3262,20 @@ function hasNewerPostForFocusedNode(result) {
 function syncFocusedGhost() {
   clearFocusGhost();
   const result = state.focusedResult;
+  const queueStatus = resolveResultQueueStatus(result);
   sceneState.visitorSystem?.syncQueuedResult(result, {
     interrupted: hasPresenceCheckingFocusedPost(result) || hasNewerPostForFocusedNode(result),
   });
   if (!result?.destination) {
     return;
   }
-  const shouldGhost = result.worldQueueStatus !== "ready" || !hasRenderableFocusedPost(result);
+  const shouldGhost = queueStatus !== "ready" || !hasRenderableFocusedPost(result);
   if (!shouldGhost) {
     return;
   }
 
   const post = result.post ?? {};
-  const accent = result.worldQueueStatus === "ready" ? WORLD_STYLE.accents[1] : WORLD_STYLE.accents[0];
+  const accent = queueStatus === "ready" ? WORLD_STYLE.accents[1] : WORLD_STYLE.accents[0];
   const group = new THREE.Group();
   group.position.set(
     result.destination.position_x,
@@ -2780,7 +3285,7 @@ function syncFocusedGhost() {
 
   const ghostCardWidth = 15.5;
   const ghostCardHeight = ghostCardWidth * (200 / 640);
-  const ghostSubtitle = result.worldQueueStatus === "ready" ? "" : "Queued for world placement";
+  const ghostSubtitle = queueStatus === "ready" ? "" : "Queued for world placement";
   const card = createBillboard(
     createCompactCardTexture(
       post.title || truncateText(post.body_plain || "Post", 26),
@@ -2868,7 +3373,8 @@ function getScenePostEntry(postId, tagId, options = {}) {
 
 function buildFocusedRevealPostPayload() {
   const result = state.focusedResult;
-  if (result.worldQueueStatus !== "ready" || !result?.destination) {
+  const queueStatus = resolveResultQueueStatus(result);
+  if (queueStatus !== "ready" || !result?.destination) {
     return null;
   }
   if (state.openTagId !== result.destination.tag_id) {
@@ -3512,10 +4018,11 @@ function rebuildConnections(pillars, tags, posts) {
 
   const focusedResult = state.focusedResult;
   const focusedDestination = focusedResult?.destination;
+  const focusedQueueStatus = resolveResultQueueStatus(focusedResult);
   const shouldLinkFocusedGhost =
     focusedDestination?.tag_id
     && state.openTagId === focusedDestination.tag_id
-    && (focusedResult.worldQueueStatus !== "ready" || !hasRenderableFocusedPost(focusedResult));
+    && (focusedQueueStatus !== "ready" || !hasRenderableFocusedPost(focusedResult));
   if (!shouldLinkFocusedGhost) {
     return;
   }
@@ -3554,7 +4061,7 @@ function rebuildConnections(pillars, tags, posts) {
       focusedAnchor.z,
     ),
     {
-      accent: focusedResult.worldQueueStatus === "ready" ? WORLD_STYLE.accents[1] : WORLD_STYLE.accents[0],
+      accent: focusedQueueStatus === "ready" ? WORLD_STYLE.accents[1] : WORLD_STYLE.accents[0],
       outerRadius: 0.18,
       outerOpacity: 0.44,
       innerOpacity: 0.88,
@@ -3695,6 +4202,7 @@ function initScene() {
     ambientRoot: sceneState.visitors,
     queuedRoot: sceneState.focusQueued,
     createMascotFigure,
+    getActorLodSettings,
     createBillboard,
     unregisterBillboard,
     pickAccent,
@@ -3897,7 +4405,7 @@ function renderSelected(result) {
   const fullBody = renderFullPostBody(post.body_md, post.body_plain);
   const tagSummary = post.tags?.slice(0, 5).map((tag) => `#${tag.label}`).join(" ") || "No visible tags";
   const postHref = post.id ? `/social/post.html?id=${encodeURIComponent(post.id)}` : "";
-  const queueStatus = result.worldQueueStatus ?? "ready";
+  const queueStatus = resolveResultQueueStatus(result);
   const queueMeta = queueStatus === "ready"
     ? ""
     : `
@@ -3924,7 +4432,7 @@ function renderSelected(result) {
 }
 
 function focusOnDestination(result) {
-  startGuidedTravel(result);
+  startGuidedTravel(normalizeWorldResult(result));
 }
 
 function renderSearchResults() {
@@ -3946,6 +4454,7 @@ function renderSearchResults() {
       const post = hit.post ?? {};
       const isActive = state.activeResultId === post.id;
       const summary = summarizeBodyMarkdown(post.body_md, post.body_plain, 120);
+      const queueStatus = resolveResultQueueStatus(hit);
       const metaBits = [
         post.tags?.slice(0, 2).map((tag) => `#${tag.label}`).join(" ") || post.pillar?.title || "",
         post.created_at ? formatRelativeTime(post.created_at) : "now",
@@ -3956,7 +4465,7 @@ function renderSearchResults() {
           <p class="world-result__body">${htmlEscape(summary)}</p>
           <div class="world-result__meta">
             ${metaBits.map((entry) => `<span>${htmlEscape(entry)}</span>`).join("")}
-            ${hit.worldQueueStatus === "ready" ? "" : `<span class="world-chip world-chip--queue">${htmlEscape(formatQueueLabel(hit.worldQueueStatus))}</span>`}
+            ${queueStatus === "ready" ? "" : `<span class="world-chip world-chip--queue">${htmlEscape(formatQueueLabel(queueStatus))}</span>`}
           </div>
         </button>
       `;
@@ -3969,7 +4478,8 @@ function renderSearchResults() {
       const result = hits.find((entry) => entry.post?.id === id);
       state.activeResultId = id;
       focusOnDestination(result);
-      elements.resultsPanel?.classList.add("is-empty");
+      clearSearchQuery();
+      clearSearchResults();
     });
   }
 }
@@ -4015,7 +4525,10 @@ async function loadMeta(force = false) {
   state.meta = payload;
   const nearDistance = payload.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = payload.renderer?.fog?.farDistance ?? 720;
-  sceneState.scene.fog = new THREE.Fog(WORLD_STYLE.fog, nearDistance, farDistance * WORLD_STREAM.fogMultiplier);
+  const fogFar = farDistance * WORLD_STREAM.fogMultiplier;
+  sceneState.scene.fog = new THREE.Fog(WORLD_STYLE.fog, nearDistance, fogFar);
+  sceneState.camera.far = Math.max(2400, fogFar + 640);
+  sceneState.camera.updateProjectionMatrix();
   syncConfettiFieldBounds();
   updateMetaPanel();
   return payload;
@@ -4049,7 +4562,6 @@ async function loadStreamForPosition(position, force = false) {
     showToast(error.message);
   } finally {
     state.streamLoading = false;
-    setLoading(false);
   }
 }
 
@@ -4074,10 +4586,14 @@ async function runSearch() {
       sort: formData.get("sort") || "latest",
       limit: 12,
     });
-    state.searchPayload = payload;
-    if (!state.activeResultId && payload.hits[0]?.post?.id) {
-      state.activeResultId = payload.hits[0].post.id;
-      renderSelected(payload.hits[0]);
+    const normalizedPayload = {
+      ...payload,
+      hits: (payload.hits ?? []).map((hit) => normalizeWorldResult(hit)),
+    };
+    state.searchPayload = normalizedPayload;
+    if (!state.activeResultId && normalizedPayload.hits[0]?.post?.id) {
+      state.activeResultId = normalizedPayload.hits[0].post.id;
+      renderSelected(normalizedPayload.hits[0]);
     }
     renderSearchResults();
     setSearchStatus("");
@@ -4161,7 +4677,13 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   const billboardDistance = state.meta?.renderer?.fog?.billboardDistance ?? 420;
   const nearDistance = state.meta?.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = state.meta?.renderer?.fog?.farDistance ?? 720;
+  const pillarLod = getPillarLodSettings();
+  const tagLod = getTagLodSettings();
+  const actorLod = getActorLodSettings();
+  const pillarActiveWindow = expandCellWindow(state.activeCellWindow, getPillarRenderPadding());
   const retainedDistance = farDistance * WORLD_STREAM.fogMultiplier;
+  const focusedDestination = state.focusedResult?.destination;
+  const focusIsolation = clamp(state.postFocusMix / 0.62, 0, 1);
 
   for (const entry of sceneState.animatedDecor) {
     if (entry.kind === "orbit") {
@@ -4236,8 +4758,13 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   }
 
   for (const entry of sceneState.animatedPillars) {
+    if (entry.lod?.levels?.[1]) {
+      entry.lod.levels[1].distance = pillarLod.proxyDistance;
+      entry.lod.levels[1].hysteresis = pillarLod.proxyHysteresis;
+    }
+    entry.lod?.update(sceneState.camera);
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
-    const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ);
+    const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ, pillarActiveWindow);
     const fade = 1 - clamp((distance - nearDistance * 0.4) / Math.max(1, retainedDistance - nearDistance * 0.4), 0, 1);
     const worldMix = activeCell ? 1 : 0.42;
     entry.body.material.opacity = (0.28 + fade * 0.68) * worldMix;
@@ -4256,6 +4783,12 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     entry.label.material.opacity = activeCell
       ? 0.26 + fade * 0.66
       : 0.1 + fade * 0.18;
+    entry.proxy.position.y = entry.proxyBaseY + Math.sin(elapsedSeconds * 0.42 + entry.phase) * 0.4;
+    entry.proxy.material.opacity = (
+      activeCell
+        ? 0.34 + fade * 0.48
+        : 0.16 + fade * 0.22
+    ) * (entry.proxy.visible ? 1 : 0);
     if (entry.flow && entry.flowData?.length) {
       const positions = entry.flow.geometry.attributes.position.array;
       for (let index = 0; index < entry.flowData.length; index += 1) {
@@ -4298,23 +4831,39 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     const maxOpacity =
       entry.displayTier === "hero" ? 0.98 : entry.displayTier === "standard" ? 0.9 : 0.8;
     const cardRange = activeCell ? billboardDistance * 1.25 : billboardDistance * 0.62;
+    const isFocusedEntry =
+      Boolean(focusedDestination)
+      && entry.postId === focusedDestination.post_id
+      && entry.tagId === focusedDestination.tag_id;
+    const backgroundOpacityFactor = focusedDestination && !isFocusedEntry
+      ? 1 - focusIsolation * 0.7
+      : 1;
     entry.group.position.copy(renderedAnchor);
     entry.group.position.y += (1 - reveal) * 1.6;
     const scale = 0.84 + reveal * 0.16;
     entry.group.scale.setScalar(scale);
+    entry.card.renderOrder = isFocusedEntry ? 14 : 10;
+    entry.proxy.renderOrder = isFocusedEntry ? 12 : 8;
 
-    entry.card.material.opacity = ((minOpacity + (maxOpacity - minOpacity) * fade) * (activeCell ? 1 : 0.54)) * reveal;
+    entry.card.material.opacity =
+      ((minOpacity + (maxOpacity - minOpacity) * fade) * (activeCell ? 1 : 0.54))
+      * reveal
+      * backgroundOpacityFactor;
     entry.card.visible = reveal > 0.06 && distance <= cardRange;
     entry.proxy.visible = reveal > 0.04 && (!entry.card.visible || !activeCell);
     entry.proxy.material.opacity = activeCell
-      ? (0.04 + (1 - fade) * 0.12) * reveal
-      : (0.16 + fade * 0.18) * reveal;
+      ? (0.04 + (1 - fade) * 0.12) * reveal * backgroundOpacityFactor
+      : (0.16 + fade * 0.18) * reveal * backgroundOpacityFactor;
     entry.baseMarker.material.opacity = activeCell
-      ? (0.05 + fade * 0.1) * reveal
-      : (0.12 + fade * 0.08) * reveal;
+      ? (0.05 + fade * 0.1) * reveal * backgroundOpacityFactor
+      : (0.12 + fade * 0.08) * reveal * backgroundOpacityFactor;
   }
 
   for (const entry of sceneState.animatedTags) {
+    if (entry.lod?.levels?.[1]) {
+      entry.lod.levels[1].distance = tagLod.proxyDistance;
+      entry.lod.levels[1].hysteresis = tagLod.proxyHysteresis;
+    }
     entry.ring.rotation.z += deltaSeconds * entry.speed;
     entry.halo.rotation.z -= deltaSeconds * entry.speed * 0.62;
     const distance = (entry.displayAnchor ?? entry.anchor).distanceTo(sceneState.camera.position);
@@ -4339,9 +4888,19 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     entry.center.material.opacity = entry.isOpen
       ? (activeCell ? 1 : 0.54)
       : (activeCell ? 0.86 : 0.34);
+    if (entry.proxy) {
+      entry.proxy.position.y = entry.proxyBaseY + Math.sin(elapsedSeconds * (0.8 + entry.speed) + entry.speed * 10) * 0.18;
+      entry.proxy.material.opacity = entry.isOpen
+        ? (activeCell ? 0.86 - farMix * 0.14 : 0.46 - farMix * 0.1)
+        : (activeCell ? 0.72 - farMix * 0.18 : 0.3 - farMix * 0.08);
+    }
   }
 
   for (const entry of sceneState.animatedPresence) {
+    if (entry.lod?.levels?.[1]) {
+      entry.lod.levels[1].distance = actorLod.proxyDistance;
+      entry.lod.levels[1].hysteresis = actorLod.proxyHysteresis;
+    }
     entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 1.2;
     entry.group.rotation.y += deltaSeconds * 0.24;
     if (entry.halo) {
@@ -4353,6 +4912,10 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     if (entry.label) {
       const distance = entry.group.position.distanceTo(sceneState.camera.position);
       entry.label.material.opacity = 1 - clamp((distance - nearDistance * 0.45) / Math.max(1, retainedDistance - nearDistance * 0.45), 0, 1);
+    }
+    if (entry.proxy) {
+      entry.proxy.position.y = entry.proxyBaseY + Math.sin(elapsedSeconds * 1.1 + entry.phase) * 0.2;
+      entry.proxy.material.opacity = 0.54;
     }
   }
 
@@ -4392,7 +4955,7 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   sceneState.visitorSystem?.update(deltaSeconds, elapsedSeconds);
 
   for (const mesh of [...sceneState.billboards, ...sceneState.persistentBillboards]) {
-    mesh.quaternion.copy(sceneState.camera.quaternion);
+    syncBillboardToCamera(mesh);
   }
 }
 
@@ -4605,23 +5168,73 @@ function pickSceneObject(event) {
   }
 }
 
+function getPrimaryPillar(entries = state.stream?.pillars ?? []) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return null;
+  }
+  return entries.reduce((best, entry) => {
+    if (!best) {
+      return entry;
+    }
+    return (entry.importance_score ?? 0) > (best.importance_score ?? 0) ? entry : best;
+  }, null);
+}
+
+function computeOpeningShot(anchor, options = {}) {
+  const player = new THREE.Vector3(
+    anchor.x,
+    anchor.y + Math.max(62, options.height * 0.38),
+    anchor.z + Math.max(150, options.height * 0.78),
+  );
+  const target = getPlayerLookTarget(player);
+  const position = new THREE.Vector3(
+    player.x,
+    Math.min(CAMERA.maxY - 2, target.y + Math.max(62, options.height * 0.16)),
+    player.z + Math.max(86, options.radius * 2.2),
+  );
+  return { position, target, player };
+}
+
+function getLevelOpeningCameraPosition(position, target) {
+  const leveled = position.clone();
+  leveled.y = target.y;
+  return leveled;
+}
+
 function positionCameraForWorldMeta() {
   if (!state.meta || state.initialViewFramed) {
     return;
   }
-  const cellSize = state.meta.renderer?.lod?.cellSize ?? 64;
   const centerX = (state.meta.bounds.minX + state.meta.bounds.maxX) / 2;
   const centerZ = (state.meta.bounds.minZ + state.meta.bounds.maxZ) / 2;
   const spanX = Math.max(1, state.meta.bounds.maxX - state.meta.bounds.minX);
   const spanZ = Math.max(1, state.meta.bounds.maxZ - state.meta.bounds.minZ);
-  const cameraDistance = Math.min(cellSize * 2.7, Math.max(136, Math.max(spanX, spanZ) * 0.58));
-  const target = new THREE.Vector3(centerX, 84, centerZ);
-  const position = new THREE.Vector3(centerX + cameraDistance * 0.44, 132, centerZ + cameraDistance);
-  aimCameraAt(position, target);
+  const frame = computeOpeningShot(
+    new THREE.Vector3(centerX, 0, centerZ),
+    {
+      height: Math.max(150, Math.min(220, Math.max(spanX, spanZ) * 0.46)),
+      radius: Math.max(26, Math.min(42, Math.max(spanX, spanZ) * 0.08)),
+    },
+  );
+  const { position, target } = frame;
+  aimCameraAt(getLevelOpeningCameraPosition(position, target), target);
 }
 
 function frameInitialViewFromStream() {
   if (!state.stream || state.initialViewFramed) {
+    return;
+  }
+  const primaryPillar = getPrimaryPillar(state.stream.pillars);
+  if (primaryPillar) {
+    const frame = computeOpeningShot(
+      new THREE.Vector3(primaryPillar.position_x, primaryPillar.position_y, primaryPillar.position_z),
+      {
+        height: primaryPillar.height,
+        radius: primaryPillar.radius,
+      },
+    );
+    aimCameraAt(getLevelOpeningCameraPosition(frame.position, frame.target), frame.target);
+    state.initialViewFramed = true;
     return;
   }
   const anchors = [
@@ -4667,7 +5280,7 @@ function frameInitialViewFromStream() {
     Math.max(112, center.y + spanY * 0.44 + 56),
     center.z + cameraDistance,
   );
-  aimCameraAt(position, target);
+  aimCameraAt(getLevelOpeningCameraPosition(position, target), target);
   state.initialViewFramed = true;
 }
 
@@ -4811,7 +5424,6 @@ async function bootstrapWorld() {
     await loadStream(true);
     setSearchStatus("");
   } catch (error) {
-    setLoading(false);
     setSearchStatus(error.message);
     showToast(error.message, 6000);
   }
@@ -4825,6 +5437,7 @@ async function bootstrapWorld() {
   }, 5000);
 
   animate();
+  setLoading(false);
 }
 
 elements.searchForm.addEventListener("submit", (event) => {
