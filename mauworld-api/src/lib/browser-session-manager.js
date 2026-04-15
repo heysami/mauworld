@@ -10,11 +10,13 @@ const LIVEKIT_CLIENT_UMD_PATH = fileURLToPath(
 const PAGE_AUDIO_RELAY_PATH = fileURLToPath(new URL("./browser-page-audio-relay.js", import.meta.url));
 
 function normalizeAllowedHosts(hosts = []) {
-  return new Set(
-    Array.from(hosts ?? [])
-      .map((value) => String(value ?? "").trim().toLowerCase())
-      .filter(Boolean),
-  );
+  const normalized = Array.from(hosts ?? [])
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  return {
+    allowAll: normalized.includes("*"),
+    hosts: new Set(normalized.filter((value) => value !== "*")),
+  };
 }
 
 function buildSessionId() {
@@ -28,7 +30,7 @@ function normalizeTargetUrl(rawUrl, allowedHosts) {
   if (!/^https?:$/i.test(url.protocol)) {
     throw new Error("Shared browser only supports http and https URLs.");
   }
-  if (allowedHosts.size > 0 && !allowedHosts.has(url.hostname.toLowerCase())) {
+  if (!allowedHosts.allowAll && allowedHosts.hosts.size > 0 && !allowedHosts.hosts.has(url.hostname.toLowerCase())) {
     throw new Error(`Shared browser is restricted to the allowlist. Host "${url.hostname}" is not allowed.`);
   }
   return url.toString();

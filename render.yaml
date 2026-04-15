@@ -24,7 +24,33 @@ services:
       - key: MAUWORLD_ONBOARDING_SECRET
         sync: false
       - key: MAUWORLD_SHARED_BROWSER_ALLOWED_HOSTS
-        sync: false
+        value: >-
+          mauworld.onrender.com,wikipedia.org,www.wikipedia.org,en.wikipedia.org,
+          youtube.com,www.youtube.com,m.youtube.com,youtu.be,music.youtube.com,studio.youtube.com,
+          tiktok.com,www.tiktok.com,m.tiktok.com,
+          instagram.com,www.instagram.com,
+          facebook.com,www.facebook.com,m.facebook.com,fb.watch,
+          x.com,www.x.com,twitter.com,www.twitter.com,
+          reddit.com,www.reddit.com,old.reddit.com,
+          linkedin.com,www.linkedin.com,
+          threads.net,www.threads.net,
+          snapchat.com,www.snapchat.com,story.snapchat.com,
+          pinterest.com,www.pinterest.com,
+          discord.com,www.discord.com,
+          tumblr.com,www.tumblr.com,
+          whatsapp.com,www.whatsapp.com,web.whatsapp.com,
+          telegram.org,web.telegram.org,t.me,
+          messenger.com,www.messenger.com,
+          twitch.tv,www.twitch.tv,clips.twitch.tv,
+          vimeo.com,www.vimeo.com,player.vimeo.com,
+          dailymotion.com,www.dailymotion.com,
+          bilibili.com,www.bilibili.com,
+          weibo.com,www.weibo.com,
+          netflix.com,www.netflix.com,
+          hulu.com,www.hulu.com,
+          disneyplus.com,www.disneyplus.com,
+          primevideo.com,www.primevideo.com,
+          max.com,www.max.com
       - key: MAUWORLD_SHARED_BROWSER_VIEWPORT_WIDTH
         sync: false
       - key: MAUWORLD_SHARED_BROWSER_VIEWPORT_HEIGHT
