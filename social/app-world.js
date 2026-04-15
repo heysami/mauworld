@@ -234,6 +234,7 @@ const sceneState = {
 
 const billboardParentQuaternion = new THREE.Quaternion();
 const browserFallbackHostPosition = new THREE.Vector3();
+const defaultBrowserStageVideoElement = elements.browserVideo;
 
 const inputState = {
   keys: new Set(),
@@ -1026,7 +1027,55 @@ function ensureBrowserVideoPlayback(element) {
   playPromise?.catch?.(() => null);
 }
 
+function mountBrowserStageVideoElement(videoElement) {
+  if (!elements.browserStage || !videoElement) {
+    return;
+  }
+  if (elements.browserVideo === videoElement) {
+    return;
+  }
+  videoElement.className = defaultBrowserStageVideoElement?.className || "world-browser-stage__video";
+  videoElement.hidden = false;
+  videoElement.muted = true;
+  videoElement.defaultMuted = true;
+  videoElement.autoplay = true;
+  videoElement.playsInline = true;
+  videoElement.setAttribute("data-world-browser-video", "");
+  if (elements.browserVideo?.isConnected) {
+    elements.browserVideo.replaceWith(videoElement);
+  } else {
+    elements.browserStage.insertBefore(videoElement, elements.browserFrame ?? elements.browserPlaceholder ?? null);
+  }
+  elements.browserVideo = videoElement;
+}
+
+function restoreBrowserStageVideoElement() {
+  if (!defaultBrowserStageVideoElement || elements.browserVideo === defaultBrowserStageVideoElement) {
+    return;
+  }
+  const activeVideo = elements.browserVideo;
+  defaultBrowserStageVideoElement.className = activeVideo?.className || defaultBrowserStageVideoElement.className;
+  defaultBrowserStageVideoElement.hidden = Boolean(activeVideo?.hidden);
+  defaultBrowserStageVideoElement.muted = true;
+  defaultBrowserStageVideoElement.defaultMuted = true;
+  defaultBrowserStageVideoElement.autoplay = true;
+  defaultBrowserStageVideoElement.playsInline = true;
+  defaultBrowserStageVideoElement.setAttribute("data-world-browser-video", "");
+  if (activeVideo?.isConnected) {
+    activeVideo.replaceWith(defaultBrowserStageVideoElement);
+  } else if (elements.browserStage) {
+    elements.browserStage.insertBefore(
+      defaultBrowserStageVideoElement,
+      elements.browserFrame ?? elements.browserPlaceholder ?? null,
+    );
+  }
+  elements.browserVideo = defaultBrowserStageVideoElement;
+}
+
 function setBrowserPreviewStream(stream) {
+  if (stream) {
+    restoreBrowserStageVideoElement();
+  }
   if (!elements.browserVideo) {
     return;
   }
@@ -1199,7 +1248,7 @@ function getBrowserMediaController() {
     onRemoteTrack: ({ sessionId, track, element }) => {
       if (!state.localBrowserShare && elements.browserVideo) {
         state.browserPanelRemoteSessionId = sessionId;
-        track.attach(elements.browserVideo);
+        mountBrowserStageVideoElement(element);
         elements.browserVideo.hidden = false;
         ensureBrowserVideoPlayback(elements.browserVideo);
         bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
@@ -1214,9 +1263,11 @@ function getBrowserMediaController() {
     onRemoteTrackRemoved: ({ sessionId }) => {
       if (state.browserPanelRemoteSessionId === sessionId && elements.browserVideo) {
         state.browserPanelRemoteSessionId = "";
+        restoreBrowserStageVideoElement();
         elements.browserVideo.pause?.();
         elements.browserVideo.removeAttribute("src");
         elements.browserVideo.srcObject = null;
+        elements.browserVideo.hidden = true;
         updateBrowserMediaVideoMetrics(null, "");
       }
       if (state.browserMediaState.remoteVideoSessionId === sessionId) {
@@ -3862,6 +3913,7 @@ function clearBrowserScreenVideo(sessionId) {
     state.browserPanelRemoteSessionId = "";
     updateBrowserMediaVideoMetrics(null, "");
     if (elements.browserVideo) {
+      restoreBrowserStageVideoElement();
       elements.browserVideo.removeAttribute("src");
       elements.browserVideo.srcObject = null;
       elements.browserVideo.hidden = true;
