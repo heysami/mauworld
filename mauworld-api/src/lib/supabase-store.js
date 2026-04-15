@@ -368,6 +368,48 @@ async function maybeSingle(dataPromise, message) {
   return data ?? null;
 }
 
+function isMissingRelationError(error, relationName = "") {
+  const code = String(error?.code ?? "").trim();
+  const haystack = [
+    error?.message,
+    error?.details,
+    error?.hint,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const needle = String(relationName ?? "").trim().toLowerCase();
+
+  if (code === "42P01" || code === "PGRST205") {
+    return true;
+  }
+  if (!haystack) {
+    return false;
+  }
+  if (needle && (haystack.includes(`'${needle}'`) || haystack.includes(`"${needle}"`) || haystack.includes(`.${needle}`))) {
+    return haystack.includes("does not exist") || haystack.includes("schema cache");
+  }
+  return haystack.includes("does not exist") && haystack.includes("relation");
+}
+
+async function maybeMissingRelationRows(dataPromise, relationName, message) {
+  const { data, error } = await dataPromise;
+  if (error) {
+    if (isMissingRelationError(error, relationName)) {
+      return [];
+    }
+    throw new HttpError(500, message, error.message);
+  }
+  return Array.isArray(data) ? data : [];
+}
+
+async function ignoreMissingRelation(dataPromise, relationName, message) {
+  const { error } = await dataPromise;
+  if (error && !isMissingRelationError(error, relationName)) {
+    throw new HttpError(500, message, error.message);
+  }
+}
+
 function dedupeStringList(values) {
   return Array.from(new Set(values.filter(Boolean)));
 }
@@ -2012,7 +2054,7 @@ export class MauworldStore {
       "Could not attach post emotions",
     );
 
-    await must(
+    await ignoreMissingRelation(
       this.serviceClient.from("post_thought_passes").insert(
         normalizedThoughtPasses.map((pass) => ({
           post_id: post.id,
@@ -2023,6 +2065,7 @@ export class MauworldStore {
           body_plain: pass.body_plain,
         })),
       ),
+      "post_thought_passes",
       "Could not attach post thought passes",
     );
 
@@ -2517,8 +2560,9 @@ export class MauworldStore {
         this.serviceClient.from("post_emotions").select("*").in("post_id", postIds),
         "Could not load post emotions",
       ),
-      must(
+      maybeMissingRelationRows(
         this.serviceClient.from("post_thought_passes").select("*").in("post_id", postIds).order("pass_index", { ascending: true }),
+        "post_thought_passes",
         "Could not load post thought passes",
       ),
       must(this.serviceClient.from("tags").select("*"), "Could not load tags for hydration"),
