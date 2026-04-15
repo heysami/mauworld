@@ -1249,15 +1249,15 @@ function getBrowserMediaController() {
       if (!state.localBrowserShare && elements.browserVideo) {
         state.browserPanelRemoteSessionId = sessionId;
         state.browserMediaState.remoteVideoSessionId = sessionId;
-        mountBrowserStageVideoElement(element);
+        restoreBrowserStageVideoElement();
+        track.attach(elements.browserVideo);
         elements.browserVideo.hidden = false;
         ensureBrowserVideoPlayback(elements.browserVideo);
         bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
-        setBrowserScreenVideo(sessionId, elements.browserVideo);
+        setBrowserScreenVideo(sessionId, element);
       } else {
         setBrowserScreenVideo(sessionId, element);
       }
-      state.browserMediaState.remoteVideoSessionId = sessionId;
       state.browserMediaTransport = "livekit";
       updateBrowserPanel();
     },
@@ -5834,6 +5834,7 @@ function updateBrowserPanel() {
     ? debugHostSessionId === state.viewerSessionId || state.livePresence.has(debugHostSessionId)
     : false;
   const debugScreenEntry = debugSession ? sceneState.browserScreenEntries.get(debugSession.sessionId) ?? null : null;
+  const debugScreenVideo = debugScreenEntry?.videoElement ?? null;
   setBrowserDebug(
     [
       `room ${state.browserMediaState.connected ? "connected" : "idle"} / ${state.browserMediaState.transport}`,
@@ -5841,6 +5842,7 @@ function updateBrowserPanel() {
       `remote ${state.browserMediaState.remoteVideoSessionId?.slice(-8) || "-"} ready ${state.browserMediaState.remoteVideoReadyState || 0} size ${state.browserMediaState.remoteVideoWidth || 0}x${state.browserMediaState.remoteVideoHeight || 0} paused ${state.browserMediaState.remoteVideoPaused ? "yes" : "no"}`,
       `sessions ${state.browserSessions.size} host live ${debugHostLive ? "yes" : "no"} rendered ${debugHostRendered ? "yes" : "no"} screen ${debugScreenEntry?.group?.visible ? "visible" : debugScreenEntry ? "hidden" : "none"}`,
       `panel stream ${elements.browserVideo?.srcObject ? "yes" : "no"} time ${Number(elements.browserVideo?.currentTime ?? 0).toFixed(2)}`,
+      `texture stream ${debugScreenVideo?.srcObject ? "yes" : "no"} time ${Number(debugScreenVideo?.currentTime ?? 0).toFixed(2)} paused ${debugScreenVideo ? (debugScreenVideo.paused ? "yes" : "no") : "-"}`,
     ].join("\n"),
   );
 
