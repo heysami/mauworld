@@ -3997,6 +3997,51 @@ function getBrowserHostPosition(hostSessionId) {
   return null;
 }
 
+function computeRemoteBrowserAudioVolume(session) {
+  if (!session || session.hostSessionId === state.viewerSessionId || session.deliveryMode !== "full") {
+    return 0;
+  }
+  const hostPosition = getBrowserHostPosition(session.hostSessionId);
+  if (!hostPosition) {
+    return 0;
+  }
+  const listenerPosition = sceneState.playerAvatar?.group?.position ?? getNavigationPosition();
+  const planarDistance = Math.hypot(
+    listenerPosition.x - hostPosition.x,
+    listenerPosition.z - hostPosition.z,
+  );
+  const maxDistance = Math.max(16, getInteractionConfig().browserRadius);
+  const fullVolumeDistance = Math.min(18, Math.max(10, maxDistance * 0.18));
+  if (planarDistance <= fullVolumeDistance) {
+    return 1;
+  }
+  if (planarDistance >= maxDistance) {
+    return 0;
+  }
+  const t = clamp(
+    (planarDistance - fullVolumeDistance) / Math.max(1, maxDistance - fullVolumeDistance),
+    0,
+    1,
+  );
+  const gain = Math.pow(1 - t, 2.25);
+  return gain < 0.01 ? 0 : gain;
+}
+
+function updateRemoteBrowserAudioMix() {
+  if (!state.browserMediaController) {
+    return;
+  }
+  for (const session of state.browserSessions.values()) {
+    if (session.hostSessionId === state.viewerSessionId) {
+      continue;
+    }
+    state.browserMediaController.setRemoteAudioVolume({
+      sessionId: session.sessionId,
+      volume: computeRemoteBrowserAudioVolume(session),
+    });
+  }
+}
+
 function updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds) {
   const hostPosition = getBrowserHostPosition(entry.hostSessionId);
   if (!hostPosition) {
@@ -5994,6 +6039,7 @@ function handleBrowserStop(payload) {
   }
   clearLocalBrowserShare({ sessionId });
   clearBrowserScreenVideo(sessionId);
+  getBrowserMediaController().removeSession?.(sessionId);
   void getBrowserMediaController().unpublishSession(sessionId);
   state.browserSessions.delete(sessionId);
   removeBrowserScreenEntry(sessionId);
@@ -6428,6 +6474,7 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   for (const entry of sceneState.animatedBrowserScreens) {
     updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds);
   }
+  updateRemoteBrowserAudioMix();
 
   if (sceneState.routeGuide) {
     sceneState.routeGuide.startMarker.rotation.z += deltaSeconds * 0.9;

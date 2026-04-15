@@ -48,12 +48,48 @@ function normalizePlayError(error) {
   return String(error?.name || error?.message || "").trim();
 }
 
-function detachTrackElement(entry) {
+function clampUnit(value) {
+  return Math.min(1, Math.max(0, Number(value) || 0));
+}
+
+function getAudioContextConstructor() {
+  return window.AudioContext || window.webkitAudioContext || null;
+}
+
+function isAppleMobileWebKit() {
+  const userAgent = String(navigator?.userAgent || "");
+  const platform = String(navigator?.platform || "");
+  const maxTouchPoints = Number(navigator?.maxTouchPoints) || 0;
+  return /iPad|iPhone|iPod/i.test(userAgent) || (platform === "MacIntel" && maxTouchPoints > 1);
+}
+
+function detachTrackElement(entry, options = {}) {
   if (!entry) {
     return;
   }
-  entry.track?.detach?.().forEach((node) => node.remove());
-  entry.element?.remove?.();
+  const removeElement = options.removeElement !== false;
+  if (entry.element && entry.track?.detach) {
+    try {
+      entry.track.detach(entry.element);
+    } catch (_error) {
+      entry.track?.detach?.().forEach((node) => {
+        if (removeElement || node !== entry.element) {
+          node.remove();
+        }
+      });
+    }
+  } else {
+    entry.track?.detach?.().forEach((node) => node.remove());
+  }
+  if (!entry.element) {
+    return;
+  }
+  entry.element.pause?.();
+  entry.element.removeAttribute?.("src");
+  entry.element.srcObject = null;
+  if (removeElement) {
+    entry.element.remove?.();
+  }
 }
 
 export function createBrowserMediaController(options = {}) {
@@ -95,6 +131,11 @@ export function createBrowserMediaController(options = {}) {
     remoteTracks: new Map(),
     pendingSubscriptions: new Map(),
     audioPlaybackState: new Map(),
+    audioVolumes: new Map(),
+    audioElements: new Map(),
+    audioContext: null,
+    audioGraphs: new Map(),
+    useAudioGraph: isAppleMobileWebKit() && Boolean(getAudioContextConstructor()),
   };
 
   function notifyStatus(patch = {}) {
@@ -120,6 +161,127 @@ export function createBrowserMediaController(options = {}) {
     return state.liveKitPromise;
   }
 
+  function getOrCreateAudioElement(sessionId) {
+    const key = String(sessionId ?? "").trim();
+    if (!key) {
+      return null;
+    }
+    const existing = state.audioElements.get(key);
+    if (existing) {
+      return existing;
+    }
+    const element = document.createElement("audio");
+    element.autoplay = true;
+    element.playsInline = true;
+    element.preload = "auto";
+    element.setAttribute("autoplay", "");
+    element.setAttribute("playsinline", "true");
+    audioContainer.append(element);
+    state.audioElements.set(key, element);
+    return element;
+  }
+
+  function ensureAudioContext() {
+    if (!state.useAudioGraph) {
+      return null;
+    }
+    if (state.audioContext) {
+      return state.audioContext;
+    }
+    const AudioContextCtor = getAudioContextConstructor();
+    if (!AudioContextCtor) {
+      state.useAudioGraph = false;
+      return null;
+    }
+    state.audioContext = new AudioContextCtor();
+    return state.audioContext;
+  }
+
+  async function resumeAudioContext() {
+    const context = ensureAudioContext();
+    if (!context) {
+      return null;
+    }
+    if (context.state === "running") {
+      return context;
+    }
+    try {
+      await context.resume();
+    } catch (_error) {
+      return null;
+    }
+    return context.state === "running" ? context : null;
+  }
+
+  function ensureAudioGraph(entry) {
+    if (!state.useAudioGraph || entry?.kind !== "audio" || !entry.element) {
+      return null;
+    }
+    const existing = state.audioGraphs.get(entry.sessionId);
+    if (existing) {
+      return existing;
+    }
+    const context = state.audioContext;
+    if (!context || context.state !== "running") {
+      return null;
+    }
+    let source = null;
+    try {
+      source = context.createMediaElementSource(entry.element);
+    } catch (_error) {
+      return state.audioGraphs.get(entry.sessionId) ?? null;
+    }
+    const gain = context.createGain();
+    gain.gain.value = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
+    source.connect(gain);
+    gain.connect(context.destination);
+    const graph = { context, source, gain };
+    state.audioGraphs.set(entry.sessionId, graph);
+    return graph;
+  }
+
+  function applyAudioOutputState(entry) {
+    if (!entry?.element || entry.kind !== "audio") {
+      return;
+    }
+    const volume = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
+    const shouldMute = volume <= 0.001;
+    const graph = ensureAudioGraph(entry);
+    if (graph) {
+      entry.element.muted = false;
+      entry.element.defaultMuted = false;
+      entry.element.volume = 1;
+      graph.gain.gain.value = volume;
+      return;
+    }
+    entry.element.muted = shouldMute ? true : false;
+    entry.element.defaultMuted = shouldMute ? true : false;
+    entry.element.volume = volume;
+  }
+
+  function disposeAudioSession(sessionId) {
+    const key = String(sessionId ?? "").trim();
+    if (!key) {
+      return;
+    }
+    const graph = state.audioGraphs.get(key);
+    if (graph) {
+      graph.source.disconnect();
+      graph.gain.disconnect();
+      state.audioGraphs.delete(key);
+    }
+    const element = state.audioElements.get(key);
+    if (element) {
+      element.pause?.();
+      element.removeAttribute?.("src");
+      element.srcObject = null;
+      element.remove?.();
+      state.audioElements.delete(key);
+    }
+    state.audioPlaybackState.delete(key);
+    state.audioVolumes.delete(key);
+  }
+
   function notifyRemoteAudioState(sessionId) {
     const key = String(sessionId ?? "").trim();
     if (!key) {
@@ -141,9 +303,7 @@ export function createBrowserMediaController(options = {}) {
     entry.element.autoplay = true;
     entry.element.playsInline = true;
     if (entry.kind === "audio") {
-      entry.element.muted = false;
-      entry.element.defaultMuted = false;
-      entry.element.volume = 1;
+      applyAudioOutputState(entry);
     } else {
       entry.element.muted = true;
       entry.element.defaultMuted = true;
@@ -151,6 +311,7 @@ export function createBrowserMediaController(options = {}) {
     try {
       await entry.element.play?.();
       if (entry.kind === "audio") {
+        applyAudioOutputState(entry);
         state.audioPlaybackState.set(entry.sessionId, {
           blocked: false,
           error: "",
@@ -176,12 +337,12 @@ export function createBrowserMediaController(options = {}) {
     if (!existing) {
       return;
     }
-    detachTrackElement(existing);
+    const preserveAudioElement = kind === "audio";
+    detachTrackElement(existing, { removeElement: !preserveAudioElement });
     state.remoteTracks.delete(key);
     if (kind === "video" && notify) {
       options.onRemoteTrackRemoved?.({ sessionId });
     } else if (kind === "audio") {
-      state.audioPlaybackState.delete(sessionId);
       notifyRemoteAudioState(sessionId);
     }
   }
@@ -193,7 +354,19 @@ export function createBrowserMediaController(options = {}) {
         return;
       }
 
-      const element = track.attach();
+      clearRemoteTrack(parsed.sessionId, parsed.kind, false);
+      let element = null;
+      if (parsed.kind === "audio") {
+        element = getOrCreateAudioElement(parsed.sessionId);
+        try {
+          track.attach(element);
+        } catch (_error) {
+          element = track.attach();
+          state.audioElements.set(parsed.sessionId, element);
+        }
+      } else {
+        element = track.attach();
+      }
       element.autoplay = true;
       element.playsInline = true;
       if (parsed.kind === "audio") {
@@ -204,7 +377,6 @@ export function createBrowserMediaController(options = {}) {
         videoContainer.append(element);
       }
 
-      clearRemoteTrack(parsed.sessionId, parsed.kind, false);
       const entry = {
         key: getTrackKey(parsed.sessionId, parsed.kind),
         sessionId: parsed.sessionId,
@@ -216,9 +388,6 @@ export function createBrowserMediaController(options = {}) {
       };
       state.remoteTracks.set(entry.key, entry);
       void playRemoteTrackEntry(entry);
-      if (parsed.kind === "audio") {
-        notifyRemoteAudioState(parsed.sessionId);
-      }
       if (parsed.kind === "video") {
         options.onRemoteTrack?.(entry);
       }
@@ -291,6 +460,9 @@ export function createBrowserMediaController(options = {}) {
       clearRemoteTrack(entry.sessionId, entry.kind, entry.kind === "video");
     }
     state.remoteTracks.clear();
+    for (const sessionId of [...state.audioElements.keys()]) {
+      disposeAudioSession(sessionId);
+    }
 
     if (state.room) {
       state.room.disconnect();
@@ -540,6 +712,9 @@ export function createBrowserMediaController(options = {}) {
           ? params.kinds.map((kind) => String(kind ?? "").trim().toLowerCase()).filter(Boolean)
           : ["audio", "video"],
       );
+      if (kinds.has("audio")) {
+        await resumeAudioContext();
+      }
       const entries = [...state.remoteTracks.values()].filter((entry) => {
         if (sessionId && entry.sessionId !== sessionId) {
           return false;
@@ -547,14 +722,43 @@ export function createBrowserMediaController(options = {}) {
         return kinds.has(entry.kind);
       });
       if (entries.length === 0) {
-        return false;
+        return Boolean(state.audioContext?.state === "running");
       }
       const results = await Promise.all(entries.map((entry) => playRemoteTrackEntry(entry)));
       return results.some(Boolean);
     },
 
+    setRemoteAudioVolume(params = {}) {
+      const sessionId = String(params.sessionId ?? "").trim();
+      if (!sessionId) {
+        return false;
+      }
+      state.audioVolumes.set(sessionId, clampUnit(params.volume));
+      const entry = state.remoteTracks.get(getTrackKey(sessionId, "audio"));
+      if (entry) {
+        applyAudioOutputState(entry);
+      }
+      return true;
+    },
+
+    removeSession(sessionId) {
+      const key = String(sessionId ?? "").trim();
+      if (!key) {
+        return false;
+      }
+      clearRemoteTrack(key, "video");
+      clearRemoteTrack(key, "audio", false);
+      state.pendingSubscriptions.delete(key);
+      disposeAudioSession(key);
+      return true;
+    },
+
     async disconnect() {
       await disconnectRoom();
+      if (state.audioContext && state.audioContext.state !== "closed") {
+        state.audioContext.close().catch(() => null);
+      }
+      state.audioContext = null;
       notifyStatus({ connected: false });
     },
 
