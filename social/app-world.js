@@ -12,6 +12,10 @@ const elements = {
   searchForm: document.querySelector("[data-world-search-form]"),
   searchStatus: document.querySelector("[data-world-search-status]"),
   results: document.querySelector("[data-world-results]"),
+  liveSearchForm: document.querySelector("[data-world-live-search-form]"),
+  liveSearchInput: document.querySelector("[data-world-live-search-input]"),
+  liveStatus: document.querySelector("[data-world-live-status]"),
+  liveResults: document.querySelector("[data-world-live-results]"),
   selected: document.querySelector("[data-world-selected]"),
   focusKind: document.querySelector("[data-world-focus-kind]"),
   meta: document.querySelector("[data-world-meta]"),
@@ -45,13 +49,17 @@ const elements = {
   browserFrame: document.querySelector("[data-world-browser-frame]"),
   browserPlaceholder: document.querySelector("[data-world-browser-placeholder]"),
   browserResume: document.querySelector("[data-world-browser-resume]"),
+  nameInput: document.querySelector("[data-world-name-input]"),
   chatComposer: document.querySelector("[data-world-chat-composer]"),
   chatInput: document.querySelector("[data-world-chat-input]"),
   chatStatus: document.querySelector("[data-world-chat-status]"),
   chatCounter: document.querySelector("[data-world-chat-counter]"),
 };
 
+elements.panelTabs = [...document.querySelectorAll("[data-world-panel-tab]")];
+elements.panelTabPanels = [...document.querySelectorAll("[data-world-panel-tab-panel]")];
 elements.browserShareModes = [...document.querySelectorAll("[data-world-browser-share-mode]")];
+elements.chatReactionButtons = [...document.querySelectorAll("[data-world-chat-reaction]")];
 
 elements.focusPieces = {
   top: document.querySelector('[data-world-focus-piece="top"]'),
@@ -121,6 +129,11 @@ const INTERACTION_DEFAULTS = {
   browserViewportHeight: 540,
 };
 
+const VIEWER_NAME_STORAGE_KEY = "mauworldViewerDisplayName";
+const VIEWER_NAME_MAX_CHARS = 40;
+
+const WORLD_PANEL_TABS = ["chat", "share", "live", "search"];
+
 const SKYLINE_BAND_ASSETS = {
   "skyline-band-primary": new URL("./assets/skyline-band-primary.svg", import.meta.url).href,
   "skyline-band-secondary": new URL("./assets/skyline-band-secondary.svg", import.meta.url).href,
@@ -133,6 +146,7 @@ const state = {
   meta: null,
   stream: null,
   searchPayload: null,
+  activePanelTab: "chat",
   activeResultId: null,
   focusedResult: null,
   openTagId: null,
@@ -143,11 +157,15 @@ const state = {
   streamLoading: false,
   searchLoading: false,
   searchSubmitted: false,
+  liveShareQuery: "",
   focusAnimation: null,
   lastPresenceAt: 0,
   lastStreamCheckAt: 0,
   initialViewFramed: false,
   viewerSessionId: "",
+  viewerDisplayName: "",
+  viewerDisplayNameCustom: "",
+  viewerDisplayNameTimer: 0,
   moveButtons: new Set(),
   navigationPosition: new THREE.Vector3(0, 76, 156),
   cameraRadius: PLAYER_VIEW.defaultRadius,
@@ -272,6 +290,74 @@ function createViewerSessionId() {
   const next = `viewer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
   window.localStorage.setItem("mauworldViewerSessionId", next);
   return next;
+}
+
+function sanitizeViewerDisplayNameInput(input) {
+  return String(input ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, VIEWER_NAME_MAX_CHARS);
+}
+
+function getDefaultViewerDisplayName(viewerSessionId = state.viewerSessionId) {
+  const sessionId = String(viewerSessionId ?? "").trim();
+  return sessionId ? `visitor ${sessionId.slice(-4)}` : "visitor";
+}
+
+function getViewerDisplayName() {
+  return state.viewerDisplayName || getDefaultViewerDisplayName();
+}
+
+function loadViewerDisplayNameCustom() {
+  return sanitizeViewerDisplayNameInput(window.localStorage.getItem(VIEWER_NAME_STORAGE_KEY));
+}
+
+function persistViewerDisplayNameCustom(input) {
+  const sanitized = sanitizeViewerDisplayNameInput(input);
+  if (sanitized) {
+    window.localStorage.setItem(VIEWER_NAME_STORAGE_KEY, sanitized);
+  } else {
+    window.localStorage.removeItem(VIEWER_NAME_STORAGE_KEY);
+  }
+  return sanitized;
+}
+
+function syncViewerNameInput() {
+  if (!elements.nameInput) {
+    return;
+  }
+  if (document.activeElement !== elements.nameInput) {
+    elements.nameInput.value = state.viewerDisplayNameCustom;
+  }
+  elements.nameInput.placeholder = getDefaultViewerDisplayName();
+}
+
+function applyViewerDisplayNameFromInput({ sendPresence = false } = {}) {
+  if (!elements.nameInput) {
+    return false;
+  }
+  const nextCustomName = persistViewerDisplayNameCustom(elements.nameInput.value);
+  const nextDisplayName = nextCustomName || getDefaultViewerDisplayName();
+  const changed = nextCustomName !== state.viewerDisplayNameCustom || nextDisplayName !== state.viewerDisplayName;
+  state.viewerDisplayNameCustom = nextCustomName;
+  state.viewerDisplayName = nextDisplayName;
+  syncViewerNameInput();
+  if (changed) {
+    state.lastPresenceAt = 0;
+  }
+  if (sendPresence && changed) {
+    state.realtimeClient?.sendPresenceNow();
+  }
+  return changed;
+}
+
+function queueViewerDisplayNameCommit(delayMs = 320) {
+  window.clearTimeout(state.viewerDisplayNameTimer);
+  state.viewerDisplayNameTimer = window.setTimeout(() => {
+    state.viewerDisplayNameTimer = 0;
+    applyViewerDisplayNameFromInput({ sendPresence: true });
+  }, delayMs);
 }
 
 function clamp(value, min, max) {
@@ -821,6 +907,39 @@ function getCachedWorldPayload(presence = []) {
 
 function getLivePresenceRows() {
   return [...state.livePresence.values()];
+}
+
+function getPresenceDisplayName(entry = {}) {
+  const actor = entry.actor ?? {};
+  const actorName = String(actor.display_name ?? actor.displayName ?? "").trim();
+  if (actorName) {
+    return actorName;
+  }
+  const movementName = sanitizeViewerDisplayNameInput(
+    entry.movement_state?.displayName ?? entry.movement_state?.display_name,
+  );
+  if (movementName) {
+    return movementName;
+  }
+  if (entry.actor_type === "viewer") {
+    return getDefaultViewerDisplayName(getPresenceEntryId(entry));
+  }
+  return entry.actor_type === "agent" ? "agent" : "visitor";
+}
+
+function getPresenceDisplayNameForSessionId(viewerSessionId) {
+  const sessionId = String(viewerSessionId ?? "").trim();
+  if (!sessionId) {
+    return "";
+  }
+  if (sessionId === state.viewerSessionId) {
+    return getViewerDisplayName();
+  }
+  const entry = state.livePresence.get(sessionId);
+  if (entry) {
+    return getPresenceDisplayName(entry);
+  }
+  return getDefaultViewerDisplayName(sessionId);
 }
 
 function getRenderablePresenceRows() {
@@ -1550,6 +1669,35 @@ function setSearchStatus(text) {
   }
 }
 
+function setLiveShareStatus(text) {
+  if (elements.liveStatus) {
+    elements.liveStatus.textContent = text;
+  }
+}
+
+function normalizeWorldPanelTab(tab) {
+  return WORLD_PANEL_TABS.includes(tab) ? tab : WORLD_PANEL_TABS[0];
+}
+
+function setWorldPanelTab(tab) {
+  const nextTab = normalizeWorldPanelTab(tab);
+  state.activePanelTab = nextTab;
+  for (const button of elements.panelTabs) {
+    const active = button?.getAttribute("data-world-panel-tab") === nextTab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  for (const panel of elements.panelTabPanels) {
+    if (!panel) {
+      continue;
+    }
+    panel.hidden = panel.getAttribute("data-world-panel-tab-panel") !== nextTab;
+  }
+  if (nextTab === "live") {
+    renderLiveSharesList();
+  }
+}
+
 function clearSearchResults() {
   state.searchPayload = null;
   state.searchSubmitted = false;
@@ -1565,6 +1713,34 @@ function clearSearchQuery() {
   if (searchInput) {
     searchInput.value = "";
   }
+}
+
+function getBrowserSessionTitle(session) {
+  const explicitTitle = sanitizeBrowserShareTitle(session?.title ?? "", "");
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+  if (session?.url) {
+    return session.url;
+  }
+  const kindLabel = getBrowserShareKindLabel(getBrowserSessionShareKind(session));
+  return `${kindLabel} live`;
+}
+
+function getBrowserSessionViewerCount(session) {
+  const value = Number(session?.viewerCount);
+  if (Number.isFinite(value) && value >= 0) {
+    return Math.max(0, Math.floor(value));
+  }
+  return 0;
+}
+
+function getBrowserSessionMaxViewers(session) {
+  const value = Number(session?.maxViewers);
+  if (Number.isFinite(value) && value > 0) {
+    return Math.max(1, Math.floor(value));
+  }
+  return getInteractionConfig().maxRecipients;
 }
 
 function setLoading(isLoading) {
@@ -3814,7 +3990,8 @@ function buildPresenceObject(entry) {
   const actor = entry.actor ?? {};
   const group = new THREE.Group();
   group.position.set(entry.position_x, entry.position_y, entry.position_z);
-  const seed = actor.id || actor.display_name || entry.actor_type;
+  const displayName = getPresenceDisplayName(entry);
+  const seed = actor.id || presenceId || actor.display_name || displayName || entry.actor_type;
   const color = entry.actor_type === "agent" ? pickAccent(seed, 1) : pickAccent(seed, 3);
   const actorLod = getActorLodSettings();
   const mascot = createMascotFigure(seed, {
@@ -3829,11 +4006,11 @@ function buildPresenceObject(entry) {
   });
   group.add(mascot.group);
 
-  const labelWidth = clamp(12 + String(actor.display_name || entry.actor_type || "agent").length * 0.28, 14, 24);
+  const labelWidth = clamp(12 + String(displayName || entry.actor_type || "agent").length * 0.28, 14, 24);
   const labelHeight = labelWidth * (160 / 768);
   const label = createBillboard(
     createTagTextTexture(
-      actor.display_name || (entry.actor_type === "agent" ? "agent" : "visitor"),
+      displayName,
       {
         accent: color,
         secondary: WORLD_STYLE.outline,
@@ -3868,6 +4045,8 @@ function buildPresenceObject(entry) {
     bubbleAccent: color,
     opacity: 1,
     baseY: entry.position_y,
+    presence: entry,
+    displayName,
     position: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
     targetPosition: new THREE.Vector3(entry.position_x, entry.position_y, entry.position_z),
     bob: 0.55 + Math.random() * 0.4,
@@ -3887,8 +4066,15 @@ function upsertPresenceObject(entry) {
   if (!presenceId) {
     return null;
   }
+  const displayName = getPresenceDisplayName(entry);
   const existing = sceneState.presenceEntries.get(presenceId);
   if (!existing) {
+    const next = buildPresenceObject(entry);
+    sceneState.presence.add(next.group);
+    return next;
+  }
+  if (existing.displayName !== displayName) {
+    removePresenceObject(presenceId);
     const next = buildPresenceObject(entry);
     sceneState.presence.add(next.group);
     return next;
@@ -3896,6 +4082,7 @@ function upsertPresenceObject(entry) {
   existing.targetPosition.set(entry.position_x, entry.position_y, entry.position_z);
   existing.baseY = entry.position_y;
   existing.presence = entry;
+  existing.displayName = displayName;
   const chatEvent = state.activeChats.get(presenceId);
   if (chatEvent) {
     applyChatBubbleToActor(existing, chatEvent);
@@ -3927,8 +4114,41 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
   updateActorBubble(avatar, deltaSeconds);
 }
 
+function getBrowserPlaceholderBadge(session) {
+  if (!session || session.hostSessionId === state.viewerSessionId || session.deliveryMode !== "placeholder") {
+    return "";
+  }
+  const maxViewers = getBrowserSessionMaxViewers(session);
+  const viewerCount = getBrowserSessionViewerCount(session);
+  if (viewerCount < maxViewers) {
+    return "";
+  }
+  const hostPosition = getBrowserHostPosition(session.hostSessionId);
+  if (!hostPosition) {
+    return "";
+  }
+  const listenerPosition = getNavigationPosition();
+  const planarDistance = Math.hypot(
+    listenerPosition.x - hostPosition.x,
+    listenerPosition.z - hostPosition.z,
+  );
+  if (planarDistance > Math.max(16, getInteractionConfig().browserRadius)) {
+    return "";
+  }
+  return "FULL";
+}
+
+function getBrowserPlaceholderTextureKey(session) {
+  return [
+    getBrowserSessionShareKind(session),
+    String(session?.deliveryMode ?? "placeholder"),
+    String(getBrowserPlaceholderBadge(session)),
+  ].join(":");
+}
+
 function createBrowserPlaceholderTexture(session) {
   const shareKind = getBrowserSessionShareKind(session);
+  const badge = getBrowserPlaceholderBadge(session);
   const symbol = shareKind === "audio"
     ? "📞"
     : shareKind === "camera"
@@ -3942,6 +4162,9 @@ function createBrowserPlaceholderTexture(session) {
   return createBubbleTexture(symbol, {
     accent,
     stroke: WORLD_STYLE.outline,
+    badge,
+    badgeBackground: badge ? "rgba(255, 79, 168, 0.92)" : undefined,
+    badgeStroke: badge ? "rgba(255, 255, 255, 0.26)" : undefined,
   });
 }
 
@@ -4112,6 +4335,7 @@ function ensureBrowserScreenEntry(session) {
     currentFrameId: 0,
     deliveryMode: "placeholder",
     geometryAspectRatio: aspectRatio,
+    placeholderKey: getBrowserPlaceholderTextureKey(session),
     billboardEnabled: true,
     clickablePayloads,
   };
@@ -4122,6 +4346,12 @@ function ensureBrowserScreenEntry(session) {
 }
 
 function updateBrowserScreenPresentation(entry) {
+  const nextPlaceholderKey = getBrowserPlaceholderTextureKey(entry.session);
+  if (entry.placeholderKey !== nextPlaceholderKey) {
+    entry.placeholderTexture?.dispose?.();
+    entry.placeholderTexture = createBrowserPlaceholderTexture(entry.session);
+    entry.placeholderKey = nextPlaceholderKey;
+  }
   const hasRemoteVideo = entry.deliveryMode === "full" && entry.videoTexture;
   const hasLiveFrame = entry.deliveryMode === "full" && entry.currentFrameId > 0;
   const desiredMap = hasRemoteVideo
@@ -4366,6 +4596,7 @@ function reconcileBrowserScreens() {
     entry.hostSessionId = session.hostSessionId;
     entry.placeholderTexture.dispose();
     entry.placeholderTexture = createBrowserPlaceholderTexture(session);
+    entry.placeholderKey = getBrowserPlaceholderTextureKey(session);
     updateBrowserScreenPresentation(entry);
   }
 }
@@ -5868,6 +6099,146 @@ function focusOnDestination(result) {
   startGuidedTravel(normalizeWorldResult(result));
 }
 
+function getLiveShareSessions(query = state.liveShareQuery) {
+  const worldSnapshotId = String(state.meta?.worldSnapshotId ?? "").trim();
+  const normalizedQuery = String(query ?? "").trim().toLowerCase();
+  return [...state.browserSessions.values()]
+    .filter((session) => !worldSnapshotId || String(session.worldSnapshotId ?? "").trim() === worldSnapshotId)
+    .filter((session) => {
+      if (!normalizedQuery) {
+        return true;
+      }
+      return getBrowserSessionTitle(session).toLowerCase().includes(normalizedQuery);
+    })
+    .sort((left, right) =>
+      Number(right.hostSessionId === state.viewerSessionId) - Number(left.hostSessionId === state.viewerSessionId)
+      || getBrowserSessionViewerCount(right) - getBrowserSessionViewerCount(left)
+      || Date.parse(right.startedAt ?? 0) - Date.parse(left.startedAt ?? 0)
+      || getBrowserSessionTitle(left).localeCompare(getBrowserSessionTitle(right)));
+}
+
+function moveToBrowserShareHost(sessionId) {
+  const session = state.browserSessions.get(sessionId);
+  if (!session) {
+    renderLiveSharesList();
+    showToast("That share just ended.");
+    return false;
+  }
+  if (session.hostSessionId === state.viewerSessionId) {
+    state.browserPanelRemoteSessionId = "";
+    updateBrowserPanel();
+    setWorldPanelTab("share");
+    showToast("You are already hosting this share.");
+    return true;
+  }
+  const hostPosition = getBrowserHostPosition(session.hostSessionId);
+  if (!hostPosition) {
+    showToast("Could not find that sharer right now.");
+    return false;
+  }
+
+  clearBrowserFocus();
+  closeSelectedPost();
+  state.browserPanelRemoteSessionId = session.sessionId;
+
+  const start = getNavigationPosition().clone();
+  const offset = new THREE.Vector3(
+    start.x - hostPosition.x,
+    0,
+    start.z - hostPosition.z,
+  );
+  if (offset.lengthSq() < 0.0001) {
+    offset.copy(getFlatForwardVector(inputState.yaw));
+  } else {
+    offset.normalize();
+  }
+  const destination = hostPosition.clone().add(offset.multiplyScalar(18));
+  destination.y = clamp(hostPosition.y, CAMERA.minY, CAMERA.maxY);
+
+  const lookTarget = hostPosition.clone().add(new THREE.Vector3(0, 18, 0));
+  const eyePosition = destination.clone().add(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
+  const { yaw, pitch } = computeLookAngles(eyePosition, lookTarget);
+  const distance = start.distanceTo(destination);
+  state.focusAnimation = {
+    startedAt: performance.now(),
+    durationMs: clamp(Math.round(distance * 26), 700, 1800),
+    fromPosition: start,
+    toPosition: destination,
+    fromYaw: inputState.yaw,
+    toYaw: yaw,
+    fromPitch: inputState.pitch,
+    toPitch: pitch,
+    fromRadius: state.cameraRadius,
+    toRadius: clamp(22, PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius),
+  };
+  updateBrowserPanel();
+  loadStreamForPosition(destination, true).catch((error) => showToast(error.message));
+  return true;
+}
+
+function renderLiveSharesList() {
+  if (!elements.liveResults) {
+    return;
+  }
+  const query = String(state.liveShareQuery ?? "");
+  const allSessions = getLiveShareSessions("");
+  const filteredSessions = query.trim() ? getLiveShareSessions(query) : allSessions;
+
+  if (allSessions.length === 0) {
+    setLiveShareStatus("No live shares right now.");
+    elements.liveResults.innerHTML = "";
+    return;
+  }
+
+  if (filteredSessions.length === 0) {
+    setLiveShareStatus("No live shares match that title.");
+    elements.liveResults.innerHTML = "";
+    return;
+  }
+
+  setLiveShareStatus(
+    query.trim()
+      ? `${filteredSessions.length} matching live ${filteredSessions.length === 1 ? "share" : "shares"}`
+      : `${filteredSessions.length} live ${filteredSessions.length === 1 ? "share" : "shares"}`,
+  );
+
+  elements.liveResults.innerHTML = filteredSessions
+    .map((session) => {
+      const title = getBrowserSessionTitle(session);
+      const shareKindLabel = getBrowserShareKindLabel(getBrowserSessionShareKind(session));
+      const viewerCount = Math.min(getBrowserSessionViewerCount(session), getBrowserSessionMaxViewers(session));
+      const maxViewers = getBrowserSessionMaxViewers(session);
+      const isOwn = session.hostSessionId === state.viewerSessionId;
+      const hostName = getPresenceDisplayNameForSessionId(session.hostSessionId);
+      const isActive =
+        session.sessionId === state.browserPanelRemoteSessionId
+        || (isOwn && session.sessionId === state.localBrowserSessionId);
+      return `
+        <button
+          class="world-live-result ${isActive ? "is-active" : ""}"
+          type="button"
+          data-live-session-id="${htmlEscape(session.sessionId)}"
+        >
+          <div class="world-live-result__top">
+            <div class="world-live-result__title">${htmlEscape(title)}</div>
+            <div class="world-live-result__count">${viewerCount}/${maxViewers} viewers</div>
+          </div>
+          <div class="world-live-result__meta">
+            <span class="world-live-result__badge">${htmlEscape(shareKindLabel)}</span>
+            <span>${isOwn ? "You are sharing this now." : `${htmlEscape(hostName)} is sharing now.`}</span>
+          </div>
+        </button>
+      `;
+    })
+    .join("");
+
+  for (const button of elements.liveResults.querySelectorAll("[data-live-session-id]")) {
+    button.addEventListener("click", () => {
+      moveToBrowserShareHost(button.getAttribute("data-live-session-id"));
+    });
+  }
+}
+
 function renderSearchResults() {
   const hits = state.searchPayload?.hits ?? [];
   if (hits.length === 0) {
@@ -6048,19 +6419,23 @@ function setBrowserStatus(text) {
 }
 
 function updateChatCounter() {
-  if (!elements.chatCounter || !elements.chatInput) {
+  if (!elements.chatInput) {
     return;
   }
   const maxChars = getInteractionConfig().chatMaxChars;
+  elements.chatInput.maxLength = maxChars;
+  if (!elements.chatCounter) {
+    return;
+  }
   const length = String(elements.chatInput.value ?? "").length;
   elements.chatCounter.textContent = `${length}/${maxChars}`;
 }
 
 function openChatComposer() {
-  if (!elements.chatComposer || !elements.chatInput) {
+  if (!elements.chatInput) {
     return;
   }
-  elements.chatComposer.hidden = false;
+  setWorldPanelTab("chat");
   elements.chatInput.maxLength = getInteractionConfig().chatMaxChars;
   elements.chatInput.focus();
   elements.chatInput.select();
@@ -6068,14 +6443,45 @@ function openChatComposer() {
 }
 
 function closeChatComposer(clearValue = false) {
-  if (!elements.chatComposer || !elements.chatInput) {
+  if (!elements.chatInput) {
     return;
   }
-  elements.chatComposer.hidden = true;
   if (clearValue) {
     elements.chatInput.value = "";
-    updateChatCounter();
   }
+  updateChatCounter();
+  if (document.activeElement === elements.chatInput) {
+    elements.chatInput.blur();
+  }
+}
+
+function submitChatComposer() {
+  const text = String(elements.chatInput?.value ?? "").trim();
+  if (!text) {
+    closeChatComposer(true);
+    return false;
+  }
+  if (!state.realtimeClient?.sendChat(text)) {
+    showToast("Realtime chat is offline.");
+    return false;
+  }
+  closeChatComposer(true);
+  return true;
+}
+
+function sendChatReaction(reaction) {
+  const text = String(reaction ?? "").trim();
+  if (!text) {
+    return false;
+  }
+  if (!state.realtimeClient?.sendChat(text)) {
+    showToast("Realtime chat is offline.");
+    return false;
+  }
+  if (document.activeElement === elements.chatInput) {
+    elements.chatInput.blur();
+  }
+  return true;
 }
 
 function isEditableTarget(target) {
@@ -6139,6 +6545,7 @@ function getRealtimeMovementState() {
     moving,
     forward: Number(forward.x.toFixed(4)),
     lift: Number(state.navigationPosition.y.toFixed(4)),
+    displayName: getViewerDisplayName(),
   };
 }
 
@@ -6250,6 +6657,9 @@ function getBrowserStagePlaceholderText({
 }
 
 function updateBrowserPanel() {
+  if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
+    state.browserPanelRemoteSessionId = "";
+  }
   const localSession = getLocalBrowserSession();
   const draft = getLocalBrowserShareDraft(localSession);
   const previewStream = state.pendingBrowserShare?.hasVideo
@@ -6531,6 +6941,7 @@ function updateBrowserSessionState(sessionPatch) {
     setBrowserScreenVideo(next.sessionId, elements.browserVideo);
   }
   updateBrowserPanel();
+  renderLiveSharesList();
 }
 
 function handleBrowserStop(payload) {
@@ -6550,12 +6961,16 @@ function handleBrowserStop(payload) {
   getBrowserMediaController().removeSession?.(sessionId);
   void getBrowserMediaController().unpublishSession(sessionId);
   state.browserSessions.delete(sessionId);
+  if (state.browserPanelRemoteSessionId === sessionId) {
+    state.browserPanelRemoteSessionId = "";
+  }
   removeBrowserScreenEntry(sessionId);
   if (state.localBrowserSessionId === sessionId) {
     state.localBrowserSessionId = "";
     state.browserMediaTransport = "jpeg-sequence";
   }
   updateBrowserPanel();
+  renderLiveSharesList();
 }
 
 function handleBrowserFrame(payload) {
@@ -6611,6 +7026,8 @@ function handleRealtimeMessage(payload) {
       sessionId: payload.sessionId,
       hostSessionId: payload.hostSessionId,
       deliveryMode: "full",
+      viewerCount: payload.viewerCount,
+      maxViewers: payload.maxViewers,
     });
     syncBrowserMediaSubscription(payload.sessionId, true);
     return;
@@ -6621,6 +7038,8 @@ function handleRealtimeMessage(payload) {
       sessionId: payload.sessionId,
       hostSessionId: payload.hostSessionId,
       deliveryMode: "placeholder",
+      viewerCount: payload.viewerCount,
+      maxViewers: payload.maxViewers,
     });
     syncBrowserMediaSubscription(payload.sessionId, false);
     return;
@@ -7724,7 +8143,7 @@ function registerInput() {
       && !event.ctrlKey
       && !event.metaKey
       && !event.altKey
-      && !isEditableTarget(event.target)
+      && event.target !== elements.chatInput
       && !(isBrowserStageFocused() && isInteractiveBrowserSession(getLocalBrowserSession()))
     ) {
       event.preventDefault();
@@ -7805,6 +8224,43 @@ function registerInput() {
     closeSelectedPost();
   });
 
+  for (const button of elements.panelTabs) {
+    button.addEventListener("click", () => {
+      setWorldPanelTab(button.getAttribute("data-world-panel-tab"));
+    });
+  }
+
+  elements.liveSearchForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+  });
+  elements.liveSearchInput?.addEventListener("input", () => {
+    state.liveShareQuery = String(elements.liveSearchInput?.value ?? "");
+    renderLiveSharesList();
+  });
+
+  elements.nameInput?.addEventListener("input", () => {
+    queueViewerDisplayNameCommit();
+  });
+  elements.nameInput?.addEventListener("blur", () => {
+    window.clearTimeout(state.viewerDisplayNameTimer);
+    state.viewerDisplayNameTimer = 0;
+    applyViewerDisplayNameFromInput({ sendPresence: true });
+  });
+  elements.nameInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      elements.nameInput?.blur();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      window.clearTimeout(state.viewerDisplayNameTimer);
+      state.viewerDisplayNameTimer = 0;
+      syncViewerNameInput();
+      elements.nameInput?.blur();
+    }
+  });
+
   const searchInput = elements.searchForm?.querySelector('input[name="q"]');
   searchInput?.addEventListener("input", () => {
     if (String(searchInput.value ?? "").trim()) {
@@ -7815,6 +8271,11 @@ function registerInput() {
 
   elements.chatInput?.addEventListener("input", updateChatCounter);
   elements.chatInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      submitChatComposer();
+      return;
+    }
     if (event.key !== "Escape") {
       return;
     }
@@ -7823,17 +8284,14 @@ function registerInput() {
   });
   elements.chatComposer?.addEventListener("submit", (event) => {
     event.preventDefault();
-    const text = String(elements.chatInput?.value ?? "").trim();
-    if (!text) {
-      closeChatComposer(true);
-      return;
-    }
-    if (!state.realtimeClient?.sendChat(text)) {
-      showToast("Realtime chat is offline.");
-      return;
-    }
-    closeChatComposer(true);
+    submitChatComposer();
   });
+  for (const button of elements.chatReactionButtons) {
+    button.addEventListener("click", () => {
+      setWorldPanelTab("chat");
+      sendChatReaction(button.getAttribute("data-world-chat-reaction") || button.textContent);
+    });
+  }
 
   elements.browserExpand?.addEventListener("click", () => {
     setBrowserOverlayOpen(!state.browserOverlayOpen);
@@ -8025,12 +8483,17 @@ function animate() {
 
 async function bootstrapWorld() {
   state.viewerSessionId = createViewerSessionId();
+  state.viewerDisplayNameCustom = loadViewerDisplayNameCustom();
+  state.viewerDisplayName = state.viewerDisplayNameCustom || getDefaultViewerDisplayName();
+  syncViewerNameInput();
   initScene();
   registerInput();
   renderSelected(null);
   renderSearchResults();
+  renderLiveSharesList();
   updateChatCounter();
   updateBrowserPanel();
+  setWorldPanelTab(state.activePanelTab);
   try {
     await loadMeta(true);
     initRealtimeClient();
@@ -8058,6 +8521,7 @@ async function bootstrapWorld() {
 
 elements.searchForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  setWorldPanelTab("search");
   runSearch().catch((error) => showToast(error.message));
 });
 

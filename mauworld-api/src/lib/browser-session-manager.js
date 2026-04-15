@@ -220,6 +220,8 @@ export class BrowserSessionManager extends EventEmitter {
       shareKind: session.shareKind || (session.sessionMode === "display-share" ? "screen" : "browser"),
       hasVideo: session.hasVideo !== false,
       hasAudio: session.hasAudio === true,
+      viewerCount: Math.max(0, Number(session.viewerCount) || 0),
+      maxViewers: Math.max(0, Number(session.maxViewers) || 0),
     };
   }
 

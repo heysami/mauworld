@@ -4,6 +4,8 @@ const DEFAULT_CHAT_TTL_SECONDS = 8;
 const DEFAULT_CHAT_DETAIL_RADIUS = 180;
 const DEFAULT_BROWSER_RADIUS = 96;
 const DEFAULT_INTERACTION_MAX_RECIPIENTS = 20;
+const DEFAULT_VIEWER_NAME = "visitor";
+const DEFAULT_VIEWER_NAME_MAX_CHARS = 40;
 
 function clampInteger(value, fallback, min, max) {
   const numeric = Number(value);
@@ -40,6 +42,15 @@ export function sanitizeChatText(input, maxChars = DEFAULT_CHAT_MAX_CHARS) {
   return normalized.slice(0, Math.max(1, maxChars));
 }
 
+export function sanitizeViewerDisplayName(input, fallback = DEFAULT_VIEWER_NAME, maxChars = DEFAULT_VIEWER_NAME_MAX_CHARS) {
+  const normalized = String(input ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, Math.max(1, maxChars));
+  return normalized || String(fallback ?? "").trim() || DEFAULT_VIEWER_NAME;
+}
+
 export function getActorSessionId(entry = {}) {
   return String(entry.viewer_session_id ?? entry.viewerSessionId ?? entry.installation_id ?? entry.installationId ?? entry.id ?? "")
     .trim();
@@ -47,6 +58,11 @@ export function getActorSessionId(entry = {}) {
 
 export function buildViewerPresencePayload(client) {
   const viewerSessionId = String(client?.viewerSessionId ?? "").trim();
+  const fallbackDisplayName = viewerSessionId ? `visitor ${viewerSessionId.slice(-4)}` : DEFAULT_VIEWER_NAME;
+  const displayName = sanitizeViewerDisplayName(
+    client?.movementState?.displayName ?? client?.movementState?.display_name,
+    fallbackDisplayName,
+  );
   return {
     id: viewerSessionId,
     actor_type: "viewer",
@@ -60,7 +76,7 @@ export function buildViewerPresencePayload(client) {
     movement_state: client?.movementState ?? {},
     actor: {
       id: viewerSessionId,
-      display_name: viewerSessionId ? `visitor ${viewerSessionId.slice(-4)}` : "visitor",
+      display_name: displayName,
       platform: "viewer",
       host_name: null,
     },

@@ -51,6 +51,29 @@ function clampLimit(value, fallback = 20, max = 100) {
   return Math.min(max, Math.floor(numeric));
 }
 
+function sanitizeViewerDisplayName(input, fallback = "visitor") {
+  const normalized = String(input ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 40);
+  return normalized || String(fallback ?? "").trim() || "visitor";
+}
+
+function buildViewerPresenceActor(row = {}) {
+  const viewerSessionId = String(row.viewer_session_id ?? row.viewerSessionId ?? "").trim();
+  const fallbackDisplayName = viewerSessionId ? `visitor ${viewerSessionId.slice(-4)}` : "visitor";
+  return {
+    id: viewerSessionId,
+    display_name: sanitizeViewerDisplayName(
+      row.movement_state?.displayName ?? row.movement_state?.display_name,
+      fallbackDisplayName,
+    ),
+    platform: "viewer",
+    host_name: null,
+  };
+}
+
 function isExpired(timestamp) {
   return !timestamp || new Date(timestamp).getTime() <= Date.now();
 }
@@ -3407,7 +3430,7 @@ export class MauworldStore {
       postInstances: streamedPosts,
       presence: filteredPresence.map((row) => ({
         ...row,
-        actor: row.installation_id ? agentById.get(row.installation_id) ?? null : null,
+        actor: row.installation_id ? agentById.get(row.installation_id) ?? null : buildViewerPresenceActor(row),
       })),
     };
   }

@@ -213,6 +213,7 @@ export function createBubbleTexture(content, options = {}) {
   const height = options.height ?? 280;
   const thought = options.type === "thought";
   const hasText = typeof options.text === "string" && options.text.trim().length > 0;
+  const badge = String(options.badge ?? "").trim();
   const accent = options.accent ?? "#2dd8ff";
   const stroke = options.stroke ?? "#33407a";
   const background = options.background ?? "rgba(255, 255, 255, 0.96)";
@@ -291,6 +292,32 @@ export function createBubbleTexture(content, options = {}) {
     context.textBaseline = "middle";
     context.font = "112px \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\", sans-serif";
     context.fillText(content, width * 0.5, thought ? height * 0.46 : height * 0.43);
+  }
+
+  if (badge) {
+    const badgePaddingX = 18;
+    const badgeHeight = 42;
+    const badgeRadius = 21;
+    const badgeTop = thought ? 26 : 36;
+    context.font = "800 22px Manrope, sans-serif";
+    const badgeWidth = Math.max(88, context.measureText(badge).width + badgePaddingX * 2);
+    const badgeLeft = width - badgeWidth - 42;
+    context.shadowColor = "rgba(18, 31, 78, 0.14)";
+    context.shadowBlur = 10;
+    context.shadowOffsetY = 6;
+    drawRoundedRect(context, badgeLeft, badgeTop, badgeWidth, badgeHeight, badgeRadius);
+    context.fillStyle = options.badgeBackground ?? "rgba(36, 51, 109, 0.9)";
+    context.fill();
+    context.shadowColor = "transparent";
+    context.shadowBlur = 0;
+    context.shadowOffsetY = 0;
+    context.lineWidth = 3;
+    context.strokeStyle = options.badgeStroke ?? "rgba(255, 255, 255, 0.2)";
+    context.stroke();
+    context.fillStyle = options.badgeColor ?? "#ffffff";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(badge, badgeLeft + badgeWidth / 2, badgeTop + badgeHeight / 2 + 1);
   }
 
   const texture = new THREE.CanvasTexture(canvas);

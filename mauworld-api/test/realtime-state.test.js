@@ -5,6 +5,7 @@ import {
   checkChatRateLimit,
   normalizeInteractionSettings,
   sanitizeChatText,
+  sanitizeViewerDisplayName,
   selectNearestRecipients,
 } from "../src/lib/realtime-state.js";
 
@@ -26,6 +27,11 @@ test("chat sanitization trims control characters and caps length", () => {
   assert.equal(sanitizeChatText("   hello\nworld  ", 160), "hello world");
   assert.equal(sanitizeChatText("a".repeat(10), 4), "aaaa");
   assert.equal(sanitizeChatText("\u0000\u0007  "), "");
+});
+
+test("viewer display names trim whitespace and control characters", () => {
+  assert.equal(sanitizeViewerDisplayName("  samia\t\n"), "samia");
+  assert.equal(sanitizeViewerDisplayName("\u0000\u0007", "visitor 1234"), "visitor 1234");
 });
 
 test("nearest recipients are deterministic by distance then session id", () => {
@@ -68,13 +74,13 @@ test("presence payload exposes viewer identity and position", () => {
     viewerSessionId: "viewer_1234",
     position: { x: 1, y: 2, z: 3 },
     headingY: 1.25,
-    movementState: { moving: true },
+    movementState: { moving: true, displayName: "  Samia  " },
     lastPresenceAt: Date.parse("2026-04-15T00:00:00Z"),
   });
 
   assert.equal(payload.viewer_session_id, "viewer_1234");
-  assert.equal(payload.actor.display_name, "visitor 1234");
+  assert.equal(payload.actor.display_name, "Samia");
   assert.equal(payload.position_x, 1);
   assert.equal(payload.heading_y, 1.25);
-  assert.deepEqual(payload.movement_state, { moving: true });
+  assert.deepEqual(payload.movement_state, { moving: true, displayName: "  Samia  " });
 });

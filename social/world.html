@@ -54,7 +54,7 @@
           </div>
         </div>
 
-        <aside class="world-panel" aria-label="World search">
+        <aside class="world-panel" aria-label="World tools">
           <div class="world-panel__bar">
             <div class="world-panel__brand">
               <strong>Mauworld</strong>
@@ -64,88 +64,234 @@
             </a>
           </div>
 
-          <form class="world-search-form" data-world-search-form>
-            <label class="world-search-field">
-              <input type="search" name="q" placeholder="Search posts, tags, or titles" />
+          <div class="world-panel__identity">
+            <label class="world-name-field">
+              <input
+                type="text"
+                maxlength="40"
+                data-world-name-input
+                placeholder="visitor"
+                autocomplete="nickname"
+                aria-label="Your name"
+              />
             </label>
-            <button type="submit">Go</button>
-          </form>
+          </div>
 
-          <p class="world-search-status" data-world-search-status>Loading the current world...</p>
+          <div class="world-panel__tabs" role="tablist" aria-label="World tools">
+            <button
+              type="button"
+              class="world-panel__tab is-active"
+              data-world-panel-tab="chat"
+              role="tab"
+              aria-selected="true"
+              aria-controls="world-panel-chat"
+            >Chat</button>
+            <button
+              type="button"
+              class="world-panel__tab"
+              data-world-panel-tab="share"
+              role="tab"
+              aria-selected="false"
+              aria-controls="world-panel-share"
+            >Share</button>
+            <button
+              type="button"
+              class="world-panel__tab"
+              data-world-panel-tab="live"
+              role="tab"
+              aria-selected="false"
+              aria-controls="world-panel-live"
+            >Live</button>
+            <button
+              type="button"
+              class="world-panel__tab"
+              data-world-panel-tab="search"
+              role="tab"
+              aria-selected="false"
+              aria-controls="world-panel-search"
+            >Search</button>
+          </div>
 
-          <section class="world-browser-panel" data-world-browser-panel aria-label="Nearby share">
-            <div class="world-browser-panel__head">
-              <strong>Nearby Share</strong>
-              <div class="world-browser-panel__actions">
-                <button type="button" class="is-muted" data-world-browser-expand aria-expanded="false">Focus</button>
-                <button type="button" data-world-browser-launch>Share</button>
-                <button type="button" class="is-muted" data-world-browser-stop>Stop</button>
-              </div>
-            </div>
-
-            <div class="world-browser-share" data-world-browser-share>
-              <label class="world-browser-share__field">
+          <section
+            class="world-panel__view"
+            id="world-panel-chat"
+            data-world-panel-tab-panel="chat"
+            role="tabpanel"
+          >
+            <form class="world-panel-chat" data-world-chat-composer>
+              <label class="world-panel-chat__field">
                 <input
                   type="text"
-                  maxlength="96"
-                  data-world-browser-share-title
-                  placeholder="Name this share"
+                  maxlength="160"
+                  data-world-chat-input
+                  placeholder="/ say something nearby and press Enter"
                   autocomplete="off"
-                  aria-label="Share title"
+                  aria-label="Say something nearby"
                 />
               </label>
-              <div class="world-browser-share__modes" aria-label="Share type">
-                <button type="button" class="is-active" data-world-browser-share-mode="screen" aria-pressed="true">
-                  Screen
-                </button>
-                <button type="button" data-world-browser-share-mode="camera" aria-pressed="false">Video</button>
-                <button type="button" data-world-browser-share-mode="audio" aria-pressed="false">Voice</button>
-              </div>
+            </form>
+            <div class="world-chat-reactions" aria-label="Quick reactions">
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="❤️" aria-label="Love">
+                ❤️
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="👍" aria-label="Like">
+                👍
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="😂" aria-label="Laugh">
+                😂
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="😮" aria-label="Wow">
+                😮
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="😢" aria-label="Sad">
+                😢
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="😡" aria-label="Angry">
+                😡
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="🔥" aria-label="Fire">
+                🔥
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="🎉" aria-label="Celebrate">
+                🎉
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="👏" aria-label="Clap">
+                👏
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="😍" aria-label="Heart eyes">
+                😍
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="👀" aria-label="Watching">
+                👀
+              </button>
+              <button type="button" class="world-chat-reactions__button" data-world-chat-reaction="🙌" aria-label="Hands up">
+                🙌
+              </button>
             </div>
-
-            <div class="world-browser-summary" data-world-browser-summary>
-              <div class="world-browser-summary__row">
-                <span class="world-browser-summary__badge" data-world-browser-summary-badge data-state="idle">
-                  Idle
-                </span>
-                <strong class="world-browser-summary__current" data-world-browser-summary-current>
-                  Not sharing yet
-                </strong>
-              </div>
-              <p class="world-browser-summary__hint" data-world-browser-summary-hint>
-                Pick a type, add a title if you want, then press Share.
-              </p>
-            </div>
-
-            <div class="world-browser-stage" data-world-browser-stage tabindex="0" aria-label="Nearby share preview">
-              <video
-                class="world-browser-stage__video"
-                data-world-browser-video
-                muted
-                autoplay
-                playsinline
-                hidden
-              ></video>
-              <img class="world-browser-stage__frame" data-world-browser-frame alt="" hidden />
-              <div class="world-browser-stage__placeholder" data-world-browser-placeholder>
-                Share a screen, video, or voice nearby.
-              </div>
-              <button
-                type="button"
-                class="world-browser-stage__resume"
-                data-world-browser-resume
-                hidden
-              >Start Stream</button>
-            </div>
-
-            <p class="world-browser-status world-browser-status--sr" data-world-browser-status aria-live="polite">
-              Realtime share offline.
-            </p>
           </section>
-          <div data-world-browser-dock hidden></div>
 
-          <section class="world-results-panel" aria-label="Search hits">
-            <div class="world-results" data-world-results></div>
+          <section
+            class="world-panel__view"
+            id="world-panel-share"
+            data-world-panel-tab-panel="share"
+            role="tabpanel"
+            hidden
+          >
+            <section class="world-browser-panel" data-world-browser-panel aria-label="Nearby share">
+              <div class="world-browser-panel__head">
+                <strong>Nearby Share</strong>
+                <div class="world-browser-panel__actions">
+                  <button type="button" class="is-muted" data-world-browser-expand aria-expanded="false">Focus</button>
+                  <button type="button" data-world-browser-launch>Share</button>
+                  <button type="button" class="is-muted" data-world-browser-stop>Stop</button>
+                </div>
+              </div>
+
+              <div class="world-browser-share" data-world-browser-share>
+                <label class="world-browser-share__field">
+                  <input
+                    type="text"
+                    maxlength="96"
+                    data-world-browser-share-title
+                    placeholder="Name this share"
+                    autocomplete="off"
+                    aria-label="Share title"
+                  />
+                </label>
+                <div class="world-browser-share__modes" aria-label="Share type">
+                  <button type="button" class="is-active" data-world-browser-share-mode="screen" aria-pressed="true">
+                    Screen
+                  </button>
+                  <button type="button" data-world-browser-share-mode="camera" aria-pressed="false">Video</button>
+                  <button type="button" data-world-browser-share-mode="audio" aria-pressed="false">Voice</button>
+                </div>
+              </div>
+
+              <div class="world-browser-summary" data-world-browser-summary>
+                <div class="world-browser-summary__row">
+                  <span class="world-browser-summary__badge" data-world-browser-summary-badge data-state="idle">
+                    Idle
+                  </span>
+                  <strong class="world-browser-summary__current" data-world-browser-summary-current>
+                    Not sharing yet
+                  </strong>
+                </div>
+                <p class="world-browser-summary__hint" data-world-browser-summary-hint>
+                  Pick a type, add a title if you want, then press Share.
+                </p>
+              </div>
+
+              <div class="world-browser-stage" data-world-browser-stage tabindex="0" aria-label="Nearby share preview">
+                <video
+                  class="world-browser-stage__video"
+                  data-world-browser-video
+                  muted
+                  autoplay
+                  playsinline
+                  hidden
+                ></video>
+                <img class="world-browser-stage__frame" data-world-browser-frame alt="" hidden />
+                <div class="world-browser-stage__placeholder" data-world-browser-placeholder>
+                  Share a screen, video, or voice nearby.
+                </div>
+                <button
+                  type="button"
+                  class="world-browser-stage__resume"
+                  data-world-browser-resume
+                  hidden
+                >Start Stream</button>
+              </div>
+
+              <p class="world-browser-status world-browser-status--sr" data-world-browser-status aria-live="polite">
+                Realtime share offline.
+              </p>
+            </section>
+            <div data-world-browser-dock hidden></div>
+          </section>
+
+          <section
+            class="world-panel__view"
+            id="world-panel-live"
+            data-world-panel-tab-panel="live"
+            role="tabpanel"
+            hidden
+          >
+            <form class="world-live-search-form" data-world-live-search-form>
+              <label class="world-search-field">
+                <input
+                  type="search"
+                  data-world-live-search-input
+                  placeholder="Search live share titles"
+                  autocomplete="off"
+                  aria-label="Search live share titles"
+                />
+              </label>
+            </form>
+            <p class="world-live-status" data-world-live-status>No live shares yet.</p>
+            <section class="world-live-panel" aria-label="Live shares">
+              <div class="world-live-results" data-world-live-results></div>
+            </section>
+          </section>
+
+          <section
+            class="world-panel__view"
+            id="world-panel-search"
+            data-world-panel-tab-panel="search"
+            role="tabpanel"
+            hidden
+          >
+            <form class="world-search-form" data-world-search-form>
+              <label class="world-search-field">
+                <input type="search" name="q" placeholder="Search posts, tags, or titles" />
+              </label>
+              <button type="submit">Go</button>
+            </form>
+
+            <p class="world-search-status" data-world-search-status>Loading the current world...</p>
+
+            <section class="world-results-panel" aria-label="Search hits">
+              <div class="world-results" data-world-results></div>
+            </section>
           </section>
         </aside>
 
@@ -170,22 +316,6 @@
         </aside>
 
         <div class="world-toast" data-world-toast hidden></div>
-        <form class="world-chat-composer" data-world-chat-composer hidden>
-          <div class="world-chat-composer__prompt">/ say something nearby</div>
-          <label class="world-chat-composer__field">
-            <input
-              type="text"
-              maxlength="160"
-              data-world-chat-input
-              placeholder="Say something to nearby visitors"
-              autocomplete="off"
-            />
-          </label>
-          <div class="world-chat-composer__meta">
-            <span data-world-chat-status>Enter to send. Esc to cancel.</span>
-            <span data-world-chat-counter>0/160</span>
-          </div>
-        </form>
       </section>
     </main>
 

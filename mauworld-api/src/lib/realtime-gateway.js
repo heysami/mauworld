@@ -295,6 +295,38 @@ export class RealtimeGateway {
     }
   }
 
+  buildBrowserSessionPayload(sessionLike, interactionSettings = null) {
+    if (!sessionLike) {
+      return null;
+    }
+    const sessionId = String(sessionLike.sessionId ?? sessionLike.id ?? "").trim();
+    const rawSession = sessionId ? this.browserManager.getSession(sessionId) ?? sessionLike : sessionLike;
+    const session = typeof this.browserManager.toClientSession === "function"
+      ? this.browserManager.toClientSession(rawSession)
+      : { ...rawSession };
+    const hostSessionId = String(session.hostSessionId ?? rawSession.hostSessionId ?? "").trim();
+    const subscribers = rawSession.subscribers instanceof Set ? rawSession.subscribers : null;
+    const viewerCount = Number.isFinite(Number(rawSession.viewerCount))
+      ? Math.max(0, Math.floor(Number(rawSession.viewerCount)))
+      : Math.max(0, [...(subscribers ?? [])].filter((viewerSessionId) => viewerSessionId !== hostSessionId).length);
+    const maxViewers = Number.isFinite(Number(rawSession.maxViewers)) && Number(rawSession.maxViewers) > 0
+      ? Math.max(1, Math.floor(Number(rawSession.maxViewers)))
+      : Math.max(
+        1,
+        Math.floor(Number(
+          interactionSettings?.interactionMaxRecipients
+          ?? this.interactionSettings.value?.interactionMaxRecipients
+          ?? 20,
+        ) || 20),
+      );
+    return {
+      ...session,
+      sessionId: sessionId || session.sessionId,
+      viewerCount,
+      maxViewers,
+    };
+  }
+
   async handlePresenceUpdate(client, message) {
     const interactionSettings = await this.getInteractionSettings();
     const worldSnapshotId = String(message.worldSnapshotId ?? message.world_snapshot_id ?? "").trim();
@@ -326,9 +358,7 @@ export class RealtimeGateway {
       });
       const browserSessions = this.browserManager.listSessionsForWorld(worldSnapshotId);
       for (const rawSession of browserSessions) {
-        const session = typeof this.browserManager.toClientSession === "function"
-          ? this.browserManager.toClientSession(rawSession)
-          : rawSession;
+        const session = this.buildBrowserSessionPayload(rawSession, interactionSettings) ?? rawSession;
         const sessionId = session.sessionId ?? rawSession.sessionId ?? rawSession.id;
         sendJson(client, {
           type: "browser:session",
@@ -340,6 +370,8 @@ export class RealtimeGateway {
           type: deliveryMode === "full" ? "browser:subscribe" : "browser:unsubscribe",
           sessionId,
           hostSessionId: session.hostSessionId,
+          viewerCount: session.viewerCount,
+          maxViewers: session.maxViewers,
         });
       }
     }
@@ -453,16 +485,20 @@ export class RealtimeGateway {
     }
   }
 
-  async broadcastBrowserSession(sessionPayload) {
-    const worldSnapshotId = String(sessionPayload.worldSnapshotId ?? "").trim();
+  async broadcastBrowserSession(sessionPayload, options = {}) {
+    const interactionSettings = options.interactionSettings ?? await this.getInteractionSettings();
+    const session = this.buildBrowserSessionPayload(sessionPayload, interactionSettings);
+    const worldSnapshotId = String(session?.worldSnapshotId ?? sessionPayload.worldSnapshotId ?? "").trim();
     if (!worldSnapshotId) {
       return;
     }
     this.broadcastToWorld(worldSnapshotId, {
       type: "browser:session",
-      session: sessionPayload,
+      session,
     });
-    await this.rebalanceBrowserSessions(worldSnapshotId);
+    if (options.rebalance !== false) {
+      await this.rebalanceBrowserSessions(worldSnapshotId, interactionSettings);
+    }
   }
 
   broadcastBrowserFrame(frame) {
@@ -520,8 +556,8 @@ export class RealtimeGateway {
     });
   }
 
-  async rebalanceBrowserSessions(worldSnapshotId) {
-    const interactionSettings = await this.getInteractionSettings();
+  async rebalanceBrowserSessions(worldSnapshotId, interactionSettings = null) {
+    const resolvedInteractionSettings = interactionSettings ?? await this.getInteractionSettings();
     const sessions = this.browserManager.listSessionsForWorld(worldSnapshotId);
     const worldClients = this.getWorldClients(worldSnapshotId);
 
@@ -536,13 +572,23 @@ export class RealtimeGateway {
           senderSessionId: hostClient.viewerSessionId,
           senderPosition: hostClient.position,
           candidates: worldClients,
-          radius: interactionSettings.browserRadius,
-          maxRecipients: interactionSettings.interactionMaxRecipients,
+          radius: resolvedInteractionSettings.browserRadius,
+          maxRecipients: resolvedInteractionSettings.interactionMaxRecipients,
         }),
       );
       fullRecipients.add(hostClient.viewerSessionId);
       const previousRecipients = new Set(session.subscribers ?? []);
       session.subscribers = fullRecipients;
+      const recipientsChanged =
+        previousRecipients.size !== fullRecipients.size
+        || [...fullRecipients].some((viewerSessionId) => !previousRecipients.has(viewerSessionId));
+      const nextViewerCount = Math.max(0, fullRecipients.size - 1);
+      const nextMaxViewers = Math.max(1, resolvedInteractionSettings.interactionMaxRecipients);
+      const countsChanged =
+        Number(session.viewerCount ?? -1) !== nextViewerCount
+        || Number(session.maxViewers ?? -1) !== nextMaxViewers;
+      session.viewerCount = nextViewerCount;
+      session.maxViewers = nextMaxViewers;
 
       for (const viewerSessionId of fullRecipients) {
         if (previousRecipients.has(viewerSessionId)) {
@@ -557,6 +603,8 @@ export class RealtimeGateway {
           type: "browser:subscribe",
           sessionId: session.id,
           hostSessionId: session.hostSessionId,
+          viewerCount: session.viewerCount,
+          maxViewers: session.maxViewers,
         });
       }
 
@@ -573,6 +621,8 @@ export class RealtimeGateway {
           type: "browser:unsubscribe",
           sessionId: session.id,
           hostSessionId: session.hostSessionId,
+          viewerCount: session.viewerCount,
+          maxViewers: session.maxViewers,
         });
       }
 
@@ -587,8 +637,17 @@ export class RealtimeGateway {
             type: "browser:unsubscribe",
             sessionId: session.id,
             hostSessionId: session.hostSessionId,
+            viewerCount: session.viewerCount,
+            maxViewers: session.maxViewers,
           });
         }
+      }
+
+      if (recipientsChanged || countsChanged) {
+        await this.broadcastBrowserSession(session, {
+          rebalance: false,
+          interactionSettings: resolvedInteractionSettings,
+        });
       }
     }
   }
