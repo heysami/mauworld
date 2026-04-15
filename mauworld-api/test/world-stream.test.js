@@ -20,7 +20,7 @@ test("pillar streaming expands beyond the active cell window for far LOD proxies
     world_billboard_distance: 420,
   };
 
-  assert.equal(computePillarStreamPaddingCells(settings), 7);
+  assert.equal(computePillarStreamPaddingCells(settings), 37);
   assert.deepEqual(
     expandWorldCellRange(
       {
@@ -32,15 +32,15 @@ test("pillar streaming expands beyond the active cell window for far LOD proxies
       computePillarStreamPaddingCells(settings),
     ),
     {
-      cellXMin: -13,
-      cellXMax: 13,
-      cellZMin: -13,
-      cellZMax: 13,
+      cellXMin: -43,
+      cellXMax: 43,
+      cellZMin: -43,
+      cellZMax: 43,
     },
   );
 });
 
-test("pillar proxy LOD switches after the interaction range with a modest hysteresis band", () => {
+test("pillar proxy LOD stays detailed much farther out while keeping a modest hysteresis band", () => {
   const settings = {
     world_cell_size: 64,
     world_lod_near_distance: 180,
@@ -50,8 +50,8 @@ test("pillar proxy LOD switches after the interaction range with a modest hyster
   const proxyDistance = computePillarProxyDistance(settings);
   const proxyHysteresis = computePillarProxyHysteresis(settings);
 
-  assert.ok(proxyDistance > settings.world_lod_near_distance);
-  assert.ok(proxyDistance < settings.world_billboard_distance);
+  assert.equal(proxyDistance, 2180);
+  assert.ok(proxyDistance >= settings.world_lod_near_distance * 10);
   assert.ok(proxyHysteresis >= 0.1);
   assert.ok(proxyHysteresis <= 0.22);
 });

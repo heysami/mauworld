@@ -201,15 +201,16 @@ function getPillarLodSettings() {
   const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
   const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
   const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const baseProxyDistance = Math.max(nearDistance * 1.1, cellSize * 2.3, billboardDistance * 0.52);
   const proxyDistance = Math.max(
     48,
-    Math.floor(Number(lod.pillarProxyDistance) || Math.max(nearDistance * 1.1, cellSize * 2.3, billboardDistance * 0.52)),
+    Math.floor(Number(lod.pillarProxyDistance) || baseProxyDistance * 10),
   );
   return {
     cellSize,
     streamPaddingCells: Math.max(
       2,
-      Math.floor(Number(lod.pillarStreamPaddingCells) || Math.ceil(billboardDistance / cellSize)),
+      Math.floor(Number(lod.pillarStreamPaddingCells) || Math.ceil(proxyDistance / cellSize) + 2),
     ),
     proxyDistance,
     proxyHysteresis: clamp(
@@ -4219,7 +4220,10 @@ async function loadMeta(force = false) {
   state.meta = payload;
   const nearDistance = payload.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = payload.renderer?.fog?.farDistance ?? 720;
-  sceneState.scene.fog = new THREE.Fog(WORLD_STYLE.fog, nearDistance, farDistance * WORLD_STREAM.fogMultiplier);
+  const fogFar = farDistance * WORLD_STREAM.fogMultiplier;
+  sceneState.scene.fog = new THREE.Fog(WORLD_STYLE.fog, nearDistance, fogFar);
+  sceneState.camera.far = Math.max(2400, fogFar + 640);
+  sceneState.camera.updateProjectionMatrix();
   syncConfettiFieldBounds();
   updateMetaPanel();
   return payload;

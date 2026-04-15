@@ -442,19 +442,20 @@ function estimateWorldSceneDelayMs(pendingCount, batchSize) {
 
 export function computePillarStreamPaddingCells(settings = {}) {
   const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
-  const billboardDistance = Math.max(16, Math.floor(Number(settings.world_billboard_distance) || 420));
-  return Math.max(2, Math.min(24, Math.ceil(billboardDistance / cellSize)));
+  const proxyDistance = computePillarProxyDistance(settings);
+  return Math.max(2, Math.min(48, Math.ceil(proxyDistance / cellSize) + 2));
 }
 
 export function computePillarProxyDistance(settings = {}) {
   const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
   const nearDistance = Math.max(16, Math.floor(Number(settings.world_lod_near_distance) || 180));
   const billboardDistance = Math.max(16, Math.floor(Number(settings.world_billboard_distance) || 420));
-  return Math.max(
+  const baseProxyDistance = Math.max(
     Math.round(nearDistance * 1.1),
     Math.round(cellSize * 2.3),
     Math.round(billboardDistance * 0.52),
   );
+  return Math.max(48, Math.round(baseProxyDistance * 10));
 }
 
 export function computePillarProxyHysteresis(settings = {}) {
@@ -540,7 +541,7 @@ function buildWorldRendererConfig(settings) {
       enabled: true,
       lodNearDistance: settings.world_lod_near_distance,
       billboardDistance: settings.world_billboard_distance,
-      farDistance: Math.round(settings.world_billboard_distance * 1.6),
+      farDistance: Math.round(Math.max(settings.world_billboard_distance * 1.6, pillarProxyDistance * 0.48)),
     },
     lod: {
       cellSize: settings.world_cell_size,
