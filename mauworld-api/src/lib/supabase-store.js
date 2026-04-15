@@ -422,6 +422,34 @@ function dedupeStringList(values) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
+const SUPABASE_IN_FILTER_BATCH_SIZE = 100;
+
+async function loadRowsByInBatches(serviceClient, {
+  table,
+  column,
+  values,
+  select = "*",
+  batchSize = SUPABASE_IN_FILTER_BATCH_SIZE,
+  apply = null,
+  message,
+}) {
+  const scopedValues = dedupeStringList(values);
+  if (scopedValues.length === 0) {
+    return [];
+  }
+
+  const rows = [];
+  for (let index = 0; index < scopedValues.length; index += batchSize) {
+    const batchValues = scopedValues.slice(index, index + batchSize);
+    let query = serviceClient.from(table).select(select).in(column, batchValues);
+    if (typeof apply === "function") {
+      query = apply(query) ?? query;
+    }
+    rows.push(...await must(query, message));
+  }
+  return rows;
+}
+
 function clampInteger(value, fallback, min, max) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -763,15 +791,21 @@ export class MauworldStore {
     let effectiveWorldSummary = worldSummary;
     let worldSnapshot = worldSummary.current ?? null;
     if (shouldRepairPublicWorld(organization, worldSummary)) {
-      const repaired = await this.rebuildWorldSnapshotForVersion({
-        version: organization.current,
-        settings,
-      });
-      worldSnapshot = repaired.worldSnapshot;
-      effectiveWorldSummary = {
-        ...worldSummary,
-        current: worldSnapshot,
-      };
+      try {
+        const repaired = await this.rebuildWorldSnapshotForVersion({
+          version: organization.current,
+          settings,
+        });
+        worldSnapshot = repaired.worldSnapshot;
+        effectiveWorldSummary = {
+          ...worldSummary,
+          current: worldSnapshot,
+        };
+      } catch (error) {
+        if (!worldSnapshot?.built_at) {
+          throw error;
+        }
+      }
     }
     if (!worldSnapshot) {
       throw new HttpError(404, "Current world snapshot not found");
@@ -926,10 +960,12 @@ export class MauworldStore {
       const pillarIds = pillars.map((row) => row.id);
       const [pillarTags, posts] = await Promise.all([
         pillarIds.length > 0
-          ? must(
-              this.serviceClient.from("pillar_tags").select("*").in("pillar_id", pillarIds),
-              "Could not load pillar tags for world snapshot rebuild",
-            )
+          ? loadRowsByInBatches(this.serviceClient, {
+              table: "pillar_tags",
+              column: "pillar_id",
+              values: pillarIds,
+              message: "Could not load pillar tags for world snapshot rebuild",
+            })
           : [],
         must(
           this.serviceClient
@@ -942,10 +978,12 @@ export class MauworldStore {
       const postIds = posts.map((row) => row.id);
       const postTags =
         postIds.length > 0
-          ? await must(
-              this.serviceClient.from("post_tags").select("*").in("post_id", postIds),
-              "Could not load post tags for world snapshot rebuild",
-            )
+          ? await loadRowsByInBatches(this.serviceClient, {
+              table: "post_tags",
+              column: "post_id",
+              values: postIds,
+              message: "Could not load post tags for world snapshot rebuild",
+            })
           : [];
 
       const layout = computeWorldLayout({
