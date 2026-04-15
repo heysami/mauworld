@@ -477,7 +477,7 @@ body.is-world-loading .world-panel {
   position: fixed;
   inset: clamp(10px, 2vw, 24px);
   z-index: 5;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 12px;
   padding: clamp(12px, 2vw, 18px);
   border-color: rgba(61, 87, 182, 0.22);
@@ -492,6 +492,10 @@ body.is-world-loading .world-panel {
 
 .world-browser-panel.is-expanded .world-browser-share {
   grid-row: 2;
+}
+
+.world-browser-panel.is-expanded .world-browser-summary {
+  grid-row: 3;
 }
 
 .world-browser-backdrop {
@@ -585,6 +589,72 @@ body.is-world-loading .world-panel {
   color: var(--world-ink);
 }
 
+.world-browser-summary {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(61, 87, 182, 0.12);
+  border-radius: 8px;
+  background: rgba(249, 251, 255, 0.96);
+}
+
+.world-browser-summary__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.world-browser-summary__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(114, 130, 185, 0.12);
+  color: var(--world-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.world-browser-summary__badge[data-state="live"] {
+  background: rgba(124, 232, 91, 0.16);
+  color: #2f7b20;
+}
+
+.world-browser-summary__badge[data-state="starting"] {
+  background: rgba(255, 216, 77, 0.18);
+  color: #8b6200;
+}
+
+.world-browser-summary__badge[data-state="draft"] {
+  background: rgba(45, 216, 255, 0.14);
+  color: #196d87;
+}
+
+.world-browser-summary__badge[data-state="offline"] {
+  background: rgba(255, 79, 168, 0.12);
+  color: #a23c73;
+}
+
+.world-browser-summary__current {
+  color: var(--world-ink);
+  font-size: 0.86rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.world-browser-summary__hint {
+  margin: 0;
+  color: var(--world-muted);
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
+.world-browser-summary__hint:empty {
+  display: none;
+}
+
 .world-chat-composer__field input {
   width: 100%;
   min-height: 40px;
@@ -648,7 +718,7 @@ body.is-world-loading .world-panel {
 }
 
 .world-browser-panel.is-expanded .world-browser-stage {
-  grid-row: 3;
+  grid-row: 4;
   height: 100%;
   min-height: 0;
   aspect-ratio: auto;

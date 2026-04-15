@@ -35,6 +35,9 @@ const elements = {
   browserLaunch: document.querySelector("[data-world-browser-launch]"),
   browserStop: document.querySelector("[data-world-browser-stop]"),
   browserShareTitle: document.querySelector("[data-world-browser-share-title]"),
+  browserSummaryBadge: document.querySelector("[data-world-browser-summary-badge]"),
+  browserSummaryCurrent: document.querySelector("[data-world-browser-summary-current]"),
+  browserSummaryHint: document.querySelector("[data-world-browser-summary-hint]"),
   browserStatus: document.querySelector("[data-world-browser-status]"),
   browserBackdrop: document.querySelector("[data-world-browser-backdrop]"),
   browserStage: document.querySelector("[data-world-browser-stage]"),
@@ -1224,6 +1227,20 @@ function getDefaultBrowserShareTitle(shareKind, videoTrack = null) {
   return getDisplayShareLabel(videoTrack);
 }
 
+function getBrowserShareKindLabel(shareKind) {
+  const kind = normalizeBrowserShareKind(shareKind, "screen");
+  if (kind === "camera") {
+    return "Video";
+  }
+  if (kind === "audio") {
+    return "Voice";
+  }
+  if (kind === "browser") {
+    return "Browser";
+  }
+  return "Screen";
+}
+
 function getSelectedBrowserShareMode() {
   return normalizeBrowserShareKind(state.browserShareMode, "screen");
 }
@@ -1239,6 +1256,42 @@ function setSelectedBrowserShareMode(mode) {
 
 function getRequestedBrowserShareTitle(fallback = "") {
   return sanitizeBrowserShareTitle(elements.browserShareTitle?.value ?? "", fallback);
+}
+
+function getLocalBrowserShareDraft(localSession = getLocalBrowserSession()) {
+  const draftMode = getSelectedBrowserShareMode();
+  const draftModeLabel = getBrowserShareKindLabel(draftMode);
+  const draftTitle = sanitizeBrowserShareTitle(elements.browserShareTitle?.value ?? "", "");
+  const liveKind = localSession ? getBrowserSessionShareKind(localSession) : "";
+  const liveKindLabel = localSession ? getBrowserShareKindLabel(liveKind) : "";
+  const liveTitle = sanitizeBrowserShareTitle(localSession?.title ?? "", "");
+  const isDisplayShare = Boolean(localSession && localSession.sessionMode === "display-share");
+  const modeDiff = Boolean(isDisplayShare && draftMode !== liveKind);
+  const titleDiff = Boolean(isDisplayShare && draftTitle && draftTitle !== liveTitle);
+  return {
+    draftMode,
+    draftModeLabel,
+    draftTitle,
+    liveKind,
+    liveKindLabel,
+    liveTitle,
+    modeDiff,
+    titleDiff,
+    canUpdateTitleOnly: Boolean(isDisplayShare && !modeDiff && titleDiff && !state.pendingBrowserShare),
+  };
+}
+
+function updateBrowserPanelSummary(summary = {}) {
+  if (elements.browserSummaryBadge) {
+    elements.browserSummaryBadge.textContent = summary.badge || "Idle";
+    elements.browserSummaryBadge.setAttribute("data-state", summary.state || "idle");
+  }
+  if (elements.browserSummaryCurrent) {
+    elements.browserSummaryCurrent.textContent = summary.current || "Not sharing yet";
+  }
+  if (elements.browserSummaryHint) {
+    elements.browserSummaryHint.textContent = summary.hint || "";
+  }
 }
 
 function createLocalBrowserShare(stream, options = {}) {
@@ -1351,6 +1404,10 @@ function attachLocalBrowserShare(sessionId, share) {
     ...share,
     sessionId,
   };
+  setSelectedBrowserShareMode(share.shareKind);
+  if (elements.browserShareTitle) {
+    elements.browserShareTitle.value = share.title || "";
+  }
   setBrowserPreviewStream(share.hasVideo ? share.stream : null);
   if (share.hasVideo && elements.browserVideo) {
     bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
@@ -6194,6 +6251,7 @@ function getBrowserStagePlaceholderText({
 
 function updateBrowserPanel() {
   const localSession = getLocalBrowserSession();
+  const draft = getLocalBrowserShareDraft(localSession);
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
     : state.localBrowserShare?.hasVideo
@@ -6242,8 +6300,22 @@ function updateBrowserPanel() {
   }
   if (!state.realtimeConnected) {
     setBrowserStatus("Realtime share offline.");
+    updateBrowserPanelSummary({
+      state: "offline",
+      badge: "Offline",
+      current: "Realtime share is offline",
+      hint: "Reconnect before you start, switch, or rename a share.",
+    });
   } else if (state.pendingBrowserShare) {
     setBrowserStatus("Preparing your nearby share...");
+    updateBrowserPanelSummary({
+      state: "starting",
+      badge: "Starting",
+      current: `Starting ${getBrowserShareKindLabel(state.pendingBrowserShare.shareKind)}`,
+      hint: state.pendingBrowserShare.title
+        ? `"${state.pendingBrowserShare.title}" will go live after the picker or permission prompt finishes.`
+        : "Finish the picker or permission prompt to go live.",
+    });
   } else if (remotePanelSession) {
     const shareKind = getBrowserSessionShareKind(remotePanelSession);
     setBrowserStatus(
@@ -6251,8 +6323,24 @@ function updateBrowserPanel() {
         ? `Listening to ${remotePanelSession.title || "live voice"} from a nearby visitor.`
         : `Viewing ${remotePanelSession.title || "nearby share"} from a nearby visitor.`,
     );
+    updateBrowserPanelSummary({
+      state: "draft",
+      badge: "Nearby",
+      current: shareKind === "audio"
+        ? `Hearing ${remotePanelSession.title || "live voice"}`
+        : `Seeing ${remotePanelSession.title || "nearby share"}`,
+      hint: "Your Share controls still start your own nearby share.",
+    });
   } else if (!localSession) {
     setBrowserStatus("Share a screen, video, or voice nearby.");
+    updateBrowserPanelSummary({
+      state: "idle",
+      badge: "Idle",
+      current: draft.draftTitle
+        ? `Ready: ${draft.draftModeLabel} "${draft.draftTitle}"`
+        : `Ready: ${draft.draftModeLabel}`,
+      hint: "Press Share to go live nearby.",
+    });
   } else if (localSession.sessionMode === "display-share") {
     const shareKind = getBrowserSessionShareKind(localSession);
     if (state.localBrowserShare?.sessionId === localSession.sessionId) {
@@ -6272,14 +6360,69 @@ function updateBrowserPanel() {
     } else {
       setBrowserStatus("Share a tab or window to start the nearby stream.");
     }
+    let hint = "Change the type, then press Share again to replace the live share.";
+    let summaryState = "live";
+    if (draft.canUpdateTitleOnly) {
+      hint = `Press Update Title to rename the live ${draft.liveKindLabel.toLowerCase()} to "${draft.draftTitle}".`;
+      summaryState = "draft";
+    } else if (draft.modeDiff) {
+      hint = draft.draftTitle
+        ? `Press Switch to replace the live ${draft.liveKindLabel.toLowerCase()} with ${draft.draftModeLabel.toLowerCase()} "${draft.draftTitle}".`
+        : `Press Switch to replace the live ${draft.liveKindLabel.toLowerCase()} with ${draft.draftModeLabel.toLowerCase()}.`;
+      summaryState = "draft";
+    } else if (draft.titleDiff) {
+      hint = `Press Update Title to rename the live ${draft.liveKindLabel.toLowerCase()} to "${draft.draftTitle}".`;
+      summaryState = "draft";
+    } else if (!draft.draftTitle) {
+      hint = "The title field is only a draft until you press Share or Update Title.";
+    }
+    updateBrowserPanelSummary({
+      state: summaryState,
+      badge: summaryState === "draft" ? "Draft" : "Live",
+      current: `${draft.liveKindLabel} live${draft.liveTitle ? ` - ${draft.liveTitle}` : ""}`,
+      hint,
+    });
   } else if (isLiveKitBrowserTransport(localSession.frameTransport) && state.browserMediaTransport === "livekit") {
     setBrowserStatus(`Streaming ${localSession.url || "browser"} over WebRTC to nearby visitors.`);
+    updateBrowserPanelSummary({
+      state: "live",
+      badge: "Live",
+      current: localSession.title || "Browser live",
+      hint: "This browser session is already live nearby.",
+    });
   } else {
     setBrowserStatus(`Streaming ${localSession.url || "browser"} to nearby visitors.`);
+    updateBrowserPanelSummary({
+      state: "live",
+      badge: "Live",
+      current: localSession.title || "Browser live",
+      hint: "This browser session is already live nearby.",
+    });
   }
 
   if (elements.browserStop) {
     elements.browserStop.disabled = !localSession;
+  }
+  if (elements.browserLaunch) {
+    if (!state.realtimeConnected) {
+      elements.browserLaunch.textContent = "Share";
+      elements.browserLaunch.disabled = true;
+    } else if (state.pendingBrowserShare) {
+      elements.browserLaunch.textContent = "Starting...";
+      elements.browserLaunch.disabled = true;
+    } else if (localSession?.sessionMode === "display-share" && draft.canUpdateTitleOnly) {
+      elements.browserLaunch.textContent = "Update Title";
+      elements.browserLaunch.disabled = false;
+    } else if (localSession?.sessionMode === "display-share" && draft.modeDiff) {
+      elements.browserLaunch.textContent = `Switch to ${draft.draftModeLabel}`;
+      elements.browserLaunch.disabled = false;
+    } else if (localSession?.sessionMode === "display-share") {
+      elements.browserLaunch.textContent = "Share Again";
+      elements.browserLaunch.disabled = false;
+    } else {
+      elements.browserLaunch.textContent = "Share";
+      elements.browserLaunch.disabled = false;
+    }
   }
   if (elements.browserExpand) {
     elements.browserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
@@ -7430,6 +7573,35 @@ async function startLocalNearbyShare(share) {
   return true;
 }
 
+function updateLiveBrowserShareTitle(localSession = getLocalBrowserSession()) {
+  if (!localSession || localSession.sessionMode !== "display-share" || !state.realtimeClient?.isConnected()) {
+    return false;
+  }
+  const draft = getLocalBrowserShareDraft(localSession);
+  if (!draft.canUpdateTitleOnly) {
+    return false;
+  }
+  const started = state.realtimeClient.startBrowser({
+    mode: "display-share",
+    title: draft.draftTitle,
+    shareKind: draft.liveKind,
+    hasVideo: localSession.hasVideo !== false,
+    hasAudio: localSession.hasAudio === true,
+    aspectRatio: localSession.aspectRatio,
+    displaySurface: state.localBrowserShare?.displaySurface || "",
+  });
+  if (!started) {
+    return false;
+  }
+  state.browserSessions.set(localSession.sessionId, {
+    ...localSession,
+    title: draft.draftTitle,
+  });
+  setBrowserStatus("Updating live share title...");
+  updateBrowserPanel();
+  return true;
+}
+
 async function launchScreenShare() {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     showToast("This browser does not support tab sharing.");
@@ -7520,6 +7692,9 @@ async function launchVoiceShare() {
 async function launchSharedBrowser() {
   if (!state.realtimeClient?.isConnected()) {
     showToast("Realtime share is offline.");
+    return;
+  }
+  if (updateLiveBrowserShareTitle()) {
     return;
   }
   const shareMode = getSelectedBrowserShareMode();
