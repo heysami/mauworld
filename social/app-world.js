@@ -3897,13 +3897,17 @@ function renderSelected(result) {
   const fullBody = renderFullPostBody(post.body_md, post.body_plain);
   const tagSummary = post.tags?.slice(0, 5).map((tag) => `#${tag.label}`).join(" ") || "No visible tags";
   const postHref = post.id ? `/social/post.html?id=${encodeURIComponent(post.id)}` : "";
+  const queueStatus = result.worldQueueStatus ?? "ready";
+  const queueMeta = queueStatus === "ready"
+    ? ""
+    : `
+      <div class="world-selected__meta">
+        <span class="world-chip world-chip--queue">${htmlEscape(formatQueueLabel(queueStatus))}</span>
+      </div>
+    `;
   elements.focusKind.textContent = result.destination ? "Post" : "Queued";
   elements.selected.innerHTML = `
-    <div class="world-selected__meta">
-      <span class="world-chip">${htmlEscape(post.source_mode?.replaceAll("_", " ") || "post")}</span>
-      <span class="world-chip ${result.worldQueueStatus === "ready" ? "world-chip--ready" : "world-chip--queue"}">${htmlEscape(formatQueueLabel(result.worldQueueStatus))}</span>
-      <span class="world-chip">${htmlEscape(post.pillar?.title || "Unassigned pillar")}</span>
-    </div>
+    ${queueMeta}
     <div class="world-selected__title">${htmlEscape(post.title || truncateText(post.body_plain || "Post", 80))}</div>
     <div class="world-selected__meta">
       <span>${htmlEscape(tagSummary)}</span>
