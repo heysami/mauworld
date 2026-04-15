@@ -83,9 +83,25 @@
               </div>
             </div>
 
-            <p class="world-browser-status world-browser-status--sr" data-world-browser-status aria-live="polite">
-              Realtime share offline.
-            </p>
+            <div class="world-browser-share" data-world-browser-share>
+              <label class="world-browser-share__field">
+                <input
+                  type="text"
+                  maxlength="96"
+                  data-world-browser-share-title
+                  placeholder="Name this share"
+                  autocomplete="off"
+                  aria-label="Share title"
+                />
+              </label>
+              <div class="world-browser-share__modes" aria-label="Share type">
+                <button type="button" class="is-active" data-world-browser-share-mode="screen" aria-pressed="true">
+                  Screen
+                </button>
+                <button type="button" data-world-browser-share-mode="camera" aria-pressed="false">Video</button>
+                <button type="button" data-world-browser-share-mode="audio" aria-pressed="false">Voice</button>
+              </div>
+            </div>
 
             <div class="world-browser-stage" data-world-browser-stage tabindex="0" aria-label="Nearby share preview">
               <video
@@ -98,7 +114,7 @@
               ></video>
               <img class="world-browser-stage__frame" data-world-browser-frame alt="" hidden />
               <div class="world-browser-stage__placeholder" data-world-browser-placeholder>
-                Share a tab or window to project it into the world.
+                Share a screen, video, or voice nearby.
               </div>
               <button
                 type="button"
@@ -107,6 +123,10 @@
                 hidden
               >Start Stream</button>
             </div>
+
+            <p class="world-browser-status world-browser-status--sr" data-world-browser-status aria-live="polite">
+              Realtime share offline.
+            </p>
           </section>
           <div data-world-browser-dock hidden></div>
 

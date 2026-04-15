@@ -407,6 +407,9 @@ export class RealtimeGateway {
         url: message.url,
         mode: message.mode,
         title: message.title,
+        shareKind: message.shareKind,
+        hasVideo: message.hasVideo,
+        hasAudio: message.hasAudio,
         aspectRatio: message.aspectRatio,
         displaySurface: message.displaySurface,
       });

@@ -652,16 +652,19 @@ export function createBrowserMediaController(options = {}) {
         return false;
       }
       const videoTrack = stream.getVideoTracks?.()[0] ?? null;
-      if (!videoTrack) {
+      const audioTrack = stream.getAudioTracks?.()[0] ?? null;
+      if (!videoTrack && !audioTrack) {
         return false;
       }
-      videoTrack.contentHint = "detail";
-      const audioTrack = stream.getAudioTracks?.()[0] ?? null;
-      const trackEntries = [{
-        kind: "video",
-        track: videoTrack,
-        name: getTrackName(sessionId),
-      }];
+      const trackEntries = [];
+      if (videoTrack) {
+        videoTrack.contentHint = "detail";
+        trackEntries.push({
+          kind: "video",
+          track: videoTrack,
+          name: getTrackName(sessionId),
+        });
+      }
       if (audioTrack) {
         trackEntries.push({
           kind: "audio",

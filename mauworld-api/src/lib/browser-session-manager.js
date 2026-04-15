@@ -34,6 +34,17 @@ function normalizeSessionMode(rawMode) {
   return String(rawMode ?? "").trim() === "display-share" ? "display-share" : "remote-browser";
 }
 
+function normalizeShareKind(rawKind, sessionMode = "remote-browser") {
+  const value = String(rawKind ?? "").trim().toLowerCase();
+  if (sessionMode === "display-share") {
+    if (value === "camera" || value === "audio" || value === "screen") {
+      return value;
+    }
+    return "screen";
+  }
+  return "browser";
+}
+
 function sanitizeSessionTitle(rawTitle, fallback = "Shared screen") {
   const cleaned = String(rawTitle ?? "")
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
@@ -41,6 +52,22 @@ function sanitizeSessionTitle(rawTitle, fallback = "Shared screen") {
     .trim()
     .slice(0, 96);
   return cleaned || fallback;
+}
+
+function getDefaultDisplayShareTitle(shareKind, displaySurface = "") {
+  if (shareKind === "camera") {
+    return "Live video";
+  }
+  if (shareKind === "audio") {
+    return "Live voice";
+  }
+  if (displaySurface === "browser") {
+    return "Shared tab";
+  }
+  if (displaySurface === "window") {
+    return "Shared window";
+  }
+  return "Shared screen";
 }
 
 function normalizeAspectRatio(rawAspectRatio, fallback) {
@@ -190,6 +217,9 @@ export class BrowserSessionManager extends EventEmitter {
       aspectRatio,
       frameTransport: session.frameTransport || this.defaultFrameTransport,
       sessionMode: session.sessionMode || "remote-browser",
+      shareKind: session.shareKind || (session.sessionMode === "display-share" ? "screen" : "browser"),
+      hasVideo: session.hasVideo !== false,
+      hasAudio: session.hasAudio === true,
     };
   }
 
@@ -224,10 +254,13 @@ export class BrowserSessionManager extends EventEmitter {
         throw new Error(relayState?.error || "Shared browser audio relay failed.");
       }
       session.audioRelayReady = true;
+      session.hasAudio = true;
       session.frameTransport = this.defaultFrameTransport;
+      this.emit("session", this.toClientSession(session));
       return true;
     } catch (error) {
       session.audioRelayReady = false;
+      session.hasAudio = false;
       this.emit("error", {
         sessionId: session.id,
         hostSessionId: session.hostSessionId,
@@ -269,6 +302,7 @@ export class BrowserSessionManager extends EventEmitter {
     }
 
     const sessionMode = normalizeSessionMode(input.mode);
+    const shareKind = normalizeShareKind(input.shareKind, sessionMode);
     const existing = this.getSessionByHost(hostSessionId);
     if (existing && existing.sessionMode !== sessionMode) {
       await this.stopSession(existing.id);
@@ -280,17 +314,18 @@ export class BrowserSessionManager extends EventEmitter {
       }
       const aspectRatio = normalizeAspectRatio(input.aspectRatio, this.viewport.width / Math.max(1, this.viewport.height));
       const displaySurface = String(input.displaySurface ?? "").trim().toLowerCase();
-      const defaultTitle = displaySurface === "browser"
-        ? "Shared tab"
-        : displaySurface === "window"
-          ? "Shared window"
-          : "Shared screen";
+      const defaultTitle = getDefaultDisplayShareTitle(shareKind, displaySurface);
+      const hasVideo = input.hasVideo !== false && shareKind !== "audio";
+      const hasAudio = input.hasAudio === true;
       if (existing && existing.sessionMode === "display-share") {
         existing.url = "";
         existing.title = sanitizeSessionTitle(input.title, defaultTitle);
         existing.status = "ready";
         existing.frameTransport = "livekit-display";
         existing.aspectRatio = aspectRatio;
+        existing.shareKind = shareKind;
+        existing.hasVideo = hasVideo;
+        existing.hasAudio = hasAudio;
         this.emit("session", this.toClientSession(existing));
         return this.toClientSession(existing);
       }
@@ -315,6 +350,9 @@ export class BrowserSessionManager extends EventEmitter {
         audioRelayReady: true,
         sessionMode: "display-share",
         aspectRatio,
+        shareKind,
+        hasVideo,
+        hasAudio,
       };
       this.sessions.set(session.id, session);
       this.emit("session", this.toClientSession(session));
@@ -325,6 +363,9 @@ export class BrowserSessionManager extends EventEmitter {
     if (existing) {
       existing.sessionMode = "remote-browser";
       existing.aspectRatio = this.viewport.width / Math.max(1, this.viewport.height);
+      existing.shareKind = "browser";
+      existing.hasVideo = true;
+      existing.hasAudio = Boolean(existing.audioRelayReady);
       await existing.page.goto(targetUrl, NAVIGATION_OPTIONS);
       existing.url = existing.page.url();
       existing.title = await existing.page.title().catch(() => existing.title);
@@ -362,6 +403,9 @@ export class BrowserSessionManager extends EventEmitter {
       audioRelayReady: false,
       sessionMode: "remote-browser",
       aspectRatio: this.viewport.width / Math.max(1, this.viewport.height),
+      shareKind: "browser",
+      hasVideo: true,
+      hasAudio: false,
     };
     this.sessions.set(session.id, session);
     this.bindSessionPageEvents(session);

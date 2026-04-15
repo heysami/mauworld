@@ -34,6 +34,7 @@ const elements = {
   browserExpand: document.querySelector("[data-world-browser-expand]"),
   browserLaunch: document.querySelector("[data-world-browser-launch]"),
   browserStop: document.querySelector("[data-world-browser-stop]"),
+  browserShareTitle: document.querySelector("[data-world-browser-share-title]"),
   browserStatus: document.querySelector("[data-world-browser-status]"),
   browserBackdrop: document.querySelector("[data-world-browser-backdrop]"),
   browserStage: document.querySelector("[data-world-browser-stage]"),
@@ -46,6 +47,8 @@ const elements = {
   chatStatus: document.querySelector("[data-world-chat-status]"),
   chatCounter: document.querySelector("[data-world-chat-counter]"),
 };
+
+elements.browserShareModes = [...document.querySelectorAll("[data-world-browser-share-mode]")];
 
 elements.focusPieces = {
   top: document.querySelector('[data-world-focus-piece="top"]'),
@@ -174,6 +177,7 @@ const state = {
   browserMediaPendingFrameId: 0,
   pendingBrowserShare: null,
   localBrowserShare: null,
+  browserShareMode: "screen",
   browserPanelRemoteSessionId: "",
   browserMediaState: {
     enabled: null,
@@ -1181,6 +1185,23 @@ function bindBrowserPanelVideoMetrics(sessionId, element) {
   update();
 }
 
+function normalizeBrowserShareKind(rawKind, fallback = "screen") {
+  const value = String(rawKind ?? "").trim().toLowerCase();
+  if (value === "browser" || value === "screen" || value === "camera" || value === "audio") {
+    return value;
+  }
+  return fallback;
+}
+
+function sanitizeBrowserShareTitle(rawTitle, fallback = "") {
+  const cleaned = String(rawTitle ?? "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 96);
+  return cleaned || fallback;
+}
+
 function getDisplayShareLabel(videoTrack) {
   const settings = videoTrack?.getSettings?.() ?? {};
   const displaySurface = String(settings.displaySurface ?? "").trim().toLowerCase();
@@ -1193,18 +1214,56 @@ function getDisplayShareLabel(videoTrack) {
   return "Shared screen";
 }
 
-function createBrowserDisplayShare(stream) {
+function getDefaultBrowserShareTitle(shareKind, videoTrack = null) {
+  const kind = normalizeBrowserShareKind(shareKind, "screen");
+  if (kind === "camera") {
+    return "Live video";
+  }
+  if (kind === "audio") {
+    return "Live voice";
+  }
+  return getDisplayShareLabel(videoTrack);
+}
+
+function getSelectedBrowserShareMode() {
+  return normalizeBrowserShareKind(state.browserShareMode, "screen");
+}
+
+function setSelectedBrowserShareMode(mode) {
+  state.browserShareMode = normalizeBrowserShareKind(mode, "screen");
+  for (const button of elements.browserShareModes) {
+    const active = button?.getAttribute("data-world-browser-share-mode") === state.browserShareMode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+function getRequestedBrowserShareTitle(fallback = "") {
+  return sanitizeBrowserShareTitle(elements.browserShareTitle?.value ?? "", fallback);
+}
+
+function createLocalBrowserShare(stream, options = {}) {
   const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
+  const audioTrack = stream?.getAudioTracks?.()[0] ?? null;
+  const shareKind = normalizeBrowserShareKind(options.shareKind, "screen");
   const settings = videoTrack?.getSettings?.() ?? {};
-  const width = Math.max(1, Math.floor(Number(settings.width) || getInteractionConfig().browserViewportWidth));
-  const height = Math.max(1, Math.floor(Number(settings.height) || getInteractionConfig().browserViewportHeight));
+  const fallbackWidth = shareKind === "audio" ? 540 : getInteractionConfig().browserViewportWidth;
+  const fallbackHeight = shareKind === "audio" ? 432 : getInteractionConfig().browserViewportHeight;
+  const width = Math.max(1, Math.floor(Number(settings.width) || fallbackWidth));
+  const height = Math.max(1, Math.floor(Number(settings.height) || fallbackHeight));
   const share = {
     stream,
     videoTrack,
-    title: getDisplayShareLabel(videoTrack),
-    displaySurface: String(settings.displaySurface ?? "").trim().toLowerCase(),
-    aspectRatio: width / Math.max(1, height),
-    hasAudio: (stream?.getAudioTracks?.().length ?? 0) > 0,
+    audioTrack,
+    observedTrack: videoTrack ?? audioTrack ?? null,
+    shareKind,
+    title: sanitizeBrowserShareTitle(options.title, getDefaultBrowserShareTitle(shareKind, videoTrack)),
+    displaySurface: String(options.displaySurface ?? settings.displaySurface ?? "").trim().toLowerCase(),
+    aspectRatio: Number(options.aspectRatio) > 0
+      ? Number(options.aspectRatio)
+      : width / Math.max(1, height),
+    hasVideo: options.hasVideo === true || (options.hasVideo !== false && Boolean(videoTrack)),
+    hasAudio: options.hasAudio === true || (options.hasAudio !== false && Boolean(audioTrack)),
     endedHandler: null,
   };
   share.endedHandler = () => {
@@ -1223,7 +1282,7 @@ function createBrowserDisplayShare(stream) {
     }
     updateBrowserPanel();
   };
-  share.videoTrack?.addEventListener?.("ended", share.endedHandler, { once: true });
+  share.observedTrack?.addEventListener?.("ended", share.endedHandler, { once: true });
   return share;
 }
 
@@ -1231,7 +1290,7 @@ function releaseBrowserDisplayShare(share, { stopTracks = false } = {}) {
   if (!share) {
     return;
   }
-  share.videoTrack?.removeEventListener?.("ended", share.endedHandler);
+  share.observedTrack?.removeEventListener?.("ended", share.endedHandler);
   if (stopTracks) {
     stopMediaStream(share.stream);
   }
@@ -1262,6 +1321,28 @@ function clearLocalBrowserShare({ stopTracks = false, sessionId = "" } = {}) {
   state.localBrowserShare = null;
 }
 
+function getBrowserSharePublishErrorLabel(shareKind) {
+  const kind = normalizeBrowserShareKind(shareKind, "screen");
+  if (kind === "camera") {
+    return "Could not publish the live video.";
+  }
+  if (kind === "audio") {
+    return "Could not publish the live voice.";
+  }
+  return "Could not publish the shared screen.";
+}
+
+function getBrowserShareMissingAudioMessage(share) {
+  const kind = normalizeBrowserShareKind(share?.shareKind, "screen");
+  if (kind === "camera") {
+    return "Camera is live without microphone audio.";
+  }
+  if (kind === "screen") {
+    return "For sound, share a browser tab and enable audio in the picker.";
+  }
+  return "";
+}
+
 function attachLocalBrowserShare(sessionId, share) {
   if (!share || !sessionId || !state.meta?.worldSnapshotId) {
     return;
@@ -1271,10 +1352,12 @@ function attachLocalBrowserShare(sessionId, share) {
     ...share,
     sessionId,
   };
-  setBrowserPreviewStream(share.stream);
-  if (elements.browserVideo) {
+  setBrowserPreviewStream(share.hasVideo ? share.stream : null);
+  if (share.hasVideo && elements.browserVideo) {
     bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
     setBrowserScreenVideo(sessionId, elements.browserVideo);
+  } else {
+    clearBrowserScreenVideo(sessionId);
   }
   void getBrowserMediaController().publishStream({
     sessionId,
@@ -1283,18 +1366,19 @@ function attachLocalBrowserShare(sessionId, share) {
     worldSnapshotId: state.meta.worldSnapshotId,
   }).then((published) => {
     if (!published) {
-      showToast("Could not publish the shared tab to nearby visitors.");
+      showToast(getBrowserSharePublishErrorLabel(share.shareKind));
       clearLocalBrowserShare({ stopTracks: true, sessionId });
       state.realtimeClient?.stopBrowser(sessionId);
       updateBrowserPanel();
       return;
     }
-    if (!share.hasAudio) {
-      showToast("For sound, share a browser tab and enable audio in the picker.", 5200);
+    const missingAudioMessage = getBrowserShareMissingAudioMessage(share);
+    if (!share.hasAudio && missingAudioMessage) {
+      showToast(missingAudioMessage, 5200);
     }
     updateBrowserPanel();
   }).catch((error) => {
-    showToast(error?.message || "Could not publish the shared tab.");
+    showToast(error?.message || getBrowserSharePublishErrorLabel(share.shareKind));
     clearLocalBrowserShare({ stopTracks: true, sessionId });
     state.realtimeClient?.stopBrowser(sessionId);
     updateBrowserPanel();
@@ -3794,8 +3878,22 @@ function createBrowserPlaceholderTexture(session) {
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
+  const shareKind = getBrowserSessionShareKind(session);
   const title = String(session?.title ?? "Shared browser").slice(0, 72) || "Shared browser";
   const url = String(session?.url ?? "").replace(/^https?:\/\//i, "");
+  const eyebrow = shareKind === "audio"
+    ? "LIVE VOICE"
+    : shareKind === "camera"
+      ? "LIVE VIDEO"
+      : shareKind === "browser"
+        ? "LIVE WINDOW"
+        : "LIVE SCREEN";
+  const subline = shareKind === "audio"
+    ? "Move closer to listen"
+    : "Move closer to watch";
+  const detailLine = shareKind === "audio"
+    ? "Only nearby visitors hear this live audio."
+    : "The live view appears when you are nearby.";
 
   context.fillStyle = "#10183a";
   context.fillRect(0, 0, width, height);
@@ -3808,7 +3906,7 @@ function createBrowserPlaceholderTexture(session) {
   context.fillText(title, 72, 92);
   context.fillStyle = "rgba(245, 247, 255, 0.7)";
   context.font = "600 22px Manrope, sans-serif";
-  context.fillText(url || "Nearby share", 72, 130);
+  context.fillText(url || eyebrow, 72, 130);
 
   context.fillStyle = "rgba(12, 18, 44, 0.82)";
   context.fillRect(120, 188, width - 240, height - 308);
@@ -3818,13 +3916,13 @@ function createBrowserPlaceholderTexture(session) {
 
   context.textAlign = "center";
   context.fillStyle = "rgba(245, 247, 255, 0.92)";
-  context.font = "800 138px Manrope, sans-serif";
-  context.fillText("...", width / 2, 382);
+  context.font = shareKind === "audio" ? "800 84px Manrope, sans-serif" : "800 138px Manrope, sans-serif";
+  context.fillText(shareKind === "audio" ? "VOICE" : "...", width / 2, shareKind === "audio" ? 358 : 382);
   context.fillStyle = "rgba(245, 247, 255, 0.76)";
   context.font = "700 30px Manrope, sans-serif";
-  context.fillText("Move closer to watch", width / 2, 468);
+  context.fillText(subline, width / 2, 468);
   context.font = "600 22px Manrope, sans-serif";
-  context.fillText("The live screen appears when you are nearby.", width / 2, 512);
+  context.fillText(detailLine, width / 2, 512);
   context.textAlign = "left";
 
   const texture = new THREE.CanvasTexture(canvas);
@@ -4017,8 +4115,9 @@ function updateBrowserScreenPresentation(entry) {
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
-  const scale = showingPlaceholder ? 0.44 : 1;
-  const offsetY = showingPlaceholder ? -3.6 : 0;
+  const placeholderScale = getBrowserSessionShareKind(entry.session) === "audio" ? 0.34 : 0.44;
+  const scale = showingPlaceholder ? placeholderScale : 1;
+  const offsetY = showingPlaceholder ? (placeholderScale < 0.4 ? -4.2 : -3.6) : 0;
   setBrowserScreenBillboardMode(entry, !showingPlaceholder);
   entry.frame.scale.set(scale, scale, 1);
   entry.frame.position.set(0, offsetY, 0);
@@ -6097,17 +6196,68 @@ function publishLocalBrowserMedia(sessionId) {
   });
 }
 
+function getBrowserSessionShareKind(session) {
+  return normalizeBrowserShareKind(session?.shareKind, session?.sessionMode === "remote-browser" ? "browser" : "screen");
+}
+
+function getBrowserStagePlaceholderText({
+  localSession = null,
+  remotePanelSession = null,
+  needsManualPlaybackStart = false,
+  needsManualAudioStart = false,
+} = {}) {
+  if (needsManualPlaybackStart) {
+    return "Browser blocked autoplay. Press start to watch this nearby stream.";
+  }
+  const session = localSession ?? remotePanelSession;
+  const shareKind = getBrowserSessionShareKind(session);
+  if (needsManualAudioStart) {
+    return shareKind === "audio"
+      ? "Press enable sound to hear this nearby voice stream."
+      : "Press enable sound to hear this nearby stream.";
+  }
+  if (!session) {
+    return "Share a screen, video, or voice nearby.";
+  }
+  if (shareKind === "audio") {
+    return session.hostSessionId === state.viewerSessionId
+      ? "Voice-only share is live nearby."
+      : `Listening to ${session.title || "live voice"} nearby.`;
+  }
+  if (shareKind === "camera") {
+    return session.hostSessionId === state.viewerSessionId
+      ? "Video share is live nearby."
+      : `Watching ${session.title || "live video"} nearby.`;
+  }
+  if (session.sessionMode === "display-share") {
+    return session.hostSessionId === state.viewerSessionId
+      ? "Choose a tab or window in the picker to start sharing."
+      : `Watching ${session.title || "nearby share"} nearby.`;
+  }
+  return session.hostSessionId === state.viewerSessionId
+    ? "Opening browser worker..."
+    : `Viewing ${session.title || "nearby share"} nearby.`;
+}
+
 function updateBrowserPanel() {
   const localSession = getLocalBrowserSession();
-  const previewStream = state.localBrowserShare?.stream ?? state.pendingBrowserShare?.stream ?? null;
+  const previewStream = state.pendingBrowserShare?.hasVideo
+    ? state.pendingBrowserShare.stream
+    : state.localBrowserShare?.hasVideo
+      ? state.localBrowserShare.stream
+      : null;
   const remotePanelSession = state.browserPanelRemoteSessionId
     ? state.browserSessions.get(state.browserPanelRemoteSessionId) ?? null
-    : [...state.browserSessions.values()].find(
-      (session) => session.hostSessionId !== state.viewerSessionId && session.deliveryMode === "full",
-    ) ?? null;
+    : localSession
+      ? null
+      : [...state.browserSessions.values()].find(
+        (session) => session.hostSessionId !== state.viewerSessionId && session.deliveryMode === "full",
+      ) ?? null;
   const hasRemotePanelSession = Boolean(!previewStream && remotePanelSession);
+  const remotePanelHasVisual = Boolean(remotePanelSession && remotePanelSession.hasVideo !== false);
   const needsManualPlaybackStart = Boolean(
     hasRemotePanelSession
+    && remotePanelHasVisual
     && String(state.browserMediaState.lastPlayError || "").includes("NotAllowedError"),
   );
   const needsManualAudioStart = Boolean(
@@ -6118,12 +6268,13 @@ function updateBrowserPanel() {
   );
   const hasRemotePanelVideo = Boolean(
     !previewStream
+    && remotePanelHasVisual
     && remotePanelSession
     && elements.browserVideo?.srcObject
     && state.browserMediaState.remoteVideoSessionId === remotePanelSession.sessionId,
   );
   const frameUrl = localSession?.lastFrameDataUrl ?? "";
-  const hasActiveBrowserMedia = Boolean(previewStream || hasRemotePanelVideo || hasRemotePanelSession || frameUrl);
+  const hasActiveBrowserMedia = Boolean(previewStream || hasRemotePanelVideo || hasRemotePanelSession || localSession || frameUrl);
   const needsPermissionAction = Boolean(needsManualPlaybackStart || needsManualAudioStart);
   const collapseDockedStage = !state.browserOverlayOpen && !needsPermissionAction;
   const permissionOnlyDockedStage = !state.browserOverlayOpen && needsPermissionAction;
@@ -6141,13 +6292,30 @@ function updateBrowserPanel() {
   } else if (state.pendingBrowserShare) {
     setBrowserStatus("Preparing your nearby share...");
   } else if (remotePanelSession) {
-    setBrowserStatus(`Viewing ${remotePanelSession.title || "nearby share"} from a nearby visitor.`);
+    const shareKind = getBrowserSessionShareKind(remotePanelSession);
+    setBrowserStatus(
+      shareKind === "audio"
+        ? `Listening to ${remotePanelSession.title || "live voice"} from a nearby visitor.`
+        : `Viewing ${remotePanelSession.title || "nearby share"} from a nearby visitor.`,
+    );
   } else if (!localSession) {
-    setBrowserStatus("Share a tab or window with nearby visitors.");
+    setBrowserStatus("Share a screen, video, or voice nearby.");
   } else if (localSession.sessionMode === "display-share") {
+    const shareKind = getBrowserSessionShareKind(localSession);
     if (state.localBrowserShare?.sessionId === localSession.sessionId) {
-      const audioLabel = state.localBrowserShare?.hasAudio ? " with sound" : "";
-      setBrowserStatus(`Sharing ${localSession.title || "screen"}${audioLabel} over WebRTC to nearby visitors.`);
+      if (shareKind === "audio") {
+        setBrowserStatus(`Sharing ${localSession.title || "live voice"} with nearby visitors.`);
+      } else if (shareKind === "camera") {
+        const audioLabel = state.localBrowserShare?.hasAudio ? " with voice" : "";
+        setBrowserStatus(`Sharing ${localSession.title || "live video"}${audioLabel} with nearby visitors.`);
+      } else {
+        const audioLabel = state.localBrowserShare?.hasAudio ? " with sound" : "";
+        setBrowserStatus(`Sharing ${localSession.title || "screen"}${audioLabel} with nearby visitors.`);
+      }
+    } else if (shareKind === "camera") {
+      setBrowserStatus("Allow camera and microphone access to go live.");
+    } else if (shareKind === "audio") {
+      setBrowserStatus("Allow microphone access to go live.");
     } else {
       setBrowserStatus("Share a tab or window to start the nearby stream.");
     }
@@ -6170,12 +6338,12 @@ function updateBrowserPanel() {
   }
   if (previewStream) {
     setBrowserPreviewStream(previewStream);
-  } else if (!hasRemotePanelSession) {
+  } else if (!hasRemotePanelVideo) {
     setBrowserPreviewStream(null);
   } else if (elements.browserVideo) {
     ensureBrowserVideoPlayback(elements.browserVideo);
   }
-  if (previewStream || hasRemotePanelVideo || hasRemotePanelSession) {
+  if (previewStream || hasRemotePanelVideo) {
     if (elements.browserVideo) {
       elements.browserVideo.hidden = false;
     }
@@ -6210,13 +6378,15 @@ function updateBrowserPanel() {
     elements.browserFrame.hidden = true;
     elements.browserFrame.removeAttribute("src");
     elements.browserPlaceholder.hidden = false;
-    elements.browserPlaceholder.textContent = localSession
-      ? localSession.sessionMode === "display-share"
-        ? "Choose a tab or window in the picker to start sharing."
-        : "Opening browser worker..."
-      : "Share a tab or window to project it into the world.";
+    elements.browserPlaceholder.textContent = getBrowserStagePlaceholderText({
+      localSession,
+      remotePanelSession,
+      needsManualPlaybackStart,
+      needsManualAudioStart,
+    });
     if (elements.browserResume) {
-      elements.browserResume.hidden = true;
+      elements.browserResume.hidden = !needsPermissionAction;
+      elements.browserResume.textContent = needsManualPlaybackStart ? "Start Stream" : "Enable Sound";
     }
   }
 }
@@ -6237,6 +6407,9 @@ function updateBrowserSessionState(sessionPatch) {
     aspectRatio: Number(sessionPatch.aspectRatio ?? previous.aspectRatio) || getInteractionConfig().browserAspectRatio,
   };
   state.browserSessions.set(next.sessionId, next);
+  if (next.hasVideo === false) {
+    clearBrowserScreenVideo(next.sessionId);
+  }
   if (next.hostSessionId === state.viewerSessionId) {
     state.localBrowserSessionId = next.sessionId;
     if (isLiveKitBrowserTransport(next.frameTransport) && state.meta?.worldSnapshotId) {
@@ -6256,6 +6429,7 @@ function updateBrowserSessionState(sessionPatch) {
   if (
     next.hostSessionId === state.viewerSessionId
     && state.localBrowserShare?.sessionId === next.sessionId
+    && state.localBrowserShare?.hasVideo
     && elements.browserVideo
   ) {
     setBrowserScreenVideo(next.sessionId, elements.browserVideo);
@@ -7271,11 +7445,39 @@ function normalizeBrowserKey(event) {
   return modifiers.filter(Boolean).join("+");
 }
 
-async function launchSharedBrowser() {
+async function startLocalNearbyShare(share) {
   if (!state.realtimeClient?.isConnected()) {
     showToast("Realtime share is offline.");
-    return;
+    return false;
   }
+  if (!share) {
+    return false;
+  }
+  state.browserPanelRemoteSessionId = "";
+  clearPendingBrowserShare({ stopTracks: true });
+  state.pendingBrowserShare = share;
+  setBrowserPreviewStream(share.hasVideo ? share.stream : null);
+  setBrowserStatus("Starting nearby share...");
+  const started = state.realtimeClient.startBrowser({
+    mode: "display-share",
+    title: share.title,
+    shareKind: share.shareKind,
+    hasVideo: share.hasVideo,
+    hasAudio: share.hasAudio,
+    aspectRatio: share.aspectRatio,
+    displaySurface: share.displaySurface,
+  });
+  if (!started) {
+    clearPendingBrowserShare({ stopTracks: true });
+    updateBrowserPanel();
+    showToast("Realtime share is offline.");
+    return false;
+  }
+  updateBrowserPanel();
+  return true;
+}
+
+async function launchScreenShare() {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     showToast("This browser does not support tab sharing.");
     return;
@@ -7289,24 +7491,12 @@ async function launchSharedBrowser() {
       },
       audio: true,
     });
-    const share = createBrowserDisplayShare(stream);
-    clearPendingBrowserShare({ stopTracks: true });
-    state.pendingBrowserShare = share;
-    setBrowserPreviewStream(share.stream);
-    setBrowserStatus("Starting nearby share...");
-    const started = state.realtimeClient.startBrowser({
-      mode: "display-share",
-      title: share.title,
-      aspectRatio: share.aspectRatio,
-      displaySurface: share.displaySurface,
+    const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
+    const share = createLocalBrowserShare(stream, {
+      shareKind: "screen",
+      title: getRequestedBrowserShareTitle(getDefaultBrowserShareTitle("screen", videoTrack)),
     });
-    if (!started) {
-      clearPendingBrowserShare({ stopTracks: true });
-      updateBrowserPanel();
-      showToast("Realtime share is offline.");
-      return;
-    }
-    updateBrowserPanel();
+    await startLocalNearbyShare(share);
   } catch (error) {
     if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") {
       showToast(error?.message || "Could not start screen sharing.");
@@ -7314,7 +7504,85 @@ async function launchSharedBrowser() {
   }
 }
 
+async function launchCameraShare() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showToast("This browser does not support camera sharing.");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        frameRate: { ideal: 24, max: 30 },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+        facingMode: "user",
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const share = createLocalBrowserShare(stream, {
+      shareKind: "camera",
+      title: getRequestedBrowserShareTitle(getDefaultBrowserShareTitle("camera")),
+    });
+    await startLocalNearbyShare(share);
+  } catch (error) {
+    if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") {
+      showToast(error?.message || "Could not start video sharing.");
+    }
+  }
+}
+
+async function launchVoiceShare() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showToast("This browser does not support voice sharing.");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+    const share = createLocalBrowserShare(stream, {
+      shareKind: "audio",
+      title: getRequestedBrowserShareTitle(getDefaultBrowserShareTitle("audio")),
+      aspectRatio: 1.2,
+      hasVideo: false,
+      hasAudio: true,
+    });
+    await startLocalNearbyShare(share);
+  } catch (error) {
+    if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") {
+      showToast(error?.message || "Could not start voice sharing.");
+    }
+  }
+}
+
+async function launchSharedBrowser() {
+  if (!state.realtimeClient?.isConnected()) {
+    showToast("Realtime share is offline.");
+    return;
+  }
+  const shareMode = getSelectedBrowserShareMode();
+  if (shareMode === "camera") {
+    await launchCameraShare();
+    return;
+  }
+  if (shareMode === "audio") {
+    await launchVoiceShare();
+    return;
+  }
+  await launchScreenShare();
+}
+
 function registerInput() {
+  setSelectedBrowserShareMode(state.browserShareMode);
   window.addEventListener("resize", resizeScene);
   const resumeBrowserMediaFromGesture = () => {
     resumeBrowserMediaPlayback();
@@ -7445,6 +7713,18 @@ function registerInput() {
       focusBrowserStage();
     }
   });
+  elements.browserShareTitle?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    void launchSharedBrowser();
+  });
+  for (const button of elements.browserShareModes) {
+    button.addEventListener("click", () => {
+      setSelectedBrowserShareMode(button.getAttribute("data-world-browser-share-mode"));
+    });
+  }
   elements.browserLaunch?.addEventListener("click", () => {
     void launchSharedBrowser();
   });
