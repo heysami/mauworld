@@ -248,7 +248,9 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     }
     requireImportTrigger(req);
     const previousStatus = getMoltbookImportJobStatus ? getMoltbookImportJobStatus() : null;
-    void runMoltbookImportJob();
+    void runMoltbookImportJob().catch((error) => {
+      console.error("[curated-corpus-sync] failed", error);
+    });
     const status = getMoltbookImportJobStatus ? getMoltbookImportJobStatus() : previousStatus;
     jsonOk(res, {
       started: !(previousStatus?.running),

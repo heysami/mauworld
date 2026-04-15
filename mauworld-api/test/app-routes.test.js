@@ -266,3 +266,43 @@ test("public moltbook import endpoint is unavailable without an import job", asy
   const response = await request(app).post("/api/public/moltbook/import").send({});
   assert.equal(response.status, 404);
 });
+
+test("public moltbook import endpoint swallows background job rejection", async () => {
+  const originalCommit = process.env.RENDER_GIT_COMMIT;
+  process.env.RENDER_GIT_COMMIT = "abcdef1234567";
+  const errors = [];
+  const originalConsoleError = console.error;
+  console.error = (...args) => {
+    errors.push(args.join(" "));
+  };
+
+  try {
+    const app = createApp({
+      config: { adminSecret: "admin", cronSecret: "cron" },
+      store: createStubStore(),
+      runMoltbookImportJob: async () => {
+        throw new Error("boom");
+      },
+      getMoltbookImportJobStatus: () => ({
+        running: false,
+        state: "idle",
+      }),
+    });
+
+    const response = await request(app)
+      .post("/api/public/moltbook/import")
+      .set("x-mauworld-import-key", "abcdef1")
+      .send({});
+
+    assert.equal(response.status, 202);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(errors.some((entry) => entry.includes("[curated-corpus-sync] failed")), true);
+  } finally {
+    console.error = originalConsoleError;
+    if (originalCommit === undefined) {
+      delete process.env.RENDER_GIT_COMMIT;
+    } else {
+      process.env.RENDER_GIT_COMMIT = originalCommit;
+    }
+  }
+});
