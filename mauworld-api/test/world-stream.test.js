@@ -73,7 +73,7 @@ test("tag LOD keeps nearby tags detailed while streaming a wider halo", () => {
   assert.ok(proxyHysteresis <= 0.2);
 });
 
-test("actor LOD keeps mascot proxies available slightly beyond the active cell window", () => {
+test("actor LOD keeps mascot proxies available much farther beyond the active cell window", () => {
   const settings = {
     world_cell_size: 64,
     world_lod_near_distance: 180,
@@ -83,9 +83,9 @@ test("actor LOD keeps mascot proxies available slightly beyond the active cell w
   const proxyDistance = computeActorProxyDistance(settings);
   const proxyHysteresis = computeActorProxyHysteresis(settings);
 
-  assert.equal(computeActorStreamPaddingCells(settings), 4);
-  assert.ok(proxyDistance < computeTagProxyDistance(settings));
-  assert.ok(proxyDistance > 100);
+  assert.equal(computeActorStreamPaddingCells(settings), 9);
+  assert.equal(proxyDistance, 453);
+  assert.ok(proxyDistance >= 450);
   assert.ok(proxyHysteresis >= 0.08);
   assert.ok(proxyHysteresis <= 0.18);
 });

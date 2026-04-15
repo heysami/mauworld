@@ -491,11 +491,12 @@ export function computeActorProxyDistance(settings = {}) {
   const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
   const nearDistance = Math.max(16, Math.floor(Number(settings.world_lod_near_distance) || 180));
   const billboardDistance = Math.max(16, Math.floor(Number(settings.world_billboard_distance) || 420));
-  return Math.max(
+  const baseProxyDistance = Math.max(
     Math.round(nearDistance * 0.84),
     Math.round(cellSize * 1.45),
     Math.round(billboardDistance * 0.28),
   );
+  return Math.max(28, Math.round(baseProxyDistance * 3));
 }
 
 export function computeActorProxyHysteresis(settings = {}) {

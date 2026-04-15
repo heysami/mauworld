@@ -254,9 +254,10 @@ function getActorLodSettings() {
   const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
   const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
   const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const baseProxyDistance = Math.max(nearDistance * 0.84, cellSize * 1.45, billboardDistance * 0.28);
   const proxyDistance = Math.max(
     28,
-    Math.floor(Number(lod.actorProxyDistance) || Math.max(nearDistance * 0.84, cellSize * 1.45, billboardDistance * 0.28)),
+    Math.floor(Number(lod.actorProxyDistance) || baseProxyDistance * 3),
   );
   return {
     cellSize,
