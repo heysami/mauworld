@@ -8,6 +8,10 @@ function getTrackName(sessionId) {
   return `browser:${sessionId}`;
 }
 
+function getAudioTrackName(sessionId) {
+  return `browser-audio:${sessionId}`;
+}
+
 function parsePublication(publication, track = null) {
   const trackName = getPublicationTrackName(publication);
   if (trackName.startsWith("browser-audio:")) {
@@ -166,15 +170,32 @@ export function createBrowserMediaController(options = {}) {
     });
   }
 
-  async function disconnectRoom() {
-    for (const published of state.publishedSessions.values()) {
+  async function unpublishStoredSession(sessionId, options = {}) {
+    const key = String(sessionId ?? "").trim();
+    const published = state.publishedSessions.get(key);
+    if (!published) {
+      return false;
+    }
+    for (const publishedTrack of published.tracks ?? []) {
       try {
-        state.room?.localParticipant?.unpublishTrack?.(published.track);
+        state.room?.localParticipant?.unpublishTrack?.(publishedTrack.track);
       } catch (_error) {
         // Best effort.
       }
-      published.track?.stop?.();
+      if (options.stopTracks !== false) {
+        publishedTrack.track?.stop?.();
+      }
+    }
+    if (options.stopTracks !== false) {
       published.stream?.getTracks?.().forEach((track) => track.stop());
+    }
+    state.publishedSessions.delete(key);
+    return true;
+  }
+
+  async function disconnectRoom() {
+    for (const sessionId of [...state.publishedSessions.keys()]) {
+      await unpublishStoredSession(sessionId);
     }
     state.publishedSessions.clear();
 
@@ -270,6 +291,56 @@ export function createBrowserMediaController(options = {}) {
     return state.connectPromise;
   }
 
+  async function publishTracks(params = {}) {
+    const sessionId = String(params.sessionId ?? "").trim();
+    const stream = params.stream ?? null;
+    const trackEntries = Array.isArray(params.trackEntries) ? params.trackEntries.filter(Boolean) : [];
+    if (!sessionId || trackEntries.length === 0) {
+      return false;
+    }
+    const connected = await ensureRoom({
+      viewerSessionId: params.viewerSessionId,
+      worldSnapshotId: params.worldSnapshotId,
+      canPublish: true,
+    });
+    if (!connected || !state.room) {
+      return false;
+    }
+    await unpublishStoredSession(sessionId);
+    const liveKit = await ensureLiveKit();
+    const publishedTracks = [];
+    try {
+      for (const entry of trackEntries) {
+        const publication = await state.room.localParticipant.publishTrack(entry.track, {
+          name: entry.name,
+          source: entry.kind === "audio"
+            ? (liveKit.Track.Source.ScreenShareAudio ?? liveKit.Track.Source.Microphone)
+            : liveKit.Track.Source.ScreenShare,
+        });
+        publishedTracks.push({
+          kind: entry.kind,
+          track: entry.track,
+          publication,
+        });
+      }
+    } catch (error) {
+      for (const publishedTrack of publishedTracks) {
+        try {
+          state.room?.localParticipant?.unpublishTrack?.(publishedTrack.track);
+        } catch (_error) {
+          // Best effort.
+        }
+      }
+      throw error;
+    }
+    state.publishedSessions.set(sessionId, {
+      sessionId,
+      stream,
+      tracks: publishedTracks,
+    });
+    return true;
+  }
+
   function applySubscription(sessionId, shouldSubscribe) {
     if (!state.room) {
       return;
@@ -301,52 +372,60 @@ export function createBrowserMediaController(options = {}) {
       if (!sessionId || !canvas) {
         return false;
       }
-      const connected = await ensureRoom({
-        viewerSessionId: params.viewerSessionId,
-        worldSnapshotId: params.worldSnapshotId,
-        canPublish: true,
-      });
-      if (!connected || !state.room) {
-        return false;
-      }
-      if (state.publishedSessions.has(sessionId)) {
-        return true;
-      }
-      const liveKit = await ensureLiveKit();
       const stream = canvas.captureStream(fps);
       const track = stream.getVideoTracks?.()[0];
       if (!track) {
         return false;
       }
       track.contentHint = "detail";
-      const publication = await state.room.localParticipant.publishTrack(track, {
-        name: getTrackName(sessionId),
-        source: liveKit.Track.Source.ScreenShare,
-      });
-      state.publishedSessions.set(sessionId, {
+      return publishTracks({
         sessionId,
         stream,
-        track,
-        publication,
+        trackEntries: [{
+          kind: "video",
+          track,
+          name: getTrackName(sessionId),
+        }],
+        viewerSessionId: params.viewerSessionId,
+        worldSnapshotId: params.worldSnapshotId,
       });
-      return true;
+    },
+
+    async publishStream(params = {}) {
+      const sessionId = String(params.sessionId ?? "").trim();
+      const stream = params.stream ?? null;
+      if (!sessionId || !stream) {
+        return false;
+      }
+      const videoTrack = stream.getVideoTracks?.()[0] ?? null;
+      if (!videoTrack) {
+        return false;
+      }
+      videoTrack.contentHint = "detail";
+      const audioTrack = stream.getAudioTracks?.()[0] ?? null;
+      const trackEntries = [{
+        kind: "video",
+        track: videoTrack,
+        name: getTrackName(sessionId),
+      }];
+      if (audioTrack) {
+        trackEntries.push({
+          kind: "audio",
+          track: audioTrack,
+          name: getAudioTrackName(sessionId),
+        });
+      }
+      return publishTracks({
+        sessionId,
+        stream,
+        trackEntries,
+        viewerSessionId: params.viewerSessionId,
+        worldSnapshotId: params.worldSnapshotId,
+      });
     },
 
     async unpublishSession(sessionId) {
-      const key = String(sessionId ?? "").trim();
-      const published = state.publishedSessions.get(key);
-      if (!published) {
-        return false;
-      }
-      try {
-        state.room?.localParticipant?.unpublishTrack?.(published.track);
-      } catch (_error) {
-        // Best effort.
-      }
-      published.track?.stop?.();
-      published.stream?.getTracks?.().forEach((track) => track.stop());
-      state.publishedSessions.delete(key);
-      return true;
+      return unpublishStoredSession(sessionId);
     },
 
     async setSubscribed(params = {}) {

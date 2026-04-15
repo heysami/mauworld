@@ -31,17 +31,13 @@ const elements = {
   browserPanel: document.querySelector("[data-world-browser-panel]"),
   browserDock: document.querySelector("[data-world-browser-dock]"),
   browserOverlayRoot: document.querySelector("[data-world-browser-overlay-root]"),
-  browserForm: document.querySelector("[data-world-browser-form]"),
   browserExpand: document.querySelector("[data-world-browser-expand]"),
   browserLaunch: document.querySelector("[data-world-browser-launch]"),
   browserStop: document.querySelector("[data-world-browser-stop]"),
-  browserBack: document.querySelector("[data-world-browser-back]"),
-  browserForward: document.querySelector("[data-world-browser-forward]"),
-  browserReload: document.querySelector("[data-world-browser-reload]"),
   browserStatus: document.querySelector("[data-world-browser-status]"),
   browserBackdrop: document.querySelector("[data-world-browser-backdrop]"),
-  browserUrl: document.querySelector("[data-world-browser-url]"),
   browserStage: document.querySelector("[data-world-browser-stage]"),
+  browserVideo: document.querySelector("[data-world-browser-video]"),
   browserFrame: document.querySelector("[data-world-browser-frame]"),
   browserPlaceholder: document.querySelector("[data-world-browser-placeholder]"),
   chatComposer: document.querySelector("[data-world-chat-composer]"),
@@ -170,6 +166,8 @@ const state = {
   browserMediaCanvasContext: null,
   browserMediaImage: null,
   browserMediaPendingFrameId: 0,
+  pendingBrowserShare: null,
+  localBrowserShare: null,
   worldCache: {
     pillars: new Map(),
     tags: new Map(),
@@ -995,6 +993,144 @@ function drawBrowserMediaFrame(frame) {
     context.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
   };
   image.src = frame.dataUrl;
+}
+
+function stopMediaStream(stream) {
+  stream?.getTracks?.().forEach((track) => track.stop());
+}
+
+function setBrowserPreviewStream(stream) {
+  if (!elements.browserVideo) {
+    return;
+  }
+  if (elements.browserVideo.srcObject !== stream) {
+    elements.browserVideo.srcObject = stream ?? null;
+  }
+  elements.browserVideo.hidden = !stream;
+  if (stream) {
+    elements.browserVideo.muted = true;
+    void elements.browserVideo.play?.().catch(() => null);
+  } else {
+    elements.browserVideo.pause?.();
+  }
+}
+
+function getDisplayShareLabel(videoTrack) {
+  const settings = videoTrack?.getSettings?.() ?? {};
+  const displaySurface = String(settings.displaySurface ?? "").trim().toLowerCase();
+  if (displaySurface === "browser") {
+    return "Shared tab";
+  }
+  if (displaySurface === "window") {
+    return "Shared window";
+  }
+  return "Shared screen";
+}
+
+function createBrowserDisplayShare(stream) {
+  const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
+  const settings = videoTrack?.getSettings?.() ?? {};
+  const width = Math.max(1, Math.floor(Number(settings.width) || getInteractionConfig().browserViewportWidth));
+  const height = Math.max(1, Math.floor(Number(settings.height) || getInteractionConfig().browserViewportHeight));
+  const share = {
+    stream,
+    videoTrack,
+    title: getDisplayShareLabel(videoTrack),
+    displaySurface: String(settings.displaySurface ?? "").trim().toLowerCase(),
+    aspectRatio: width / Math.max(1, height),
+    hasAudio: (stream?.getAudioTracks?.().length ?? 0) > 0,
+    endedHandler: null,
+  };
+  share.endedHandler = () => {
+    if (state.pendingBrowserShare?.stream === share.stream) {
+      clearPendingBrowserShare();
+      updateBrowserPanel();
+      return;
+    }
+    if (state.localBrowserShare?.stream !== share.stream) {
+      return;
+    }
+    const sessionId = state.localBrowserShare?.sessionId || "";
+    clearLocalBrowserShare({ stopTracks: false, sessionId });
+    if (sessionId) {
+      state.realtimeClient?.stopBrowser(sessionId);
+    }
+    updateBrowserPanel();
+  };
+  share.videoTrack?.addEventListener?.("ended", share.endedHandler, { once: true });
+  return share;
+}
+
+function releaseBrowserDisplayShare(share, { stopTracks = false } = {}) {
+  if (!share) {
+    return;
+  }
+  share.videoTrack?.removeEventListener?.("ended", share.endedHandler);
+  if (stopTracks) {
+    stopMediaStream(share.stream);
+  }
+}
+
+function clearPendingBrowserShare({ stopTracks = false } = {}) {
+  if (!state.pendingBrowserShare) {
+    return;
+  }
+  releaseBrowserDisplayShare(state.pendingBrowserShare, { stopTracks });
+  state.pendingBrowserShare = null;
+}
+
+function clearLocalBrowserShare({ stopTracks = false, sessionId = "" } = {}) {
+  const activeShare = state.localBrowserShare;
+  if (!activeShare) {
+    return;
+  }
+  if (sessionId && activeShare.sessionId && activeShare.sessionId !== sessionId) {
+    return;
+  }
+  releaseBrowserDisplayShare(activeShare, { stopTracks });
+  setBrowserPreviewStream(null);
+  if (activeShare.sessionId) {
+    clearBrowserScreenVideo(activeShare.sessionId);
+  }
+  state.localBrowserShare = null;
+}
+
+function attachLocalBrowserShare(sessionId, share) {
+  if (!share || !sessionId || !state.meta?.worldSnapshotId) {
+    return;
+  }
+  clearLocalBrowserShare({ stopTracks: true });
+  state.localBrowserShare = {
+    ...share,
+    sessionId,
+  };
+  setBrowserPreviewStream(share.stream);
+  if (elements.browserVideo) {
+    setBrowserScreenVideo(sessionId, elements.browserVideo);
+  }
+  void getBrowserMediaController().publishStream({
+    sessionId,
+    stream: share.stream,
+    viewerSessionId: state.viewerSessionId,
+    worldSnapshotId: state.meta.worldSnapshotId,
+  }).then((published) => {
+    if (!published) {
+      showToast("Could not publish the shared tab to nearby visitors.");
+      clearLocalBrowserShare({ stopTracks: true, sessionId });
+      state.realtimeClient?.stopBrowser(sessionId);
+      updateBrowserPanel();
+      return;
+    }
+    if (!share.hasAudio) {
+      showToast("For sound, share a browser tab and enable audio in the picker.", 5200);
+    }
+    updateBrowserPanel();
+  }).catch((error) => {
+    showToast(error?.message || "Could not publish the shared tab.");
+    clearLocalBrowserShare({ stopTracks: true, sessionId });
+    state.realtimeClient?.stopBrowser(sessionId);
+    updateBrowserPanel();
+  });
 }
 
 function getBrowserMediaController() {
@@ -3486,10 +3622,55 @@ function removeBrowserScreenEntry(sessionId) {
   }
 }
 
+function updateBrowserScreenGeometry(entry) {
+  if (!entry?.frame || !entry?.frameShell) {
+    return;
+  }
+  const aspectRatio = Number(entry.session?.aspectRatio) || getInteractionConfig().browserAspectRatio;
+  if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
+    return;
+  }
+  const width = 20;
+  const height = width / Math.max(0.1, aspectRatio);
+  entry.frame.geometry.dispose();
+  entry.frame.geometry = new THREE.PlaneGeometry(width, height);
+  entry.frameShell.geometry.dispose();
+  entry.frameShell.geometry = new THREE.PlaneGeometry(width + 1.2, height + 1.2);
+  entry.geometryAspectRatio = aspectRatio;
+}
+
+function updateBrowserScreenAspectFromVideo(entry, videoElement) {
+  if (!entry || !videoElement) {
+    return;
+  }
+  const applyAspect = () => {
+    const width = Math.max(0, Math.floor(Number(videoElement.videoWidth) || 0));
+    const height = Math.max(0, Math.floor(Number(videoElement.videoHeight) || 0));
+    if (!width || !height) {
+      return;
+    }
+    const nextAspectRatio = width / Math.max(1, height);
+    if (Math.abs(nextAspectRatio - (Number(entry.session?.aspectRatio) || 0)) < 0.01) {
+      return;
+    }
+    entry.session = {
+      ...entry.session,
+      aspectRatio: nextAspectRatio,
+    };
+    updateBrowserScreenGeometry(entry);
+  };
+  if (videoElement.videoWidth && videoElement.videoHeight) {
+    applyAspect();
+    return;
+  }
+  videoElement.addEventListener("loadedmetadata", applyAspect, { once: true });
+}
+
 function ensureBrowserScreenEntry(session) {
   let entry = sceneState.browserScreenEntries.get(session.sessionId);
   if (entry) {
     entry.session = { ...entry.session, ...session };
+    updateBrowserScreenGeometry(entry);
     return entry;
   }
 
@@ -3531,6 +3712,7 @@ function ensureBrowserScreenEntry(session) {
     hostSessionId: session.hostSessionId,
     session,
     group,
+    frameShell,
     frame,
     liveImage,
     liveTexture,
@@ -3541,6 +3723,7 @@ function ensureBrowserScreenEntry(session) {
     targetPosition: new THREE.Vector3(),
     currentFrameId: 0,
     deliveryMode: "placeholder",
+    geometryAspectRatio: aspectRatio,
   };
   sceneState.browserScreens.add(group);
   sceneState.browserScreenEntries.set(session.sessionId, entry);
@@ -3578,6 +3761,7 @@ function setBrowserScreenVideo(sessionId, videoElement) {
   entry.videoTexture.generateMipmaps = false;
   entry.videoTexture.minFilter = THREE.LinearFilter;
   entry.videoTexture.magFilter = THREE.LinearFilter;
+  updateBrowserScreenAspectFromVideo(entry, videoElement);
   updateBrowserScreenPresentation(entry);
 }
 
@@ -5390,6 +5574,10 @@ function isLiveKitBrowserTransport(frameTransport) {
   return String(frameTransport ?? "").startsWith("livekit");
 }
 
+function isInteractiveBrowserSession(session) {
+  return Boolean(session && String(session.sessionMode ?? "remote-browser") !== "display-share");
+}
+
 function syncBrowserMediaSubscription(sessionId, subscribed) {
   const session = state.browserSessions.get(sessionId);
   if (!session || !isLiveKitBrowserTransport(session.frameTransport)) {
@@ -5403,7 +5591,7 @@ function syncBrowserMediaSubscription(sessionId, subscribed) {
     subscribed,
     viewerSessionId: state.viewerSessionId,
     worldSnapshotId: state.meta?.worldSnapshotId,
-    canPublish: session.frameTransport === "livekit-canvas" && session.hostSessionId === state.viewerSessionId,
+    canPublish: session.hostSessionId === state.viewerSessionId,
   });
 }
 
@@ -5428,10 +5616,20 @@ function publishLocalBrowserMedia(sessionId) {
 
 function updateBrowserPanel() {
   const localSession = getLocalBrowserSession();
+  const previewStream = state.localBrowserShare?.stream ?? state.pendingBrowserShare?.stream ?? null;
   if (!state.realtimeConnected) {
-    setBrowserStatus("Realtime browser offline.");
+    setBrowserStatus("Realtime share offline.");
+  } else if (state.pendingBrowserShare) {
+    setBrowserStatus("Preparing your nearby share...");
   } else if (!localSession) {
-    setBrowserStatus("Launch a shared browser for nearby visitors.");
+    setBrowserStatus("Share a tab or window with nearby visitors.");
+  } else if (localSession.sessionMode === "display-share") {
+    if (state.localBrowserShare?.sessionId === localSession.sessionId) {
+      const audioLabel = state.localBrowserShare?.hasAudio ? " with sound" : "";
+      setBrowserStatus(`Sharing ${localSession.title || "screen"}${audioLabel} over WebRTC to nearby visitors.`);
+    } else {
+      setBrowserStatus("Share a tab or window to start the nearby stream.");
+    }
   } else if (isLiveKitBrowserTransport(localSession.frameTransport) && state.browserMediaTransport === "livekit") {
     setBrowserStatus(`Streaming ${localSession.url || "browser"} over WebRTC to nearby visitors.`);
   } else {
@@ -5441,15 +5639,6 @@ function updateBrowserPanel() {
   if (elements.browserStop) {
     elements.browserStop.disabled = !localSession;
   }
-  if (elements.browserBack) {
-    elements.browserBack.disabled = !localSession;
-  }
-  if (elements.browserForward) {
-    elements.browserForward.disabled = !localSession;
-  }
-  if (elements.browserReload) {
-    elements.browserReload.disabled = !localSession;
-  }
   if (elements.browserExpand) {
     elements.browserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
     elements.browserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
@@ -5458,20 +5647,35 @@ function updateBrowserPanel() {
   if (!elements.browserFrame || !elements.browserPlaceholder) {
     return;
   }
+  setBrowserPreviewStream(previewStream);
+  if (previewStream) {
+    elements.browserFrame.hidden = true;
+    elements.browserFrame.removeAttribute("src");
+    elements.browserPlaceholder.hidden = true;
+    return;
+  }
   const frameUrl = localSession?.lastFrameDataUrl ?? "";
   if (frameUrl) {
+    if (elements.browserVideo) {
+      elements.browserVideo.hidden = true;
+    }
     elements.browserFrame.hidden = false;
     if (elements.browserFrame.getAttribute("src") !== frameUrl) {
       elements.browserFrame.src = frameUrl;
     }
     elements.browserPlaceholder.hidden = true;
   } else {
+    if (elements.browserVideo) {
+      elements.browserVideo.hidden = true;
+    }
     elements.browserFrame.hidden = true;
     elements.browserFrame.removeAttribute("src");
     elements.browserPlaceholder.hidden = false;
     elements.browserPlaceholder.textContent = localSession
-      ? "Opening browser worker..."
-      : "Launch a shared browser to project it into the world.";
+      ? localSession.sessionMode === "display-share"
+        ? "Choose a tab or window in the picker to start sharing."
+        : "Opening browser worker..."
+      : "Share a tab or window to project it into the world.";
   }
 }
 
@@ -5487,30 +5691,46 @@ function updateBrowserSessionState(sessionPatch) {
     frameTransport: sessionPatch.frameTransport ?? previous.frameTransport ?? "jpeg-sequence",
     lastFrameDataUrl: sessionPatch.lastFrameDataUrl ?? previous.lastFrameDataUrl ?? "",
     lastFrameId: sessionPatch.lastFrameId ?? previous.lastFrameId ?? 0,
+    sessionMode: sessionPatch.sessionMode ?? previous.sessionMode ?? "remote-browser",
+    aspectRatio: Number(sessionPatch.aspectRatio ?? previous.aspectRatio) || getInteractionConfig().browserAspectRatio,
   };
   state.browserSessions.set(next.sessionId, next);
   if (next.hostSessionId === state.viewerSessionId) {
     state.localBrowserSessionId = next.sessionId;
-    if (elements.browserUrl && document.activeElement !== elements.browserUrl) {
-      elements.browserUrl.value = next.url ?? "";
-    }
-    if (next.frameTransport === "livekit-canvas" && state.meta?.worldSnapshotId) {
+    if (isLiveKitBrowserTransport(next.frameTransport) && state.meta?.worldSnapshotId) {
       void getBrowserMediaController().connect({
         viewerSessionId: state.viewerSessionId,
         worldSnapshotId: state.meta.worldSnapshotId,
         canPublish: true,
       });
     }
+    if (next.sessionMode === "display-share" && state.pendingBrowserShare?.stream) {
+      const pendingShare = state.pendingBrowserShare;
+      state.pendingBrowserShare = null;
+      attachLocalBrowserShare(next.sessionId, pendingShare);
+    }
   }
   reconcileBrowserScreens();
+  if (
+    next.hostSessionId === state.viewerSessionId
+    && state.localBrowserShare?.sessionId === next.sessionId
+    && elements.browserVideo
+  ) {
+    setBrowserScreenVideo(next.sessionId, elements.browserVideo);
+  }
   updateBrowserPanel();
 }
 
 function handleBrowserStop(payload) {
   const sessionId = String(payload.sessionId ?? "").trim();
+  const hostSessionId = String(payload.hostSessionId ?? "").trim();
   if (!sessionId) {
     return;
   }
+  if (hostSessionId && hostSessionId === state.viewerSessionId) {
+    clearPendingBrowserShare();
+  }
+  clearLocalBrowserShare({ sessionId });
   clearBrowserScreenVideo(sessionId);
   void getBrowserMediaController().unpublishSession(sessionId);
   state.browserSessions.delete(sessionId);
@@ -5598,8 +5818,11 @@ function handleRealtimeMessage(payload) {
     return;
   }
   if (payload.type === "browser:error") {
-    setBrowserStatus(payload.message || "Shared browser failed.");
-    showToast(payload.message || "Shared browser failed.");
+    if (state.pendingBrowserShare) {
+      clearPendingBrowserShare({ stopTracks: true });
+    }
+    setBrowserStatus(payload.message || "Nearby share failed.");
+    showToast(payload.message || "Nearby share failed.");
   }
 }
 
@@ -6413,8 +6636,9 @@ function getBrowserViewportPoint(event) {
 }
 
 function sendBrowserInput(input) {
+  const session = getLocalBrowserSession();
   const sessionId = getActiveBrowserSessionId();
-  if (!sessionId || !state.realtimeClient?.isConnected()) {
+  if (!sessionId || !state.realtimeClient?.isConnected() || !isInteractiveBrowserSession(session)) {
     return false;
   }
   return state.realtimeClient.sendBrowserInput(sessionId, input);
@@ -6455,18 +6679,47 @@ function normalizeBrowserKey(event) {
   return modifiers.filter(Boolean).join("+");
 }
 
-function launchSharedBrowser(rawUrl = elements.browserUrl?.value ?? "") {
+async function launchSharedBrowser() {
   if (!state.realtimeClient?.isConnected()) {
-    showToast("Realtime browser is offline.");
+    showToast("Realtime share is offline.");
     return;
   }
-  const targetUrl = String(rawUrl ?? "").trim() || elements.browserUrl?.placeholder || "";
-  if (!targetUrl) {
-    showToast("Enter an allowlisted URL.");
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    showToast("This browser does not support tab sharing.");
     return;
   }
-  setBrowserStatus("Starting browser worker...");
-  state.realtimeClient.startBrowser(targetUrl);
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        frameRate: { ideal: 24, max: 30 },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+      },
+      audio: true,
+    });
+    const share = createBrowserDisplayShare(stream);
+    clearPendingBrowserShare({ stopTracks: true });
+    state.pendingBrowserShare = share;
+    setBrowserPreviewStream(share.stream);
+    setBrowserStatus("Starting nearby share...");
+    const started = state.realtimeClient.startBrowser({
+      mode: "display-share",
+      title: share.title,
+      aspectRatio: share.aspectRatio,
+      displaySurface: share.displaySurface,
+    });
+    if (!started) {
+      clearPendingBrowserShare({ stopTracks: true });
+      updateBrowserPanel();
+      showToast("Realtime share is offline.");
+      return;
+    }
+    updateBrowserPanel();
+  } catch (error) {
+    if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") {
+      showToast(error?.message || "Could not start screen sharing.");
+    }
+  }
 }
 
 function registerInput() {
@@ -6478,13 +6731,13 @@ function registerInput() {
       && !event.metaKey
       && !event.altKey
       && !isEditableTarget(event.target)
-      && !isBrowserStageFocused()
+      && !(isBrowserStageFocused() && isInteractiveBrowserSession(getLocalBrowserSession()))
     ) {
       event.preventDefault();
       openChatComposer();
       return;
     }
-    if (isBrowserStageFocused() && getActiveBrowserSessionId()) {
+    if (isBrowserStageFocused() && isInteractiveBrowserSession(getLocalBrowserSession()) && getActiveBrowserSessionId()) {
       event.preventDefault();
       const key = normalizeBrowserKey(event);
       if (key) {
@@ -6523,7 +6776,7 @@ function registerInput() {
     }
   });
   window.addEventListener("keyup", (event) => {
-    if (isEditableTarget(event.target) || isBrowserStageFocused()) {
+    if (isEditableTarget(event.target) || (isBrowserStageFocused() && isInteractiveBrowserSession(getLocalBrowserSession()))) {
       return;
     }
     const key = event.key.toLowerCase();
@@ -6587,10 +6840,6 @@ function registerInput() {
     closeChatComposer(true);
   });
 
-  elements.browserForm?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    launchSharedBrowser(elements.browserUrl?.value);
-  });
   elements.browserExpand?.addEventListener("click", () => {
     setBrowserOverlayOpen(!state.browserOverlayOpen);
     if (state.browserOverlayOpen) {
@@ -6598,22 +6847,13 @@ function registerInput() {
     }
   });
   elements.browserLaunch?.addEventListener("click", () => {
-    launchSharedBrowser(elements.browserUrl?.value);
+    void launchSharedBrowser();
   });
   elements.browserStop?.addEventListener("click", () => {
     const sessionId = getActiveBrowserSessionId();
     if (sessionId) {
       state.realtimeClient?.stopBrowser(sessionId);
     }
-  });
-  elements.browserBack?.addEventListener("click", () => {
-    sendBrowserInput({ kind: "back" });
-  });
-  elements.browserForward?.addEventListener("click", () => {
-    sendBrowserInput({ kind: "forward" });
-  });
-  elements.browserReload?.addEventListener("click", () => {
-    sendBrowserInput({ kind: "reload" });
   });
   elements.browserStage?.addEventListener("focus", () => {
     state.localBrowserFocus = true;
@@ -6624,8 +6864,11 @@ function registerInput() {
     state.browserPointerGesture = null;
   });
   elements.browserStage?.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
     focusBrowserStage();
+    if (!isInteractiveBrowserSession(getLocalBrowserSession())) {
+      return;
+    }
+    event.preventDefault();
     state.browserStagePointerId = event.pointerId;
     elements.browserStage?.setPointerCapture?.(event.pointerId);
     const point = getBrowserViewportPoint(event);
@@ -6643,6 +6886,9 @@ function registerInput() {
     };
   });
   elements.browserStage?.addEventListener("pointermove", (event) => {
+    if (!isInteractiveBrowserSession(getLocalBrowserSession())) {
+      return;
+    }
     const point = getBrowserViewportPoint(event);
     if (!point) {
       return;
@@ -6682,6 +6928,9 @@ function registerInput() {
     });
   });
   elements.browserStage?.addEventListener("pointerup", (event) => {
+    if (!isInteractiveBrowserSession(getLocalBrowserSession())) {
+      return;
+    }
     event.preventDefault();
     const point = getBrowserViewportPoint(event);
     if (!point) {
@@ -6719,6 +6968,9 @@ function registerInput() {
     state.browserPointerGesture = null;
   });
   elements.browserStage?.addEventListener("wheel", (event) => {
+    if (!isInteractiveBrowserSession(getLocalBrowserSession())) {
+      return;
+    }
     event.preventDefault();
     focusBrowserStage();
     sendBrowserInput({

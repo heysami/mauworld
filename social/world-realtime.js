@@ -137,8 +137,14 @@ export function createWorldRealtimeClient(options = {}) {
     sendChat(text) {
       return send("chat:send", { text });
     },
-    startBrowser(url) {
-      return send("browser:start", { url });
+    startBrowser(input = {}) {
+      const payload =
+        typeof input === "string"
+          ? { url: input }
+          : typeof input === "object" && input
+            ? input
+            : {};
+      return send("browser:start", payload);
     },
     stopBrowser(sessionId) {
       return send("browser:stop", { sessionId });

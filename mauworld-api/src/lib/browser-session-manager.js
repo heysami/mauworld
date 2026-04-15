@@ -30,6 +30,27 @@ function buildSessionId() {
   return `browser_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
+function normalizeSessionMode(rawMode) {
+  return String(rawMode ?? "").trim() === "display-share" ? "display-share" : "remote-browser";
+}
+
+function sanitizeSessionTitle(rawTitle, fallback = "Shared screen") {
+  const cleaned = String(rawTitle ?? "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 96);
+  return cleaned || fallback;
+}
+
+function normalizeAspectRatio(rawAspectRatio, fallback) {
+  const value = Number(rawAspectRatio);
+  if (Number.isFinite(value) && value >= 0.3 && value <= 6) {
+    return value;
+  }
+  return fallback;
+}
+
 function normalizeTargetUrl(rawUrl, allowedHosts) {
   const fallback = "https://mauworld.onrender.com/social/world.html";
   const next = String(rawUrl ?? "").trim() || fallback;
@@ -156,6 +177,7 @@ export class BrowserSessionManager extends EventEmitter {
   }
 
   toClientSession(session) {
+    const aspectRatio = normalizeAspectRatio(session.aspectRatio, this.viewport.width / Math.max(1, this.viewport.height));
     return {
       sessionId: session.id,
       hostSessionId: session.hostSessionId,
@@ -165,8 +187,9 @@ export class BrowserSessionManager extends EventEmitter {
       status: session.status,
       startedAt: session.startedAt,
       viewport: { ...this.viewport },
-      aspectRatio: this.viewport.width / Math.max(1, this.viewport.height),
+      aspectRatio,
       frameTransport: session.frameTransport || this.defaultFrameTransport,
+      sessionMode: session.sessionMode || "remote-browser",
     };
   }
 
@@ -245,9 +268,63 @@ export class BrowserSessionManager extends EventEmitter {
       throw new Error("Shared browser sessions require a hostSessionId and worldSnapshotId.");
     }
 
+    const sessionMode = normalizeSessionMode(input.mode);
     const existing = this.getSessionByHost(hostSessionId);
+    if (existing && existing.sessionMode !== sessionMode) {
+      await this.stopSession(existing.id);
+    }
+
+    if (sessionMode === "display-share") {
+      if (!this.liveKitEnabled) {
+        throw new Error("Native tab sharing requires LiveKit to be configured.");
+      }
+      const aspectRatio = normalizeAspectRatio(input.aspectRatio, this.viewport.width / Math.max(1, this.viewport.height));
+      const displaySurface = String(input.displaySurface ?? "").trim().toLowerCase();
+      const defaultTitle = displaySurface === "browser"
+        ? "Shared tab"
+        : displaySurface === "window"
+          ? "Shared window"
+          : "Shared screen";
+      if (existing && existing.sessionMode === "display-share") {
+        existing.url = "";
+        existing.title = sanitizeSessionTitle(input.title, defaultTitle);
+        existing.status = "ready";
+        existing.frameTransport = "livekit-display";
+        existing.aspectRatio = aspectRatio;
+        this.emit("session", this.toClientSession(existing));
+        return this.toClientSession(existing);
+      }
+
+      const session = {
+        id: buildSessionId(),
+        hostSessionId,
+        worldSnapshotId,
+        context: null,
+        page: null,
+        url: "",
+        title: sanitizeSessionTitle(input.title, defaultTitle),
+        status: "ready",
+        startedAt: new Date().toISOString(),
+        frameTimer: null,
+        frameCounter: 0,
+        lastFrameDataUrl: "",
+        lastFrameAt: 0,
+        captureInFlight: false,
+        captureAfterInputTimer: null,
+        frameTransport: "livekit-display",
+        audioRelayReady: true,
+        sessionMode: "display-share",
+        aspectRatio,
+      };
+      this.sessions.set(session.id, session);
+      this.emit("session", this.toClientSession(session));
+      return this.toClientSession(session);
+    }
+
     const targetUrl = normalizeTargetUrl(input.url, this.allowedHosts);
     if (existing) {
+      existing.sessionMode = "remote-browser";
+      existing.aspectRatio = this.viewport.width / Math.max(1, this.viewport.height);
       await existing.page.goto(targetUrl, NAVIGATION_OPTIONS);
       existing.url = existing.page.url();
       existing.title = await existing.page.title().catch(() => existing.title);
@@ -283,6 +360,8 @@ export class BrowserSessionManager extends EventEmitter {
       captureAfterInputTimer: null,
       frameTransport: this.defaultFrameTransport,
       audioRelayReady: false,
+      sessionMode: "remote-browser",
+      aspectRatio: this.viewport.width / Math.max(1, this.viewport.height),
     };
     this.sessions.set(session.id, session);
     this.bindSessionPageEvents(session);
@@ -380,6 +459,9 @@ export class BrowserSessionManager extends EventEmitter {
     const kind = String(input.kind ?? "").trim();
     if (!kind) {
       return this.toClientSession(session);
+    }
+    if (session.sessionMode === "display-share") {
+      throw new Error("Shared tabs and windows are controlled directly in the shared app.");
     }
     await session.page.bringToFront().catch(() => null);
 

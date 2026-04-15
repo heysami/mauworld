@@ -394,6 +394,10 @@ export class RealtimeGateway {
         hostSessionId: client.viewerSessionId,
         worldSnapshotId: client.worldSnapshotId,
         url: message.url,
+        mode: message.mode,
+        title: message.title,
+        aspectRatio: message.aspectRatio,
+        displaySurface: message.displaySurface,
       });
       const internal = this.browserManager.getSession(session.sessionId);
       if (internal) {

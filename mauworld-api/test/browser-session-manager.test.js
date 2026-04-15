@@ -72,6 +72,34 @@ test("shared browser starts sessions after navigation commit", async () => {
   assert.equal(navigationCalls[0].timeout, 30000);
 });
 
+test("display-share sessions skip Playwright and use livekit-display transport", async () => {
+  const manager = new BrowserSessionManager({
+    allowedHosts: ["*"],
+    liveKitConfig: {
+      liveKitUrl: "https://livekit.example.com",
+      liveKitApiKey: "key",
+      liveKitApiSecret: "secret",
+    },
+  });
+  manager.ensureBrowser = async () => {
+    throw new Error("should not launch browser");
+  };
+
+  const session = await manager.startSession({
+    hostSessionId: "viewer_host",
+    worldSnapshotId: "world_current",
+    mode: "display-share",
+    title: "Shared tab",
+    aspectRatio: 16 / 9,
+    displaySurface: "browser",
+  });
+
+  assert.equal(session.status, "ready");
+  assert.equal(session.frameTransport, "livekit-display");
+  assert.equal(session.sessionMode, "display-share");
+  assert.equal(session.title, "Shared tab");
+});
+
 test("shared browser schedules an interaction capture after pointer input", async () => {
   const manager = new BrowserSessionManager({
     allowedHosts: ["*"],
@@ -116,4 +144,26 @@ test("shared browser schedules an interaction capture after pointer input", asyn
     ["click", 24, 32],
   ]);
   assert.equal(queued, 1);
+});
+
+test("display-share sessions reject remote browser input", async () => {
+  const manager = new BrowserSessionManager({
+    allowedHosts: ["*"],
+    liveKitConfig: {
+      liveKitUrl: "https://livekit.example.com",
+      liveKitApiKey: "key",
+      liveKitApiSecret: "secret",
+    },
+  });
+
+  const session = await manager.startSession({
+    hostSessionId: "viewer_host",
+    worldSnapshotId: "world_current",
+    mode: "display-share",
+  });
+
+  await assert.rejects(
+    manager.handleInput(session.sessionId, { kind: "click" }),
+    /controlled directly in the shared app/i,
+  );
 });
