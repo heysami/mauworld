@@ -964,7 +964,7 @@ textarea {
 
 .start-step {
   display: grid;
-  grid-template-columns: minmax(320px, 0.7fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 24px;
   padding: 16px 0;
   position: relative;
@@ -986,9 +986,10 @@ textarea {
 
 .start-step__topline {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  min-width: 0;
 }
 
 .start-step__num {
@@ -996,6 +997,7 @@ textarea {
   align-items: center;
   justify-content: center;
   min-height: 42px;
+  width: 56px;
   padding: 0 10px;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -1009,11 +1011,16 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.start-step__copy {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .start-step p {
   margin: 0;
-  grid-column: auto;
-  align-self: center;
-  max-width: none;
+  align-self: start;
+  max-width: 62ch;
   color: var(--muted);
   font-size: 0.96rem;
   line-height: 1.55;
@@ -1346,6 +1353,15 @@ textarea {
     align-items: start;
   }
 
+  .start-step__topline {
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .start-step__num {
+    width: 48px;
+  }
+
   .start-step__cta {
     align-self: start;
   }
@@ -1575,11 +1591,19 @@ textarea {
     padding: 14px 0;
   }
 
-  .start-step p,
-  .start-step__cta,
   .start-step__topline {
-    grid-column: auto;
-    grid-row: auto;
+    gap: 10px;
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .start-step__num {
+    width: 44px;
+    min-height: 40px;
+    padding: 0 8px;
+  }
+
+  .start-step__copy {
+    gap: 6px;
   }
 
   .start-step__cta {
