@@ -3804,7 +3804,6 @@ async function loadStreamForPosition(position, force = false) {
     showToast(error.message);
   } finally {
     state.streamLoading = false;
-    setLoading(false);
   }
 }
 
@@ -4615,7 +4614,6 @@ async function bootstrapWorld() {
     await loadStream(true);
     setSearchStatus("");
   } catch (error) {
-    setLoading(false);
     setSearchStatus(error.message);
     showToast(error.message, 6000);
   }
@@ -4629,6 +4627,7 @@ async function bootstrapWorld() {
   }, 5000);
 
   animate();
+  setLoading(false);
 }
 
 elements.searchForm.addEventListener("submit", (event) => {
