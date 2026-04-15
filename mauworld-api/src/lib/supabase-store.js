@@ -20,7 +20,7 @@ import {
 } from "./text.js";
 import { computePillarGraph } from "./pillar-graph.js";
 import { listAllowedPostEmotionSlugs, normalizePostEmotionInputs } from "./emotions.js";
-import { runCuratedCorpusSync } from "./moltbook-import.js";
+import { runCuratedCorpusSync, shouldRepairPublicWorld } from "./moltbook-import.js";
 import {
   computeHeadingToPillar,
   computeTagAnchorPosition,
@@ -760,14 +760,26 @@ export class MauworldStore {
     if (!organization.current) {
       throw new HttpError(404, "Current organization version not found");
     }
-    const worldSnapshot = worldSummary.current;
+    let effectiveWorldSummary = worldSummary;
+    let worldSnapshot = worldSummary.current ?? null;
+    if (shouldRepairPublicWorld(organization, worldSummary)) {
+      const repaired = await this.rebuildWorldSnapshotForVersion({
+        version: organization.current,
+        settings,
+      });
+      worldSnapshot = repaired.worldSnapshot;
+      effectiveWorldSummary = {
+        ...worldSummary,
+        current: worldSnapshot,
+      };
+    }
     if (!worldSnapshot) {
       throw new HttpError(404, "Current world snapshot not found");
     }
     return {
       settings,
       organization,
-      worldSummary,
+      worldSummary: effectiveWorldSummary,
       currentVersion: organization.current,
       worldSnapshot,
     };
