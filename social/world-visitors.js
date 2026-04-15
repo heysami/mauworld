@@ -208,25 +208,30 @@ function wrapBubbleText(context, value, maxWidth, maxLines = 4) {
   return lines;
 }
 
+const BUBBLE_LABEL_FONT = "800 30px Manrope, sans-serif";
+const BUBBLE_TEXT_FONT = "700 36px Manrope, sans-serif";
+const BUBBLE_TEXT_LINE_HEIGHT = 44;
+
 function measureSpeechBubbleTextLayout(options = {}) {
-  const maxWidth = Math.max(220, Math.floor(Number(options.maxWidth ?? options.width) || 384));
-  const maxHeight = Math.max(160, Math.floor(Number(options.maxHeight ?? options.height) || 280));
-  const minWidth = Math.min(maxWidth, Math.max(212, Math.floor(Number(options.minWidth) || 212)));
-  const minHeight = Math.min(maxHeight, Math.max(164, Math.floor(Number(options.minHeight) || 164)));
+  const maxWidth = Math.max(260, Math.floor(Number(options.maxWidth ?? options.width) || 384));
+  const maxHeight = Math.max(180, Math.floor(Number(options.maxHeight ?? options.height) || 280));
+  const minWidth = Math.min(maxWidth, Math.max(244, Math.floor(Number(options.minWidth) || 244)));
+  const minHeight = Math.min(maxHeight, Math.max(196, Math.floor(Number(options.minHeight) || 196)));
   const label = String(options.label ?? "").trim();
   const text = String(options.text ?? "").trim();
   const canvas = document.createElement("canvas");
   canvas.width = maxWidth;
   canvas.height = maxHeight;
   const context = canvas.getContext("2d");
-  const left = 64;
   const horizontalPadding = 128;
-  const extraWidth = 28;
-  const lineHeight = 38;
+  const extraWidth = 40;
+  const lineHeight = BUBBLE_TEXT_LINE_HEIGHT;
+  const startY = label ? 100 : 58;
+  const bottomPadding = label ? 108 : 102;
 
-  context.font = "800 28px Manrope, sans-serif";
+  context.font = BUBBLE_LABEL_FONT;
   const labelWidth = label ? context.measureText(label).width : 0;
-  context.font = "700 30px Manrope, sans-serif";
+  context.font = BUBBLE_TEXT_FONT;
 
   let lines = wrapBubbleText(context, text, maxWidth - horizontalPadding, 4);
   let longestLineWidth = lines.reduce((maxLine, line) => Math.max(maxLine, context.measureText(line).width), 0);
@@ -236,9 +241,8 @@ function measureSpeechBubbleTextLayout(options = {}) {
   width = clamp(Math.ceil(Math.max(labelWidth, longestLineWidth) + horizontalPadding + extraWidth), minWidth, maxWidth);
   lines = wrapBubbleText(context, text, width - horizontalPadding, 4);
 
-  const startY = label ? 100 : 78;
   const contentBottom = startY + lines.length * lineHeight;
-  const height = clamp(Math.ceil(contentBottom + 68), minHeight, maxHeight);
+  const height = clamp(Math.ceil(contentBottom + bottomPadding), minHeight, maxHeight);
 
   return {
     width,
@@ -325,17 +329,17 @@ export function createBubbleTexture(content, options = {}) {
       context.fillStyle = accent;
       context.textAlign = "left";
       context.textBaseline = "top";
-      context.font = "800 28px Manrope, sans-serif";
-      context.fillText(label, left, 56);
+      context.font = BUBBLE_LABEL_FONT;
+      context.fillText(label, left, 52);
     }
     context.fillStyle = stroke;
     context.textAlign = "left";
     context.textBaseline = "top";
-    context.font = "700 30px Manrope, sans-serif";
+    context.font = BUBBLE_TEXT_FONT;
     const lines = textLayout?.lines ?? wrapBubbleText(context, options.text, maxWidth, 4);
     const startY = textLayout?.startY ?? (label ? 100 : 78);
     lines.forEach((line, index) => {
-      context.fillText(line, left, startY + index * 38);
+      context.fillText(line, left, startY + index * BUBBLE_TEXT_LINE_HEIGHT);
     });
   } else {
     context.textAlign = "center";

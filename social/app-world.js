@@ -3880,9 +3880,14 @@ function getPresenceEntryId(entry = {}) {
     .trim();
 }
 
+const CHAT_BUBBLE_BASE_WIDTH = 16.4;
+const CHAT_BUBBLE_BASE_HEIGHT = 10.4;
+const CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 680;
+const CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 420;
+
 function createActorBubbleState(color, options = {}) {
-  const baseWidth = 14.2;
-  const baseHeight = 9.2;
+  const baseWidth = CHAT_BUBBLE_BASE_WIDTH;
+  const baseHeight = CHAT_BUBBLE_BASE_HEIGHT;
   const bubble = createBillboard(
     createBubbleTexture("💬", {
       accent: color,
@@ -3935,10 +3940,10 @@ function getChatBubbleTargetSize(texture, bubble) {
   if (!layout?.hasText) {
     return { width: baseWidth, height: baseHeight };
   }
-  const maxTextureWidth = Math.max(1, Number(layout.maxWidth) || Number(layout.width) || 560);
-  const maxTextureHeight = Math.max(1, Number(layout.maxHeight) || Number(layout.height) || 360);
-  const width = clamp(baseWidth * ((Number(layout.width) || maxTextureWidth) / maxTextureWidth), 5.8, baseWidth);
-  const height = clamp(baseHeight * ((Number(layout.height) || maxTextureHeight) / maxTextureHeight), 4.2, baseHeight);
+  const maxTextureWidth = Math.max(1, Number(layout.maxWidth) || Number(layout.width) || CHAT_BUBBLE_TEXTURE_MAX_WIDTH);
+  const maxTextureHeight = Math.max(1, Number(layout.maxHeight) || Number(layout.height) || CHAT_BUBBLE_TEXTURE_MAX_HEIGHT);
+  const width = clamp(baseWidth * ((Number(layout.width) || maxTextureWidth) / maxTextureWidth), 6.2, baseWidth);
+  const height = clamp(baseHeight * ((Number(layout.height) || maxTextureHeight) / maxTextureHeight), 4.9, baseHeight);
   return { width, height };
 }
 
@@ -3962,8 +3967,8 @@ function applyChatBubbleToActor(actorEntry, chatEvent) {
       accent,
       stroke: WORLD_STYLE.outline,
       text: bubbleText,
-      width: bubbleText ? 560 : undefined,
-      height: bubbleText ? 360 : undefined,
+      width: bubbleText ? CHAT_BUBBLE_TEXTURE_MAX_WIDTH : undefined,
+      height: bubbleText ? CHAT_BUBBLE_TEXTURE_MAX_HEIGHT : undefined,
     });
     actorEntry.bubble.mesh.material.map = nextTexture;
     const nextSize = getChatBubbleTargetSize(nextTexture, actorEntry.bubble);
