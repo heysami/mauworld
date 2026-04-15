@@ -112,7 +112,7 @@ const state = {
   initialViewFramed: false,
   viewerSessionId: "",
   moveButtons: new Set(),
-  navigationPosition: new THREE.Vector3(0, 96, 112),
+  navigationPosition: new THREE.Vector3(0, 76, 156),
   cameraRadius: PLAYER_VIEW.defaultRadius,
   travelAnimation: null,
   postFocusTagId: null,
@@ -173,8 +173,8 @@ const inputState = {
   lastPointerX: 0,
   lastPointerY: 0,
   pointerMoved: false,
-  yaw: Math.PI,
-  pitch: -0.25,
+  yaw: 0,
+  pitch: 0.66,
 };
 
 function createViewerSessionId() {
@@ -4376,19 +4376,19 @@ function getPrimaryPillar(entries = state.stream?.pillars ?? []) {
   }, null);
 }
 
-function computeOpeningHeroFrame(anchor, options = {}) {
-  const targetHeight = Math.max(54, options.height * 0.56);
-  const target = new THREE.Vector3(
+function computeOpeningShot(anchor, options = {}) {
+  const player = new THREE.Vector3(
     anchor.x,
-    anchor.y + targetHeight,
-    anchor.z,
+    anchor.y + Math.max(62, options.height * 0.38),
+    anchor.z + Math.max(150, options.height * 0.78),
   );
+  const target = getPlayerLookTarget(player);
   const position = new THREE.Vector3(
-    anchor.x - Math.max(14, options.radius * 0.36),
-    Math.min(CAMERA.maxY - 8, target.y + Math.max(28, options.height * 0.18)),
-    anchor.z + Math.max(118, options.radius * 2.9),
+    player.x,
+    Math.min(CAMERA.maxY - 2, target.y + Math.max(62, options.height * 0.16)),
+    player.z + Math.max(86, options.radius * 2.2),
   );
-  return { position, target };
+  return { position, target, player };
 }
 
 function positionCameraForWorldMeta() {
@@ -4399,7 +4399,7 @@ function positionCameraForWorldMeta() {
   const centerZ = (state.meta.bounds.minZ + state.meta.bounds.maxZ) / 2;
   const spanX = Math.max(1, state.meta.bounds.maxX - state.meta.bounds.minX);
   const spanZ = Math.max(1, state.meta.bounds.maxZ - state.meta.bounds.minZ);
-  const frame = computeOpeningHeroFrame(
+  const frame = computeOpeningShot(
     new THREE.Vector3(centerX, 0, centerZ),
     {
       height: Math.max(150, Math.min(220, Math.max(spanX, spanZ) * 0.46)),
@@ -4416,7 +4416,7 @@ function frameInitialViewFromStream() {
   }
   const primaryPillar = getPrimaryPillar(state.stream.pillars);
   if (primaryPillar) {
-    const frame = computeOpeningHeroFrame(
+    const frame = computeOpeningShot(
       new THREE.Vector3(primaryPillar.position_x, primaryPillar.position_y, primaryPillar.position_z),
       {
         height: primaryPillar.height,
