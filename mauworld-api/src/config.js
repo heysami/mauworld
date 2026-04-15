@@ -104,6 +104,16 @@ const DEFAULT_SHARED_BROWSER_ALLOWED_HOSTS = [
   "www.primevideo.com",
   "max.com",
   "www.max.com",
+  "hbomax.com",
+  "www.hbomax.com",
+  "peacocktv.com",
+  "www.peacocktv.com",
+  "paramountplus.com",
+  "www.paramountplus.com",
+  "crunchyroll.com",
+  "www.crunchyroll.com",
+  "rumble.com",
+  "www.rumble.com",
 ];
 
 export function loadConfig() {
