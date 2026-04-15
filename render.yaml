@@ -3,7 +3,7 @@ services:
     name: mauworld-api
     runtime: node
     rootDir: mauworld-api
-    buildCommand: npm install
+    buildCommand: npm install && npx playwright install chromium --only-shell
     startCommand: npm run start
     healthCheckPath: /health
     envVars:
