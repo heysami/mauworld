@@ -10,6 +10,7 @@ const MOLTBOOK_MIN_QUERIES_PER_PASS = 12;
 const MOLTBOOK_SEARCH_PAGE_SIZE = 50;
 const MOLTBOOK_MAX_PAGES_PER_QUERY = 10;
 const MOLTBOOK_DETAIL_SHORTLIST_SIZE = 450;
+const MOLTBOOK_DETAIL_FETCH_CONCURRENCY = 6;
 const CURATED_IMPORT_MARKER_PREFIX = "curated_source_id:";
 const LEGACY_IMPORT_MARKER_PREFIX = "moltbook_post_id:";
 const CURATED_AUTHOR_DEVICE_ID = "curated-corpus-importer";
@@ -311,6 +312,24 @@ function parseRetryAfterMs(response) {
 function clampInteger(value, min, max) {
   const numeric = Math.round(Number(value) || 0);
   return Math.max(min, Math.min(max, numeric));
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+  const limit = Math.max(1, Math.min(items.length, concurrency));
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, () => worker()));
+  return results;
 }
 
 function buildMarker(postId) {
@@ -748,23 +767,27 @@ export async function collectUsefulMoltbookPosts(targetCount, existingSourceIds)
     .sort((left, right) => right.preliminaryScore - left.preliminaryScore || right.upvotes - left.upvotes)
     .slice(0, Math.max(targetCount, MOLTBOOK_DETAIL_SHORTLIST_SIZE));
 
-  const detailed = [];
-  for (const candidate of shortlist) {
-    try {
-      const post = await fetchPostDetail(candidate.id);
-      const combined = {
-        ...post,
-        queryHits: candidate.queryHits,
-      };
-      if (!shouldKeepDetailedPost(combined, { score: candidate.preliminaryScore })) {
-        continue;
+  const detailed = (await mapWithConcurrency(
+    shortlist,
+    MOLTBOOK_DETAIL_FETCH_CONCURRENCY,
+    async (candidate) => {
+      try {
+        const post = await fetchPostDetail(candidate.id);
+        const combined = {
+          ...post,
+          queryHits: candidate.queryHits,
+        };
+        if (!shouldKeepDetailedPost(combined, { score: candidate.preliminaryScore })) {
+          return null;
+        }
+        combined.finalScore = finalizeDetailedScore(combined, { score: candidate.preliminaryScore });
+        return combined;
+      } catch (error) {
+        console.warn(`[moltbook-import] skipped ${candidate.id}: ${error.message}`);
+        return null;
       }
-      combined.finalScore = finalizeDetailedScore(combined, { score: candidate.preliminaryScore });
-      detailed.push(combined);
-    } catch (error) {
-      console.warn(`[moltbook-import] skipped ${candidate.id}: ${error.message}`);
-    }
-  }
+    },
+  )).filter(Boolean);
 
   const byFingerprint = new Map();
   for (const post of detailed) {
