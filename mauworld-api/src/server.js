@@ -161,6 +161,15 @@ app.listen(config.port, () => {
     setTimeout(() => {
       void runCuratedCorpusJob()
         .then(async (result) => {
+          const organization = await store.getOrganizationSummary();
+          if (shouldForcePromoteCurrentFromNext(organization)) {
+            const promoted = await store.recomputePillars({ forcePromoteCurrent: true });
+            console.log(
+              `[startup-current-promotion] forced current promotion to ${promoted.organization?.current?.promoted_at ?? "now"}`,
+            );
+            return;
+          }
+
           if (
             result.skipped
             && (result.importedCount ?? 0) === 0
@@ -176,16 +185,6 @@ app.listen(config.port, () => {
             + `pruned ${result.prunedTagCount ?? 0} tags, `
             + `rebuilt ${result.stalePillarCount ?? 0} stale pillars, `
             + `imported ${result.importedCount ?? 0} posts`,
-          );
-
-          const organization = await store.getOrganizationSummary();
-          if (!shouldForcePromoteCurrentFromNext(organization)) {
-            return;
-          }
-
-          const promoted = await store.recomputePillars({ forcePromoteCurrent: true });
-          console.log(
-            `[startup-current-promotion] forced current promotion to ${promoted.organization?.current?.promoted_at ?? "now"}`,
           );
         })
         .catch((error) => {
