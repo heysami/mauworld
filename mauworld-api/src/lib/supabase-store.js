@@ -424,6 +424,7 @@ function dedupeStringList(values) {
 
 const SUPABASE_IN_FILTER_BATCH_SIZE = 100;
 const SUPABASE_MUTATION_BATCH_SIZE = 25;
+const WORLD_POST_INSTANCE_INSERT_BATCH_SIZE = 5;
 const DERIVED_POST_COUNTER_BATCH_SIZE = 25;
 
 async function loadRowsByInBatches(serviceClient, {
@@ -1095,6 +1096,7 @@ export class MauworldStore {
         await insertRowsByBatches(this.serviceClient, {
           table: "world_post_instances",
           rows: layout.postInstances,
+          batchSize: WORLD_POST_INSTANCE_INSERT_BATCH_SIZE,
           message: "Could not insert world post instances",
         });
       }
@@ -1315,6 +1317,7 @@ export class MauworldStore {
       await insertRowsByBatches(this.serviceClient, {
         table: "world_post_instances",
         rows: nextInstances,
+        batchSize: WORLD_POST_INSTANCE_INSERT_BATCH_SIZE,
         message: "Could not insert world post instances for tag refresh",
       });
     }
