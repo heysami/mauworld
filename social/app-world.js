@@ -114,8 +114,8 @@ const INTERACTION_DEFAULTS = {
   browserRadius: 96,
   maxRecipients: 20,
   browserAspectRatio: 16 / 9,
-  browserViewportWidth: 1280,
-  browserViewportHeight: 720,
+  browserViewportWidth: 960,
+  browserViewportHeight: 540,
 };
 
 const SKYLINE_BAND_ASSETS = {
