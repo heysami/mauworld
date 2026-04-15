@@ -3916,6 +3916,8 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   const nearDistance = state.meta?.renderer?.fog?.lodNearDistance ?? 180;
   const farDistance = state.meta?.renderer?.fog?.farDistance ?? 720;
   const retainedDistance = farDistance * WORLD_STREAM.fogMultiplier;
+  const focusedDestination = state.focusedResult?.destination;
+  const focusIsolation = clamp(state.postFocusMix / 0.62, 0, 1);
 
   for (const entry of sceneState.animatedDecor) {
     if (entry.kind === "orbit") {
@@ -4052,20 +4054,32 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     const maxOpacity =
       entry.displayTier === "hero" ? 0.98 : entry.displayTier === "standard" ? 0.9 : 0.8;
     const cardRange = activeCell ? billboardDistance * 1.25 : billboardDistance * 0.62;
+    const isFocusedEntry =
+      Boolean(focusedDestination)
+      && entry.postId === focusedDestination.post_id
+      && entry.tagId === focusedDestination.tag_id;
+    const backgroundOpacityFactor = focusedDestination && !isFocusedEntry
+      ? 1 - focusIsolation * 0.7
+      : 1;
     entry.group.position.copy(renderedAnchor);
     entry.group.position.y += (1 - reveal) * 1.6;
     const scale = 0.84 + reveal * 0.16;
     entry.group.scale.setScalar(scale);
+    entry.card.renderOrder = isFocusedEntry ? 14 : 10;
+    entry.proxy.renderOrder = isFocusedEntry ? 12 : 8;
 
-    entry.card.material.opacity = ((minOpacity + (maxOpacity - minOpacity) * fade) * (activeCell ? 1 : 0.54)) * reveal;
+    entry.card.material.opacity =
+      ((minOpacity + (maxOpacity - minOpacity) * fade) * (activeCell ? 1 : 0.54))
+      * reveal
+      * backgroundOpacityFactor;
     entry.card.visible = reveal > 0.06 && distance <= cardRange;
     entry.proxy.visible = reveal > 0.04 && (!entry.card.visible || !activeCell);
     entry.proxy.material.opacity = activeCell
-      ? (0.04 + (1 - fade) * 0.12) * reveal
-      : (0.16 + fade * 0.18) * reveal;
+      ? (0.04 + (1 - fade) * 0.12) * reveal * backgroundOpacityFactor
+      : (0.16 + fade * 0.18) * reveal * backgroundOpacityFactor;
     entry.baseMarker.material.opacity = activeCell
-      ? (0.05 + fade * 0.1) * reveal
-      : (0.12 + fade * 0.08) * reveal;
+      ? (0.05 + fade * 0.1) * reveal * backgroundOpacityFactor
+      : (0.12 + fade * 0.08) * reveal * backgroundOpacityFactor;
   }
 
   for (const entry of sceneState.animatedTags) {
