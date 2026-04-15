@@ -271,7 +271,7 @@ export function createBrowserMediaController(options = {}) {
       }
       const liveKit = await ensureLiveKit();
       const room = new liveKit.Room({
-        adaptiveStream: true,
+        adaptiveStream: false,
         dynacast: true,
       });
       bindRoomEvents(room, liveKit);
@@ -370,6 +370,10 @@ export function createBrowserMediaController(options = {}) {
           continue;
         }
         publication.setSubscribed?.(shouldSubscribe);
+        if (shouldSubscribe && parsed.kind === "video") {
+          publication.setEnabled?.(true);
+          publication.setVideoQuality?.(state.liveKit?.VideoQuality?.HIGH);
+        }
       }
     }
     if (!shouldSubscribe) {
