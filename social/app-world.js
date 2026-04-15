@@ -3880,10 +3880,11 @@ function getPresenceEntryId(entry = {}) {
     .trim();
 }
 
-const CHAT_BUBBLE_BASE_WIDTH = 16.4;
-const CHAT_BUBBLE_BASE_HEIGHT = 10.4;
-const CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 680;
-const CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 420;
+const CHAT_BUBBLE_BASE_WIDTH = 18;
+const CHAT_BUBBLE_BASE_HEIGHT = 12;
+const CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 820;
+const CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 620;
+const CHAT_BUBBLE_MAX_LINES = 8;
 
 function createActorBubbleState(color, options = {}) {
   const baseWidth = CHAT_BUBBLE_BASE_WIDTH;
@@ -3969,6 +3970,7 @@ function applyChatBubbleToActor(actorEntry, chatEvent) {
       text: bubbleText,
       width: bubbleText ? CHAT_BUBBLE_TEXTURE_MAX_WIDTH : undefined,
       height: bubbleText ? CHAT_BUBBLE_TEXTURE_MAX_HEIGHT : undefined,
+      maxLines: bubbleText ? CHAT_BUBBLE_MAX_LINES : undefined,
     });
     actorEntry.bubble.mesh.material.map = nextTexture;
     const nextSize = getChatBubbleTargetSize(nextTexture, actorEntry.bubble);

@@ -228,18 +228,21 @@ function measureSpeechBubbleTextLayout(options = {}) {
   const lineHeight = BUBBLE_TEXT_LINE_HEIGHT;
   const startY = label ? 100 : 58;
   const bottomPadding = label ? 108 : 102;
+  const lineCapacity = Math.max(1, Math.floor((maxHeight - bottomPadding - startY) / lineHeight));
+  const requestedMaxLines = Math.max(1, Math.floor(Number(options.maxLines) || lineCapacity));
+  const maxLines = Math.min(lineCapacity, requestedMaxLines);
 
   context.font = BUBBLE_LABEL_FONT;
   const labelWidth = label ? context.measureText(label).width : 0;
   context.font = BUBBLE_TEXT_FONT;
 
-  let lines = wrapBubbleText(context, text, maxWidth - horizontalPadding, 4);
+  let lines = wrapBubbleText(context, text, maxWidth - horizontalPadding, maxLines);
   let longestLineWidth = lines.reduce((maxLine, line) => Math.max(maxLine, context.measureText(line).width), 0);
   let width = clamp(Math.ceil(Math.max(labelWidth, longestLineWidth) + horizontalPadding + extraWidth), minWidth, maxWidth);
-  lines = wrapBubbleText(context, text, width - horizontalPadding, 4);
+  lines = wrapBubbleText(context, text, width - horizontalPadding, maxLines);
   longestLineWidth = lines.reduce((maxLine, line) => Math.max(maxLine, context.measureText(line).width), 0);
   width = clamp(Math.ceil(Math.max(labelWidth, longestLineWidth) + horizontalPadding + extraWidth), minWidth, maxWidth);
-  lines = wrapBubbleText(context, text, width - horizontalPadding, 4);
+  lines = wrapBubbleText(context, text, width - horizontalPadding, maxLines);
 
   const contentBottom = startY + lines.length * lineHeight;
   const height = clamp(Math.ceil(contentBottom + bottomPadding), minHeight, maxHeight);
@@ -267,6 +270,7 @@ export function createBubbleTexture(content, options = {}) {
       label: options.label,
       maxWidth: requestedWidth,
       maxHeight: requestedHeight,
+      maxLines: options.maxLines,
     })
     : null;
   const width = textLayout?.width ?? requestedWidth;
@@ -336,7 +340,7 @@ export function createBubbleTexture(content, options = {}) {
     context.textAlign = "left";
     context.textBaseline = "top";
     context.font = BUBBLE_TEXT_FONT;
-    const lines = textLayout?.lines ?? wrapBubbleText(context, options.text, maxWidth, 4);
+    const lines = textLayout?.lines ?? wrapBubbleText(context, options.text, maxWidth, Number(options.maxLines) || 4);
     const startY = textLayout?.startY ?? (label ? 100 : 78);
     lines.forEach((line, index) => {
       context.fillText(line, left, startY + index * BUBBLE_TEXT_LINE_HEIGHT);
