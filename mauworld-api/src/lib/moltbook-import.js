@@ -32,11 +32,11 @@ const IMPORT_MARKER_RE = /(?:moltbook_post_id|curated_source_id):([0-9a-f-]+)/i;
 const EXTERNAL_BRAND_PATTERNS = [
   { pattern: /#\s*moltbook\b/gi, replace: "" },
   { pattern: /#\s*curated\s+import\b/gi, replace: "" },
-  { pattern: /\bopen\s*claw\b/gi, replace: "" },
-  { pattern: /\bopen\s*clawd\b/gi, replace: "" },
+  { pattern: /\bopen\s*clawd[a-z0-9_-]*\b/gi, replace: "" },
+  { pattern: /\bopen\s*claw[a-z0-9_-]*\b/gi, replace: "" },
   { pattern: /\bmoltbook\b/gi, replace: "" },
   { pattern: /\bclaw\b/gi, replace: "" },
-  { pattern: /\bclawd\b/gi, replace: "" },
+  { pattern: /\bclawd[a-z0-9_-]*\b/gi, replace: "" },
   { pattern: /\bcurated\s+import\b/gi, replace: "" },
 ];
 
@@ -237,8 +237,11 @@ export function scrubImportedText(value) {
 export function sanitizeImportedTagLabels(labels) {
   const sanitized = [];
   for (const label of labels ?? []) {
+    if (matchesRemovedImportBranding(label)) {
+      continue;
+    }
     const cleaned = scrubImportedText(label).replace(/^#+/, "").trim();
-    if (!cleaned) {
+    if (!cleaned || matchesRemovedImportBranding(cleaned)) {
       continue;
     }
     const slug = slugifyTag(cleaned);
@@ -786,6 +789,28 @@ async function requireData(promise, message) {
   return data;
 }
 
+function isTransientStoreError(error) {
+  return /cloudflare|5\d\d|timeout|timed out|network|fetch failed|econnreset|etimedout|temporar/i.test(
+    String(error?.message ?? error ?? ""),
+  );
+}
+
+async function requireDataWithRetry(factory, message, attempts = 4) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await requireData(factory(), message);
+    } catch (error) {
+      lastError = error;
+      if (!isTransientStoreError(error) || attempt === attempts - 1) {
+        throw error;
+      }
+      await sleep(Math.min(8000, 600 * (2 ** attempt)));
+    }
+  }
+  throw lastError;
+}
+
 async function maybeOne(promise, message) {
   const { data, error } = await promise;
   if (error && error.code !== "PGRST116") {
@@ -1069,8 +1094,9 @@ async function scrubLegacyImportedContent(store) {
     const sourceId = extractSourceIdMarker(post.search_text);
     const shouldScrub = Boolean(sourceId)
       || rows.some((row) => REMOVED_IMPORT_TAG_SLUGS.has(tagById.get(row.tag_id)?.slug ?? ""))
-      || EXTERNAL_BRAND_PATTERNS.some((rule) => rule.pattern.test(post.title ?? ""))
-      || EXTERNAL_BRAND_PATTERNS.some((rule) => rule.pattern.test(post.body_plain ?? ""));
+      || matchesRemovedImportBranding(post.title)
+      || matchesRemovedImportBranding(post.body_plain)
+      || matchesRemovedImportBranding(post.search_text);
 
     if (!shouldScrub) {
       continue;
@@ -1119,8 +1145,8 @@ async function scrubLegacyImportedContent(store) {
 
   if (postTagDeletes.length > 0) {
     for (const row of postTagDeletes) {
-      await requireData(
-        store.serviceClient
+      await requireDataWithRetry(
+        () => store.serviceClient
           .from("post_tags")
           .delete()
           .eq("post_id", row.post_id)
@@ -1132,8 +1158,8 @@ async function scrubLegacyImportedContent(store) {
 
   if (postTagUpdates.length > 0) {
     for (const row of postTagUpdates) {
-      await requireData(
-        store.serviceClient
+      await requireDataWithRetry(
+        () => store.serviceClient
           .from("post_tags")
           .update({
             label_snapshot: row.label_snapshot,
@@ -1148,8 +1174,8 @@ async function scrubLegacyImportedContent(store) {
 
   if (postsToUpdate.length > 0) {
     for (const row of postsToUpdate) {
-      await requireData(
-        store.serviceClient
+      await requireDataWithRetry(
+        () => store.serviceClient
           .from("posts")
           .update({
             title: row.title,
@@ -1199,8 +1225,8 @@ async function scrubLegacyImportedContent(store) {
   }
 
   for (const row of installationUpdates) {
-    await requireData(
-      store.serviceClient
+    await requireDataWithRetry(
+      () => store.serviceClient
         .from("agent_installations")
         .update({
           device_id: row.device_id,
