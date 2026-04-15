@@ -52,6 +52,10 @@ function clampUnit(value) {
   return Math.min(1, Math.max(0, Number(value) || 0));
 }
 
+function getAudioContextConstructor() {
+  return window.AudioContext || window.webkitAudioContext || null;
+}
+
 function detachTrackElement(entry) {
   if (!entry) {
     return;
@@ -100,6 +104,8 @@ export function createBrowserMediaController(options = {}) {
     pendingSubscriptions: new Map(),
     audioPlaybackState: new Map(),
     audioVolumes: new Map(),
+    audioContext: null,
+    audioGraphs: new Map(),
   };
 
   function notifyStatus(patch = {}) {
@@ -125,6 +131,45 @@ export function createBrowserMediaController(options = {}) {
     return state.liveKitPromise;
   }
 
+  function ensureAudioContext() {
+    if (state.audioContext) {
+      return state.audioContext;
+    }
+    const AudioContextCtor = getAudioContextConstructor();
+    if (!AudioContextCtor) {
+      return null;
+    }
+    state.audioContext = new AudioContextCtor();
+    return state.audioContext;
+  }
+
+  function ensureAudioGraph(entry) {
+    if (!entry?.element || entry.kind !== "audio") {
+      return null;
+    }
+    const existing = state.audioGraphs.get(entry.sessionId);
+    if (existing) {
+      return existing;
+    }
+    const context = ensureAudioContext();
+    if (!context) {
+      return null;
+    }
+    let source = null;
+    try {
+      source = context.createMediaElementSource(entry.element);
+    } catch (_error) {
+      return state.audioGraphs.get(entry.sessionId) ?? null;
+    }
+    const gain = context.createGain();
+    gain.gain.value = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
+    source.connect(gain);
+    gain.connect(context.destination);
+    const graph = { context, source, gain };
+    state.audioGraphs.set(entry.sessionId, graph);
+    return graph;
+  }
+
   function notifyRemoteAudioState(sessionId) {
     const key = String(sessionId ?? "").trim();
     if (!key) {
@@ -148,7 +193,18 @@ export function createBrowserMediaController(options = {}) {
     if (entry.kind === "audio") {
       entry.element.muted = false;
       entry.element.defaultMuted = false;
-      entry.element.volume = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
+      entry.element.volume = 1;
+      const graph = ensureAudioGraph(entry);
+      if (graph?.context?.state === "suspended") {
+        try {
+          await graph.context.resume();
+        } catch (_error) {
+          // Best effort; element playback may still succeed.
+        }
+      }
+      if (graph) {
+        graph.gain.gain.value = clampUnit(state.audioVolumes.get(entry.sessionId) ?? 1);
+      }
     } else {
       entry.element.muted = true;
       entry.element.defaultMuted = true;
@@ -186,6 +242,12 @@ export function createBrowserMediaController(options = {}) {
     if (kind === "video" && notify) {
       options.onRemoteTrackRemoved?.({ sessionId });
     } else if (kind === "audio") {
+      const graph = state.audioGraphs.get(sessionId);
+      if (graph) {
+        graph.source.disconnect();
+        graph.gain.disconnect();
+        state.audioGraphs.delete(sessionId);
+      }
       state.audioPlaybackState.delete(sessionId);
       state.audioVolumes.delete(sessionId);
       notifyRemoteAudioState(sessionId);
@@ -566,15 +628,28 @@ export function createBrowserMediaController(options = {}) {
       }
       const volume = clampUnit(params.volume);
       state.audioVolumes.set(sessionId, volume);
+      const graph = state.audioGraphs.get(sessionId);
+      if (graph) {
+        graph.gain.gain.value = volume;
+      }
       const entry = state.remoteTracks.get(getTrackKey(sessionId, "audio"));
       if (entry?.element) {
-        entry.element.volume = volume;
+        entry.element.volume = graph ? 1 : volume;
       }
       return true;
     },
 
     async disconnect() {
       await disconnectRoom();
+      for (const graph of state.audioGraphs.values()) {
+        graph.source.disconnect();
+        graph.gain.disconnect();
+      }
+      state.audioGraphs.clear();
+      if (state.audioContext && state.audioContext.state !== "closed") {
+        state.audioContext.close().catch(() => null);
+      }
+      state.audioContext = null;
       notifyStatus({ connected: false });
     },
 
