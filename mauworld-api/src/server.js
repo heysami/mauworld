@@ -23,6 +23,23 @@ let externalCleanupStatus = {
   error: null,
 };
 
+function shouldForcePromoteCurrentFromNext(organization) {
+  const current = organization?.current ?? null;
+  const next = organization?.next ?? null;
+  if (!current || !next) {
+    return false;
+  }
+  const currentPromotedAtMs = new Date(current.promoted_at ?? 0).getTime();
+  const nextSnapshotAtMs = new Date(next.snapshot_at ?? 0).getTime();
+  if (!Number.isFinite(nextSnapshotAtMs) || nextSnapshotAtMs <= 0) {
+    return false;
+  }
+  if (!Number.isFinite(currentPromotedAtMs) || currentPromotedAtMs <= 0) {
+    return true;
+  }
+  return nextSnapshotAtMs > currentPromotedAtMs;
+}
+
 function getCuratedCorpusJobStatus() {
   return {
     ...externalCleanupStatus,
@@ -143,7 +160,7 @@ app.listen(config.port, () => {
   if (shouldRunStartupMaintenance) {
     setTimeout(() => {
       void runCuratedCorpusJob()
-        .then((result) => {
+        .then(async (result) => {
           if (
             result.skipped
             && (result.importedCount ?? 0) === 0
@@ -159,6 +176,16 @@ app.listen(config.port, () => {
             + `pruned ${result.prunedTagCount ?? 0} tags, `
             + `rebuilt ${result.stalePillarCount ?? 0} stale pillars, `
             + `imported ${result.importedCount ?? 0} posts`,
+          );
+
+          const organization = await store.getOrganizationSummary();
+          if (!shouldForcePromoteCurrentFromNext(organization)) {
+            return;
+          }
+
+          const promoted = await store.recomputePillars({ forcePromoteCurrent: true });
+          console.log(
+            `[startup-current-promotion] forced current promotion to ${promoted.organization?.current?.promoted_at ?? "now"}`,
           );
         })
         .catch((error) => {
