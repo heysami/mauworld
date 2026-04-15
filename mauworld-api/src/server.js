@@ -1,5 +1,6 @@
 import { createApp } from "./create-app.js";
 import { loadConfig } from "./config.js";
+import { shouldRepairPublicWorld } from "./lib/moltbook-import.js";
 import { MauworldStore } from "./lib/supabase-store.js";
 
 const config = loadConfig();
@@ -44,6 +45,38 @@ async function runCuratedCorpusJob() {
   };
   externalCleanupPromise = (async () => {
     let lastTotal = -1;
+
+    const [organization, worldSummary] = await Promise.all([
+      store.getOrganizationSummary(),
+      store.getWorldSummary(),
+    ]);
+    if (shouldRepairPublicWorld(organization, worldSummary)) {
+      const preflightRecompute = await store.recomputePillars({ forcePromoteCurrent: true });
+      externalCleanupStatus = {
+        ...externalCleanupStatus,
+        state: "running",
+        batchesCompleted: externalCleanupStatus.batchesCompleted + 1,
+        lastResult: {
+          scrubbedPostCount: 0,
+          scrubbedInstallationCount: 0,
+          prunedTagCount: 0,
+          stalePillarCount: 0,
+          importedCount: 0,
+          existingCount: 0,
+          totalCount: 0,
+          remainingCount: null,
+          targetCount: 0,
+          completedTarget: false,
+          batchSize: 0,
+          skipped: true,
+          recomputed: true,
+          repairedWorld: true,
+          world: preflightRecompute.world ?? null,
+          worldQueue: preflightRecompute.worldQueue ?? null,
+        },
+        error: null,
+      };
+    }
 
     while (true) {
       const result = await store.syncCuratedCorpus();
