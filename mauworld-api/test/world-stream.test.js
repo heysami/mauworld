@@ -40,7 +40,7 @@ test("pillar streaming expands beyond the active cell window for far LOD proxies
   );
 });
 
-test("pillar proxy LOD stays detailed much farther out while keeping a modest hysteresis band", () => {
+test("pillar proxy LOD uses the same distance both directions for pillar swaps", () => {
   const settings = {
     world_cell_size: 64,
     world_lod_near_distance: 180,
@@ -52,8 +52,7 @@ test("pillar proxy LOD stays detailed much farther out while keeping a modest hy
 
   assert.equal(proxyDistance, 2180);
   assert.ok(proxyDistance >= settings.world_lod_near_distance * 10);
-  assert.ok(proxyHysteresis >= 0.1);
-  assert.ok(proxyHysteresis <= 0.22);
+  assert.equal(proxyHysteresis, 0);
 });
 
 test("tag LOD keeps nearby tags detailed while streaming a wider halo", () => {

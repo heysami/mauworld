@@ -203,6 +203,7 @@ function getPillarLodSettings() {
   const cellSize = Math.max(16, Math.floor(Number(lod.cellSize) || 64));
   const billboardDistance = Math.max(16, Math.floor(Number(fog.billboardDistance) || 420));
   const nearDistance = Math.max(16, Math.floor(Number(fog.lodNearDistance) || 180));
+  const configuredProxyHysteresis = Number(lod.pillarProxyHysteresis);
   const baseProxyDistance = Math.max(nearDistance * 1.1, cellSize * 2.3, billboardDistance * 0.52);
   const proxyDistance = Math.max(
     48,
@@ -216,8 +217,8 @@ function getPillarLodSettings() {
     ),
     proxyDistance,
     proxyHysteresis: clamp(
-      Number(lod.pillarProxyHysteresis) || Math.max(0.1, Math.min(0.22, (cellSize * 0.4) / Math.max(1, proxyDistance))),
-      0.01,
+      Number.isFinite(configuredProxyHysteresis) ? configuredProxyHysteresis : 0,
+      0,
       0.4,
     ),
   };

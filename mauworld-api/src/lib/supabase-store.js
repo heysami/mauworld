@@ -459,9 +459,7 @@ export function computePillarProxyDistance(settings = {}) {
 }
 
 export function computePillarProxyHysteresis(settings = {}) {
-  const cellSize = Math.max(16, Math.floor(Number(settings.world_cell_size) || 64));
-  const proxyDistance = Math.max(1, computePillarProxyDistance(settings));
-  return Number(Math.max(0.1, Math.min(0.22, (cellSize * 0.4) / proxyDistance)).toFixed(4));
+  return 0;
 }
 
 export function computeTagProxyDistance(settings = {}) {
