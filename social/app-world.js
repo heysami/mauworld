@@ -248,7 +248,6 @@ const sceneState = {
 
 const billboardParentQuaternion = new THREE.Quaternion();
 const browserFallbackHostPosition = new THREE.Vector3();
-const browserPlaceholderLookTarget = new THREE.Vector3();
 const defaultBrowserStageVideoElement = elements.browserVideo;
 
 const inputState = {
@@ -3872,62 +3871,21 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
 }
 
 function createBrowserPlaceholderTexture(session) {
-  const width = 1280;
-  const height = 720;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
   const shareKind = getBrowserSessionShareKind(session);
-  const title = String(session?.title ?? "Shared browser").slice(0, 72) || "Shared browser";
-  const url = String(session?.url ?? "").replace(/^https?:\/\//i, "");
-  const eyebrow = shareKind === "audio"
-    ? "LIVE VOICE"
+  const symbol = shareKind === "audio"
+    ? "📞"
     : shareKind === "camera"
-      ? "LIVE VIDEO"
-      : shareKind === "browser"
-        ? "LIVE WINDOW"
-        : "LIVE SCREEN";
-  const subline = shareKind === "audio"
-    ? "Move closer to listen"
-    : "Move closer to watch";
-  const detailLine = shareKind === "audio"
-    ? "Only nearby visitors hear this live audio."
-    : "The live view appears when you are nearby.";
-
-  context.fillStyle = "#10183a";
-  context.fillRect(0, 0, width, height);
-  context.fillStyle = "rgba(255, 255, 255, 0.08)";
-  context.fillRect(40, 40, width - 80, height - 80);
-  context.fillStyle = "#18265c";
-  context.fillRect(40, 40, width - 80, 82);
-  context.fillStyle = "#f5f7ff";
-  context.font = "700 34px Manrope, sans-serif";
-  context.fillText(title, 72, 92);
-  context.fillStyle = "rgba(245, 247, 255, 0.7)";
-  context.font = "600 22px Manrope, sans-serif";
-  context.fillText(url || eyebrow, 72, 130);
-
-  context.fillStyle = "rgba(12, 18, 44, 0.82)";
-  context.fillRect(120, 188, width - 240, height - 308);
-  context.strokeStyle = "rgba(255, 255, 255, 0.12)";
-  context.lineWidth = 2;
-  context.strokeRect(120, 188, width - 240, height - 308);
-
-  context.textAlign = "center";
-  context.fillStyle = "rgba(245, 247, 255, 0.92)";
-  context.font = shareKind === "audio" ? "800 84px Manrope, sans-serif" : "800 138px Manrope, sans-serif";
-  context.fillText(shareKind === "audio" ? "VOICE" : "...", width / 2, shareKind === "audio" ? 358 : 382);
-  context.fillStyle = "rgba(245, 247, 255, 0.76)";
-  context.font = "700 30px Manrope, sans-serif";
-  context.fillText(subline, width / 2, 468);
-  context.font = "600 22px Manrope, sans-serif";
-  context.fillText(detailLine, width / 2, 512);
-  context.textAlign = "left";
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
+      ? "🤩"
+      : "📺";
+  const accent = shareKind === "audio"
+    ? WORLD_STYLE.accents[3]
+    : shareKind === "camera"
+      ? WORLD_STYLE.accents[0]
+      : WORLD_STYLE.accents[1];
+  return createBubbleTexture(symbol, {
+    accent,
+    stroke: WORLD_STYLE.outline,
+  });
 }
 
 function removeBrowserScreenEntry(sessionId) {
@@ -4115,26 +4073,27 @@ function updateBrowserScreenPresentation(entry) {
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
-  const placeholderScale = getBrowserSessionShareKind(entry.session) === "audio" ? 0.34 : 0.44;
-  const scale = showingPlaceholder ? placeholderScale : 1;
-  const offsetY = showingPlaceholder ? (placeholderScale < 0.4 ? -4.2 : -3.6) : 0;
-  setBrowserScreenBillboardMode(entry, !showingPlaceholder);
-  entry.frame.scale.set(scale, scale, 1);
+  const shareKind = getBrowserSessionShareKind(entry.session);
+  const baseAspectRatio = Number(entry.session?.aspectRatio) || getInteractionConfig().browserAspectRatio;
+  const baseWidth = 20;
+  const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
+  const bubbleWidth = shareKind === "audio" ? 7.8 : 8.6;
+  const bubbleHeight = bubbleWidth / (384 / 280);
+  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
+  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
+  const offsetY = 0;
+  setBrowserScreenBillboardMode(entry, true);
+  entry.frame.scale.set(scaleX, scaleY, 1);
   entry.frame.position.set(0, offsetY, 0);
-  entry.frame.material.depthTest = showingPlaceholder;
-  entry.frame.material.opacity = showingPlaceholder ? 0.9 : 1;
-  entry.frame.renderOrder = showingPlaceholder ? 6 : 10;
-  entry.frameShell.visible = showingPlaceholder;
-  entry.frameShell.scale.set(scale, scale, 1);
-  entry.frameShell.position.set(0, offsetY, -0.02);
-  entry.frameShell.material.opacity = showingPlaceholder ? 0.74 : 0.92;
-  entry.frameShell.renderOrder = showingPlaceholder ? 5 : 9;
+  entry.frame.material.depthTest = false;
+  entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
+  entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
+  entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
   }
   entry.frame.material.needsUpdate = true;
-  entry.frameShell.material.needsUpdate = true;
 }
 
 function setBrowserScreenVideo(sessionId, videoElement) {
@@ -4318,16 +4277,10 @@ function updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds) {
   entry.targetPosition.copy(hostPosition);
   entry.targetPosition.y += showingLiveMedia
     ? 18 + Math.sin(elapsedSeconds * 1.3) * 0.7
-    : 12.4 + Math.sin(elapsedSeconds * 1.1) * 0.2;
+    : 15.4 + Math.sin(elapsedSeconds * 1.1) * 0.18;
   entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
   entry.group.position.copy(entry.position);
-  if (showingLiveMedia) {
-    entry.group.rotation.set(0, 0, 0);
-  } else if (sceneState.camera) {
-    browserPlaceholderLookTarget.copy(sceneState.camera.position);
-    browserPlaceholderLookTarget.y = entry.group.position.y;
-    entry.group.lookAt(browserPlaceholderLookTarget);
-  }
+  entry.group.rotation.set(0, 0, 0);
   entry.group.visible = true;
   updateBrowserScreenPresentation(entry);
 }
