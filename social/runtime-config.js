@@ -41,17 +41,24 @@
   const derivedApiBase = deriveApiBaseFromLocation();
   const renderDefaultApiBase = "https://mauworld-api.onrender.com/api";
   const fallbackApiBase = "/api";
+  const isLocalOrigin = isLocalApiBase(window.location.origin);
+  const preferredHostedApiBase =
+    derivedApiBase
+    || renderDefaultApiBase
+    || fallbackApiBase;
   const apiBase =
     queryApiBase
     || runtimeApiBase
     || metaApiBase
+    || (isLocalOrigin ? storedApiBase : "")
+    || preferredHostedApiBase
     || storedApiBase
-    || derivedApiBase
-    || renderDefaultApiBase
     || fallbackApiBase;
 
   if (queryApiBase) {
     window.localStorage.setItem("mauworldApiBase", apiBase);
+  } else if (!isLocalOrigin && storedApiBase && storedApiBase !== apiBase) {
+    window.localStorage.removeItem("mauworldApiBase");
   }
 
   window.__MAUWORLD__ = {
