@@ -1248,6 +1248,7 @@ function getBrowserMediaController() {
     onRemoteTrack: ({ sessionId, track, element }) => {
       if (!state.localBrowserShare && elements.browserVideo) {
         state.browserPanelRemoteSessionId = sessionId;
+        state.browserMediaState.remoteVideoSessionId = sessionId;
         mountBrowserStageVideoElement(element);
         elements.browserVideo.hidden = false;
         ensureBrowserVideoPlayback(elements.browserVideo);
@@ -5788,6 +5789,7 @@ function updateBrowserPanel() {
     : [...state.browserSessions.values()].find(
       (session) => session.hostSessionId !== state.viewerSessionId && session.deliveryMode === "full",
     ) ?? null;
+  const hasRemotePanelSession = Boolean(!previewStream && remotePanelSession);
   const hasRemotePanelVideo = Boolean(
     !previewStream
     && remotePanelSession
@@ -5838,6 +5840,7 @@ function updateBrowserPanel() {
       `session ${debugSession?.sessionId?.slice(-8) || "-"} / ${debugSession?.deliveryMode || "-"} / ${debugSession?.sessionMode || "-"}`,
       `remote ${state.browserMediaState.remoteVideoSessionId?.slice(-8) || "-"} ready ${state.browserMediaState.remoteVideoReadyState || 0} size ${state.browserMediaState.remoteVideoWidth || 0}x${state.browserMediaState.remoteVideoHeight || 0} paused ${state.browserMediaState.remoteVideoPaused ? "yes" : "no"}`,
       `sessions ${state.browserSessions.size} host live ${debugHostLive ? "yes" : "no"} rendered ${debugHostRendered ? "yes" : "no"} screen ${debugScreenEntry?.group?.visible ? "visible" : debugScreenEntry ? "hidden" : "none"}`,
+      `panel stream ${elements.browserVideo?.srcObject ? "yes" : "no"} time ${Number(elements.browserVideo?.currentTime ?? 0).toFixed(2)}`,
     ].join("\n"),
   );
 
@@ -5846,10 +5849,12 @@ function updateBrowserPanel() {
   }
   if (previewStream) {
     setBrowserPreviewStream(previewStream);
-  } else if (!hasRemotePanelVideo) {
+  } else if (!hasRemotePanelSession) {
     setBrowserPreviewStream(null);
+  } else if (elements.browserVideo) {
+    ensureBrowserVideoPlayback(elements.browserVideo);
   }
-  if (previewStream || hasRemotePanelVideo) {
+  if (previewStream || hasRemotePanelVideo || hasRemotePanelSession) {
     if (elements.browserVideo) {
       elements.browserVideo.hidden = false;
     }
