@@ -3813,6 +3813,63 @@ function rebuildConnections(pillars, tags, posts) {
     });
     sceneState.lines.add(branch);
   }
+
+  const focusedResult = state.focusedResult;
+  const focusedDestination = focusedResult?.destination;
+  const focusedQueueStatus = resolveResultQueueStatus(focusedResult);
+  const shouldLinkFocusedGhost =
+    focusedDestination?.tag_id
+    && state.openTagId === focusedDestination.tag_id
+    && (
+      focusedQueueStatus !== "ready"
+      || focusedDestination.display_tier === "hidden"
+      || !hasVisibleFocusedPost(focusedResult)
+    );
+  if (!shouldLinkFocusedGhost) {
+    return;
+  }
+
+  const focusedTag = tagById.get(focusedDestination.tag_id);
+  const renderedTagAnchor = focusedTag
+    ? getRenderedTagAnchor(focusedTag)
+    : getRenderedTagAnchorById(focusedDestination.tag_id);
+  if (!renderedTagAnchor) {
+    return;
+  }
+
+  const focusedAnchor = getRenderedPostAnchorById(
+    focusedDestination.post_id,
+    focusedDestination.tag_id,
+    new THREE.Vector3(
+      focusedDestination.position_x,
+      focusedDestination.position_y ?? 0,
+      focusedDestination.position_z,
+    ),
+  );
+  if (!focusedAnchor) {
+    return;
+  }
+
+  const focusedElevation = getFocusedAnimatedPost()?.cardElevation ?? 5.2;
+  const branch = createBranchConnection(
+    new THREE.Vector3(
+      renderedTagAnchor.x,
+      renderedTagAnchor.y + 0.18,
+      renderedTagAnchor.z,
+    ),
+    new THREE.Vector3(
+      focusedAnchor.x,
+      focusedAnchor.y + focusedElevation * 0.76,
+      focusedAnchor.z,
+    ),
+    {
+      accent: focusedQueueStatus === "ready" ? WORLD_STYLE.accents[1] : WORLD_STYLE.accents[0],
+      outerRadius: 0.18,
+      outerOpacity: 0.44,
+      innerOpacity: 0.88,
+    },
+  );
+  sceneState.lines.add(branch);
 }
 
 function rebuildScene(streamPayload) {
