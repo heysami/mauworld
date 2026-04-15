@@ -181,6 +181,7 @@ const state = {
     remoteVideoWidth: 0,
     remoteVideoHeight: 0,
     remoteVideoPaused: true,
+    lastPlayError: "",
   },
   worldCache: {
     pillars: new Map(),
@@ -1021,10 +1022,48 @@ function ensureBrowserVideoPlayback(element) {
   }
   element.autoplay = true;
   element.playsInline = true;
+  element.setAttribute("autoplay", "");
+  element.setAttribute("playsinline", "true");
   element.muted = true;
   element.defaultMuted = true;
+  element.setAttribute("muted", "");
+  element.volume = 0;
   const playPromise = element.play?.();
-  playPromise?.catch?.(() => null);
+  playPromise?.then?.(() => {
+    if (state.browserMediaState.lastPlayError) {
+      state.browserMediaState.lastPlayError = "";
+      updateBrowserPanel();
+    }
+  });
+  playPromise?.catch?.((error) => {
+    const message = String(error?.name || error?.message || "play failed");
+    if (state.browserMediaState.lastPlayError !== message) {
+      state.browserMediaState.lastPlayError = message;
+      updateBrowserPanel();
+    }
+  });
+}
+
+function resumeBrowserMediaPlayback() {
+  const seen = new Set();
+  const candidates = [];
+  if (elements.browserVideo) {
+    candidates.push(elements.browserVideo);
+  }
+  for (const entry of sceneState.browserScreenEntries.values()) {
+    if (entry?.videoElement) {
+      candidates.push(entry.videoElement);
+    }
+  }
+  for (const element of candidates) {
+    if (!element || seen.has(element)) {
+      continue;
+    }
+    seen.add(element);
+    if (element.srcObject && element.paused) {
+      ensureBrowserVideoPlayback(element);
+    }
+  }
 }
 
 function mountBrowserStageVideoElement(videoElement) {
@@ -5843,6 +5882,7 @@ function updateBrowserPanel() {
       `sessions ${state.browserSessions.size} host live ${debugHostLive ? "yes" : "no"} rendered ${debugHostRendered ? "yes" : "no"} screen ${debugScreenEntry?.group?.visible ? "visible" : debugScreenEntry ? "hidden" : "none"}`,
       `panel stream ${elements.browserVideo?.srcObject ? "yes" : "no"} time ${Number(elements.browserVideo?.currentTime ?? 0).toFixed(2)}`,
       `texture stream ${debugScreenVideo?.srcObject ? "yes" : "no"} time ${Number(debugScreenVideo?.currentTime ?? 0).toFixed(2)} paused ${debugScreenVideo ? (debugScreenVideo.paused ? "yes" : "no") : "-"}`,
+      `play ${state.browserMediaState.lastPlayError || "ok"}`,
     ].join("\n"),
   );
 
@@ -6935,6 +6975,12 @@ async function launchSharedBrowser() {
 
 function registerInput() {
   window.addEventListener("resize", resizeScene);
+  const resumeBrowserMediaFromGesture = () => {
+    resumeBrowserMediaPlayback();
+  };
+  window.addEventListener("pointerdown", resumeBrowserMediaFromGesture, { capture: true });
+  window.addEventListener("touchstart", resumeBrowserMediaFromGesture, { capture: true, passive: true });
+  window.addEventListener("keydown", resumeBrowserMediaFromGesture, { capture: true });
   window.addEventListener("keydown", (event) => {
     if (
       event.key === "/"
