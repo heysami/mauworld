@@ -61,10 +61,10 @@ body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
 .pw-atmosphere {
   z-index: 1;
   background:
-    radial-gradient(circle at 50% 54%, rgba(255, 223, 82, 0.22), transparent 20%),
-    radial-gradient(circle at 14% 18%, rgba(45, 216, 255, 0.12), transparent 22%),
-    radial-gradient(circle at 86% 16%, rgba(255, 79, 168, 0.12), transparent 18%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(201, 239, 255, 0.14) 100%);
+    radial-gradient(circle at 50% 56%, rgba(255, 223, 82, 0.14), transparent 18%),
+    radial-gradient(circle at 16% 18%, rgba(45, 216, 255, 0.08), transparent 18%),
+    radial-gradient(circle at 84% 18%, rgba(255, 79, 168, 0.08), transparent 16%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015) 0%, rgba(201, 239, 255, 0.06) 100%);
   pointer-events: none;
 }
 
@@ -74,7 +74,7 @@ body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
     linear-gradient(transparent 0 calc(100% - 1px), rgba(61, 87, 182, 0.04) calc(100% - 1px)),
     linear-gradient(90deg, transparent 0 calc(100% - 1px), rgba(61, 87, 182, 0.035) calc(100% - 1px));
   background-size: 100% 80px, 80px 100%;
-  opacity: 0.7;
+  opacity: 0.38;
   mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.3) 24%, rgba(0, 0, 0, 0.08) 100%);
   pointer-events: none;
 }
@@ -125,6 +125,23 @@ body.private-worlds-body .world-panel {
   color: var(--pw-muted);
   font-size: 0.84rem;
   line-height: 1.45;
+}
+
+.pw-mau-panel__session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.pw-mau-panel__session span {
+  color: var(--pw-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 body.private-worlds-body.is-launcher-open .pw-mau-panel {
@@ -599,6 +616,13 @@ body.private-worlds-body.is-launcher-open .pw-launcher {
   margin: 0;
   color: var(--pw-muted);
   font-size: 0.82rem;
+}
+
+.pw-access-note {
+  margin: 0;
+  color: var(--pw-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .pw-chat-log,

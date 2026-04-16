@@ -16,9 +16,9 @@ const PRIVATE_CAMERA = {
   maxY: 360,
   lookMin: -1.1,
   lookMax: 1.1,
-  movementSpeed: 48,
-  verticalSpeed: 34,
-  wheelFactor: 0.045,
+  movementSpeed: 18,
+  verticalSpeed: 12,
+  wheelFactor: 0.032,
 };
 const PRIVATE_PLAYER_VIEW = {
   lookHeight: 7.6,
@@ -27,9 +27,9 @@ const PRIVATE_PLAYER_VIEW = {
   defaultRadius: 28,
 };
 const PRIVATE_SPRINT = {
-  maxMultiplier: 5,
-  rampSeconds: 10,
-  decaySeconds: 10,
+  maxMultiplier: 1.85,
+  rampSeconds: 0.3,
+  decaySeconds: 0.24,
 };
 const PRIVATE_CHAT_MAX_ENTRIES = 28;
 const PRIVATE_WORLD_STYLE = {
@@ -74,6 +74,8 @@ const elements = {
   selectedSubtitle: document.querySelector("[data-selected-subtitle]"),
   panelTitle: document.querySelector("[data-private-panel-title]"),
   panelSubtitle: document.querySelector("[data-private-panel-subtitle]"),
+  panelSessionLabel: document.querySelector("[data-private-session-label]"),
+  panelOpenAccess: document.querySelector("[data-private-open-access]"),
   panelChatComposer: document.querySelector("[data-private-chat-composer]"),
   panelChatInput: document.querySelector("[data-private-chat-input]"),
   panelChatStatus: document.querySelector("[data-private-chat-status]"),
@@ -180,6 +182,7 @@ const state = {
   viewerCameraPosition: new THREE.Vector3(8, 6, 20),
   cameraRadius: PRIVATE_PLAYER_VIEW.defaultRadius,
   sprintHoldSeconds: 0,
+  trailAccumulator: 0,
   lastPresenceSentAt: 0,
   viewerLookActive: false,
   viewerLookPointerId: 0,
@@ -569,29 +572,7 @@ function getPrivateCameraPlanarBasis(preview = state.preview) {
 }
 
 function getPrivateCameraMovementBasis(preview = state.preview) {
-  const planarBasis = getPrivateCameraPlanarBasis(preview);
-  if (!preview?.camera) {
-    return planarBasis;
-  }
-  const fullForward = new THREE.Vector3();
-  preview.camera.getWorldDirection(fullForward);
-  if (fullForward.lengthSq() < 0.000001) {
-    return planarBasis;
-  }
-  fullForward.normalize();
-
-  const tiltMix = Math.max(0, Math.min(1, (Math.abs(state.viewerPitch) - 0.34) / 0.5));
-  const forward = planarBasis.forward.clone().lerp(fullForward, tiltMix);
-  if (forward.lengthSq() < 0.000001) {
-    forward.copy(planarBasis.forward);
-  } else {
-    forward.normalize();
-  }
-
-  return {
-    forward,
-    right: planarBasis.right,
-  };
+  return getPrivateCameraPlanarBasis(preview);
 }
 
 function syncPrivateCameraToFollowTarget(preview = state.preview) {
@@ -877,6 +858,7 @@ async function fetchAuthConfig() {
 
 async function refreshAuthState() {
   elements.authState.textContent = state.session ? "Signed in" : "Signed out";
+  renderSessionSummary();
   if (!state.session) {
     await releaseSceneLock();
     state.profile = null;
@@ -896,6 +878,7 @@ async function refreshAuthState() {
     const payload = await apiFetch("/private/profile");
     state.profile = payload.profile;
     renderProfile();
+    renderSessionSummary();
     await loadWorlds();
     if (!state.selectedWorld) {
       setLauncherTab(getPreferredLauncherTab());
@@ -913,6 +896,24 @@ function renderProfile() {
   elements.profileForm.hidden = false;
   elements.profileForm.elements.username.value = state.profile.username || "";
   elements.profileForm.elements.displayName.value = state.profile.display_name || "";
+}
+
+function renderSessionSummary() {
+  if (!elements.panelSessionLabel || !elements.panelOpenAccess) {
+    return;
+  }
+  if (state.session && state.profile) {
+    elements.panelSessionLabel.textContent = `Signed in as @${state.profile.username || "user"}. Access opens profile and sign out.`;
+    elements.panelOpenAccess.textContent = "Profile";
+    return;
+  }
+  if (state.session) {
+    elements.panelSessionLabel.textContent = "Signed in. Access opens profile and sign out.";
+    elements.panelOpenAccess.textContent = "Profile";
+    return;
+  }
+  elements.panelSessionLabel.textContent = "Signed out. Access opens sign in or account creation.";
+  elements.panelOpenAccess.textContent = "Access";
 }
 
 async function loadWorlds() {
@@ -1595,19 +1596,19 @@ function renderPrivateChat() {
   const localParticipant = getLocalParticipant();
   const canChat = Boolean(state.session && state.selectedWorld && localParticipant);
   elements.panelChatInput.disabled = !canChat;
-  elements.panelChatInput.placeholder = !state.selectedWorld
-    ? "Open a world to chat"
-    : !localParticipant
-      ? "Enter the world to chat"
-      : !state.session
-        ? "Sign in to chat"
+  elements.panelChatInput.placeholder = !state.session
+    ? "Access opens sign in or account creation"
+    : !state.selectedWorld
+      ? "Open a world to chat"
+      : !localParticipant
+        ? "Enter the world to chat"
         : "Say something in this private world";
-  elements.panelChatStatus.textContent = !state.selectedWorld
-    ? "Open a world to chat."
-    : !localParticipant
-      ? "Enter the world to chat."
-      : !state.session
-        ? "Guests can view, but only signed-in participants can chat."
+  elements.panelChatStatus.textContent = !state.session
+    ? "Signed out. Access opens sign in or account creation."
+    : !state.selectedWorld
+      ? "Open a world to chat."
+      : !localParticipant
+        ? "Enter the world to chat."
         : "Everyone inside this private world sees this chat.";
 
   if (!state.privateChatEntries.length) {
@@ -1696,7 +1697,7 @@ function renderBuildSummary() {
       <strong>Controls</strong>
       <span>${state.mode === "build"
         ? "Select in-world, drag to move, Shift + wheel to rotate, Alt + wheel to scale."
-        : "WASD to move, Q/E to rise or drop, drag to look, wheel to zoom."}</span>
+        : "WASD to move, hold Shift to sprint, Q/E to rise or drop, drag to look, wheel to zoom."}</span>
     </div>
   `;
 }
@@ -1745,7 +1746,7 @@ function renderRuntimeStatus() {
         ? "Build mode: click to select, drag to move, Shift + wheel to rotate, Alt + wheel to scale."
         : getLocalParticipant()?.join_role === "player"
           ? "WASD / Arrows to move, Space to jump, Release to return to viewer."
-          : "Viewer mode by default. WASD to move, Q/E to rise or drop, drag to look, wheel to zoom, then click a player capsule to possess it."}</span>
+          : "Viewer mode by default. WASD to move, hold Shift to sprint, Q/E to rise or drop, drag to look, wheel to zoom, then click a player capsule to possess it."}</span>
     </div>
     ${runtimePlayers.length > 0 ? `
       <div class="pw-world-meta__row">
@@ -2035,6 +2036,7 @@ function adjustSelectedEntityByWheel(event) {
 function updateBuildCamera(preview, deltaSeconds) {
   const { forward, right } = getPrivateCameraMovementBasis(preview);
   const moveDirection = new THREE.Vector3();
+  const previousPosition = state.viewerPosition.clone();
   if (state.pressedViewerKeys.has("w") || state.pressedViewerKeys.has("arrowup")) {
     moveDirection.add(forward);
   }
@@ -2059,6 +2061,7 @@ function updateBuildCamera(preview, deltaSeconds) {
     const speed = verticalOnly ? PRIVATE_CAMERA.verticalSpeed : state.viewerMoveSpeed;
     state.viewerPosition.addScaledVector(moveDirection, speed * deltaSeconds);
     state.viewerPosition.y = clampNumber(state.viewerPosition.y, 0, PRIVATE_CAMERA.minY, PRIVATE_CAMERA.maxY);
+    leaveViewerMovementTrail(preview, previousPosition, state.viewerPosition, deltaSeconds);
   }
   syncPrivateCameraToFollowTarget(preview);
 }
@@ -2103,6 +2106,7 @@ function updateEmbodiedViewer(preview, deltaSeconds, elapsedSeconds) {
 
   const { forward, right } = getPrivateCameraMovementBasis(preview);
   const moveDirection = new THREE.Vector3();
+  const previousPosition = state.viewerPosition.clone();
   if (state.pressedViewerKeys.has("w") || state.pressedViewerKeys.has("arrowup")) {
     moveDirection.add(forward);
   }
@@ -2137,6 +2141,7 @@ function updateEmbodiedViewer(preview, deltaSeconds, elapsedSeconds) {
     const speed = verticalOnly ? PRIVATE_CAMERA.verticalSpeed : state.viewerMoveSpeed * speedMultiplier;
     state.viewerPosition.addScaledVector(moveDirection, speed * deltaSeconds);
     state.viewerPosition.y = clampNumber(state.viewerPosition.y, 0, PRIVATE_CAMERA.minY, PRIVATE_CAMERA.maxY);
+    leaveViewerMovementTrail(preview, previousPosition, state.viewerPosition, deltaSeconds);
   }
 
   updateMascotMotion(avatar, {
@@ -2189,8 +2194,8 @@ function buildPreviewEnvironment(preview) {
   const floor = new THREE.Mesh(
     new THREE.CircleGeometry(260, 120),
     new THREE.MeshStandardMaterial({
-      color: "#f4f8ff",
-      roughness: 0.92,
+      color: "#ffffff",
+      roughness: 0.96,
       metalness: 0.02,
     }),
   );
@@ -2203,7 +2208,7 @@ function buildPreviewEnvironment(preview) {
     new THREE.MeshBasicMaterial({
       color: PRIVATE_WORLD_STYLE.groundGlow,
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.22,
       side: THREE.DoubleSide,
     }),
   );
@@ -2214,7 +2219,7 @@ function buildPreviewEnvironment(preview) {
   const grid = new THREE.GridHelper(160, 80, PRIVATE_WORLD_STYLE.line, PRIVATE_WORLD_STYLE.lineMuted);
   grid.position.y = 0;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
-    material.opacity = 0.58;
+    material.opacity = 0.42;
     material.transparent = true;
   }
   environment.add(grid);
@@ -2224,7 +2229,7 @@ function buildPreviewEnvironment(preview) {
     new THREE.MeshBasicMaterial({
       color: PRIVATE_WORLD_STYLE.accents[0],
       transparent: true,
-      opacity: 0.14,
+      opacity: 0.08,
     }),
   );
   horizonRing.rotation.x = Math.PI / 2;
@@ -2232,7 +2237,7 @@ function buildPreviewEnvironment(preview) {
   environment.add(horizonRing);
 
   const particleGeometry = new THREE.BufferGeometry();
-  const particleCount = 420;
+  const particleCount = 180;
   const particlePositions = new Float32Array(particleCount * 3);
   for (let index = 0; index < particleCount; index += 1) {
     const radius = 24 + Math.random() * 120;
@@ -2248,7 +2253,7 @@ function buildPreviewEnvironment(preview) {
       color: "#d7e7fb",
       size: 0.18,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.18,
       depthWrite: false,
     }),
   );
@@ -2313,7 +2318,7 @@ function ensurePreview() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PRIVATE_WORLD_STYLE.background);
-  scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 54, 260);
+  scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 120, 420);
 
   const camera = new THREE.PerspectiveCamera(48, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 5000);
   camera.position.copy(state.viewerCameraPosition);
@@ -2332,15 +2337,18 @@ function ensurePreview() {
     camera,
     root: new THREE.Group(),
     actors: new THREE.Group(),
+    trails: new THREE.Group(),
     raycaster: new THREE.Raycaster(),
     entityPickables: [],
     entityMeshes: new Map(),
     effectSystems: [],
+    trailPuffs: [],
     lastFrameAt: performance.now(),
   };
   buildPreviewEnvironment(state.preview);
   state.preview.scene.add(state.preview.root);
   state.preview.scene.add(state.preview.actors);
+  state.preview.scene.add(state.preview.trails);
   ensureViewerAvatar(state.preview);
   resetViewerRig();
   syncPrivateCameraToFollowTarget(state.preview);
@@ -2377,6 +2385,7 @@ function ensurePreview() {
       updateBuildCamera(state.preview, deltaSeconds);
     }
     updatePreviewEffects(state.preview, timestamp / 1000);
+    updateViewerTrailPuffs(state.preview, deltaSeconds);
     state.preview.renderer.render(state.preview.scene, state.preview.camera);
     window.requestAnimationFrame(render);
   };
@@ -2597,6 +2606,96 @@ function createTrailSystem(preview, anchorId, effectName, color) {
     object: line,
     history: points,
   };
+}
+
+function spawnViewerTrailPuff(preview, position, travelVector) {
+  if (!preview?.trails) {
+    return;
+  }
+  const group = new THREE.Group();
+  group.position.copy(position);
+  group.position.y += 1.2;
+  const radius = 0.24 + Math.random() * 0.12;
+  const geometry = new THREE.SphereGeometry(radius, 14, 14);
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshToonMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.white),
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  const shell = createOutlineShell(geometry, "#bcc3cf", 1.1);
+  shell.material.opacity = 0.54;
+  mesh.add(shell);
+  group.add(mesh);
+  preview.trails.add(group);
+  preview.trailPuffs.push({
+    group,
+    mesh,
+    shell,
+    velocity: new THREE.Vector3(
+      -travelVector.x * 0.016 + (Math.random() - 0.5) * 0.12,
+      0.08 + Math.random() * 0.06,
+      -travelVector.z * 0.016 + (Math.random() - 0.5) * 0.12,
+    ),
+    drift: new THREE.Vector3(-travelVector.x * 0.004, 0.04 + Math.random() * 0.03, -travelVector.z * 0.004),
+    growth: 0.16 + Math.random() * 0.12,
+    age: 0,
+    lifetime: 0.9 + Math.random() * 0.2,
+  });
+}
+
+function leaveViewerMovementTrail(preview, previousPosition, nextPosition, deltaSeconds) {
+  const delta = new THREE.Vector3().subVectors(nextPosition, previousPosition);
+  const distance = delta.length();
+  if (distance < 0.02) {
+    state.trailAccumulator = 0;
+    return;
+  }
+  state.trailAccumulator += distance;
+  if (state.trailAccumulator < 1.35 || deltaSeconds <= 0) {
+    return;
+  }
+  state.trailAccumulator = 0;
+  spawnViewerTrailPuff(preview, previousPosition.clone(), delta);
+}
+
+function updateViewerTrailPuffs(preview, deltaSeconds) {
+  if (!preview?.trailPuffs?.length) {
+    return;
+  }
+  for (let index = preview.trailPuffs.length - 1; index >= 0; index -= 1) {
+    const entry = preview.trailPuffs[index];
+    entry.age += deltaSeconds;
+    const life = Math.min(1, entry.age / Math.max(0.0001, entry.lifetime));
+    entry.group.position.addScaledVector(entry.velocity, deltaSeconds);
+    entry.velocity.addScaledVector(entry.drift, deltaSeconds);
+    const scale = 1 + entry.growth * life;
+    entry.group.scale.setScalar(scale);
+    entry.mesh.material.opacity = (1 - life) * 0.92;
+    if (entry.shell?.material) {
+      entry.shell.material.opacity = (1 - life) * 0.54;
+    }
+    if (life >= 1) {
+      preview.trails.remove(entry.group);
+      entry.group.traverse((node) => {
+        if (node.geometry) {
+          node.geometry.dispose();
+        }
+        if (node.material) {
+          if (Array.isArray(node.material)) {
+            node.material.forEach((material) => material.dispose?.());
+          } else {
+            node.material.dispose?.();
+          }
+        }
+      });
+      preview.trailPuffs.splice(index, 1);
+    }
+  }
 }
 
 function updatePreviewEffects(preview, elapsedSeconds) {
@@ -3757,6 +3856,10 @@ function bindEvents() {
       setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "chat");
     });
   }
+  elements.panelOpenAccess?.addEventListener("click", () => {
+    setLauncherTab("access");
+    setLauncherOpen(true);
+  });
   elements.panelChatComposer?.addEventListener("submit", (event) => {
     event.preventDefault();
     if (!sendPrivateChat(elements.panelChatInput?.value || "")) {
@@ -4156,6 +4259,7 @@ async function init() {
   renderPrivateChat();
   renderPrivateShare();
   renderBuildSummary();
+  renderSessionSummary();
   ensurePreview();
   setLauncherTab(getPreferredLauncherTab());
   setMode(state.mode);
