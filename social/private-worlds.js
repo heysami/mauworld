@@ -3121,6 +3121,7 @@ function renderPrivateChat() {
         : "";
   if (elements.panelChatReactions) {
     elements.panelChatReactions.hidden = !canChat;
+    elements.panelChatReactions.style.display = canChat ? "" : "none";
   }
   if (elements.panelChatEmpty) {
     elements.panelChatEmpty.hidden = canChat;
