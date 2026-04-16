@@ -97,6 +97,11 @@ body.private-worlds-body {
   font-size: 18px;
 }
 
+.pw-panel__header h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
 .pw-panel__header span {
   color: #5f6d83;
   font-size: 13px;
@@ -224,7 +229,9 @@ body.private-worlds-body.is-play-mode [data-build-panel] {
 .pw-event-log,
 .pw-scene-strip,
 .pw-runtime-status,
-.pw-world-meta {
+.pw-world-meta,
+.pw-builder-list,
+.pw-prefab-list {
   display: grid;
   gap: 10px;
 }
@@ -233,7 +240,10 @@ body.private-worlds-body.is-play-mode [data-build-panel] {
 .pw-collaborator-item,
 .pw-event-log__item,
 .pw-scene-pill,
-.pw-world-meta__row {
+.pw-world-meta__row,
+.pw-builder-group,
+.pw-builder-item,
+.pw-prefab-card {
   border: 1px solid #d4dde8;
   border-radius: 8px;
   background: #f8fbff;
@@ -303,6 +313,166 @@ body.private-worlds-body.is-play-mode [data-build-panel] {
   background: #edf4ff;
 }
 
+.pw-builder-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.95fr) minmax(320px, 1.05fr);
+  gap: 16px;
+  margin: 14px 0;
+}
+
+.pw-builder-panel {
+  padding: 14px;
+  border: 1px solid #d4dde8;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.pw-builder-group {
+  padding: 10px;
+}
+
+.pw-builder-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.pw-builder-group__header strong {
+  font-size: 13px;
+}
+
+.pw-builder-group__header span {
+  font-size: 12px;
+  color: #54647d;
+}
+
+.pw-builder-group__items {
+  display: grid;
+  gap: 8px;
+}
+
+.pw-builder-item,
+.pw-prefab-card {
+  padding: 10px 12px;
+}
+
+.pw-builder-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 0;
+  border: 1px solid #d4dde8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #14213d;
+  text-align: left;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pw-builder-item.is-active,
+.pw-prefab-card.is-active {
+  border-color: #243b64;
+  background: #edf4ff;
+}
+
+.pw-builder-item strong,
+.pw-prefab-card strong {
+  font-size: 13px;
+}
+
+.pw-builder-item small,
+.pw-prefab-card small,
+.pw-prefab-card p,
+.pw-builder-empty {
+  color: #54647d;
+}
+
+.pw-builder-item small,
+.pw-prefab-card small,
+.pw-prefab-card p {
+  margin: 0;
+}
+
+.pw-entity-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.pw-selection-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #c7d4e3;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #243b64;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pw-builder-empty {
+  margin: 0;
+  font-size: 13px;
+}
+
+.pw-inspector-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pw-inspector-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pw-inspector-note {
+  margin: 0;
+  font-size: 13px;
+  color: #54647d;
+}
+
+.pw-inline-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pw-prefab-card__actions,
+.pw-builder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pw-prefab-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #54647d;
+}
+
+.pw-prefab-card label {
+  margin-bottom: 0;
+}
+
+.pw-advanced-editor {
+  margin-top: 12px;
+}
+
+.pw-advanced-editor summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #243b64;
+}
+
 .pw-preview {
   position: relative;
   overflow: hidden;
@@ -328,6 +498,18 @@ body.private-worlds-body.is-play-mode [data-build-panel] {
 .pw-collaborator-item,
 .pw-event-log__item {
   padding: 10px 12px;
+}
+
+.pw-collaborator-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pw-collaborator-item__meta {
+  display: grid;
+  gap: 4px;
 }
 
 .pw-event-log {
@@ -363,6 +545,10 @@ body.private-worlds-body.is-play-mode [data-build-panel] {
   .pw-grid-main {
     grid-template-columns: 1fr;
   }
+
+  .pw-builder-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -377,6 +563,11 @@ body.private-worlds-body.is-play-mode [data-build-panel] {
 
   .pw-grid-2,
   .pw-grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .pw-inspector-grid,
+  .pw-inspector-grid--2 {
     grid-template-columns: 1fr;
   }
 

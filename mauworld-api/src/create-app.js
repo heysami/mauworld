@@ -239,6 +239,15 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     jsonOk(res, payload);
   }));
 
+  app.get("/api/public/private-worlds", asyncRoute(async (req, res) => {
+    const payload = await store.searchPublicPrivateWorlds({
+      q: req.query.q,
+      worldType: req.query.worldType,
+      limit: req.query.limit,
+    });
+    jsonOk(res, payload);
+  }));
+
   app.get("/api/public/world/posts/:id/instances", asyncRoute(async (req, res) => {
     const payload = await store.getWorldPostInstances(requireString(req.params.id, "postId"));
     jsonOk(res, payload);
@@ -423,6 +432,16 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       prefabId: requireString(req.params.prefabId, "prefabId"),
       worldId: requireString(req.params.worldId, "worldId"),
       creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.delete("/api/private/worlds/:worldId/prefabs/:prefabId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.deletePrivateWorldPrefab(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      prefabId: requireString(req.params.prefabId, "prefabId"),
+      creatorUsername: requireString(req.query.creatorUsername, "creatorUsername"),
     });
     jsonOk(res, payload);
   }));

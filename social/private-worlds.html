@@ -118,11 +118,35 @@
 
           <section class="pw-panel">
             <div class="pw-panel__header">
+              <h2>Browse Worlds</h2>
+              <button type="button" class="is-muted" data-refresh-public-worlds>Refresh</button>
+            </div>
+            <div class="pw-grid-2">
+              <label class="pw-search">
+                <span>Search</span>
+                <input type="search" data-public-world-search placeholder="Search all private worlds" />
+              </label>
+              <label>
+                <span>Type</span>
+                <select data-public-world-type>
+                  <option value="">All</option>
+                  <option value="room">Room</option>
+                  <option value="field">Field</option>
+                  <option value="board">Board</option>
+                </select>
+              </label>
+            </div>
+            <div class="pw-world-list" data-public-world-list></div>
+          </section>
+
+          <section class="pw-panel">
+            <div class="pw-panel__header">
               <h2>Your Worlds</h2>
               <button type="button" class="is-muted" data-refresh-worlds>Refresh</button>
             </div>
             <label class="pw-search">
-              <input type="search" data-world-search placeholder="Search your private worlds" />
+              <span>Search</span>
+              <input type="search" data-world-search placeholder="Search worlds you can edit" />
             </label>
             <div class="pw-world-list" data-world-list></div>
           </section>
@@ -181,7 +205,10 @@
             <div class="pw-grid-main">
               <section class="pw-section" data-build-panel>
                 <div class="pw-section__header">
-                  <h3>Scenes</h3>
+                  <div>
+                    <h3>Builder</h3>
+                    <p class="pw-preview-hint">Build voxels and objects visually here. Screen HTML and world logic stay as text.</p>
+                  </div>
                   <div class="pw-inline-actions">
                     <button type="button" class="is-muted" data-add-voxel disabled>Add Voxel</button>
                     <button type="button" class="is-muted" data-add-primitive disabled>Add Primitive</button>
@@ -189,6 +216,7 @@
                     <button type="button" class="is-muted" data-add-screen disabled>Add Screen</button>
                     <button type="button" class="is-muted" data-add-text disabled>Add Text</button>
                     <button type="button" class="is-muted" data-add-trigger disabled>Add Trigger</button>
+                    <button type="button" class="is-muted" data-add-particle disabled>Add Particle</button>
                     <button type="button" class="is-muted" data-add-rule disabled>Add Rule</button>
                   </div>
                 </div>
@@ -207,9 +235,47 @@
                     </label>
                   </div>
                   <label>
-                    <span>Scene JSON</span>
-                    <textarea name="sceneDoc" rows="22" spellcheck="false"></textarea>
+                    <span>Logic Script</span>
+                    <textarea name="scriptDsl" rows="6" spellcheck="false" placeholder="zone_enter from trigger_start -> apply_force to primitive_crate force(0,4,0)"></textarea>
                   </label>
+
+                  <div class="pw-builder-layout">
+                    <section class="pw-builder-panel">
+                      <div class="pw-panel__header">
+                        <h4>Scene Items</h4>
+                        <div class="pw-inline-actions">
+                          <button type="button" class="is-muted" data-remove-entity disabled>Remove Selected</button>
+                          <button type="button" class="is-muted" data-convert-prefab disabled>Convert to Prefab</button>
+                        </div>
+                      </div>
+                      <div class="pw-builder-list" data-entity-sections></div>
+                    </section>
+
+                    <section class="pw-builder-panel">
+                      <div class="pw-panel__header">
+                        <h4>Inspector</h4>
+                        <span class="pw-selection-pill" data-selection-label>No selection</span>
+                      </div>
+                      <p class="pw-builder-empty" data-entity-empty>Pick an item from the list or click one in the preview.</p>
+                      <div class="pw-entity-editor" data-entity-editor></div>
+                    </section>
+                  </div>
+
+                  <section class="pw-builder-panel">
+                    <div class="pw-panel__header">
+                      <h4>Prefabs</h4>
+                      <button type="button" class="is-muted" data-place-prefab disabled>Place Selected Prefab</button>
+                    </div>
+                    <div class="pw-prefab-list" data-prefab-list></div>
+                  </section>
+
+                  <details class="pw-advanced-editor">
+                    <summary>Advanced Scene JSON</summary>
+                    <label>
+                      <span>Scene JSON</span>
+                      <textarea name="sceneDoc" rows="18" spellcheck="false"></textarea>
+                    </label>
+                  </details>
                   <div class="pw-inline-actions">
                     <button type="submit" data-save-scene disabled>Save Scene</button>
                     <button type="button" class="is-muted" data-refresh-scene disabled>Reload</button>

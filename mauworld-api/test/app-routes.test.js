@@ -82,6 +82,30 @@ function createStubStore() {
         hits: [],
       };
     },
+    async searchPublicPrivateWorlds() {
+      return {
+        worlds: [
+          {
+            world_id: "mw_public123",
+            name: "Lantern Hall",
+            about: "A social room",
+            world_type: "room",
+            template_size: "medium",
+            width: 40,
+            length: 20,
+            height: 10,
+            creator: {
+              username: "maker",
+              display_name: "Maker",
+            },
+            active_instance: {
+              status: "active",
+              viewer_count: 3,
+            },
+          },
+        ],
+      };
+    },
     async getWorldPostInstances() {
       return {
         worldSnapshotId: "world_123",
@@ -342,6 +366,26 @@ test("public world presence endpoint upserts viewer sessions", async () => {
   assert.equal(response.body.ok, true);
   assert.equal(response.body.worldSnapshotId, "world_123");
   assert.equal(response.body.session.id, "presence_123");
+});
+
+test("public private world browse endpoint returns searchable world metadata", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .get("/api/public/private-worlds")
+    .query({
+      q: "lantern",
+      worldType: "room",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(Array.isArray(response.body.worlds), true);
+  assert.equal(response.body.worlds[0].world_id, "mw_public123");
+  assert.equal(response.body.worlds[0].active_instance.viewer_count, 3);
 });
 
 test("browser media token endpoint reports disabled when LiveKit is not configured", async () => {

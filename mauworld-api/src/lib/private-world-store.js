@@ -356,6 +356,35 @@ async function loadWorldPrefabs(store, worldRowId) {
   );
 }
 
+async function loadActiveInstancesForWorldIds(store, worldRowIds = []) {
+  const ids = dedupe(worldRowIds);
+  if (ids.length === 0) {
+    return new Map();
+  }
+  const rows = await must(
+    store.serviceClient.from("private_world_active_instances").select("*").in("world_id", ids),
+    "Could not load private world active instances",
+  );
+  return new Map(rows.map((row) => [row.world_id, row]));
+}
+
+async function loadParticipantCountsForInstanceIds(store, instanceIds = []) {
+  const ids = dedupe(instanceIds);
+  if (ids.length === 0) {
+    return new Map();
+  }
+  const rows = await must(
+    store.serviceClient.from("private_world_participants").select("instance_id").in("instance_id", ids),
+    "Could not load private world participant counts",
+  );
+  const counts = new Map();
+  for (const row of rows) {
+    const key = row.instance_id;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
 async function loadActiveInstance(store, worldRowId) {
   return await maybeSingle(
     store.serviceClient.from("private_world_active_instances").select("*").eq("world_id", worldRowId).maybeSingle(),
@@ -777,6 +806,72 @@ export function installPrivateWorldStore(MauworldStore) {
     };
   };
 
+  MauworldStore.prototype.searchPublicPrivateWorlds = async function searchPublicPrivateWorlds(input = {}) {
+    const limit = clampLimit(input.limit, 18, 60);
+    const query = lower(input.q);
+    const worldType = lower(input.worldType);
+    let builder = this.serviceClient
+      .from("private_worlds")
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .limit(limit * 3);
+    if (worldType) {
+      builder = builder.eq("world_type", worldType);
+    }
+    const rows = await must(builder, "Could not load searchable private worlds");
+    const filteredRows = rows
+      .filter((row) => !query || String(row.search_text ?? "").includes(query))
+      .slice(0, limit);
+    const creatorProfiles = await loadProfilesByIds(this, filteredRows.map((row) => row.creator_profile_id));
+    const activeInstances = await loadActiveInstancesForWorldIds(this, filteredRows.map((row) => row.id));
+    const participantCounts = await loadParticipantCountsForInstanceIds(this, [...activeInstances.values()].map((row) => row.id));
+    return {
+      worlds: filteredRows.map((row) => {
+        const creator = creatorProfiles.get(row.creator_profile_id) ?? null;
+        const activeInstance = activeInstances.get(row.id) ?? null;
+        const isImported = Boolean(
+          row.imported_at
+          || row.origin_world_id
+          || row.origin_creator_username
+          || row.origin_world_name,
+        );
+        return {
+          world_id: row.world_id,
+          name: row.name,
+          about: row.about,
+          world_type: row.world_type,
+          template_size: row.template_size,
+          width: row.width,
+          length: row.length,
+          height: row.height,
+          updated_at: row.updated_at,
+          creator: creator
+            ? {
+                username: creator.username,
+                display_name: creator.display_name,
+              }
+            : {
+                username: "unknown",
+                display_name: "Unknown",
+              },
+          lineage: {
+            is_imported: isImported,
+            origin_world_id: isImported ? (row.origin_world_id ?? row.world_id) : null,
+            origin_creator_username: isImported ? row.origin_creator_username : null,
+            origin_world_name: isImported ? row.origin_world_name : null,
+          },
+          active_instance: activeInstance
+            ? {
+                status: activeInstance.status,
+                viewer_count: participantCounts.get(activeInstance.id) ?? 0,
+                anchor_world_snapshot_id: activeInstance.anchor_world_snapshot_id,
+              }
+            : null,
+        };
+      }),
+    };
+  };
+
   MauworldStore.prototype.createPrivateWorld = async function createPrivateWorld(profile, input = {}) {
     const size = resolvePrivateWorldSize(input);
     const name = sanitizeWorldText(input.name ?? "Untitled private world", "world name", 96);
@@ -1062,6 +1157,66 @@ export function installPrivateWorldStore(MauworldStore) {
     await syncRuntimeForWorld(this, world, creator);
     return {
       prefab: serializePrefab(prefab),
+    };
+  };
+
+  MauworldStore.prototype.deletePrivateWorldPrefab = async function deletePrivateWorldPrefab(profile, input = {}) {
+    const { world, creator } = await requireWorldEditor(this, profile, input.worldId, input.creatorUsername);
+    const prefab = await maybeSingle(
+      this.serviceClient
+        .from("private_world_prefabs")
+        .select("*")
+        .eq("id", input.prefabId)
+        .eq("world_id", world.id)
+        .maybeSingle(),
+      "Could not load private world prefab",
+    );
+    if (!prefab) {
+      throw new HttpError(404, "Private world prefab not found");
+    }
+
+    const scenes = await loadWorldScenes(this, world.id);
+    const remainingPrefabs = (await loadWorldPrefabs(this, world.id)).filter((entry) => entry.id !== prefab.id);
+    for (const scene of scenes) {
+      const sceneDoc = normalizeSceneDoc(scene.scene_doc ?? {});
+      const nextInstances = (sceneDoc.prefab_instances ?? []).filter((entry) => entry.prefab_id !== prefab.id);
+      if (nextInstances.length === (sceneDoc.prefab_instances ?? []).length) {
+        continue;
+      }
+      sceneDoc.prefab_instances = nextInstances;
+      await must(
+        this.serviceClient
+          .from("private_world_scenes")
+          .update({
+            scene_doc: sceneDoc,
+            compiled_doc: compileSceneDoc(sceneDoc, world, { prefabs: remainingPrefabs }),
+            updated_at: nowIso(),
+          })
+          .eq("id", scene.id),
+        "Could not remove prefab instances from private world scene",
+      );
+    }
+
+    await must(
+      this.serviceClient
+        .from("private_world_prefabs")
+        .delete()
+        .eq("id", prefab.id)
+        .eq("world_id", world.id),
+      "Could not delete private world prefab",
+    );
+
+    emitPrivateWorldEvent(this, {
+      type: "prefab:removed",
+      world_id: world.world_id,
+      creator_username: creator.username,
+      prefab_id: prefab.id,
+    });
+    await recompileWorldScenes(this, world);
+    await syncRuntimeForWorld(this, world, creator);
+    return {
+      removed: true,
+      prefab_id: prefab.id,
     };
   };
 
