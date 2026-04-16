@@ -4032,7 +4032,7 @@ function buildWorldBoundsPreview(world = state.selectedWorld) {
     new THREE.LineBasicMaterial({
       color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
       transparent: true,
-      opacity: world.world_type === "field" ? 0.16 : 0.22,
+      opacity: world.world_type === "field" ? 0.22 : 0.32,
     }),
   );
   boundsLines.position.set(0, height / 2, 0);
@@ -4531,7 +4531,15 @@ function updatePreviewFromSelection() {
   const particleEffects = [];
   const selectedEntity = state.builderSelection;
   refreshPrivatePreviewEnvironment(preview, state.selectedWorld);
-  const boundsPreview = state.mode === "build" && isEditor() ? buildWorldBoundsPreview(state.selectedWorld) : null;
+  const hasPlacedGeometry = Boolean(
+    (sceneDoc.voxels?.length ?? 0)
+    || (sceneDoc.primitives?.length ?? 0)
+    || (sceneDoc.screens?.length ?? 0)
+    || (sceneDoc.text3d?.length ?? 0),
+  );
+  const boundsPreview = (state.mode === "build" && isEditor()) || !hasPlacedGeometry
+    ? buildWorldBoundsPreview(state.selectedWorld)
+    : null;
   if (boundsPreview) {
     preview.root.add(boundsPreview);
   }
