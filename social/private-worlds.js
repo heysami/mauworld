@@ -837,6 +837,7 @@ function buildPrivatePresenceObject(entry) {
   return {
     id: presenceId,
     group: figure.group,
+    shadow: figure.shadow,
     halo: figure.halo,
     orb: figure.orb,
     orbBaseY: figure.orb.position.y,
@@ -1094,6 +1095,9 @@ function updatePrivatePresenceScene(deltaSeconds, elapsedSeconds) {
     entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 7.5));
     entry.group.position.copy(entry.position);
     entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 0.9;
+    if (entry.shadow) {
+      entry.shadow.position.y = -entry.group.position.y + 0.05;
+    }
     if (entry.halo) {
       entry.halo.rotation.z += deltaSeconds * 1.14;
     }
@@ -3742,6 +3746,7 @@ function ensureViewerAvatar(preview) {
   });
   const avatar = {
     group: figure.group,
+    shadow: figure.shadow,
     position: state.viewerPosition.clone(),
     poseRoot: figure.poseRoot,
     halo: figure.halo,
@@ -3765,6 +3770,9 @@ function ensureViewerAvatar(preview) {
   };
   avatar.group.add(avatar.bubble.mesh);
   avatar.group.position.copy(state.viewerPosition);
+  if (avatar.shadow) {
+    avatar.shadow.position.y = -avatar.group.position.y + 0.05;
+  }
   preview.actors.add(avatar.group);
   preview.viewerAvatar = avatar;
   applyPrivateChatBubbleToActor(avatar, state.activeChats.get(getPrivateViewerSessionId()));
@@ -3849,6 +3857,9 @@ function syncPrivateLocalAvatar(preview, elapsedSeconds) {
     bobAmplitude: 0.16,
     bobSpeed: 1.6,
   });
+  if (avatar.shadow) {
+    avatar.shadow.position.y = -avatar.group.position.y + 0.05;
+  }
   updatePrivateActorBubble(avatar, deltaSeconds, preview.camera);
 }
 
@@ -3932,15 +3943,17 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
 
   const groundRadius = clampNumber(Math.max(bounds.width, bounds.length) * 0.82, 48, 28, 240);
   const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(groundRadius, 72),
+    world
+      ? new THREE.PlaneGeometry(bounds.width, bounds.length)
+      : new THREE.CircleGeometry(groundRadius, 72),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.ground),
+      color: new THREE.Color(world ? "#f6fbff" : PRIVATE_WORLD_STYLE.ground),
       transparent: true,
       opacity: 0.98,
     }),
   );
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -2;
+  ground.position.y = 0;
   preview.environment.add(ground);
 
   const groundRim = new THREE.Mesh(
@@ -3955,13 +3968,13 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
     }),
   );
   groundRim.rotation.x = -Math.PI / 2;
-  groundRim.position.y = -1.98;
+  groundRim.position.y = 0.02;
   preview.environment.add(groundRim);
 
   const gridSize = Math.max(bounds.width, bounds.length);
   const gridDivisions = Math.max(4, Math.round(gridSize));
   const grid = new THREE.GridHelper(gridSize, gridDivisions, "#bfdcff", "#dbeaff");
-  grid.position.y = 0;
+  grid.position.y = 0.04;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
     material.opacity = 0.32;
     material.transparent = true;
@@ -3979,7 +3992,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
       fog: false,
     }),
   );
-  footprint.position.y = 0.02;
+  footprint.position.y = 0.08;
   preview.environment.add(footprint);
   preview.ground = ground;
   preview.groundRim = groundRim;
