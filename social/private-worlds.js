@@ -3974,7 +3974,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
 
   const gridSize = Math.max(bounds.width, bounds.length);
   const gridDivisions = Math.max(4, Math.round(gridSize));
-  const grid = new THREE.GridHelper(gridSize, gridDivisions, "#bfdcff", "#dbeaff");
+  const grid = new THREE.GridHelper(gridSize, gridDivisions, "#8fb8ff", "#c7dcff");
   grid.position.y = 0.04;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
     material.opacity = 0.32;
@@ -4023,7 +4023,7 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
       ? preview.buildGrid.material
       : [preview.buildGrid.material];
     for (const material of materials) {
-      material.opacity = noWorld ? 0.2 : (showGridHint ? 0.28 : (buildMode ? 0.32 : 0));
+      material.opacity = noWorld ? 0.22 : (showGridHint ? 0.38 : (buildMode ? 0.32 : 0));
     }
   }
   if (preview.buildFootprint) {
