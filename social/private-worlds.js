@@ -316,9 +316,14 @@ function getPrivateBrowserWorldKey(world = state.selectedWorld) {
   return `private:${world.world_id}:${String(world.creator.username).trim().toLowerCase()}`;
 }
 
-function setPrivatePanelTab(tab) {
+function setPrivatePanelTab(tab, options = {}) {
   const nextTab = PRIVATE_PANEL_TABS.has(tab) ? tab : "build";
+  const syncMode = options.syncMode !== false;
   state.privatePanelTab = nextTab;
+  if (syncMode && nextTab === "build" && state.mode !== "build" && isEditor()) {
+    setMode("build");
+    return;
+  }
   for (const button of elements.privatePanelTabButtons ?? []) {
     const active = button.getAttribute("data-private-panel-tab") === nextTab;
     button.classList.toggle("is-active", active);
@@ -343,7 +348,7 @@ function updateShellState() {
     Boolean(state.builderSelection && state.mode === "build" && isEditor()),
   );
   setLauncherTab(state.launcherTab);
-  setPrivatePanelTab(state.privatePanelTab);
+  setPrivatePanelTab(state.privatePanelTab, { syncMode: false });
 }
 
 function setLauncherOpen(open) {
@@ -2542,6 +2547,9 @@ function setMode(mode) {
   if (nextMode === "play") {
     state.builderSelection = null;
     state.sceneDrawerOpen = false;
+    if (state.privatePanelTab === "build") {
+      state.privatePanelTab = "chat";
+    }
   } else {
     state.privatePanelTab = "build";
   }
@@ -3382,6 +3390,16 @@ function renderSelectedWorld() {
   const localParticipant = getLocalParticipant(world);
   state.joined = Boolean(localParticipant);
   const joinedAsPlayer = localParticipant?.join_role === "player";
+  for (const button of elements.privatePanelTabButtons ?? []) {
+    const tab = button.getAttribute("data-private-panel-tab") || "";
+    if (tab === "build") {
+      button.disabled = !hasWorld || !canEdit;
+    } else if (tab === "world") {
+      button.disabled = !hasWorld;
+    } else {
+      button.disabled = !hasWorld;
+    }
+  }
   if (elements.sceneToolsToggle) {
     elements.sceneToolsToggle.disabled = !hasWorld || !canEdit;
   }
