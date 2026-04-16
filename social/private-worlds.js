@@ -13,13 +13,13 @@ const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "ar
 const LAUNCHER_TABS = new Set(["create", "worlds", "access", "import"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "build", "world"]);
 const PRIVATE_CAMERA = {
-  minY: 0,
+  minY: 12,
   maxY: 360,
   lookMin: -1.1,
   lookMax: 1.1,
-  movementSpeed: 18,
-  verticalSpeed: 12,
-  wheelFactor: 0.032,
+  movementSpeed: 48,
+  verticalSpeed: 34,
+  wheelFactor: 0.045,
 };
 const PRIVATE_PLAYER_VIEW = {
   lookHeight: 7.6,
@@ -27,10 +27,42 @@ const PRIVATE_PLAYER_VIEW = {
   maxRadius: 110,
   defaultRadius: 28,
 };
+const PRIVATE_MOVEMENT_INTENT_KEYS = [
+  "w",
+  "a",
+  "s",
+  "d",
+  "q",
+  "e",
+  "arrowup",
+  "arrowdown",
+  "arrowleft",
+  "arrowright",
+  "forward",
+  "backward",
+  "left",
+  "right",
+  "up",
+  "down",
+];
+const PRIVATE_SPRINT_MOVEMENT_KEYS = [
+  "w",
+  "a",
+  "s",
+  "d",
+  "arrowup",
+  "arrowdown",
+  "arrowleft",
+  "arrowright",
+  "forward",
+  "backward",
+  "left",
+  "right",
+];
 const PRIVATE_SPRINT = {
-  maxMultiplier: 1.85,
-  rampSeconds: 0.3,
-  decaySeconds: 0.24,
+  maxMultiplier: 5,
+  rampSeconds: 10,
+  decaySeconds: 10,
 };
 const PRIVATE_CHAT_MAX_ENTRIES = 28;
 const PRIVATE_WORLD_STYLE = {
@@ -203,7 +235,6 @@ const state = {
   activeLockEntityKey: "",
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
-  pressedViewerKeys: new Set(),
   launcherTab: "create",
   privatePanelTab: "build",
   mode: "play",
@@ -219,21 +250,26 @@ const state = {
   browserOverlayOpen: false,
   browserMediaState: createEmptyPrivateBrowserMediaState(),
   worldSocketKey: "",
-  viewerYaw: -0.65,
-  viewerPitch: -0.32,
-  viewerMoveSpeed: PRIVATE_CAMERA.movementSpeed,
-  viewerPosition: new THREE.Vector3(0, 0, 10),
-  viewerCameraPosition: new THREE.Vector3(8, 6, 20),
+  viewerPosition: new THREE.Vector3(0, PRIVATE_CAMERA.minY, 10),
+  viewerCameraPosition: new THREE.Vector3(8, PRIVATE_CAMERA.minY + 6, 20),
   cameraRadius: PRIVATE_PLAYER_VIEW.defaultRadius,
-  sprintHoldSeconds: 0,
   trailAccumulator: 0,
   lastPresenceSentAt: 0,
-  viewerLookActive: false,
-  viewerLookPointerId: 0,
-  viewerLookLastX: 0,
-  viewerLookLastY: 0,
+  viewerSuppressClickAt: 0,
   buildDrag: null,
   launchHandled: false,
+};
+
+const privateInputState = {
+  keys: new Set(),
+  sprintHoldSeconds: 0,
+  pointerDown: false,
+  dragDistance: 0,
+  lastPointerX: 0,
+  lastPointerY: 0,
+  pointerMoved: false,
+  yaw: 0,
+  pitch: 0.66,
 };
 
 function getGuestSessionId() {
@@ -538,17 +574,22 @@ function getViewerSpawnPosition(world = state.selectedWorld) {
   const length = Math.max(12, Number(world?.length ?? 40) || 40);
   return new THREE.Vector3(
     Math.max(-width * 0.12, -6),
-    0,
+    PRIVATE_CAMERA.minY,
     Math.min(length * 0.26, 26),
   );
 }
 
 function resetViewerRig(world = state.selectedWorld) {
-  state.viewerYaw = -0.65;
-  state.viewerPitch = -0.24;
-  state.viewerMoveSpeed = PRIVATE_CAMERA.movementSpeed;
+  privateInputState.yaw = 0;
+  privateInputState.pitch = 0.66;
+  privateInputState.sprintHoldSeconds = 0;
+  privateInputState.pointerDown = false;
+  privateInputState.pointerMoved = false;
+  privateInputState.dragDistance = 0;
+  privateInputState.keys.clear();
   state.cameraRadius = PRIVATE_PLAYER_VIEW.defaultRadius;
-  state.sprintHoldSeconds = 0;
+  state.trailAccumulator = 0;
+  state.viewerSuppressClickAt = 0;
   state.viewerPosition.copy(getViewerSpawnPosition(world));
   state.viewerCameraPosition.set(state.viewerPosition.x, state.viewerPosition.y + 12, state.viewerPosition.z + state.cameraRadius);
   if (state.preview?.camera) {
@@ -558,7 +599,7 @@ function resetViewerRig(world = state.selectedWorld) {
     state.preview.viewerAvatar.position.copy(state.viewerPosition);
     state.preview.viewerAvatar.lastPosition.copy(state.viewerPosition);
     state.preview.viewerAvatar.group.position.copy(state.viewerPosition);
-    state.preview.viewerAvatar.facingYaw = normalizeAngle(state.viewerYaw + Math.PI);
+    state.preview.viewerAvatar.facingYaw = normalizeAngle(privateInputState.yaw + Math.PI);
   }
 }
 
@@ -578,7 +619,7 @@ function setByPath(target, path, value) {
   cursor[segments[segments.length - 1]] = value;
 }
 
-function getPrivateFlatForwardVector(yaw = state.viewerYaw) {
+function getPrivateFlatForwardVector(yaw = privateInputState.yaw) {
   return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
 }
 
@@ -586,7 +627,7 @@ function getPrivatePlayerLookTarget(position = state.viewerPosition) {
   return position.clone().add(new THREE.Vector3(0, PRIVATE_PLAYER_VIEW.lookHeight, 0));
 }
 
-function getPrivateCameraForwardVector(yaw = state.viewerYaw, pitch = state.viewerPitch) {
+function getPrivateCameraForwardVector(yaw = privateInputState.yaw, pitch = privateInputState.pitch) {
   const cosPitch = Math.cos(pitch);
   return new THREE.Vector3(
     -Math.sin(yaw) * cosPitch,
@@ -600,7 +641,7 @@ function getPrivateCameraPlanarBasis(preview = state.preview) {
   if (!preview?.camera) {
     return {
       forward: fallbackForward,
-      right: new THREE.Vector3(Math.cos(state.viewerYaw), 0, -Math.sin(state.viewerYaw)),
+      right: new THREE.Vector3(Math.cos(privateInputState.yaw), 0, -Math.sin(privateInputState.yaw)),
     };
   }
 
@@ -615,7 +656,7 @@ function getPrivateCameraPlanarBasis(preview = state.preview) {
 
   const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
   if (right.lengthSq() < 0.000001) {
-    right.set(Math.cos(state.viewerYaw), 0, -Math.sin(state.viewerYaw));
+    right.set(Math.cos(privateInputState.yaw), 0, -Math.sin(privateInputState.yaw));
   } else {
     right.normalize();
   }
@@ -623,7 +664,27 @@ function getPrivateCameraPlanarBasis(preview = state.preview) {
 }
 
 function getPrivateCameraMovementBasis(preview = state.preview) {
-  return getPrivateCameraPlanarBasis(preview);
+  const planarBasis = getPrivateCameraPlanarBasis(preview);
+  if (!preview?.camera) {
+    return planarBasis;
+  }
+  const fullForward = new THREE.Vector3();
+  preview.camera.getWorldDirection(fullForward);
+  if (fullForward.lengthSq() < 0.000001) {
+    return planarBasis;
+  }
+  fullForward.normalize();
+  const tiltMix = Math.max(0, Math.min(1, (Math.abs(privateInputState.pitch) - 0.34) / 0.5));
+  const forward = planarBasis.forward.clone().lerp(fullForward, tiltMix);
+  if (forward.lengthSq() < 0.000001) {
+    forward.copy(planarBasis.forward);
+  } else {
+    forward.normalize();
+  }
+  return {
+    forward,
+    right: planarBasis.right,
+  };
 }
 
 function syncPrivateCameraToFollowTarget(preview = state.preview) {
@@ -633,15 +694,15 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
   const target = getPrivatePlayerLookTarget();
   const radius = clampNumber(
     state.cameraRadius,
-    PRIVATE_PLAYER_VIEW.defaultRadius,
+    state.cameraRadius,
     PRIVATE_PLAYER_VIEW.minRadius,
     PRIVATE_PLAYER_VIEW.maxRadius,
   );
-  const cosPitch = Math.cos(state.viewerPitch);
+  const cosPitch = Math.cos(privateInputState.pitch);
   preview.camera.position.set(
-    target.x + Math.sin(state.viewerYaw) * cosPitch * radius,
-    target.y - Math.sin(state.viewerPitch) * radius,
-    target.z + Math.cos(state.viewerYaw) * cosPitch * radius,
+    target.x + Math.sin(privateInputState.yaw) * cosPitch * radius,
+    target.y - Math.sin(privateInputState.pitch) * radius,
+    target.z + Math.cos(privateInputState.yaw) * cosPitch * radius,
   );
   preview.camera.lookAt(target);
   state.viewerCameraPosition.copy(preview.camera.position);
@@ -1682,7 +1743,12 @@ async function refreshAuthState() {
     state.runtimeSnapshot = null;
     state.privateChatEntries = [];
     state.pressedRuntimeKeys.clear();
-    state.pressedViewerKeys.clear();
+    privateInputState.keys.clear();
+    privateInputState.sprintHoldSeconds = 0;
+    privateInputState.pointerDown = false;
+    privateInputState.pointerMoved = false;
+    privateInputState.dragDistance = 0;
+    state.viewerSuppressClickAt = 0;
     resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
     renderProfile();
     renderWorldList();
@@ -2871,37 +2937,18 @@ function adjustSelectedEntityByWheel(event) {
   return true;
 }
 
-function updateBuildCamera(preview, deltaSeconds) {
-  const { forward, right } = getPrivateCameraMovementBasis(preview);
-  const moveDirection = new THREE.Vector3();
-  const previousPosition = state.viewerPosition.clone();
-  if (state.pressedViewerKeys.has("w") || state.pressedViewerKeys.has("arrowup")) {
-    moveDirection.add(forward);
-  }
-  if (state.pressedViewerKeys.has("s") || state.pressedViewerKeys.has("arrowdown")) {
-    moveDirection.sub(forward);
-  }
-  if (state.pressedViewerKeys.has("d") || state.pressedViewerKeys.has("arrowright")) {
-    moveDirection.add(right);
-  }
-  if (state.pressedViewerKeys.has("a") || state.pressedViewerKeys.has("arrowleft")) {
-    moveDirection.sub(right);
-  }
-  if (state.pressedViewerKeys.has("e")) {
-    moveDirection.y += 1;
-  }
-  if (state.pressedViewerKeys.has("q")) {
-    moveDirection.y -= 1;
-  }
-  if (moveDirection.lengthSq() > 0.0001) {
-    moveDirection.normalize();
-    const verticalOnly = Math.abs(moveDirection.y) > 0 && Math.abs(moveDirection.x) < 0.0001 && Math.abs(moveDirection.z) < 0.0001;
-    const speed = verticalOnly ? PRIVATE_CAMERA.verticalSpeed : state.viewerMoveSpeed;
-    state.viewerPosition.addScaledVector(moveDirection, speed * deltaSeconds);
-    state.viewerPosition.y = clampNumber(state.viewerPosition.y, 0, PRIVATE_CAMERA.minY, PRIVATE_CAMERA.maxY);
-    leaveViewerMovementTrail(preview, previousPosition, state.viewerPosition, deltaSeconds);
-  }
-  syncPrivateCameraToFollowTarget(preview);
+function hasPrivateMovementIntent(activeKeys) {
+  return PRIVATE_MOVEMENT_INTENT_KEYS.some((key) => activeKeys.has(key));
+}
+
+function hasPrivateSprintIntent(activeKeys) {
+  return activeKeys.has("shift") && PRIVATE_SPRINT_MOVEMENT_KEYS.some((key) => activeKeys.has(key));
+}
+
+function getPrivateSprintSpeedMultiplier() {
+  const progress = Math.max(0, Math.min(1, privateInputState.sprintHoldSeconds / PRIVATE_SPRINT.rampSeconds));
+  const easedProgress = progress * progress * (3 - 2 * progress);
+  return 1 + (PRIVATE_SPRINT.maxMultiplier - 1) * easedProgress;
 }
 
 function ensureViewerAvatar(preview) {
@@ -2930,7 +2977,7 @@ function ensureViewerAvatar(preview) {
     leanZ: 0,
     targetLeanX: 0,
     targetLeanZ: 0,
-    facingYaw: normalizeAngle(state.viewerYaw + Math.PI),
+    facingYaw: normalizeAngle(privateInputState.yaw + Math.PI),
   };
   avatar.group.position.copy(state.viewerPosition);
   preview.actors.add(avatar.group);
@@ -2938,62 +2985,83 @@ function ensureViewerAvatar(preview) {
   return avatar;
 }
 
-function updateEmbodiedViewer(preview, deltaSeconds, elapsedSeconds) {
+function updatePrivateMovement(preview, deltaSeconds) {
+  const activeKeys = new Set(privateInputState.keys);
+  const sprintIntentActive = hasPrivateSprintIntent(activeKeys);
+  privateInputState.sprintHoldSeconds = sprintIntentActive
+    ? Math.min(PRIVATE_SPRINT.rampSeconds, privateInputState.sprintHoldSeconds + deltaSeconds)
+    : Math.max(
+      0,
+      privateInputState.sprintHoldSeconds - (deltaSeconds * PRIVATE_SPRINT.rampSeconds) / PRIVATE_SPRINT.decaySeconds,
+    );
+
+  if (!hasPrivateMovementIntent(activeKeys)) {
+    return;
+  }
+
+  const previousPosition = state.viewerPosition.clone();
+  const { forward, right } = getPrivateCameraMovementBasis(preview);
+  const velocity = new THREE.Vector3();
+  let vertical = 0;
+
+  if (activeKeys.has("w") || activeKeys.has("forward") || activeKeys.has("arrowup")) {
+    velocity.add(forward);
+  }
+  if (activeKeys.has("s") || activeKeys.has("backward") || activeKeys.has("arrowdown")) {
+    velocity.sub(forward);
+  }
+  if (activeKeys.has("a") || activeKeys.has("left") || activeKeys.has("arrowleft")) {
+    velocity.sub(right);
+  }
+  if (activeKeys.has("d") || activeKeys.has("right") || activeKeys.has("arrowright")) {
+    velocity.add(right);
+  }
+  if (activeKeys.has("q") || activeKeys.has("down")) {
+    vertical -= 1;
+  }
+  if (activeKeys.has("e") || activeKeys.has("up")) {
+    vertical += 1;
+  }
+
+  if (velocity.lengthSq() === 0 && vertical === 0) {
+    return;
+  }
+
+  const speedMultiplier = sprintIntentActive ? getPrivateSprintSpeedMultiplier() : 1;
+  if (velocity.lengthSq() > 0) {
+    velocity.normalize();
+    state.viewerPosition.addScaledVector(
+      velocity,
+      deltaSeconds * PRIVATE_CAMERA.movementSpeed * speedMultiplier,
+    );
+  }
+  state.viewerPosition.y = clampNumber(
+    state.viewerPosition.y + vertical * deltaSeconds * PRIVATE_CAMERA.verticalSpeed * speedMultiplier,
+    state.viewerPosition.y,
+    PRIVATE_CAMERA.minY,
+    PRIVATE_CAMERA.maxY,
+  );
+  syncPrivateCameraToFollowTarget(preview);
+  leaveViewerMovementTrail(preview, previousPosition, state.viewerPosition, deltaSeconds);
+}
+
+function syncPrivateLocalAvatar(preview, elapsedSeconds) {
   const avatar = ensureViewerAvatar(preview);
   avatar.group.visible = true;
-
-  const { forward, right } = getPrivateCameraMovementBasis(preview);
-  const moveDirection = new THREE.Vector3();
-  const previousPosition = state.viewerPosition.clone();
-  if (state.pressedViewerKeys.has("w") || state.pressedViewerKeys.has("arrowup")) {
-    moveDirection.add(forward);
-  }
-  if (state.pressedViewerKeys.has("s") || state.pressedViewerKeys.has("arrowdown")) {
-    moveDirection.sub(forward);
-  }
-  if (state.pressedViewerKeys.has("d") || state.pressedViewerKeys.has("arrowright")) {
-    moveDirection.add(right);
-  }
-  if (state.pressedViewerKeys.has("a") || state.pressedViewerKeys.has("arrowleft")) {
-    moveDirection.sub(right);
-  }
-  if (state.pressedViewerKeys.has("e")) {
-    moveDirection.y += 1;
-  }
-  if (state.pressedViewerKeys.has("q")) {
-    moveDirection.y -= 1;
-  }
-  const sprintPressed = state.pressedViewerKeys.has("shift");
-  if (sprintPressed) {
-    state.sprintHoldSeconds = Math.min(PRIVATE_SPRINT.rampSeconds, state.sprintHoldSeconds + deltaSeconds);
-  } else {
-    state.sprintHoldSeconds = Math.max(0, state.sprintHoldSeconds - (deltaSeconds * PRIVATE_SPRINT.rampSeconds) / PRIVATE_SPRINT.decaySeconds);
-  }
-  const sprintMix = PRIVATE_SPRINT.rampSeconds > 0 ? state.sprintHoldSeconds / PRIVATE_SPRINT.rampSeconds : 0;
-  const speedMultiplier = 1 + (PRIVATE_SPRINT.maxMultiplier - 1) * Math.max(0, Math.min(1, sprintMix));
-  const planarMovement = moveDirection.clone();
-  planarMovement.y = 0;
-  if (moveDirection.lengthSq() > 0.0001) {
-    moveDirection.normalize();
-    const verticalOnly = planarMovement.lengthSq() < 0.0001 && Math.abs(moveDirection.y) > 0;
-    const speed = verticalOnly ? PRIVATE_CAMERA.verticalSpeed : state.viewerMoveSpeed * speedMultiplier;
-    state.viewerPosition.addScaledVector(moveDirection, speed * deltaSeconds);
-    state.viewerPosition.y = clampNumber(state.viewerPosition.y, 0, PRIVATE_CAMERA.minY, PRIVATE_CAMERA.maxY);
-    leaveViewerMovementTrail(preview, previousPosition, state.viewerPosition, deltaSeconds);
-  }
-
+  const deltaSeconds = Math.max(1 / 240, avatar.lastSyncElapsed == null ? 1 / 60 : elapsedSeconds - avatar.lastSyncElapsed);
+  avatar.lastSyncElapsed = elapsedSeconds;
+  const { forward, right } = getPrivateCameraPlanarBasis(preview);
   updateMascotMotion(avatar, {
     deltaSeconds,
     elapsedSeconds,
     nextPosition: state.viewerPosition,
-    maxSpeed: state.viewerMoveSpeed * PRIVATE_SPRINT.maxMultiplier,
+    maxSpeed: PRIVATE_CAMERA.movementSpeed * 1.35,
     movementBasisForward: forward,
     movementBasisRight: right,
-    idleFacingYaw: normalizeAngle(state.viewerYaw + Math.PI),
+    idleFacingYaw: avatar.facingYaw,
     bobAmplitude: 0.16,
     bobSpeed: 1.6,
   });
-  syncPrivateCameraToFollowTarget(preview);
 }
 
 function updatePossessedCamera(preview) {
@@ -3150,15 +3218,13 @@ function ensurePreview() {
       state.preview.atmosphereField.rotation.y += deltaSeconds * 0.004;
     }
     const possessed = state.mode === "play" && updatePossessedCamera(state.preview);
-    if (state.preview.viewerAvatar) {
-      state.preview.viewerAvatar.group.visible = !possessed && state.mode === "play";
-    }
     if (possessed) {
-      // handled by runtime player camera
-    } else if (state.mode === "play") {
-      updateEmbodiedViewer(state.preview, deltaSeconds, timestamp / 1000);
+      if (state.preview.viewerAvatar) {
+        state.preview.viewerAvatar.group.visible = false;
+      }
     } else {
-      updateBuildCamera(state.preview, deltaSeconds);
+      updatePrivateMovement(state.preview, deltaSeconds);
+      syncPrivateLocalAvatar(state.preview, timestamp / 1000);
     }
     updatePreviewEffects(state.preview, timestamp / 1000);
     updateViewerTrailPuffs(state.preview, deltaSeconds);
@@ -3177,10 +3243,11 @@ function ensurePreview() {
     if (state.mode !== "play" && state.mode !== "build") {
       return;
     }
-    state.viewerLookActive = true;
-    state.viewerLookPointerId = event.pointerId;
-    state.viewerLookLastX = event.clientX;
-    state.viewerLookLastY = event.clientY;
+    privateInputState.pointerDown = true;
+    privateInputState.dragDistance = 0;
+    privateInputState.pointerMoved = false;
+    privateInputState.lastPointerX = event.clientX;
+    privateInputState.lastPointerY = event.clientY;
     elements.previewCanvas.setPointerCapture(event.pointerId);
   });
   elements.previewCanvas.addEventListener("pointermove", (event) => {
@@ -3189,17 +3256,19 @@ function ensurePreview() {
       updateBuildDrag(event);
       return;
     }
-    if (!state.viewerLookActive || state.viewerLookPointerId !== event.pointerId) {
+    if (!privateInputState.pointerDown) {
       return;
     }
-    const deltaX = event.clientX - state.viewerLookLastX;
-    const deltaY = event.clientY - state.viewerLookLastY;
-    state.viewerLookLastX = event.clientX;
-    state.viewerLookLastY = event.clientY;
-    state.viewerYaw -= deltaX * 0.0045;
-    state.viewerPitch = clampNumber(
-      state.viewerPitch - deltaY * 0.0036,
-      state.viewerPitch,
+    const deltaX = event.clientX - privateInputState.lastPointerX;
+    const deltaY = event.clientY - privateInputState.lastPointerY;
+    privateInputState.dragDistance += Math.abs(deltaX) + Math.abs(deltaY);
+    privateInputState.pointerMoved = privateInputState.dragDistance > 4;
+    privateInputState.lastPointerX = event.clientX;
+    privateInputState.lastPointerY = event.clientY;
+    privateInputState.yaw -= deltaX * 0.0045;
+    privateInputState.pitch = clampNumber(
+      privateInputState.pitch - deltaY * 0.0036,
+      privateInputState.pitch,
       PRIVATE_CAMERA.lookMin,
       PRIVATE_CAMERA.lookMax,
     );
@@ -3211,17 +3280,15 @@ function ensurePreview() {
       elements.previewCanvas.releasePointerCapture?.(event.pointerId);
       return;
     }
-    if (state.viewerLookPointerId === event.pointerId) {
-      state.viewerLookActive = false;
-      elements.previewCanvas.releasePointerCapture?.(event.pointerId);
-    }
+    state.viewerSuppressClickAt = privateInputState.pointerMoved ? performance.now() : 0;
+    privateInputState.pointerDown = false;
+    elements.previewCanvas.releasePointerCapture?.(event.pointerId);
   });
   elements.previewCanvas.addEventListener("pointercancel", (event) => {
     endBuildDrag(event.pointerId);
-    if (state.viewerLookPointerId === event.pointerId) {
-      state.viewerLookActive = false;
-      elements.previewCanvas.releasePointerCapture?.(event.pointerId);
-    }
+    privateInputState.pointerDown = false;
+    privateInputState.pointerMoved = false;
+    elements.previewCanvas.releasePointerCapture?.(event.pointerId);
   });
   elements.previewCanvas.addEventListener("wheel", (event) => {
     if (adjustSelectedEntityByWheel(event)) {
@@ -3233,13 +3300,16 @@ function ensurePreview() {
     }
     state.cameraRadius = clampNumber(
       state.cameraRadius + event.deltaY * PRIVATE_CAMERA.wheelFactor,
-      state.cameraRadius,
+      PRIVATE_PLAYER_VIEW.defaultRadius,
       PRIVATE_PLAYER_VIEW.minRadius,
       PRIVATE_PLAYER_VIEW.maxRadius,
     );
     syncPrivateCameraToFollowTarget(state.preview);
   }, { passive: false });
   elements.previewCanvas.addEventListener("click", (event) => {
+    if (state.viewerSuppressClickAt && performance.now() - state.viewerSuppressClickAt < 240) {
+      return;
+    }
     const hit = raycastPreviewPointer(event);
     const entityKind = hit?.object?.userData?.privateWorldEntityKind;
     const entityId = hit?.object?.userData?.privateWorldEntityId;
@@ -3390,21 +3460,21 @@ function spawnViewerTrailPuff(preview, position, travelVector) {
   }
   const group = new THREE.Group();
   group.position.copy(position);
-  group.position.y += 1.2;
-  const radius = 0.24 + Math.random() * 0.12;
-  const geometry = new THREE.SphereGeometry(radius, 14, 14);
+  group.position.y += 1.35;
+  const radius = 0.3 + Math.random() * 0.16;
+  const geometry = new THREE.SphereGeometry(radius, 16, 16);
   const mesh = new THREE.Mesh(
     geometry,
     new THREE.MeshToonMaterial({
       color: new THREE.Color(PRIVATE_WORLD_STYLE.white),
       transparent: true,
-      opacity: 0.92,
+      opacity: 0.94,
       depthWrite: false,
       fog: false,
     }),
   );
-  const shell = createOutlineShell(geometry, "#bcc3cf", 1.1);
-  shell.material.opacity = 0.54;
+  const shell = createOutlineShell(geometry, "#bcc3cf", 1.12);
+  shell.material.opacity = 0.58;
   mesh.add(shell);
   group.add(mesh);
   preview.trails.add(group);
@@ -3413,14 +3483,14 @@ function spawnViewerTrailPuff(preview, position, travelVector) {
     mesh,
     shell,
     velocity: new THREE.Vector3(
-      -travelVector.x * 0.016 + (Math.random() - 0.5) * 0.12,
-      0.08 + Math.random() * 0.06,
-      -travelVector.z * 0.016 + (Math.random() - 0.5) * 0.12,
+      -travelVector.x * 0.018 + (Math.random() - 0.5) * 0.18,
+      0.08 + Math.random() * 0.1,
+      -travelVector.z * 0.018 + (Math.random() - 0.5) * 0.18,
     ),
-    drift: new THREE.Vector3(-travelVector.x * 0.004, 0.04 + Math.random() * 0.03, -travelVector.z * 0.004),
-    growth: 0.16 + Math.random() * 0.12,
+    drift: new THREE.Vector3(-travelVector.x * 0.004, 0.05 + Math.random() * 0.04, -travelVector.z * 0.004),
+    growth: 0.18 + Math.random() * 0.16,
     age: 0,
-    lifetime: 0.9 + Math.random() * 0.2,
+    lifetime: 1.1 + Math.random() * 0.28,
   });
 }
 
@@ -3432,7 +3502,7 @@ function leaveViewerMovementTrail(preview, previousPosition, nextPosition, delta
     return;
   }
   state.trailAccumulator += distance;
-  if (state.trailAccumulator < 1.35 || deltaSeconds <= 0) {
+  if (state.trailAccumulator < 2.2 || deltaSeconds <= 0) {
     return;
   }
   state.trailAccumulator = 0;
@@ -3447,13 +3517,14 @@ function updateViewerTrailPuffs(preview, deltaSeconds) {
     const entry = preview.trailPuffs[index];
     entry.age += deltaSeconds;
     const life = Math.min(1, entry.age / Math.max(0.0001, entry.lifetime));
-    entry.group.position.addScaledVector(entry.velocity, deltaSeconds);
-    entry.velocity.addScaledVector(entry.drift, deltaSeconds);
+    entry.group.position.addScaledVector(entry.drift, deltaSeconds);
+    entry.group.position.y += deltaSeconds * 0.08;
+    entry.mesh.position.addScaledVector(entry.velocity, deltaSeconds);
     const scale = 1 + entry.growth * life;
-    entry.group.scale.setScalar(scale);
-    entry.mesh.material.opacity = (1 - life) * 0.92;
+    entry.mesh.scale.setScalar(scale);
+    entry.mesh.material.opacity = (1 - life) * 0.88;
     if (entry.shell?.material) {
-      entry.shell.material.opacity = (1 - life) * 0.54;
+      entry.shell.material.opacity = (1 - life) * 0.46;
     }
     if (life >= 1) {
       preview.trails.remove(entry.group);
@@ -4133,7 +4204,12 @@ async function leaveWorld() {
   state.joined = false;
   state.joinedAsGuest = false;
   state.pressedRuntimeKeys.clear();
-  state.pressedViewerKeys.clear();
+  privateInputState.keys.clear();
+  privateInputState.sprintHoldSeconds = 0;
+  privateInputState.pointerDown = false;
+  privateInputState.pointerMoved = false;
+  privateInputState.dragDistance = 0;
+  state.viewerSuppressClickAt = 0;
   pushEvent("world:left", state.selectedWorld.name);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
 }
@@ -5043,7 +5119,7 @@ function bindEvents() {
       void sendRuntimeInput(key, "down");
       return;
     }
-    state.pressedViewerKeys.add(key);
+    privateInputState.keys.add(key);
   });
   window.addEventListener("keyup", (event) => {
     const key = normalizeRuntimeKey(event);
@@ -5056,12 +5132,17 @@ function bindEvents() {
       void sendRuntimeInput(key, "up");
       return;
     }
-    state.pressedViewerKeys.delete(key);
+    privateInputState.keys.delete(key);
   });
   window.addEventListener("blur", () => {
     const keys = [...state.pressedRuntimeKeys];
     state.pressedRuntimeKeys.clear();
-    state.pressedViewerKeys.clear();
+    privateInputState.keys.clear();
+    privateInputState.sprintHoldSeconds = 0;
+    privateInputState.pointerDown = false;
+    privateInputState.pointerMoved = false;
+    privateInputState.dragDistance = 0;
+    state.viewerSuppressClickAt = 0;
     for (const key of keys) {
       void sendRuntimeInput(key, "up");
     }
