@@ -795,16 +795,7 @@ export function createDefaultSceneDoc() {
     voxels: [],
     primitives: [],
     screens: [],
-    players: [
-      {
-        id: "player_default",
-        label: "Player 1",
-        position: { x: 0, y: 1, z: 0 },
-        camera_mode: "third_person",
-        body_mode: "rigid",
-        occupiable: true,
-      },
-    ],
+    players: [],
     texts: [],
     trigger_zones: [],
     prefabs: [],

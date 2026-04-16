@@ -13,18 +13,20 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/social/styles.css" />
+    <link rel="stylesheet" href="/social/world.css" />
     <link rel="stylesheet" href="/social/private-worlds.css" />
   </head>
-  <body class="private-worlds-body is-launcher-open">
-    <main class="private-worlds-shell">
-      <canvas class="pw-canvas" data-preview-canvas></canvas>
+  <body class="world-body private-worlds-body is-launcher-open is-play-mode">
+    <main class="world-page private-worlds-shell">
+      <section class="world-scene-shell private-worlds-scene-shell">
+      <canvas class="world-canvas pw-canvas" data-preview-canvas></canvas>
       <div class="pw-atmosphere" aria-hidden="true"></div>
       <div class="pw-grid-glow" aria-hidden="true"></div>
 
       <header class="pw-topbar">
         <div class="pw-topbar__cluster">
+          <a class="world-panel__portal pw-topbar__portal" href="/social/world.html">Public Mauworld</a>
           <button type="button" class="pw-ghost-button" data-launcher-toggle>Worlds</button>
-          <a class="pw-ghost-button pw-ghost-button--link" href="/social/world.html">Public Mauworld</a>
           <div class="pw-world-identity">
             <div class="pw-world-identity__eyebrow">Private World</div>
             <div class="pw-world-identity__title" data-selected-title>No world selected</div>
@@ -51,55 +53,33 @@
         </div>
       </header>
 
-      <aside class="pw-launcher" data-launcher aria-label="Private world launcher">
-        <div class="pw-drawer__head">
-          <div>
-            <p class="pw-drawer__eyebrow">Private Worlds</p>
-            <h1>Launch into a room, field, or board.</h1>
+      <aside class="world-panel pw-launcher" data-launcher aria-label="Private world launcher">
+        <div class="world-panel__bar pw-launcher__bar">
+          <div class="world-panel__brand pw-launcher__brand">
+            <strong>Private Worlds</strong>
+            <span>Step into a private room, field, or board.</span>
           </div>
-          <button type="button" class="pw-drawer__close" data-launcher-close>Close</button>
+          <div class="world-panel__bar-actions">
+            <button type="button" class="pw-drawer__close" data-launcher-close>Close</button>
+          </div>
         </div>
 
-        <div class="pw-launcher__grid">
-          <section class="pw-panel pw-panel--compact">
+        <div class="pw-launcher__intro">
+          <h1>Build inside Mauworld, then play it.</h1>
+          <p>Walk in as a viewer, edit when you are allowed, and possess players from inside the scene.</p>
+        </div>
+
+        <div class="pw-launcher-tabs" role="tablist" aria-label="Private world launcher sections">
+          <button type="button" class="pw-launcher-tab is-active" data-launcher-tab="create" aria-pressed="true">Create</button>
+          <button type="button" class="pw-launcher-tab" data-launcher-tab="worlds" aria-pressed="false">My Worlds</button>
+          <button type="button" class="pw-launcher-tab" data-launcher-tab="access" aria-pressed="false">Access</button>
+          <button type="button" class="pw-launcher-tab" data-launcher-tab="import" aria-pressed="false">Import</button>
+        </div>
+
+        <div class="pw-launcher__views">
+          <section class="pw-launcher-section is-active" data-launcher-section="create">
             <div class="pw-panel__header">
-              <h2>Access</h2>
-            </div>
-
-            <form class="pw-auth-form" data-auth-form>
-              <label>
-                <span>Email</span>
-                <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
-              </label>
-              <label>
-                <span>Password</span>
-                <input type="password" name="password" autocomplete="current-password" placeholder="Password" required />
-              </label>
-              <div class="pw-inline-actions">
-                <button type="submit" data-auth-action="signin">Sign In</button>
-                <button type="button" class="is-muted" data-auth-action="signup">Create Account</button>
-                <button type="button" class="is-muted" data-auth-action="signout">Sign Out</button>
-              </div>
-            </form>
-
-            <form class="pw-profile-form" data-profile-form hidden>
-              <label>
-                <span>Username</span>
-                <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
-              </label>
-              <label>
-                <span>Display Name</span>
-                <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
-              </label>
-              <button type="submit">Save Profile</button>
-            </form>
-
-            <p class="pw-status" data-auth-status aria-live="polite"></p>
-          </section>
-
-          <section class="pw-panel pw-panel--compact">
-            <div class="pw-panel__header">
-              <h2>Create</h2>
+              <h2>Create a new world</h2>
             </div>
             <form class="pw-world-form" data-create-world-form>
               <label>
@@ -146,9 +126,9 @@
             </form>
           </section>
 
-          <section class="pw-panel pw-panel--compact">
+          <section class="pw-launcher-section" data-launcher-section="worlds" hidden>
             <div class="pw-panel__header">
-              <h2>My Worlds</h2>
+              <h2>Worlds you can edit</h2>
               <button type="button" class="is-muted" data-refresh-worlds>Refresh</button>
             </div>
             <label class="pw-search">
@@ -158,9 +138,45 @@
             <div class="pw-world-list" data-world-list></div>
           </section>
 
-          <section class="pw-panel pw-panel--compact">
+          <section class="pw-launcher-section" data-launcher-section="access" hidden>
             <div class="pw-panel__header">
-              <h2>Import / Resolve</h2>
+              <h2>Sign in</h2>
+            </div>
+
+            <form class="pw-auth-form" data-auth-form>
+              <label>
+                <span>Email</span>
+                <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
+              </label>
+              <label>
+                <span>Password</span>
+                <input type="password" name="password" autocomplete="current-password" placeholder="Password" required />
+              </label>
+              <div class="pw-inline-actions">
+                <button type="submit" data-auth-action="signin">Sign In</button>
+                <button type="button" class="is-muted" data-auth-action="signup">Create Account</button>
+                <button type="button" class="is-muted" data-auth-action="signout">Sign Out</button>
+              </div>
+            </form>
+
+            <form class="pw-profile-form" data-profile-form hidden>
+              <label>
+                <span>Username</span>
+                <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
+              </label>
+              <label>
+                <span>Display Name</span>
+                <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
+              </label>
+              <button type="submit">Save Profile</button>
+            </form>
+
+            <p class="pw-status" data-auth-status aria-live="polite"></p>
+          </section>
+
+          <section class="pw-launcher-section" data-launcher-section="import" hidden>
+            <div class="pw-panel__header">
+              <h2>Import or resolve</h2>
             </div>
             <form class="pw-import-form" data-import-form>
               <label class="pw-file">
@@ -397,6 +413,7 @@
           <button type="button" class="is-muted" data-reset-scene disabled>Reset</button>
         </div>
         <div class="pw-runtime-status" data-runtime-status></div>
+      </section>
       </section>
     </main>
 

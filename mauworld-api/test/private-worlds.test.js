@@ -5,6 +5,7 @@ import {
   compilePrivateWorldScriptDsl,
   compileSceneDoc,
   computeMiniatureDimensions,
+  createDefaultSceneDoc,
   normalizeSceneDoc,
   validatePrivateWorldExportPackage,
 } from "../src/lib/private-worlds.js";
@@ -18,6 +19,13 @@ test("computeMiniatureDimensions preserves the documented normalization examples
     computeMiniatureDimensions({ width: 300, length: 300, height: 50 }),
     { width: 18, length: 18, height: 3 },
   );
+});
+
+test("default private world scenes start empty until the builder places entities", () => {
+  const scene = createDefaultSceneDoc();
+  assert.deepEqual(scene.voxels, []);
+  assert.deepEqual(scene.primitives, []);
+  assert.deepEqual(scene.players, []);
 });
 
 test("normalizeSceneDoc keeps safe defaults and strips executable screen content", () => {

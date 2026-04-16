@@ -2,12 +2,25 @@ import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 import { createPatternedMaterial } from "./private-world-materials.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
+import { updateMascotMotion } from "./world-visitors.js";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
 const AI_KEY_STORAGE_KEY = "mauworldPrivateWorldAiKey";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
+const LAUNCHER_TABS = new Set(["create", "worlds", "access", "import"]);
+const PRIVATE_WORLD_STYLE = {
+  background: "#fbfcff",
+  fog: "#eff7ff",
+  ground: "#ffffff",
+  groundGlow: "#fff3be",
+  line: "#c9dcff",
+  lineMuted: "#deebfa",
+  outline: "#33407a",
+  white: "#ffffff",
+  accents: ["#ff4fa8", "#2dd8ff", "#ffd84d", "#7ce85b", "#ff9548", "#7ed7ff"],
+};
 
 const elements = {
   launcher: document.querySelector("[data-launcher]"),
@@ -79,6 +92,9 @@ const elements = {
   addRule: document.querySelector("[data-add-rule]"),
 };
 
+elements.launcherTabButtons = [...document.querySelectorAll("[data-launcher-tab]")];
+elements.launcherSections = [...document.querySelectorAll("[data-launcher-section]")];
+
 const state = {
   authConfig: null,
   supabase: null,
@@ -102,11 +118,14 @@ const state = {
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
   pressedViewerKeys: new Set(),
+  launcherTab: "create",
   mode: "play",
   lockHeartbeatTimer: 0,
   viewerYaw: -0.65,
   viewerPitch: -0.32,
   viewerMoveSpeed: 18,
+  viewerPosition: new THREE.Vector3(0, 0, 10),
+  viewerCameraPosition: new THREE.Vector3(8, 6, 20),
   viewerLookActive: false,
   viewerLookPointerId: 0,
   viewerLookLastX: 0,
@@ -136,10 +155,12 @@ function updateShellState() {
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
   document.body.classList.toggle("is-world-menu-open", state.worldMenuOpen === true);
+  document.body.classList.toggle("is-signed-in", Boolean(state.session));
   document.body.classList.toggle(
     "has-selection",
     Boolean(state.builderSelection && state.mode === "build" && isEditor()),
   );
+  setLauncherTab(state.launcherTab);
 }
 
 function setLauncherOpen(open) {
@@ -148,6 +169,9 @@ function setLauncherOpen(open) {
     state.sceneDrawerOpen = false;
     state.worldMenuOpen = false;
     state.builderSelection = null;
+    if (!LAUNCHER_TABS.has(state.launcherTab)) {
+      state.launcherTab = getPreferredLauncherTab();
+    }
   }
   updateShellState();
 }
@@ -207,6 +231,198 @@ function clampNumber(value, fallback, min, max) {
     return fallback;
   }
   return Math.max(min, Math.min(max, numeric));
+}
+
+function normalizeAngle(angle) {
+  let next = Number(angle) || 0;
+  while (next > Math.PI) {
+    next -= Math.PI * 2;
+  }
+  while (next < -Math.PI) {
+    next += Math.PI * 2;
+  }
+  return next;
+}
+
+function createOutlineShell(geometry, color, scale = 1.08) {
+  const shell = new THREE.Mesh(
+    geometry.clone(),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color),
+      side: THREE.BackSide,
+      transparent: true,
+      opacity: 1,
+      fog: false,
+    }),
+  );
+  shell.scale.setScalar(scale);
+  return shell;
+}
+
+function createViewerAvatarFigure(options = {}) {
+  const scale = options.scale ?? 0.72;
+  const outlineColor = options.outlineColor ?? PRIVATE_WORLD_STYLE.outline;
+  const primary = options.primary ?? PRIVATE_WORLD_STYLE.accents[1];
+  const secondary = options.secondary ?? PRIVATE_WORLD_STYLE.accents[0];
+  const tertiary = options.tertiary ?? PRIVATE_WORLD_STYLE.accents[2];
+  const group = new THREE.Group();
+  const poseRoot = new THREE.Group();
+  group.add(poseRoot);
+
+  const bodyGeometry = new THREE.CapsuleGeometry(1.38 * scale, 2.24 * scale, 6, 16);
+  const headGeometry = new THREE.SphereGeometry(2.08 * scale, 24, 24);
+  const earGeometry = new THREE.ConeGeometry(0.76 * scale, 1.8 * scale, 16);
+  const limbGeometry = new THREE.CapsuleGeometry(0.36 * scale, 1.18 * scale, 4, 10);
+
+  const whiteMaterial = new THREE.MeshToonMaterial({ color: new THREE.Color(PRIVATE_WORLD_STYLE.white) });
+  const primaryMaterial = new THREE.MeshToonMaterial({ color: new THREE.Color(primary) });
+  const secondaryMaterial = new THREE.MeshToonMaterial({ color: new THREE.Color(secondary) });
+  const faceMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(outlineColor), fog: false });
+
+  const bodyShell = createOutlineShell(bodyGeometry, outlineColor, 1.12);
+  bodyShell.position.y = 4.1 * scale;
+  poseRoot.add(bodyShell);
+
+  const body = new THREE.Mesh(bodyGeometry, whiteMaterial);
+  body.position.y = 4.1 * scale;
+  poseRoot.add(body);
+
+  const headShell = createOutlineShell(headGeometry, outlineColor, 1.12);
+  headShell.position.y = 8.08 * scale;
+  poseRoot.add(headShell);
+
+  const head = new THREE.Mesh(headGeometry, whiteMaterial);
+  head.position.y = 8.08 * scale;
+  poseRoot.add(head);
+
+  for (const side of [-1, 1]) {
+    const earShell = createOutlineShell(earGeometry, side > 0 ? primary : secondary, 1.12);
+    earShell.position.set(side * 1.36 * scale, 10.68 * scale, 0);
+    earShell.rotation.z = side * 0.34;
+    poseRoot.add(earShell);
+
+    const ear = new THREE.Mesh(earGeometry, side > 0 ? primaryMaterial : secondaryMaterial);
+    ear.position.copy(earShell.position);
+    ear.rotation.copy(earShell.rotation);
+    poseRoot.add(ear);
+
+    const arm = new THREE.Mesh(limbGeometry, side > 0 ? secondaryMaterial : primaryMaterial);
+    arm.position.set(side * 2.14 * scale, 4.72 * scale, 0.1 * scale);
+    arm.rotation.z = side * 0.82;
+    poseRoot.add(arm);
+  }
+
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.24 * scale, 10, 10), faceMaterial);
+    eye.position.set(side * 0.68 * scale, 8.2 * scale, 1.85 * scale);
+    poseRoot.add(eye);
+
+    const cheek = new THREE.Mesh(
+      new THREE.SphereGeometry(0.28 * scale, 10, 10),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(side > 0 ? primary : secondary),
+        transparent: true,
+        opacity: 0.82,
+        fog: false,
+      }),
+    );
+    cheek.position.set(side * 1.14 * scale, 7.48 * scale, 1.74 * scale);
+    poseRoot.add(cheek);
+  }
+
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(2.76 * scale, 0.18 * scale, 10, 42),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(primary),
+      transparent: true,
+      opacity: 0.86,
+      fog: false,
+    }),
+  );
+  halo.rotation.x = Math.PI / 2;
+  halo.position.y = 5.3 * scale;
+  poseRoot.add(halo);
+
+  const orb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.42 * scale, 16, 16),
+    new THREE.MeshToonMaterial({ color: new THREE.Color(tertiary) }),
+  );
+  orb.position.set(0, 12.1 * scale, 0);
+  poseRoot.add(orb);
+
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(3.2 * scale, 32),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#b8c8e8"),
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false,
+    }),
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = 0.02;
+  group.add(shadow);
+
+  return {
+    group,
+    poseRoot,
+    halo,
+    orb,
+  };
+}
+
+function getPreferredLauncherTab() {
+  if (!state.session) {
+    return "access";
+  }
+  if (state.selectedWorld) {
+    return "worlds";
+  }
+  if (state.worlds.length > 0) {
+    return "worlds";
+  }
+  return "create";
+}
+
+function setLauncherTab(tab) {
+  const nextTab = LAUNCHER_TABS.has(tab) ? tab : getPreferredLauncherTab();
+  state.launcherTab = nextTab;
+  for (const button of elements.launcherTabButtons ?? []) {
+    const active = button.getAttribute("data-launcher-tab") === nextTab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  for (const section of elements.launcherSections ?? []) {
+    const active = section.getAttribute("data-launcher-section") === nextTab;
+    section.hidden = !active;
+    section.classList.toggle("is-active", active);
+  }
+}
+
+function getViewerSpawnPosition(world = state.selectedWorld) {
+  const width = Math.max(12, Number(world?.width ?? 40) || 40);
+  const length = Math.max(12, Number(world?.length ?? 40) || 40);
+  return new THREE.Vector3(
+    Math.max(-width * 0.12, -6),
+    0,
+    Math.min(length * 0.26, 26),
+  );
+}
+
+function resetViewerRig(world = state.selectedWorld) {
+  state.viewerYaw = -0.65;
+  state.viewerPitch = -0.24;
+  state.viewerPosition.copy(getViewerSpawnPosition(world));
+  const forward = new THREE.Vector3(Math.sin(state.viewerYaw), 0, -Math.cos(state.viewerYaw)).normalize();
+  state.viewerCameraPosition.copy(state.viewerPosition)
+    .addScaledVector(forward, -16.8)
+    .add(new THREE.Vector3(0, 8.2, 0));
+  if (state.preview?.viewerAvatar) {
+    state.preview.viewerAvatar.position.copy(state.viewerPosition);
+    state.preview.viewerAvatar.lastPosition.copy(state.viewerPosition);
+    state.preview.viewerAvatar.group.position.copy(state.viewerPosition);
+    state.preview.viewerAvatar.facingYaw = normalizeAngle(state.viewerYaw + Math.PI);
+  }
 }
 
 function setByPath(target, path, value) {
@@ -454,6 +670,7 @@ async function refreshAuthState() {
     renderProfile();
     renderWorldList();
     renderSelectedWorld();
+    setLauncherTab("access");
     disconnectWorldSocket();
     return;
   }
@@ -462,6 +679,9 @@ async function refreshAuthState() {
     state.profile = payload.profile;
     renderProfile();
     await loadWorlds();
+    if (!state.selectedWorld) {
+      setLauncherTab(getPreferredLauncherTab());
+    }
   } catch (error) {
     setStatus(error.message);
   }
@@ -490,6 +710,9 @@ async function loadWorlds() {
   });
   state.worlds = payload.worlds ?? [];
   renderWorldList();
+  if (state.launcherOpen && !state.selectedWorld) {
+    setLauncherTab(getPreferredLauncherTab());
+  }
 }
 
 async function loadPublicWorlds() {
@@ -1191,6 +1414,7 @@ function renderSelectedWorld() {
     state.sceneDrawerOpen = false;
     state.worldMenuOpen = false;
     state.launcherOpen = true;
+    state.launcherTab = getPreferredLauncherTab();
   }
   if (state.mode === "build" && !isEditor()) {
     state.mode = "play";
@@ -1411,7 +1635,7 @@ function adjustSelectedEntityByWheel(event) {
   return true;
 }
 
-function updateFloatingViewerCamera(preview, deltaSeconds) {
+function updateBuildCamera(preview, deltaSeconds) {
   const moveDirection = new THREE.Vector3();
   const forward = new THREE.Vector3(Math.sin(state.viewerYaw), 0, Math.cos(state.viewerYaw) * -1).normalize();
   const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
@@ -1436,6 +1660,92 @@ function updateFloatingViewerCamera(preview, deltaSeconds) {
     preview.camera.position.y + Math.sin(state.viewerPitch),
     preview.camera.position.z - Math.cos(state.viewerYaw) * Math.cos(state.viewerPitch),
   );
+  preview.camera.lookAt(lookTarget);
+}
+
+function ensureViewerAvatar(preview) {
+  if (preview.viewerAvatar) {
+    return preview.viewerAvatar;
+  }
+  const figure = createViewerAvatarFigure({
+    outlineColor: PRIVATE_WORLD_STYLE.outline,
+    primary: PRIVATE_WORLD_STYLE.accents[1],
+    secondary: PRIVATE_WORLD_STYLE.accents[0],
+    tertiary: PRIVATE_WORLD_STYLE.accents[2],
+  });
+  const avatar = {
+    group: figure.group,
+    position: state.viewerPosition.clone(),
+    poseRoot: figure.poseRoot,
+    halo: figure.halo,
+    orb: figure.orb,
+    orbBaseY: figure.orb.position.y,
+    opacity: 1,
+    targetOpacity: 1,
+    bobPhase: Math.random() * Math.PI * 2,
+    lastPosition: state.viewerPosition.clone(),
+    lastSyncElapsed: 0,
+    leanX: 0,
+    leanZ: 0,
+    targetLeanX: 0,
+    targetLeanZ: 0,
+    facingYaw: normalizeAngle(state.viewerYaw + Math.PI),
+  };
+  avatar.group.position.copy(state.viewerPosition);
+  preview.actors.add(avatar.group);
+  preview.viewerAvatar = avatar;
+  return avatar;
+}
+
+function updateEmbodiedViewer(preview, deltaSeconds, elapsedSeconds) {
+  const avatar = ensureViewerAvatar(preview);
+  avatar.group.visible = true;
+
+  const moveDirection = new THREE.Vector3();
+  const forward = new THREE.Vector3(Math.sin(state.viewerYaw), 0, -Math.cos(state.viewerYaw)).normalize();
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+  if (state.pressedViewerKeys.has("w") || state.pressedViewerKeys.has("arrowup")) {
+    moveDirection.add(forward);
+  }
+  if (state.pressedViewerKeys.has("s") || state.pressedViewerKeys.has("arrowdown")) {
+    moveDirection.sub(forward);
+  }
+  if (state.pressedViewerKeys.has("d") || state.pressedViewerKeys.has("arrowright")) {
+    moveDirection.add(right);
+  }
+  if (state.pressedViewerKeys.has("a") || state.pressedViewerKeys.has("arrowleft")) {
+    moveDirection.sub(right);
+  }
+  if (moveDirection.lengthSq() > 0.0001) {
+    moveDirection.normalize().multiplyScalar(state.viewerMoveSpeed * deltaSeconds);
+    state.viewerPosition.add(moveDirection);
+  }
+
+  updateMascotMotion(avatar, {
+    deltaSeconds,
+    elapsedSeconds,
+    nextPosition: state.viewerPosition,
+    maxSpeed: state.viewerMoveSpeed * 1.2,
+    movementBasisForward: forward,
+    movementBasisRight: right,
+    idleFacingYaw: normalizeAngle(state.viewerYaw + Math.PI),
+    bobAmplitude: 0.16,
+    bobSpeed: 1.6,
+  });
+
+  const lookLift = 4.2 + Math.sin(state.viewerPitch) * 2.1;
+  const lookDistance = 5.8 + Math.cos(state.viewerPitch) * 2.2;
+  const lookTarget = state.viewerPosition.clone()
+    .addScaledVector(forward, lookDistance)
+    .add(new THREE.Vector3(0, lookLift, 0));
+  const desiredCameraPosition = state.viewerPosition.clone()
+    .addScaledVector(forward, -16.6)
+    .add(new THREE.Vector3(0, 8.4 - state.viewerPitch * 2.1, 0));
+  state.viewerCameraPosition.lerp(
+    desiredCameraPosition,
+    1 - Math.exp(-deltaSeconds * 6.5),
+  );
+  preview.camera.position.copy(state.viewerCameraPosition);
   preview.camera.lookAt(lookTarget);
 }
 
@@ -1473,9 +1783,9 @@ function buildPreviewEnvironment(preview) {
   preview.scene.add(environment);
 
   const floor = new THREE.Mesh(
-    new THREE.CircleGeometry(168, 96),
+    new THREE.CircleGeometry(260, 120),
     new THREE.MeshStandardMaterial({
-      color: "#fbfdff",
+      color: "#f4f8ff",
       roughness: 0.92,
       metalness: 0.02,
     }),
@@ -1485,11 +1795,11 @@ function buildPreviewEnvironment(preview) {
   environment.add(floor);
 
   const floorHalo = new THREE.Mesh(
-    new THREE.RingGeometry(18, 44, 80),
+    new THREE.RingGeometry(12, 52, 96),
     new THREE.MeshBasicMaterial({
-      color: "#e8f3ff",
+      color: PRIVATE_WORLD_STYLE.groundGlow,
       transparent: true,
-      opacity: 0.68,
+      opacity: 0.34,
       side: THREE.DoubleSide,
     }),
   );
@@ -1497,129 +1807,89 @@ function buildPreviewEnvironment(preview) {
   floorHalo.position.y = 0.02;
   environment.add(floorHalo);
 
-  const pad = new THREE.Mesh(
-    new THREE.CylinderGeometry(12, 14, 0.9, 56),
-    new THREE.MeshStandardMaterial({
-      color: "#ffffff",
-      roughness: 0.88,
-      metalness: 0.03,
-    }),
-  );
-  pad.position.set(0, -0.45, 0);
-  environment.add(pad);
-
-  const grid = new THREE.GridHelper(48, 24, "#9ab4d4", "#d4dfed");
+  const grid = new THREE.GridHelper(160, 80, PRIVATE_WORLD_STYLE.line, PRIVATE_WORLD_STYLE.lineMuted);
   grid.position.y = 0;
-  grid.material.opacity = 0.56;
-  grid.material.transparent = true;
+  for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
+    material.opacity = 0.58;
+    material.transparent = true;
+  }
   environment.add(grid);
 
-  const idleGroup = new THREE.Group();
-  idleGroup.position.x = 24;
-  environment.add(idleGroup);
-
-  const dome = new THREE.Mesh(
-    new THREE.SphereGeometry(11.6, 36, 24, 0, Math.PI * 2, 0, Math.PI / 2),
-    new THREE.MeshPhongMaterial({
-      color: "#dfeeff",
-      transparent: true,
-      opacity: 0.24,
-      shininess: 90,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-  );
-  dome.scale.y = 0.68;
-  idleGroup.add(dome);
-
-  const coreRing = new THREE.Mesh(
-    new THREE.TorusGeometry(8.4, 0.12, 18, 64),
+  const horizonRing = new THREE.Mesh(
+    new THREE.TorusGeometry(92, 0.12, 18, 92),
     new THREE.MeshBasicMaterial({
-      color: "#ff5a7a",
+      color: PRIVATE_WORLD_STYLE.accents[0],
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.14,
     }),
   );
-  coreRing.rotation.x = Math.PI / 2;
-  coreRing.position.y = 1.2;
-  idleGroup.add(coreRing);
-
-  const coolRing = new THREE.Mesh(
-    new THREE.TorusGeometry(9.8, 0.08, 18, 64),
-    new THREE.MeshBasicMaterial({
-      color: "#39d1ff",
-      transparent: true,
-      opacity: 0.5,
-    }),
-  );
-  coolRing.rotation.x = Math.PI / 2;
-  coolRing.position.y = 1.24;
-  idleGroup.add(coolRing);
-
-  const beaconPositions = [
-    { x: -8.5, z: 5.4, color: "#39d1ff", height: 5.2, scale: 1.2 },
-    { x: 0, z: -7.2, color: "#ff5a7a", height: 6.2, scale: 1.4 },
-    { x: 8.5, z: 5.4, color: "#90ec73", height: 4.8, scale: 1.12 },
-  ];
-  const idleBeacons = [];
-  for (const entry of beaconPositions) {
-    const beacon = new THREE.Group();
-    const column = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.72 * entry.scale, 0.9 * entry.scale, entry.height, 28),
-      new THREE.MeshStandardMaterial({
-        color: "#ffffff",
-        roughness: 0.74,
-        metalness: 0.06,
-        emissive: entry.color,
-        emissiveIntensity: 0.12,
-      }),
-    );
-    column.position.y = entry.height / 2;
-    const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(0.95 * entry.scale, 18, 18),
-      new THREE.MeshBasicMaterial({
-        color: entry.color,
-        transparent: true,
-        opacity: 0.22,
-      }),
-    );
-    glow.position.y = entry.height + 0.6;
-    beacon.add(column);
-    beacon.add(glow);
-    beacon.position.set(entry.x, 0, entry.z);
-    idleGroup.add(beacon);
-    idleBeacons.push({ group: beacon, glow });
-  }
+  horizonRing.rotation.x = Math.PI / 2;
+  horizonRing.position.y = 0.02;
+  environment.add(horizonRing);
 
   const particleGeometry = new THREE.BufferGeometry();
-  const particleCount = 220;
+  const particleCount = 420;
   const particlePositions = new Float32Array(particleCount * 3);
   for (let index = 0; index < particleCount; index += 1) {
-    const radius = 18 + Math.random() * 42;
+    const radius = 24 + Math.random() * 120;
     const angle = Math.random() * Math.PI * 2;
     particlePositions[index * 3] = Math.cos(angle) * radius;
-    particlePositions[index * 3 + 1] = 6 + Math.random() * 18;
+    particlePositions[index * 3 + 1] = 10 + Math.random() * 44;
     particlePositions[index * 3 + 2] = Math.sin(angle) * radius;
   }
   particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
-  const idleParticleField = new THREE.Points(
+  const atmosphereField = new THREE.Points(
     particleGeometry,
     new THREE.PointsMaterial({
-      color: "#dcecff",
-      size: 0.16,
+      color: "#d7e7fb",
+      size: 0.18,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.42,
       depthWrite: false,
     }),
   );
-  environment.add(idleParticleField);
+  environment.add(atmosphereField);
 
   preview.environment = environment;
-  preview.idleGroup = idleGroup;
-  preview.idleCoreRing = coreRing;
-  preview.idleCoolRing = coolRing;
-  preview.idleBeacons = idleBeacons;
-  preview.idleParticleField = idleParticleField;
+  preview.worldGlowRing = floorHalo;
+  preview.horizonRing = horizonRing;
+  preview.atmosphereField = atmosphereField;
+}
+
+function buildWorldBoundsPreview(world = state.selectedWorld) {
+  if (!world) {
+    return null;
+  }
+  const width = Math.max(4, Number(world.width ?? 24) || 24);
+  const length = Math.max(4, Number(world.length ?? 24) || 24);
+  const height = Math.max(2, Number(world.height ?? 8) || 8);
+  const group = new THREE.Group();
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, length),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.accents[1]),
+      transparent: true,
+      opacity: world.world_type === "board" ? 0.08 : 0.04,
+      side: THREE.DoubleSide,
+    }),
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = 0.01;
+  group.add(floor);
+
+  const boundsGeometry = new THREE.BoxGeometry(width, height, length);
+  const boundsEdges = new THREE.EdgesGeometry(boundsGeometry);
+  const boundsLines = new THREE.LineSegments(
+    boundsEdges,
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
+      transparent: true,
+      opacity: world.world_type === "field" ? 0.24 : 0.34,
+    }),
+  );
+  boundsLines.position.set(0, height / 2, 0);
+  group.add(boundsLines);
+  return group;
 }
 
 function ensurePreview() {
@@ -1635,21 +1905,21 @@ function ensurePreview() {
   renderer.setSize(elements.previewCanvas.clientWidth || 640, 360, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.06;
+  renderer.toneMappingExposure = 1.02;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#f7fbff");
-  scene.fog = new THREE.Fog("#eef6ff", 44, 180);
+  scene.background = new THREE.Color(PRIVATE_WORLD_STYLE.background);
+  scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 54, 260);
 
   const camera = new THREE.PerspectiveCamera(48, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 5000);
-  camera.position.set(22, 14, 28);
-  camera.lookAt(0, 3, 0);
+  camera.position.copy(state.viewerCameraPosition);
+  camera.lookAt(state.viewerPosition.x, state.viewerPosition.y + 4, state.viewerPosition.z);
 
-  const ambient = new THREE.HemisphereLight("#ffffff", "#bfd3eb", 1.45);
-  const sunLight = new THREE.DirectionalLight("#fff6de", 1.42);
-  sunLight.position.set(18, 26, 14);
-  const rimLight = new THREE.DirectionalLight("#9be9ff", 0.62);
-  rimLight.position.set(-18, 16, -10);
+  const ambient = new THREE.HemisphereLight("#ffffff", "#d9e7fa", 1.52);
+  const sunLight = new THREE.DirectionalLight("#fff7df", 1.28);
+  sunLight.position.set(34, 42, 18);
+  const rimLight = new THREE.DirectionalLight("#9be9ff", 0.54);
+  rimLight.position.set(-24, 20, -14);
   scene.add(ambient, sunLight, rimLight);
 
   state.preview = {
@@ -1657,6 +1927,7 @@ function ensurePreview() {
     scene,
     camera,
     root: new THREE.Group(),
+    actors: new THREE.Group(),
     raycaster: new THREE.Raycaster(),
     entityPickables: [],
     entityMeshes: new Map(),
@@ -1665,6 +1936,9 @@ function ensurePreview() {
   };
   buildPreviewEnvironment(state.preview);
   state.preview.scene.add(state.preview.root);
+  state.preview.scene.add(state.preview.actors);
+  ensureViewerAvatar(state.preview);
+  resetViewerRig();
 
   const render = (timestamp = performance.now()) => {
     if (!state.preview) {
@@ -1677,37 +1951,25 @@ function ensurePreview() {
     state.preview.camera.aspect = width / Math.max(1, height);
     state.preview.camera.updateProjectionMatrix();
     state.preview.renderer.setSize(width, height, false);
-    if (state.preview.idleGroup) {
-      state.preview.idleGroup.rotation.y = timestamp * 0.00008;
-      state.preview.idleGroup.position.y = Math.sin(timestamp * 0.00055) * 0.14;
+    if (state.preview.worldGlowRing) {
+      state.preview.worldGlowRing.rotation.z += deltaSeconds * 0.03;
     }
-    if (state.preview.idleCoreRing) {
-      state.preview.idleCoreRing.rotation.z += deltaSeconds * 0.18;
+    if (state.preview.horizonRing) {
+      state.preview.horizonRing.rotation.z -= deltaSeconds * 0.02;
     }
-    if (state.preview.idleCoolRing) {
-      state.preview.idleCoolRing.rotation.z -= deltaSeconds * 0.12;
+    if (state.preview.atmosphereField) {
+      state.preview.atmosphereField.rotation.y += deltaSeconds * 0.004;
     }
-    if (state.preview.idleBeacons?.length) {
-      state.preview.idleBeacons.forEach((entry, index) => {
-        entry.group.position.y = Math.sin(timestamp * 0.001 + index * 1.4) * 0.22;
-        entry.glow.scale.setScalar(1 + Math.sin(timestamp * 0.0014 + index) * 0.06);
-      });
+    const possessed = state.mode === "play" && updatePossessedCamera(state.preview);
+    if (state.preview.viewerAvatar) {
+      state.preview.viewerAvatar.group.visible = !possessed && state.mode === "play";
     }
-    if (state.preview.idleParticleField) {
-      state.preview.idleParticleField.rotation.y += deltaSeconds * 0.01;
-    }
-    const shouldIdleOrbit = !state.selectedWorld && !state.viewerLookActive && state.pressedViewerKeys.size === 0;
-    if (shouldIdleOrbit) {
-      const orbit = timestamp * 0.00006;
-      const idleFocusX = 24;
-      state.preview.camera.position.set(
-        idleFocusX + Math.cos(orbit) * 28,
-        14 + Math.sin(orbit * 2) * 1.2,
-        Math.sin(orbit) * 28,
-      );
-      state.preview.camera.lookAt(idleFocusX, 3, 0);
-    } else if (!(state.mode === "play" && updatePossessedCamera(state.preview))) {
-      updateFloatingViewerCamera(state.preview, deltaSeconds);
+    if (possessed) {
+      // handled by runtime player camera
+    } else if (state.mode === "play") {
+      updateEmbodiedViewer(state.preview, deltaSeconds, timestamp / 1000);
+    } else {
+      updateBuildCamera(state.preview, deltaSeconds);
     }
     updatePreviewEffects(state.preview, timestamp / 1000);
     state.preview.renderer.render(state.preview.scene, state.preview.camera);
@@ -1978,9 +2240,6 @@ function updatePreviewFromSelection() {
   if (!preview) {
     return;
   }
-  if (preview.idleGroup) {
-    preview.idleGroup.visible = !state.selectedWorld;
-  }
 
   let sceneDoc = null;
   try {
@@ -1994,9 +2253,6 @@ function updatePreviewFromSelection() {
     return;
   }
   preview.root.visible = true;
-  if (preview.idleGroup) {
-    preview.idleGroup.visible = false;
-  }
 
   const addMesh = (geometry, material, position, rotation = { x: 0, y: 0, z: 0 }, scale = { x: 1, y: 1, z: 1 }, metadata = null) => {
     const mesh = new THREE.Mesh(geometry, material);
@@ -2015,6 +2271,10 @@ function updatePreviewFromSelection() {
   const runtimeTransforms = getRuntimeTransformMaps();
   const particleEffects = [];
   const selectedEntity = state.builderSelection;
+  const boundsPreview = buildWorldBoundsPreview(state.selectedWorld);
+  if (boundsPreview) {
+    preview.root.add(boundsPreview);
+  }
 
   for (const [index, voxel] of (sceneDoc.voxels ?? []).entries()) {
     addMesh(
@@ -2240,12 +2500,14 @@ function disconnectWorldSocket() {
 }
 
 async function openWorld(worldId, creatorUsername, includeContent = true) {
+  const previousWorldKey = state.selectedWorld ? `${state.selectedWorld.world_id}:${state.selectedWorld.creator.username}` : "";
   const payload = await apiFetch(`/private/worlds/${encodeURIComponent(worldId)}`, {
     search: {
       creatorUsername,
       includeContent: includeContent ? "true" : "false",
     },
   });
+  const nextWorldKey = payload.world ? `${payload.world.world_id}:${payload.world.creator.username}` : "";
   state.selectedWorld = payload.world;
   state.selectedSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
   state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
@@ -2253,6 +2515,9 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.launcherOpen = false;
   state.sceneDrawerOpen = false;
   state.worldMenuOpen = false;
+  if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
+    resetViewerRig(payload.world);
+  }
   syncRuntimeFromWorld(payload.world);
   renderSelectedWorld();
   connectWorldSocket();
@@ -2315,6 +2580,7 @@ async function signOut() {
 async function handleCreateWorld(event) {
   event.preventDefault();
   if (!state.session) {
+    setLauncherTab("access");
     setStatus("Sign in first.");
     return;
   }
@@ -3036,11 +3302,19 @@ function renderEventLog() {
 
 function bindEvents() {
   elements.launcherToggle?.addEventListener("click", () => {
+    if (!state.launcherOpen) {
+      setLauncherTab(state.selectedWorld ? "worlds" : getPreferredLauncherTab());
+    }
     setLauncherOpen(!state.launcherOpen);
   });
   elements.launcherClose?.addEventListener("click", () => {
     setLauncherOpen(false);
   });
+  for (const button of elements.launcherTabButtons ?? []) {
+    button.addEventListener("click", () => {
+      setLauncherTab(button.getAttribute("data-launcher-tab") || getPreferredLauncherTab());
+    });
+  }
   elements.sceneToolsToggle?.addEventListener("click", () => {
     if (!state.selectedWorld) {
       return;
@@ -3362,6 +3636,8 @@ async function init() {
   bindEvents();
   renderEventLog();
   ensurePreview();
+  setLauncherTab(getPreferredLauncherTab());
+  setMode(state.mode);
   updateShellState();
   await fetchAuthConfig();
   await refreshAuthState();
