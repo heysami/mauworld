@@ -99,6 +99,7 @@ const MOVEMENT_INTENT_KEYS = ["w", "a", "s", "d", "q", "e", "arrowup", "arrowdow
 const SPRINT_MOVEMENT_KEYS = ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", "forward", "backward", "left", "right"];
 const SPRINT_MAX_MULTIPLIER = 5;
 const SPRINT_RAMP_SECONDS = 10;
+const SPRINT_DECAY_SECONDS = 10;
 
 const WORLD_STREAM = {
   mobileRange: 5,
@@ -7758,7 +7759,7 @@ function updateMovement(deltaSeconds) {
 
   inputState.sprintHoldSeconds = sprintIntentActive
     ? Math.min(SPRINT_RAMP_SECONDS, inputState.sprintHoldSeconds + deltaSeconds)
-    : 0;
+    : Math.max(0, inputState.sprintHoldSeconds - (deltaSeconds * SPRINT_RAMP_SECONDS) / SPRINT_DECAY_SECONDS);
 
   if (hasMovementIntentNow && isBrowserFocusModeActive()) {
     clearBrowserFocus();
