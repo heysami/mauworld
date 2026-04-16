@@ -3499,7 +3499,9 @@ function renderSelectedWorld() {
   const canEdit = isEditor();
   const localParticipant = getLocalParticipant(world);
   state.joined = Boolean(localParticipant);
+  state.joinedAsGuest = !state.session && localParticipant?.join_role === "guest";
   const joinedAsPlayer = localParticipant?.join_role === "player";
+  renderSessionSummary();
   for (const button of elements.privatePanelTabButtons ?? []) {
     const tab = button.getAttribute("data-private-panel-tab") || "";
     if (tab === "build") {
@@ -3541,7 +3543,7 @@ function renderSelectedWorld() {
     elements.panelExport.disabled = !hasWorld || !state.session;
   }
   if (elements.panelEnter) {
-    elements.panelEnter.disabled = !hasWorld;
+    elements.panelEnter.disabled = !hasWorld || Boolean(localParticipant);
   }
   if (elements.panelLeave) {
     elements.panelLeave.disabled = !hasWorld || !localParticipant;
