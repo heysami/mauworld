@@ -95,6 +95,10 @@ const PLAYER_VIEW = {
 };
 
 const MOVEMENT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "shift"]);
+const MOVEMENT_INTENT_KEYS = ["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "forward", "backward", "left", "right", "up", "down"];
+const SPRINT_MOVEMENT_KEYS = ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", "forward", "backward", "left", "right"];
+const SPRINT_MAX_MULTIPLIER = 5;
+const SPRINT_RAMP_SECONDS = 10;
 
 const WORLD_STREAM = {
   mobileRange: 5,
@@ -275,6 +279,7 @@ const defaultBrowserStageVideoElement = elements.browserVideo;
 
 const inputState = {
   keys: new Set(),
+  sprintHoldSeconds: 0,
   pointerDown: false,
   dragDistance: 0,
   lastPointerX: 0,
@@ -6665,8 +6670,8 @@ function releaseBrowserStagePointer(event) {
 }
 
 function getRealtimeMovementState() {
-  const movementKeysActive = [...inputState.keys].some((key) => MOVEMENT_KEYS.has(key));
-  const moving = Boolean(movementKeysActive || state.moveButtons.size > 0 || state.travelAnimation || state.focusAnimation);
+  const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
+  const moving = Boolean(hasMovementIntent(activeKeys) || state.travelAnimation || state.focusAnimation);
   const forward = new THREE.Vector3();
   forward.copy(getFlatForwardVector(inputState.yaw));
   return {
@@ -6675,6 +6680,20 @@ function getRealtimeMovementState() {
     lift: Number(state.navigationPosition.y.toFixed(4)),
     displayName: getViewerDisplayName(),
   };
+}
+
+function hasMovementIntent(activeKeys) {
+  return MOVEMENT_INTENT_KEYS.some((key) => activeKeys.has(key));
+}
+
+function hasSprintIntent(activeKeys) {
+  return activeKeys.has("shift") && SPRINT_MOVEMENT_KEYS.some((key) => activeKeys.has(key));
+}
+
+function getSprintSpeedMultiplier() {
+  const progress = clamp(inputState.sprintHoldSeconds / SPRINT_RAMP_SECONDS, 0, 1);
+  const easedProgress = progress * progress * (3 - 2 * progress);
+  return 1 + (SPRINT_MAX_MULTIPLIER - 1) * easedProgress;
 }
 
 function buildRealtimePresencePayload() {
@@ -7734,19 +7753,24 @@ function applyTravelAnimation(deltaSeconds) {
 
 function updateMovement(deltaSeconds) {
   const activeKeys = new Set([...inputState.keys, ...state.moveButtons]);
-  const hasMovementIntent = ["w", "a", "s", "d", "q", "e", "forward", "backward", "left", "right", "up", "down"]
-    .some((key) => activeKeys.has(key));
+  const hasMovementIntentNow = hasMovementIntent(activeKeys);
+  const sprintIntentActive = hasSprintIntent(activeKeys);
 
-  if (hasMovementIntent && isBrowserFocusModeActive()) {
+  inputState.sprintHoldSeconds = sprintIntentActive
+    ? Math.min(SPRINT_RAMP_SECONDS, inputState.sprintHoldSeconds + deltaSeconds)
+    : 0;
+
+  if (hasMovementIntentNow && isBrowserFocusModeActive()) {
     clearBrowserFocus();
   }
 
-  if (hasMovementIntent && (state.focusAnimation || state.travelAnimation) && isPostFocusModeActive()) {
+  if (hasMovementIntentNow && (state.focusAnimation || state.travelAnimation) && isPostFocusModeActive()) {
     state.focusAnimation = null;
     cancelTravelAnimation();
   }
 
   if (state.focusAnimation || state.travelAnimation) {
+    inputState.sprintHoldSeconds = 0;
     return;
   }
   const previousPosition = getNavigationPosition().clone();
@@ -7754,16 +7778,16 @@ function updateMovement(deltaSeconds) {
   const velocity = new THREE.Vector3();
   let vertical = 0;
 
-  if (activeKeys.has("w") || activeKeys.has("forward")) {
+  if (activeKeys.has("w") || activeKeys.has("forward") || activeKeys.has("arrowup")) {
     velocity.add(forward);
   }
-  if (activeKeys.has("s") || activeKeys.has("backward")) {
+  if (activeKeys.has("s") || activeKeys.has("backward") || activeKeys.has("arrowdown")) {
     velocity.sub(forward);
   }
-  if (activeKeys.has("a") || activeKeys.has("left")) {
+  if (activeKeys.has("a") || activeKeys.has("left") || activeKeys.has("arrowleft")) {
     velocity.sub(right);
   }
-  if (activeKeys.has("d") || activeKeys.has("right")) {
+  if (activeKeys.has("d") || activeKeys.has("right") || activeKeys.has("arrowright")) {
     velocity.add(right);
   }
   if (activeKeys.has("q") || activeKeys.has("down")) {
@@ -7781,7 +7805,7 @@ function updateMovement(deltaSeconds) {
     closeSelectedPost();
   }
 
-  const speedMultiplier = inputState.keys.has("shift") ? 2.1 : 1;
+  const speedMultiplier = sprintIntentActive ? getSprintSpeedMultiplier() : 1;
   if (velocity.lengthSq() > 0) {
     velocity.normalize();
     state.navigationPosition.addScaledVector(
