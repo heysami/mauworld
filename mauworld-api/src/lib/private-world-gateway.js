@@ -1,4 +1,5 @@
 import { WebSocket, WebSocketServer } from "ws";
+import { BrowserSessionManager } from "./browser-session-manager.js";
 import { checkChatRateLimit, sanitizeChatText } from "./realtime-state.js";
 
 const PRIVATE_WORLD_REALTIME_PATH = "/api/ws/private/worlds";
@@ -26,11 +27,37 @@ function sendJson(client, payload) {
   return true;
 }
 
+function buildPrivateBrowserWorldKey(worldId, creatorUsername) {
+  return `private:${String(worldId ?? "").trim()}:${String(creatorUsername ?? "").trim().toLowerCase()}`;
+}
+
 export class PrivateWorldGateway {
   constructor(options = {}) {
     this.config = options.config ?? {};
     this.store = options.store;
     this.clients = new Set();
+    this.browserManager = new BrowserSessionManager({
+      allowedHosts: options.config?.sharedBrowserAllowedHosts,
+      viewport: {
+        width: options.config?.sharedBrowserViewportWidth,
+        height: options.config?.sharedBrowserViewportHeight,
+      },
+      frameRate: options.config?.sharedBrowserFrameRate,
+      jpegQuality: options.config?.sharedBrowserJpegQuality,
+      liveKitConfig: options.config,
+    });
+    this.browserManager.on("frame", (frame) => {
+      this.broadcastBrowserFrame(frame);
+    });
+    this.browserManager.on("session", (session) => {
+      this.broadcastBrowserSession(session);
+    });
+    this.browserManager.on("stop", (payload) => {
+      this.broadcastBrowserStop(payload);
+    });
+    this.browserManager.on("error", (payload) => {
+      this.notifyBrowserError(payload);
+    });
     this.unsubscribe = this.store?.subscribePrivateWorldEvents?.((event) => {
       void this.broadcastStoreEvent(event);
     }) ?? null;
@@ -82,33 +109,44 @@ export class PrivateWorldGateway {
         socket,
         worldId,
         creatorUsername,
+        browserWorldKey: buildPrivateBrowserWorldKey(worldId, creatorUsername),
         profile: auth?.profile ?? null,
         guestSessionId: guestSessionId || null,
         viewerSessionId: auth?.profile?.id ? `profile:${auth.profile.id}` : (guestSessionId || `guest:${Math.random().toString(36).slice(2, 10)}`),
         displayName: auth?.profile?.display_name || auth?.profile?.username || "guest viewer",
         chatRateLimitState: {},
+        messageQueue: Promise.resolve(),
       };
       this.clients.add(client);
       socket.on("message", (buffer) => {
-        this.handleMessage(client, parseJson(buffer));
+        this.queueClientMessage(client, parseJson(buffer));
       });
       socket.on("close", () => {
-        this.clients.delete(client);
+        void this.handleDisconnect(client);
       });
       socket.on("error", () => {
-        this.clients.delete(client);
+        void this.handleDisconnect(client);
       });
 
       sendJson(client, {
         type: "world:snapshot",
         world: detail.world,
       });
+      await this.syncBrowserAudience(client.browserWorldKey);
+      this.sendExistingBrowserSessions(client);
     } catch (error) {
       socket.close(1008, error.message || "not allowed");
     }
   }
 
-  handleMessage(client, message) {
+  queueClientMessage(client, message) {
+    const run = async () => {
+      await this.handleMessage(client, message);
+    };
+    client.messageQueue = (client.messageQueue ?? Promise.resolve()).then(run, run);
+  }
+
+  async handleMessage(client, message) {
     if (!message || typeof message !== "object") {
       return;
     }
@@ -121,11 +159,23 @@ export class PrivateWorldGateway {
       return;
     }
     if (type === "world:refresh") {
-      void this.refreshClient(client);
+      await this.refreshClient(client);
       return;
     }
     if (type === "chat:send") {
       this.handleChatSend(client, message);
+      return;
+    }
+    if (type === "browser:start") {
+      await this.handleBrowserStart(client, message);
+      return;
+    }
+    if (type === "browser:stop") {
+      await this.handleBrowserStop(client, message);
+      return;
+    }
+    if (type === "browser:input") {
+      await this.handleBrowserInput(client, message);
     }
   }
 
@@ -136,9 +186,68 @@ export class PrivateWorldGateway {
     );
   }
 
+  getBrowserWorldClients(browserWorldKey) {
+    return [...this.clients].filter((client) => client.browserWorldKey === browserWorldKey);
+  }
+
   broadcastToWorld(worldId, creatorUsername, payload) {
     for (const client of this.getWorldClients(worldId, creatorUsername)) {
       sendJson(client, payload);
+    }
+  }
+
+  broadcastToBrowserWorld(browserWorldKey, payload) {
+    for (const client of this.getBrowserWorldClients(browserWorldKey)) {
+      sendJson(client, payload);
+    }
+  }
+
+  buildBrowserSessionPayload(sessionLike) {
+    if (!sessionLike) {
+      return null;
+    }
+    const sessionId = String(sessionLike.sessionId ?? sessionLike.id ?? "").trim();
+    const rawSession = sessionId ? this.browserManager.getSession(sessionId) ?? sessionLike : sessionLike;
+    const session = typeof this.browserManager.toClientSession === "function"
+      ? this.browserManager.toClientSession(rawSession)
+      : { ...rawSession };
+    const subscribers = rawSession.subscribers instanceof Set ? rawSession.subscribers : new Set();
+    return {
+      ...session,
+      sessionId: sessionId || session.sessionId,
+      viewerCount: Math.max(0, [...subscribers].filter((viewerSessionId) => viewerSessionId !== session.hostSessionId).length),
+      maxViewers: Math.max(1, Number(rawSession.maxViewers) || 20),
+    };
+  }
+
+  sendExistingBrowserSessions(client) {
+    for (const rawSession of this.browserManager.listSessionsForWorld(client.browserWorldKey)) {
+      const session = this.buildBrowserSessionPayload(rawSession);
+      if (!session) {
+        continue;
+      }
+      sendJson(client, {
+        type: "browser:session",
+        session,
+      });
+      sendJson(client, {
+        type: "browser:subscribe",
+        sessionId: session.sessionId,
+        hostSessionId: session.hostSessionId,
+        viewerCount: session.viewerCount,
+        maxViewers: session.maxViewers,
+      });
+    }
+  }
+
+  async syncBrowserAudience(browserWorldKey) {
+    const worldClients = this.getBrowserWorldClients(browserWorldKey);
+    const subscribers = new Set(worldClients.map((entry) => entry.viewerSessionId));
+    for (const session of this.browserManager.listSessionsForWorld(browserWorldKey)) {
+      session.subscribers = new Set(subscribers);
+      session.viewerCount = Math.max(0, subscribers.size - 1);
+      session.maxViewers = 20;
+      await this.broadcastBrowserSession(session, { rebroadcastSubscribe: false });
     }
   }
 
@@ -175,6 +284,68 @@ export class PrivateWorldGateway {
     });
   }
 
+  async handleBrowserStart(client, message) {
+    if (!client?.profile) {
+      sendJson(client, {
+        type: "browser:error",
+        message: "Guests cannot share in private worlds.",
+      });
+      return;
+    }
+    try {
+      const session = await this.browserManager.startSession({
+        hostSessionId: client.viewerSessionId,
+        worldSnapshotId: client.browserWorldKey,
+        mode: message.mode,
+        title: message.title,
+        shareKind: message.shareKind,
+        hasVideo: message.hasVideo,
+        hasAudio: message.hasAudio,
+        aspectRatio: message.aspectRatio,
+        displaySurface: message.displaySurface,
+      });
+      const internal = this.browserManager.getSession(session.sessionId);
+      if (internal) {
+        internal.subscribers = new Set(this.getBrowserWorldClients(client.browserWorldKey).map((entry) => entry.viewerSessionId));
+        internal.viewerCount = Math.max(0, internal.subscribers.size - 1);
+        internal.maxViewers = 20;
+      }
+      await this.broadcastBrowserSession(session);
+    } catch (error) {
+      sendJson(client, {
+        type: "browser:error",
+        message: error.message || "Could not start live share.",
+      });
+    }
+  }
+
+  async handleBrowserStop(client, message) {
+    const requestedSessionId = String(message.sessionId ?? "").trim();
+    const session = requestedSessionId
+      ? this.browserManager.getSession(requestedSessionId)
+      : this.browserManager.getSessionByHost(client.viewerSessionId);
+    if (!session || session.hostSessionId !== client.viewerSessionId) {
+      return;
+    }
+    await this.browserManager.stopSession(session.id ?? session.sessionId);
+  }
+
+  async handleBrowserInput(client, message) {
+    const sessionId = String(message.sessionId ?? "").trim();
+    const session = this.browserManager.getSession(sessionId);
+    if (!session || session.hostSessionId !== client.viewerSessionId) {
+      return;
+    }
+    try {
+      await this.browserManager.handleInput(sessionId, message.input ?? {});
+    } catch (error) {
+      sendJson(client, {
+        type: "browser:error",
+        message: error.message || "Could not send browser input.",
+      });
+    }
+  }
+
   async refreshClient(client) {
     try {
       const detail = await this.store.getPrivateWorldDetail({
@@ -193,6 +364,93 @@ export class PrivateWorldGateway {
         type: "world:error",
         message: error.message || "Could not refresh world snapshot",
       });
+    }
+  }
+
+  async broadcastBrowserSession(sessionPayload, options = {}) {
+    const session = this.buildBrowserSessionPayload(sessionPayload);
+    const browserWorldKey = String(session?.worldSnapshotId ?? sessionPayload?.worldSnapshotId ?? "").trim();
+    if (!session || !browserWorldKey) {
+      return;
+    }
+    this.broadcastToBrowserWorld(browserWorldKey, {
+      type: "browser:session",
+      session,
+    });
+    if (options.rebroadcastSubscribe !== false) {
+      this.broadcastToBrowserWorld(browserWorldKey, {
+        type: "browser:subscribe",
+        sessionId: session.sessionId,
+        hostSessionId: session.hostSessionId,
+        viewerCount: session.viewerCount,
+        maxViewers: session.maxViewers,
+      });
+    }
+  }
+
+  broadcastBrowserFrame(frame) {
+    const session = this.browserManager.getSession(frame.sessionId);
+    if (!session) {
+      return;
+    }
+    const recipients = session.subscribers instanceof Set
+      ? session.subscribers
+      : new Set(this.getBrowserWorldClients(session.worldSnapshotId).map((entry) => entry.viewerSessionId));
+    for (const viewerSessionId of recipients) {
+      const client = [...this.clients].find((entry) => entry.viewerSessionId === viewerSessionId && entry.browserWorldKey === session.worldSnapshotId);
+      if (!client) {
+        continue;
+      }
+      sendJson(client, {
+        type: "browser:frame",
+        sessionId: frame.sessionId,
+        hostSessionId: frame.hostSessionId,
+        frameId: frame.frameId,
+        dataUrl: frame.dataUrl,
+        width: frame.width,
+        height: frame.height,
+        title: frame.title,
+        url: frame.url,
+      });
+    }
+  }
+
+  broadcastBrowserStop(payload) {
+    const browserWorldKey = String(payload.worldSnapshotId ?? "").trim();
+    if (!browserWorldKey) {
+      return;
+    }
+    this.broadcastToBrowserWorld(browserWorldKey, {
+      type: "browser:stop",
+      sessionId: payload.sessionId,
+      hostSessionId: payload.hostSessionId,
+    });
+  }
+
+  notifyBrowserError(payload) {
+    const session = payload.sessionId ? this.browserManager.getSession(payload.sessionId) : null;
+    const hostSessionId = payload.hostSessionId || session?.hostSessionId || "";
+    const client = [...this.clients].find((entry) => entry.viewerSessionId === hostSessionId);
+    if (!client) {
+      return;
+    }
+    sendJson(client, {
+      type: "browser:error",
+      sessionId: payload.sessionId,
+      message: payload.message,
+    });
+  }
+
+  async handleDisconnect(client) {
+    if (!this.clients.has(client)) {
+      return;
+    }
+    this.clients.delete(client);
+    const browserSession = this.browserManager.getSessionByHost(client.viewerSessionId);
+    if (browserSession) {
+      await this.browserManager.stopSession(browserSession.id ?? browserSession.sessionId);
+    } else {
+      await this.syncBrowserAudience(client.browserWorldKey);
     }
   }
 
@@ -223,6 +481,7 @@ export class PrivateWorldGateway {
 
   async dispose() {
     this.unsubscribe?.();
+    await this.browserManager.dispose();
     for (const client of this.clients) {
       client.socket.close(1001, "server shutdown");
     }

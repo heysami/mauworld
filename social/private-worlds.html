@@ -20,8 +20,6 @@
     <main class="world-page private-worlds-shell">
       <section class="world-scene-shell private-worlds-scene-shell">
       <canvas class="world-canvas pw-canvas" data-preview-canvas></canvas>
-      <div class="pw-atmosphere" aria-hidden="true"></div>
-      <div class="pw-grid-glow" aria-hidden="true"></div>
 
       <aside class="world-panel pw-mau-panel" data-private-panel aria-label="Private world tools">
         <div class="world-panel__bar">
@@ -85,12 +83,26 @@
                 type="text"
                 maxlength="160"
                 data-private-chat-input
-                placeholder="Enter the world to chat"
+                placeholder="/ say something nearby and press Enter"
                 autocomplete="off"
                 aria-label="Chat in this private world"
               />
             </label>
           </form>
+          <div class="world-chat-reactions" aria-label="Quick reactions">
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="❤️" aria-label="Love">❤️</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="👍" aria-label="Like">👍</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="😂" aria-label="Laugh">😂</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="😮" aria-label="Wow">😮</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="😢" aria-label="Sad">😢</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="😡" aria-label="Angry">😡</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="🔥" aria-label="Fire">🔥</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="🎉" aria-label="Celebrate">🎉</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="👏" aria-label="Clap">👏</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="😍" aria-label="Heart eyes">😍</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="👀" aria-label="Watching">👀</button>
+            <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="🙌" aria-label="Hands up">🙌</button>
+          </div>
           <p class="world-live-status" data-private-chat-status>Enter the world to chat.</p>
           <section class="world-live-panel" aria-label="Private world chat">
             <div class="world-live-results pw-chat-log" data-private-chat-log></div>
@@ -98,23 +110,65 @@
         </section>
 
         <section class="world-panel__view" data-private-panel-view="share" role="tabpanel" hidden>
-          <section class="world-browser-panel pw-share-panel" aria-label="World invite">
+          <section class="world-browser-panel pw-share-panel" data-private-browser-panel aria-label="Live share">
             <div class="world-browser-panel__head">
-              <strong>Share this world</strong>
+              <strong>Live Share</strong>
               <div class="world-browser-panel__actions">
-                <button type="button" data-private-copy-link disabled>Copy Link</button>
-                <button type="button" class="is-muted" data-private-native-share disabled>Share</button>
+                <button type="button" class="is-muted" data-private-browser-expand aria-expanded="false">Focus</button>
+                <button type="button" data-private-browser-launch disabled>Share</button>
+                <button type="button" class="is-muted" data-private-browser-stop disabled>Stop</button>
               </div>
             </div>
+
+            <div class="world-browser-share" aria-label="Share type">
+              <label class="world-browser-share__field">
+                <input
+                  type="text"
+                  maxlength="96"
+                  data-private-browser-share-title
+                  placeholder="Name this share"
+                  autocomplete="off"
+                  aria-label="Share title"
+                />
+              </label>
+              <div class="world-browser-share__modes" aria-label="Share type">
+                <button type="button" class="is-active" data-private-browser-share-mode="screen" aria-pressed="true">Screen</button>
+                <button type="button" data-private-browser-share-mode="camera" aria-pressed="false">Video</button>
+                <button type="button" data-private-browser-share-mode="audio" aria-pressed="false">Voice</button>
+              </div>
+            </div>
+
             <div class="world-browser-summary">
               <div class="world-browser-summary__row">
-                <span class="world-browser-summary__badge" data-private-share-badge data-state="offline">idle</span>
-                <strong class="world-browser-summary__current" data-private-share-current>No world selected</strong>
+                <span class="world-browser-summary__badge" data-private-browser-summary-badge data-state="offline">Offline</span>
+                <strong class="world-browser-summary__current" data-private-browser-summary-current>Live share offline</strong>
               </div>
-              <p class="world-browser-summary__hint" data-private-share-status>Open a world to copy its entry link.</p>
+              <p class="world-browser-summary__hint" data-private-browser-summary-hint>Sign in and enter this world to share screen, video, or voice.</p>
             </div>
-            <div class="pw-share-meta" data-private-share-meta></div>
+
+            <div class="world-browser-stage" data-private-browser-stage tabindex="-1" aria-label="Private world live share preview">
+              <video
+                class="world-browser-stage__video"
+                data-private-browser-video
+                muted
+                autoplay
+                playsinline
+                hidden
+              ></video>
+              <img class="world-browser-stage__frame" data-private-browser-frame alt="" hidden />
+              <div class="world-browser-stage__placeholder" data-private-browser-placeholder>
+                Share a screen, video, or voice inside this private world.
+              </div>
+              <button type="button" class="world-browser-stage__resume" data-private-browser-resume hidden>
+                Start Stream
+              </button>
+            </div>
+
+            <p class="world-browser-status world-browser-status--sr" data-private-browser-status aria-live="polite">
+              Realtime share offline.
+            </p>
           </section>
+          <div data-private-browser-dock hidden></div>
         </section>
 
         <section class="world-panel__view" data-private-panel-view="build" role="tabpanel" hidden>
@@ -137,6 +191,12 @@
         </section>
 
         <section class="world-panel__view" data-private-panel-view="world" role="tabpanel" hidden>
+          <div class="pw-action-grid pw-action-grid--world">
+            <button type="button" data-private-copy-link disabled>Copy Entry</button>
+            <button type="button" data-private-native-share disabled>Share Entry</button>
+          </div>
+          <p class="world-live-status" data-private-share-status>Open a world to copy its entry link.</p>
+          <div class="pw-share-meta" data-private-share-meta></div>
           <div class="pw-world-meta" data-private-panel-world-meta></div>
           <div class="pw-panel__header">
             <h2>Live feed</h2>
@@ -144,6 +204,9 @@
           <div class="pw-event-log pw-panel-event-log" data-private-panel-events></div>
         </section>
       </aside>
+
+      <div data-private-browser-overlay-root></div>
+      <div class="world-browser-backdrop" data-private-browser-backdrop aria-hidden="true"></div>
 
       <header class="pw-topbar">
         <div class="pw-topbar__cluster">

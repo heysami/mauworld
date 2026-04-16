@@ -2,6 +2,7 @@ import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 import { createPatternedMaterial } from "./private-world-materials.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
+import { createBrowserMediaController } from "./world-browser-media.js";
 import { updateMascotMotion } from "./world-visitors.js";
 
 const { mauworldApiUrl } = window.MauworldSocial;
@@ -80,12 +81,27 @@ const elements = {
   panelChatInput: document.querySelector("[data-private-chat-input]"),
   panelChatStatus: document.querySelector("[data-private-chat-status]"),
   panelChatLog: document.querySelector("[data-private-chat-log]"),
-  panelShareCopy: document.querySelector("[data-private-copy-link]"),
-  panelShareNative: document.querySelector("[data-private-native-share]"),
-  panelShareBadge: document.querySelector("[data-private-share-badge]"),
-  panelShareCurrent: document.querySelector("[data-private-share-current]"),
   panelShareStatus: document.querySelector("[data-private-share-status]"),
   panelShareMeta: document.querySelector("[data-private-share-meta]"),
+  panelShareCopy: document.querySelector("[data-private-copy-link]"),
+  panelShareNative: document.querySelector("[data-private-native-share]"),
+  panelBrowserPanel: document.querySelector("[data-private-browser-panel]"),
+  panelBrowserDock: document.querySelector("[data-private-browser-dock]"),
+  panelBrowserOverlayRoot: document.querySelector("[data-private-browser-overlay-root]"),
+  panelBrowserBackdrop: document.querySelector("[data-private-browser-backdrop]"),
+  panelBrowserExpand: document.querySelector("[data-private-browser-expand]"),
+  panelBrowserLaunch: document.querySelector("[data-private-browser-launch]"),
+  panelBrowserStop: document.querySelector("[data-private-browser-stop]"),
+  panelBrowserShareTitle: document.querySelector("[data-private-browser-share-title]"),
+  panelBrowserSummaryBadge: document.querySelector("[data-private-browser-summary-badge]"),
+  panelBrowserSummaryCurrent: document.querySelector("[data-private-browser-summary-current]"),
+  panelBrowserSummaryHint: document.querySelector("[data-private-browser-summary-hint]"),
+  panelBrowserStatus: document.querySelector("[data-private-browser-status]"),
+  panelBrowserStage: document.querySelector("[data-private-browser-stage]"),
+  panelBrowserVideo: document.querySelector("[data-private-browser-video]"),
+  panelBrowserFrame: document.querySelector("[data-private-browser-frame]"),
+  panelBrowserPlaceholder: document.querySelector("[data-private-browser-placeholder]"),
+  panelBrowserResume: document.querySelector("[data-private-browser-resume]"),
   panelBuildSummary: document.querySelector("[data-private-build-summary]"),
   panelWorldMeta: document.querySelector("[data-private-panel-world-meta]"),
   panelEvents: document.querySelector("[data-private-panel-events]"),
@@ -146,6 +162,24 @@ elements.launcherTabButtons = [...document.querySelectorAll("[data-launcher-tab]
 elements.launcherSections = [...document.querySelectorAll("[data-launcher-section]")];
 elements.privatePanelTabButtons = [...document.querySelectorAll("[data-private-panel-tab]")];
 elements.privatePanelViews = [...document.querySelectorAll("[data-private-panel-view]")];
+elements.panelChatReactionButtons = [...document.querySelectorAll("[data-private-chat-reaction]")];
+elements.panelBrowserShareModes = [...document.querySelectorAll("[data-private-browser-share-mode]")];
+
+function createEmptyPrivateBrowserMediaState() {
+  return {
+    enabled: null,
+    connected: false,
+    transport: "jpeg-sequence",
+    roomName: "",
+    canPublish: false,
+    remoteVideoSessionId: "",
+    remoteAudioSessionId: "",
+    remoteAudioAvailable: false,
+    remoteAudioBlocked: false,
+    remoteAudioError: "",
+    lastPlayError: "",
+  };
+}
 
 const state = {
   authConfig: null,
@@ -171,10 +205,20 @@ const state = {
   pressedRuntimeKeys: new Set(),
   pressedViewerKeys: new Set(),
   launcherTab: "create",
-  privatePanelTab: "chat",
+  privatePanelTab: "build",
   mode: "play",
   lockHeartbeatTimer: 0,
   privateChatEntries: [],
+  browserSessions: new Map(),
+  localBrowserSessionId: "",
+  browserMediaController: null,
+  pendingBrowserShare: null,
+  localBrowserShare: null,
+  browserShareMode: "screen",
+  browserPanelRemoteSessionId: "",
+  browserOverlayOpen: false,
+  browserMediaState: createEmptyPrivateBrowserMediaState(),
+  worldSocketKey: "",
   viewerYaw: -0.65,
   viewerPitch: -0.32,
   viewerMoveSpeed: PRIVATE_CAMERA.movementSpeed,
@@ -219,8 +263,15 @@ function getPrivateDisplayName() {
   return state.profile?.display_name || state.profile?.username || "guest viewer";
 }
 
+function getPrivateBrowserWorldKey(world = state.selectedWorld) {
+  if (!world?.world_id || !world?.creator?.username) {
+    return "";
+  }
+  return `private:${world.world_id}:${String(world.creator.username).trim().toLowerCase()}`;
+}
+
 function setPrivatePanelTab(tab) {
-  const nextTab = PRIVATE_PANEL_TABS.has(tab) ? tab : "chat";
+  const nextTab = PRIVATE_PANEL_TABS.has(tab) ? tab : "build";
   state.privatePanelTab = nextTab;
   for (const button of elements.privatePanelTabButtons ?? []) {
     const active = button.getAttribute("data-private-panel-tab") === nextTab;
@@ -822,6 +873,771 @@ function sendPrivateChat(text) {
   return sent;
 }
 
+function sanitizeBrowserShareTitle(rawTitle, fallback = "") {
+  const cleaned = String(rawTitle ?? "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 96);
+  return cleaned || fallback;
+}
+
+function normalizeBrowserShareKind(rawKind, fallback = "screen") {
+  const value = String(rawKind ?? "").trim().toLowerCase();
+  if (value === "screen" || value === "camera" || value === "audio") {
+    return value;
+  }
+  return fallback;
+}
+
+function getDisplayShareLabel(videoTrack) {
+  const settings = videoTrack?.getSettings?.() ?? {};
+  const displaySurface = String(settings.displaySurface ?? "").trim().toLowerCase();
+  if (displaySurface === "browser") {
+    return "Shared tab";
+  }
+  if (displaySurface === "window") {
+    return "Shared window";
+  }
+  return "Shared screen";
+}
+
+function getDefaultBrowserShareTitle(shareKind, videoTrack = null) {
+  const kind = normalizeBrowserShareKind(shareKind, "screen");
+  if (kind === "camera") {
+    return "Live video";
+  }
+  if (kind === "audio") {
+    return "Live voice";
+  }
+  return getDisplayShareLabel(videoTrack);
+}
+
+function getBrowserShareKindLabel(shareKind) {
+  const kind = normalizeBrowserShareKind(shareKind, "screen");
+  if (kind === "camera") {
+    return "Video";
+  }
+  if (kind === "audio") {
+    return "Voice";
+  }
+  return "Screen";
+}
+
+function isLiveKitBrowserTransport(frameTransport) {
+  return String(frameTransport ?? "").startsWith("livekit");
+}
+
+function stopMediaStream(stream) {
+  stream?.getTracks?.().forEach((track) => track.stop());
+}
+
+function ensurePrivateBrowserVideoPlayback(element) {
+  if (!element) {
+    return;
+  }
+  element.autoplay = true;
+  element.playsInline = true;
+  element.muted = true;
+  element.defaultMuted = true;
+  const playPromise = element.play?.();
+  playPromise?.then?.(() => {
+    if (state.browserMediaState.lastPlayError) {
+      state.browserMediaState.lastPlayError = "";
+      updatePrivateBrowserPanel();
+    }
+  });
+  playPromise?.catch?.((error) => {
+    const message = String(error?.name || error?.message || "play failed");
+    if (state.browserMediaState.lastPlayError !== message) {
+      state.browserMediaState.lastPlayError = message;
+      updatePrivateBrowserPanel();
+    }
+  });
+}
+
+function setPrivateBrowserPreviewStream(stream) {
+  if (!elements.panelBrowserVideo) {
+    return;
+  }
+  if (elements.panelBrowserVideo.srcObject !== stream) {
+    elements.panelBrowserVideo.srcObject = stream ?? null;
+  }
+  elements.panelBrowserVideo.hidden = !stream;
+  if (stream) {
+    ensurePrivateBrowserVideoPlayback(elements.panelBrowserVideo);
+  } else {
+    elements.panelBrowserVideo.pause?.();
+  }
+}
+
+function setPrivateBrowserStatus(text) {
+  if (elements.panelBrowserStatus) {
+    elements.panelBrowserStatus.textContent = text || "";
+  }
+}
+
+function updatePrivateBrowserSummary(summary = {}) {
+  if (elements.panelBrowserSummaryBadge) {
+    elements.panelBrowserSummaryBadge.textContent = summary.badge || "Idle";
+    elements.panelBrowserSummaryBadge.dataset.state = summary.state || "idle";
+  }
+  if (elements.panelBrowserSummaryCurrent) {
+    elements.panelBrowserSummaryCurrent.textContent = summary.current || "Not sharing yet";
+  }
+  if (elements.panelBrowserSummaryHint) {
+    elements.panelBrowserSummaryHint.textContent = summary.hint || "";
+  }
+}
+
+function setPrivateBrowserOverlayOpen(open) {
+  state.browserOverlayOpen = Boolean(open);
+  if (!elements.panelBrowserPanel) {
+    return;
+  }
+  if (state.browserOverlayOpen) {
+    elements.panelBrowserOverlayRoot?.append(elements.panelBrowserPanel);
+  } else {
+    elements.panelBrowserDock?.before(elements.panelBrowserPanel);
+  }
+  elements.panelBrowserPanel.classList.toggle("is-expanded", state.browserOverlayOpen);
+  elements.panelBrowserBackdrop?.classList.toggle("is-visible", state.browserOverlayOpen);
+  elements.panelBrowserBackdrop?.setAttribute("aria-hidden", state.browserOverlayOpen ? "false" : "true");
+  if (elements.panelBrowserExpand) {
+    elements.panelBrowserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
+    elements.panelBrowserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
+  }
+  if (elements.panelBrowserStage) {
+    elements.panelBrowserStage.tabIndex = state.browserOverlayOpen ? 0 : -1;
+  }
+}
+
+function getSelectedPrivateBrowserShareMode() {
+  return normalizeBrowserShareKind(state.browserShareMode, "screen");
+}
+
+function setSelectedPrivateBrowserShareMode(mode) {
+  state.browserShareMode = normalizeBrowserShareKind(mode, "screen");
+  for (const button of elements.panelBrowserShareModes ?? []) {
+    const active = button.getAttribute("data-private-browser-share-mode") === state.browserShareMode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+function getRequestedPrivateBrowserShareTitle(fallback = "") {
+  return sanitizeBrowserShareTitle(elements.panelBrowserShareTitle?.value ?? "", fallback);
+}
+
+function getLocalPrivateBrowserSession() {
+  return state.localBrowserSessionId ? state.browserSessions.get(state.localBrowserSessionId) ?? null : null;
+}
+
+function createLocalPrivateBrowserShare(stream, options = {}) {
+  const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
+  const audioTrack = stream?.getAudioTracks?.()[0] ?? null;
+  const shareKind = normalizeBrowserShareKind(options.shareKind, "screen");
+  const settings = videoTrack?.getSettings?.() ?? {};
+  const share = {
+    stream,
+    videoTrack,
+    audioTrack,
+    observedTrack: videoTrack ?? audioTrack ?? null,
+    shareKind,
+    title: sanitizeBrowserShareTitle(options.title, getDefaultBrowserShareTitle(shareKind, videoTrack)),
+    displaySurface: String(options.displaySurface ?? settings.displaySurface ?? "").trim().toLowerCase(),
+    aspectRatio: Number(options.aspectRatio) > 0
+      ? Number(options.aspectRatio)
+      : Math.max(0.3, Number(settings.width) || 16) / Math.max(1, Number(settings.height) || 9),
+    hasVideo: options.hasVideo === true || (options.hasVideo !== false && Boolean(videoTrack)),
+    hasAudio: options.hasAudio === true || (options.hasAudio !== false && Boolean(audioTrack)),
+    endedHandler: null,
+  };
+  share.endedHandler = () => {
+    if (state.pendingBrowserShare?.stream === share.stream) {
+      clearPendingPrivateBrowserShare({ stopTracks: false });
+      updatePrivateBrowserPanel();
+      return;
+    }
+    if (state.localBrowserShare?.stream !== share.stream) {
+      return;
+    }
+    const sessionId = state.localBrowserShare?.sessionId || "";
+    clearLocalPrivateBrowserShare({ stopTracks: false, sessionId });
+    if (sessionId) {
+      sendWorldSocketMessage({
+        type: "browser:stop",
+        sessionId,
+      });
+    }
+    updatePrivateBrowserPanel();
+  };
+  share.observedTrack?.addEventListener?.("ended", share.endedHandler, { once: true });
+  return share;
+}
+
+function releasePrivateBrowserShare(share, { stopTracks = false } = {}) {
+  if (!share) {
+    return;
+  }
+  share.observedTrack?.removeEventListener?.("ended", share.endedHandler);
+  if (stopTracks) {
+    stopMediaStream(share.stream);
+  }
+}
+
+function clearPendingPrivateBrowserShare({ stopTracks = false } = {}) {
+  if (!state.pendingBrowserShare) {
+    return;
+  }
+  releasePrivateBrowserShare(state.pendingBrowserShare, { stopTracks });
+  state.pendingBrowserShare = null;
+}
+
+function clearLocalPrivateBrowserShare({ stopTracks = false, sessionId = "" } = {}) {
+  const activeShare = state.localBrowserShare;
+  if (!activeShare) {
+    return;
+  }
+  if (sessionId && activeShare.sessionId && activeShare.sessionId !== sessionId) {
+    return;
+  }
+  releasePrivateBrowserShare(activeShare, { stopTracks });
+  setPrivateBrowserPreviewStream(null);
+  state.localBrowserShare = null;
+}
+
+async function fetchPrivateBrowserMediaToken({ canPublish = false } = {}) {
+  const viewerSessionId = getPrivateViewerSessionId();
+  const worldSnapshotId = getPrivateBrowserWorldKey();
+  if (!viewerSessionId || !worldSnapshotId) {
+    return { enabled: false };
+  }
+  try {
+    return await apiFetch("/public/world/current/browser-media-token", {
+      method: "POST",
+      body: {
+        viewerSessionId,
+        worldSnapshotId,
+        canPublish,
+      },
+    });
+  } catch (_error) {
+    return { enabled: false };
+  }
+}
+
+function getPrivateBrowserMediaController() {
+  if (state.browserMediaController) {
+    return state.browserMediaController;
+  }
+  state.browserMediaController = createBrowserMediaController({
+    fetchToken: ({ canPublish = false } = {}) => fetchPrivateBrowserMediaToken({ canPublish }),
+    onRemoteTrack: ({ sessionId, track, element }) => {
+      const existing = state.browserSessions.get(sessionId) ?? {};
+      state.browserSessions.set(sessionId, {
+        ...existing,
+        _remoteElement: element ?? existing._remoteElement ?? null,
+      });
+      if (!state.localBrowserShare && elements.panelBrowserVideo) {
+        state.browserPanelRemoteSessionId = sessionId;
+        state.browserMediaState.remoteVideoSessionId = sessionId;
+        track.attach(elements.panelBrowserVideo);
+        elements.panelBrowserVideo.hidden = false;
+        ensurePrivateBrowserVideoPlayback(elements.panelBrowserVideo);
+      }
+      updatePrivateBrowserPanel();
+    },
+    onRemoteTrackRemoved: ({ sessionId }) => {
+      const existing = state.browserSessions.get(sessionId);
+      if (existing) {
+        state.browserSessions.set(sessionId, {
+          ...existing,
+          _remoteElement: null,
+        });
+      }
+      if (state.browserPanelRemoteSessionId === sessionId && !state.localBrowserShare && elements.panelBrowserVideo) {
+        state.browserPanelRemoteSessionId = "";
+        elements.panelBrowserVideo.pause?.();
+        elements.panelBrowserVideo.removeAttribute("src");
+        elements.panelBrowserVideo.srcObject = null;
+        elements.panelBrowserVideo.hidden = true;
+      }
+      if (state.browserMediaState.remoteVideoSessionId === sessionId) {
+        state.browserMediaState.remoteVideoSessionId = "";
+      }
+      updatePrivateBrowserPanel();
+    },
+    onRemoteAudioState: ({ sessionId, available, blocked, error }) => {
+      state.browserMediaState.remoteAudioSessionId = available ? String(sessionId ?? "").trim() : "";
+      state.browserMediaState.remoteAudioAvailable = available === true;
+      state.browserMediaState.remoteAudioBlocked = blocked === true;
+      state.browserMediaState.remoteAudioError = String(error ?? "").trim();
+      updatePrivateBrowserPanel();
+    },
+    onStatus: ({ enabled, transport, connected, roomName, canPublish }) => {
+      state.browserMediaState.enabled = enabled;
+      state.browserMediaState.connected = connected === true;
+      state.browserMediaState.transport = transport || state.browserMediaState.transport;
+      state.browserMediaState.roomName = roomName || "";
+      state.browserMediaState.canPublish = canPublish === true;
+      updatePrivateBrowserPanel();
+    },
+  });
+  return state.browserMediaController;
+}
+
+function syncPrivateBrowserMediaSubscription(sessionId, subscribed) {
+  const session = state.browserSessions.get(sessionId);
+  if (!session || !isLiveKitBrowserTransport(session.frameTransport)) {
+    return;
+  }
+  void getPrivateBrowserMediaController().setSubscribed({
+    sessionId,
+    subscribed,
+    viewerSessionId: getPrivateViewerSessionId(),
+    worldSnapshotId: getPrivateBrowserWorldKey(),
+    canPublish: session.hostSessionId === getPrivateViewerSessionId(),
+  });
+}
+
+function attachLocalPrivateBrowserShare(sessionId, share) {
+  if (!share || !sessionId || !getPrivateBrowserWorldKey()) {
+    return;
+  }
+  clearLocalPrivateBrowserShare({ stopTracks: true });
+  state.localBrowserShare = {
+    ...share,
+    sessionId,
+  };
+  setSelectedPrivateBrowserShareMode(share.shareKind);
+  if (elements.panelBrowserShareTitle) {
+    elements.panelBrowserShareTitle.value = share.title || "";
+  }
+  setPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
+  void getPrivateBrowserMediaController().publishStream({
+    sessionId,
+    stream: share.stream,
+    viewerSessionId: getPrivateViewerSessionId(),
+    worldSnapshotId: getPrivateBrowserWorldKey(),
+  }).then((published) => {
+    if (!published) {
+      clearLocalPrivateBrowserShare({ stopTracks: true, sessionId });
+      sendWorldSocketMessage({
+        type: "browser:stop",
+        sessionId,
+      });
+      updatePrivateBrowserPanel();
+    }
+  }).catch(() => {
+    clearLocalPrivateBrowserShare({ stopTracks: true, sessionId });
+    sendWorldSocketMessage({
+      type: "browser:stop",
+      sessionId,
+    });
+    updatePrivateBrowserPanel();
+  });
+}
+
+function updatePrivateBrowserSessionState(sessionPatch = {}) {
+  const sessionId = String(sessionPatch.sessionId ?? "").trim();
+  if (!sessionId) {
+    return;
+  }
+  const previous = state.browserSessions.get(sessionId) ?? {};
+  const next = {
+    ...previous,
+    ...sessionPatch,
+    deliveryMode: sessionPatch.deliveryMode ?? previous.deliveryMode ?? "placeholder",
+    frameTransport: sessionPatch.frameTransport ?? previous.frameTransport ?? "jpeg-sequence",
+    sessionMode: sessionPatch.sessionMode ?? previous.sessionMode ?? "display-share",
+  };
+  state.browserSessions.set(sessionId, next);
+
+  if (next.hostSessionId === getPrivateViewerSessionId()) {
+    state.localBrowserSessionId = next.sessionId;
+    if (isLiveKitBrowserTransport(next.frameTransport) && getPrivateBrowserWorldKey()) {
+      void getPrivateBrowserMediaController().connect({
+        viewerSessionId: getPrivateViewerSessionId(),
+        worldSnapshotId: getPrivateBrowserWorldKey(),
+        canPublish: true,
+      });
+    }
+    if (next.sessionMode === "display-share" && state.pendingBrowserShare?.stream) {
+      const pendingShare = state.pendingBrowserShare;
+      state.pendingBrowserShare = null;
+      attachLocalPrivateBrowserShare(next.sessionId, pendingShare);
+    }
+  } else if (next.deliveryMode === "full") {
+    state.browserPanelRemoteSessionId = next.sessionId;
+    syncPrivateBrowserMediaSubscription(next.sessionId, true);
+  } else if (next.deliveryMode === "placeholder") {
+    syncPrivateBrowserMediaSubscription(next.sessionId, false);
+  }
+
+  updatePrivateBrowserPanel();
+}
+
+function handlePrivateBrowserStop(payload = {}) {
+  const sessionId = String(payload.sessionId ?? "").trim();
+  const hostSessionId = String(payload.hostSessionId ?? "").trim();
+  if (!sessionId) {
+    return;
+  }
+  if (hostSessionId && hostSessionId === getPrivateViewerSessionId()) {
+    clearPendingPrivateBrowserShare();
+  }
+  clearLocalPrivateBrowserShare({ sessionId });
+  getPrivateBrowserMediaController().removeSession?.(sessionId);
+  void getPrivateBrowserMediaController().unpublishSession(sessionId);
+  state.browserSessions.delete(sessionId);
+  if (state.localBrowserSessionId === sessionId) {
+    state.localBrowserSessionId = "";
+  }
+  if (state.browserPanelRemoteSessionId === sessionId) {
+    state.browserPanelRemoteSessionId = "";
+    if (!state.localBrowserShare) {
+      setPrivateBrowserPreviewStream(null);
+    }
+  }
+  updatePrivateBrowserPanel();
+}
+
+function resetPrivateBrowserState({ disconnectController = false, stopTracks = false } = {}) {
+  if (state.browserOverlayOpen) {
+    setPrivateBrowserOverlayOpen(false);
+  }
+  clearPendingPrivateBrowserShare({ stopTracks });
+  clearLocalPrivateBrowserShare({ stopTracks });
+  for (const sessionId of state.browserSessions.keys()) {
+    state.browserMediaController?.removeSession?.(sessionId);
+  }
+  state.browserSessions = new Map();
+  state.localBrowserSessionId = "";
+  state.browserPanelRemoteSessionId = "";
+  state.browserMediaState = createEmptyPrivateBrowserMediaState();
+  setPrivateBrowserPreviewStream(null);
+  if (elements.panelBrowserFrame) {
+    elements.panelBrowserFrame.hidden = true;
+    elements.panelBrowserFrame.removeAttribute("src");
+  }
+  if (disconnectController) {
+    void state.browserMediaController?.disconnect?.();
+    state.browserMediaController = null;
+  }
+  updatePrivateBrowserPanel();
+}
+
+async function launchPrivateScreenShare() {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    setPrivateBrowserStatus("This browser does not support screen sharing.");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        frameRate: { ideal: 24, max: 30 },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+      },
+      audio: true,
+    });
+    const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
+    const share = createLocalPrivateBrowserShare(stream, {
+      shareKind: "screen",
+      title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("screen", videoTrack)),
+    });
+    state.pendingBrowserShare = share;
+    setPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
+    updatePrivateBrowserPanel();
+    const sent = sendWorldSocketMessage({
+      type: "browser:start",
+      mode: "display-share",
+      title: share.title,
+      shareKind: share.shareKind,
+      hasVideo: share.hasVideo,
+      hasAudio: share.hasAudio,
+      aspectRatio: share.aspectRatio,
+      displaySurface: share.displaySurface,
+    });
+    if (!sent) {
+      clearPendingPrivateBrowserShare({ stopTracks: true });
+      setPrivateBrowserStatus("Live share is offline right now.");
+      updatePrivateBrowserPanel();
+    }
+  } catch (error) {
+    if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
+      setPrivateBrowserStatus(error?.message || "Could not start screen sharing.");
+    }
+  }
+}
+
+async function launchPrivateCameraShare() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setPrivateBrowserStatus("This browser does not support camera sharing.");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        frameRate: { ideal: 24, max: 30 },
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+        facingMode: "user",
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const share = createLocalPrivateBrowserShare(stream, {
+      shareKind: "camera",
+      title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("camera")),
+    });
+    state.pendingBrowserShare = share;
+    setPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
+    updatePrivateBrowserPanel();
+    const sent = sendWorldSocketMessage({
+      type: "browser:start",
+      mode: "display-share",
+      title: share.title,
+      shareKind: share.shareKind,
+      hasVideo: share.hasVideo,
+      hasAudio: share.hasAudio,
+      aspectRatio: share.aspectRatio,
+      displaySurface: share.displaySurface,
+    });
+    if (!sent) {
+      clearPendingPrivateBrowserShare({ stopTracks: true });
+      setPrivateBrowserStatus("Live share is offline right now.");
+      updatePrivateBrowserPanel();
+    }
+  } catch (error) {
+    if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
+      setPrivateBrowserStatus(error?.message || "Could not start video sharing.");
+    }
+  }
+}
+
+async function launchPrivateVoiceShare() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setPrivateBrowserStatus("This browser does not support voice sharing.");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+    const share = createLocalPrivateBrowserShare(stream, {
+      shareKind: "audio",
+      title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("audio")),
+      hasVideo: false,
+      hasAudio: true,
+      aspectRatio: 1.2,
+    });
+    state.pendingBrowserShare = share;
+    setPrivateBrowserPreviewStream(null);
+    updatePrivateBrowserPanel();
+    const sent = sendWorldSocketMessage({
+      type: "browser:start",
+      mode: "display-share",
+      title: share.title,
+      shareKind: share.shareKind,
+      hasVideo: share.hasVideo,
+      hasAudio: share.hasAudio,
+      aspectRatio: share.aspectRatio,
+      displaySurface: share.displaySurface,
+    });
+    if (!sent) {
+      clearPendingPrivateBrowserShare({ stopTracks: true });
+      setPrivateBrowserStatus("Live share is offline right now.");
+      updatePrivateBrowserPanel();
+    }
+  } catch (error) {
+    if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
+      setPrivateBrowserStatus(error?.message || "Could not start voice sharing.");
+    }
+  }
+}
+
+async function launchPrivateShare() {
+  const localParticipant = getLocalParticipant();
+  if (!state.session || !state.selectedWorld || !localParticipant) {
+    updatePrivateBrowserPanel();
+    return;
+  }
+  const shareMode = getSelectedPrivateBrowserShareMode();
+  if (shareMode === "camera") {
+    await launchPrivateCameraShare();
+    return;
+  }
+  if (shareMode === "audio") {
+    await launchPrivateVoiceShare();
+    return;
+  }
+  await launchPrivateScreenShare();
+}
+
+function updatePrivateBrowserPanel() {
+  const world = state.selectedWorld;
+  const localParticipant = getLocalParticipant();
+  const localSession = getLocalPrivateBrowserSession();
+  if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
+    state.browserPanelRemoteSessionId = "";
+  }
+  const remoteSession = state.browserPanelRemoteSessionId
+    ? state.browserSessions.get(state.browserPanelRemoteSessionId) ?? null
+    : [...state.browserSessions.values()].find((session) => session.hostSessionId !== getPrivateViewerSessionId()) ?? null;
+  const canShare = Boolean(state.session && world && localParticipant);
+  const previewStream = state.pendingBrowserShare?.hasVideo
+    ? state.pendingBrowserShare.stream
+    : state.localBrowserShare?.hasVideo
+      ? state.localBrowserShare.stream
+      : null;
+  const showingRemoteVideo = Boolean(!previewStream && remoteSession && elements.panelBrowserVideo?.srcObject);
+  const needsPlaybackStart = Boolean(showingRemoteVideo && String(state.browserMediaState.lastPlayError || "").includes("NotAllowedError"));
+  const needsAudioStart = Boolean(
+    remoteSession
+    && state.browserMediaState.remoteAudioAvailable
+    && state.browserMediaState.remoteAudioBlocked
+    && state.browserMediaState.remoteAudioSessionId === remoteSession.sessionId,
+  );
+
+  setSelectedPrivateBrowserShareMode(state.browserShareMode);
+  if (elements.panelBrowserShareTitle) {
+    elements.panelBrowserShareTitle.disabled = !canShare;
+  }
+  if (elements.panelBrowserLaunch) {
+    elements.panelBrowserLaunch.disabled = !canShare || Boolean(state.pendingBrowserShare);
+    elements.panelBrowserLaunch.textContent = state.pendingBrowserShare ? "Starting..." : (localSession ? "Share Again" : "Share");
+  }
+  if (elements.panelBrowserStop) {
+    elements.panelBrowserStop.disabled = !localSession;
+  }
+  if (elements.panelBrowserExpand) {
+    elements.panelBrowserExpand.disabled = !previewStream && !showingRemoteVideo && !remoteSession;
+  }
+
+  if (!world) {
+    setPrivateBrowserStatus("Open a private world to use live share.");
+    updatePrivateBrowserSummary({
+      state: "offline",
+      badge: "Offline",
+      current: "No world selected",
+      hint: "Open a world first.",
+    });
+  } else if (!state.session) {
+    setPrivateBrowserStatus("Guests can watch but cannot start live share.");
+    updatePrivateBrowserSummary({
+      state: "offline",
+      badge: "Signed out",
+      current: "Sign in to go live",
+      hint: "Signed-in participants can share screen, video, or voice.",
+    });
+  } else if (!localParticipant) {
+    setPrivateBrowserStatus("Enter this world to start a live share.");
+    updatePrivateBrowserSummary({
+      state: "idle",
+      badge: "Idle",
+      current: "Enter to share",
+      hint: "Join this private world first.",
+    });
+  } else if (state.pendingBrowserShare) {
+    setPrivateBrowserStatus(`Starting ${getBrowserShareKindLabel(state.pendingBrowserShare.shareKind).toLowerCase()} share...`);
+    updatePrivateBrowserSummary({
+      state: "starting",
+      badge: "Starting",
+      current: `Starting ${getBrowserShareKindLabel(state.pendingBrowserShare.shareKind)}`,
+      hint: state.pendingBrowserShare.title
+        ? `"${state.pendingBrowserShare.title}" will go live after the permission prompt finishes.`
+        : "Finish the permission prompt to go live.",
+    });
+  } else if (localSession) {
+    const shareKind = getBrowserShareKindLabel(localSession.shareKind || "screen");
+    setPrivateBrowserStatus(`${shareKind} is live inside this private world.`);
+    updatePrivateBrowserSummary({
+      state: "live",
+      badge: "Live",
+      current: `${shareKind} live${localSession.title ? ` - ${localSession.title}` : ""}`,
+      hint: "Everyone inside this private world can watch this live share.",
+    });
+  } else if (remoteSession) {
+    const shareKind = getBrowserShareKindLabel(remoteSession.shareKind || "screen");
+    setPrivateBrowserStatus(`Watching ${shareKind.toLowerCase()} from inside this private world.`);
+    updatePrivateBrowserSummary({
+      state: "live",
+      badge: "Live",
+      current: remoteSession.title || `${shareKind} live`,
+      hint: "Someone in this private world is live right now.",
+    });
+  } else if (state.browserMediaState.enabled === false) {
+    setPrivateBrowserStatus("Live share is unavailable right now.");
+    updatePrivateBrowserSummary({
+      state: "offline",
+      badge: "Offline",
+      current: "Live share unavailable",
+      hint: "Live media is not available on this server right now.",
+    });
+  } else {
+    const draftKind = getBrowserShareKindLabel(getSelectedPrivateBrowserShareMode());
+    const draftTitle = sanitizeBrowserShareTitle(elements.panelBrowserShareTitle?.value ?? "", "");
+    setPrivateBrowserStatus("Share a screen, video, or voice inside this private world.");
+    updatePrivateBrowserSummary({
+      state: "idle",
+      badge: "Idle",
+      current: draftTitle ? `Ready: ${draftKind} "${draftTitle}"` : `Ready: ${draftKind}`,
+      hint: "Press Share to go live in this private world.",
+    });
+  }
+
+  if (previewStream) {
+    setPrivateBrowserPreviewStream(previewStream);
+  } else if (remoteSession?._remoteElement?.srcObject && elements.panelBrowserVideo) {
+    if (elements.panelBrowserVideo.srcObject !== remoteSession._remoteElement.srcObject) {
+      elements.panelBrowserVideo.srcObject = remoteSession._remoteElement.srcObject;
+    }
+    elements.panelBrowserVideo.hidden = false;
+    ensurePrivateBrowserVideoPlayback(elements.panelBrowserVideo);
+  } else if (!showingRemoteVideo) {
+    setPrivateBrowserPreviewStream(null);
+  }
+
+  if (elements.panelBrowserFrame) {
+    elements.panelBrowserFrame.hidden = true;
+    elements.panelBrowserFrame.removeAttribute("src");
+  }
+  if (elements.panelBrowserPlaceholder) {
+    const hasDisplayedVideo = Boolean(previewStream || (remoteSession && elements.panelBrowserVideo?.srcObject));
+    let placeholder = "Share a screen, video, or voice inside this private world.";
+    if (needsPlaybackStart) {
+      placeholder = "Browser blocked autoplay. Press start to watch this live stream.";
+    } else if (needsAudioStart) {
+      placeholder = remoteSession?.shareKind === "audio"
+        ? "Press enable sound to hear this live voice stream."
+        : "Press enable sound to hear this live stream.";
+    } else if (localSession?.shareKind === "audio") {
+      placeholder = "Voice is live inside this private world.";
+    } else if (remoteSession?.shareKind === "audio") {
+      placeholder = "Listening to live voice from inside this private world.";
+    } else if (remoteSession && !hasDisplayedVideo) {
+      placeholder = "Waiting for the live stream to appear.";
+    }
+    elements.panelBrowserPlaceholder.hidden = hasDisplayedVideo;
+    elements.panelBrowserPlaceholder.textContent = placeholder;
+  }
+  if (elements.panelBrowserResume) {
+    const needsPermissionAction = needsPlaybackStart || needsAudioStart;
+    elements.panelBrowserResume.hidden = !needsPermissionAction;
+    elements.panelBrowserResume.textContent = needsPlaybackStart ? "Start Stream" : "Enable Sound";
+  }
+}
+
 async function apiFetch(path, options = {}) {
   const headers = {
     "Content-Type": "application/json",
@@ -867,6 +1683,7 @@ async function refreshAuthState() {
     state.privateChatEntries = [];
     state.pressedRuntimeKeys.clear();
     state.pressedViewerKeys.clear();
+    resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
     renderProfile();
     renderWorldList();
     renderSelectedWorld();
@@ -880,6 +1697,9 @@ async function refreshAuthState() {
     renderProfile();
     renderSessionSummary();
     await loadWorlds();
+    if (state.selectedWorld?.world_id && state.selectedWorld?.creator?.username) {
+      await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+    }
     if (!state.selectedWorld) {
       setLauncherTab(getPreferredLauncherTab());
     }
@@ -1596,20 +2416,23 @@ function renderPrivateChat() {
   const localParticipant = getLocalParticipant();
   const canChat = Boolean(state.session && state.selectedWorld && localParticipant);
   elements.panelChatInput.disabled = !canChat;
+  for (const button of elements.panelChatReactionButtons ?? []) {
+    button.disabled = !canChat;
+  }
   elements.panelChatInput.placeholder = !state.session
     ? "Access opens sign in or account creation"
     : !state.selectedWorld
       ? "Open a world to chat"
       : !localParticipant
         ? "Enter the world to chat"
-        : "Say something in this private world";
+        : "/ say something nearby and press Enter";
   elements.panelChatStatus.textContent = !state.session
     ? "Signed out. Access opens sign in or account creation."
     : !state.selectedWorld
       ? "Open a world to chat."
       : !localParticipant
         ? "Enter the world to chat."
-        : "Everyone inside this private world sees this chat.";
+        : "Everyone inside this private world hears this lane.";
 
   if (!state.privateChatEntries.length) {
     elements.panelChatLog.innerHTML = '<article class="world-live-result"><strong class="world-live-result__title">No chat yet</strong><p class="world-result__body">Walk in and say something.</p></article>';
@@ -1628,7 +2451,7 @@ function renderPrivateChat() {
 }
 
 function renderPrivateShare() {
-  if (!elements.panelShareBadge || !elements.panelShareCurrent || !elements.panelShareStatus || !elements.panelShareMeta) {
+  if (!elements.panelShareStatus || !elements.panelShareMeta) {
     return;
   }
   const world = state.selectedWorld;
@@ -1641,14 +2464,11 @@ function renderPrivateShare() {
   if (elements.panelShareNative) {
     elements.panelShareNative.disabled = !canShare || typeof navigator.share !== "function";
   }
-  elements.panelShareBadge.dataset.state = isActive ? "live" : "offline";
-  elements.panelShareBadge.textContent = isActive ? "live" : "idle";
-  elements.panelShareCurrent.textContent = world ? world.name : "No world selected";
   elements.panelShareStatus.textContent = !world
     ? "Open a world to copy its entry link."
     : isActive
-      ? "Send this entry link to bring someone straight into the active private world."
-      : "This world is inactive, but the link still resolves the world for signed-in access.";
+      ? "Copy or share the direct entry link for this active private world."
+      : "This world is inactive, but the entry link still resolves it for signed-in access.";
   elements.panelShareMeta.innerHTML = !world ? "" : `
     <div class="pw-world-meta__row">
       <strong>Creator</strong>
@@ -1663,8 +2483,8 @@ function renderPrivateShare() {
       <span>${Number(world.active_instance?.viewer_count ?? 0)} / ${Number(world.max_viewers ?? 20)}</span>
     </div>
     <div class="pw-world-meta__row">
-      <strong>Entry Link</strong>
-      <span>${htmlEscape(shareUrl)}</span>
+      <strong>Entry</strong>
+      <span>${htmlEscape(isActive ? "Direct autojoin link ready" : "Resolve link ready")}</span>
     </div>
   `;
 }
@@ -1799,6 +2619,7 @@ function renderSelectedWorld() {
   renderRuntimeStatus();
   renderBuildSummary();
   renderPrivateShare();
+  updatePrivateBrowserPanel();
 
   const hasWorld = Boolean(world);
   const canEdit = isEditor();
@@ -1856,6 +2677,12 @@ function renderSelectedWorld() {
   if (elements.panelReset) {
     elements.panelReset.disabled = !hasWorld || !canEdit;
   }
+  if (elements.panelShareCopy) {
+    elements.panelShareCopy.disabled = !hasWorld;
+  }
+  if (elements.panelShareNative) {
+    elements.panelShareNative.disabled = !hasWorld || typeof navigator.share !== "function";
+  }
 
   for (const button of [
     elements.addVoxel,
@@ -1885,6 +2712,7 @@ function renderSelectedWorld() {
   updateShellState();
   updatePreviewFromSelection();
   renderPrivateChat();
+  updatePrivateBrowserPanel();
 }
 
 function snapBuildValue(value, step = 0.1) {
@@ -2203,76 +3031,27 @@ function buildPreviewEnvironment(preview) {
 
   const floor = new THREE.Mesh(
     new THREE.CircleGeometry(260, 120),
-    new THREE.MeshStandardMaterial({
+    new THREE.MeshBasicMaterial({
       color: "#ffffff",
-      roughness: 0.96,
-      metalness: 0.02,
+      side: THREE.DoubleSide,
     }),
   );
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -0.03;
   environment.add(floor);
 
-  const floorHalo = new THREE.Mesh(
-    new THREE.RingGeometry(12, 52, 96),
-    new THREE.MeshBasicMaterial({
-      color: PRIVATE_WORLD_STYLE.groundGlow,
-      transparent: true,
-      opacity: 0.22,
-      side: THREE.DoubleSide,
-    }),
-  );
-  floorHalo.rotation.x = -Math.PI / 2;
-  floorHalo.position.y = 0.02;
-  environment.add(floorHalo);
-
   const grid = new THREE.GridHelper(160, 80, PRIVATE_WORLD_STYLE.line, PRIVATE_WORLD_STYLE.lineMuted);
   grid.position.y = 0;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
-    material.opacity = 0.42;
+    material.opacity = 0.18;
     material.transparent = true;
   }
   environment.add(grid);
 
-  const horizonRing = new THREE.Mesh(
-    new THREE.TorusGeometry(92, 0.12, 18, 92),
-    new THREE.MeshBasicMaterial({
-      color: PRIVATE_WORLD_STYLE.accents[0],
-      transparent: true,
-      opacity: 0.08,
-    }),
-  );
-  horizonRing.rotation.x = Math.PI / 2;
-  horizonRing.position.y = 0.02;
-  environment.add(horizonRing);
-
-  const particleGeometry = new THREE.BufferGeometry();
-  const particleCount = 180;
-  const particlePositions = new Float32Array(particleCount * 3);
-  for (let index = 0; index < particleCount; index += 1) {
-    const radius = 24 + Math.random() * 120;
-    const angle = Math.random() * Math.PI * 2;
-    particlePositions[index * 3] = Math.cos(angle) * radius;
-    particlePositions[index * 3 + 1] = 10 + Math.random() * 44;
-    particlePositions[index * 3 + 2] = Math.sin(angle) * radius;
-  }
-  particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
-  const atmosphereField = new THREE.Points(
-    particleGeometry,
-    new THREE.PointsMaterial({
-      color: "#d7e7fb",
-      size: 0.18,
-      transparent: true,
-      opacity: 0.18,
-      depthWrite: false,
-    }),
-  );
-  environment.add(atmosphereField);
-
   preview.environment = environment;
-  preview.worldGlowRing = floorHalo;
-  preview.horizonRing = horizonRing;
-  preview.atmosphereField = atmosphereField;
+  preview.worldGlowRing = null;
+  preview.horizonRing = null;
+  preview.atmosphereField = null;
 }
 
 function buildWorldBoundsPreview(world = state.selectedWorld) {
@@ -2283,19 +3062,6 @@ function buildWorldBoundsPreview(world = state.selectedWorld) {
   const length = Math.max(4, Number(world.length ?? 24) || 24);
   const height = Math.max(2, Number(world.height ?? 8) || 8);
   const group = new THREE.Group();
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(width, length),
-    new THREE.MeshBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.accents[1]),
-      transparent: true,
-      opacity: world.world_type === "board" ? 0.08 : 0.04,
-      side: THREE.DoubleSide,
-    }),
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.y = 0.01;
-  group.add(floor);
-
   const boundsGeometry = new THREE.BoxGeometry(width, height, length);
   const boundsEdges = new THREE.EdgesGeometry(boundsGeometry);
   const boundsLines = new THREE.LineSegments(
@@ -2303,7 +3069,7 @@ function buildWorldBoundsPreview(world = state.selectedWorld) {
     new THREE.LineBasicMaterial({
       color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
       transparent: true,
-      opacity: world.world_type === "field" ? 0.24 : 0.34,
+      opacity: world.world_type === "field" ? 0.16 : 0.22,
     }),
   );
   boundsLines.position.set(0, height / 2, 0);
@@ -2328,7 +3094,7 @@ function ensurePreview() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PRIVATE_WORLD_STYLE.background);
-  scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 120, 420);
+  scene.fog = null;
 
   const camera = new THREE.PerspectiveCamera(48, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 5000);
   camera.position.copy(state.viewerCameraPosition);
@@ -2980,15 +3746,27 @@ function updatePreviewFromSelection() {
 }
 
 function connectWorldSocket() {
-  disconnectWorldSocket();
   const world = state.selectedWorld;
   if (!world) {
+    disconnectWorldSocket();
     return;
   }
+  const socketKey = `${world.world_id}:${String(world.creator.username ?? "").trim().toLowerCase()}`;
+  if (
+    state.worldSocket
+    && state.worldSocket.readyState !== WebSocket.CLOSED
+    && state.worldSocket.readyState !== WebSocket.CLOSING
+    && state.worldSocketKey === socketKey
+  ) {
+    return;
+  }
+  disconnectWorldSocket();
   const socket = new WebSocket(buildSocketUrl(world.world_id, world.creator.username));
   state.worldSocket = socket;
+  state.worldSocketKey = socketKey;
   socket.addEventListener("open", () => {
     renderPrivateChat();
+    updatePrivateBrowserPanel();
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -3013,6 +3791,34 @@ function connectWorldSocket() {
         if (elements.panelChatStatus) {
           elements.panelChatStatus.textContent = payload.message || "Could not send chat.";
         }
+      } else if (payload.type === "browser:session") {
+        updatePrivateBrowserSessionState(payload.session ?? {});
+      } else if (payload.type === "browser:subscribe") {
+        updatePrivateBrowserSessionState({
+          ...(state.browserSessions.get(payload.sessionId) ?? {}),
+          sessionId: payload.sessionId,
+          hostSessionId: payload.hostSessionId,
+          deliveryMode: "full",
+          viewerCount: payload.viewerCount,
+          maxViewers: payload.maxViewers,
+        });
+        syncPrivateBrowserMediaSubscription(payload.sessionId, true);
+      } else if (payload.type === "browser:unsubscribe") {
+        updatePrivateBrowserSessionState({
+          ...(state.browserSessions.get(payload.sessionId) ?? {}),
+          sessionId: payload.sessionId,
+          hostSessionId: payload.hostSessionId,
+          deliveryMode: "placeholder",
+          viewerCount: payload.viewerCount,
+          maxViewers: payload.maxViewers,
+        });
+        syncPrivateBrowserMediaSubscription(payload.sessionId, false);
+      } else if (payload.type === "browser:stop") {
+        handlePrivateBrowserStop(payload);
+      } else if (payload.type === "browser:error") {
+        clearPendingPrivateBrowserShare({ stopTracks: true });
+        setPrivateBrowserStatus(payload.message || "Live share failed.");
+        updatePrivateBrowserPanel();
       } else if (payload.type === "world:snapshot") {
         if (payload.world?.world_id === state.selectedWorld?.world_id) {
           state.selectedWorld = payload.world;
@@ -3026,7 +3832,9 @@ function connectWorldSocket() {
     }
   });
   socket.addEventListener("close", () => {
+    state.worldSocketKey = "";
     renderPrivateChat();
+    updatePrivateBrowserPanel();
   });
 }
 
@@ -3035,7 +3843,9 @@ function disconnectWorldSocket() {
     state.worldSocket.close();
     state.worldSocket = null;
   }
+  state.worldSocketKey = "";
   renderPrivateChat();
+  updatePrivateBrowserPanel();
 }
 
 async function openWorld(worldId, creatorUsername, includeContent = true) {
@@ -3057,6 +3867,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
     state.privateChatEntries = [];
     resetViewerRig(payload.world);
+    resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
   }
   syncRuntimeFromWorld(payload.world);
   renderSelectedWorld();
@@ -3863,7 +4674,7 @@ function bindEvents() {
   }
   for (const button of elements.privatePanelTabButtons ?? []) {
     button.addEventListener("click", () => {
-      setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "chat");
+      setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "build");
     });
   }
   elements.panelOpenAccess?.addEventListener("click", () => {
@@ -3876,6 +4687,19 @@ function bindEvents() {
       renderPrivateChat();
     }
   });
+  elements.panelChatInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      elements.panelChatInput?.blur();
+    }
+  });
+  for (const button of elements.panelChatReactionButtons ?? []) {
+    button.addEventListener("click", () => {
+      if (!sendPrivateChat(button.getAttribute("data-private-chat-reaction") || button.textContent || "")) {
+        renderPrivateChat();
+      }
+    });
+  }
   elements.panelShareCopy?.addEventListener("click", async () => {
     const shareUrl = buildPrivateWorldEntryUrl();
     if (!shareUrl) {
@@ -3904,6 +4728,44 @@ function bindEvents() {
     } catch (_error) {
       // user canceled native share
     }
+  });
+  elements.panelBrowserExpand?.addEventListener("click", () => {
+    setPrivateBrowserOverlayOpen(!state.browserOverlayOpen);
+  });
+  elements.panelBrowserBackdrop?.addEventListener("click", () => {
+    setPrivateBrowserOverlayOpen(false);
+  });
+  elements.panelBrowserShareTitle?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    void launchPrivateShare();
+  });
+  for (const button of elements.panelBrowserShareModes ?? []) {
+    button.addEventListener("click", () => {
+      setSelectedPrivateBrowserShareMode(button.getAttribute("data-private-browser-share-mode") || "screen");
+      updatePrivateBrowserPanel();
+    });
+  }
+  elements.panelBrowserLaunch?.addEventListener("click", () => {
+    void launchPrivateShare();
+  });
+  elements.panelBrowserStop?.addEventListener("click", () => {
+    const sessionId = getLocalPrivateBrowserSession()?.sessionId || "";
+    if (!sessionId) {
+      return;
+    }
+    sendWorldSocketMessage({
+      type: "browser:stop",
+      sessionId,
+    });
+  });
+  elements.panelBrowserResume?.addEventListener("click", () => {
+    void getPrivateBrowserMediaController().resumePlayback({
+      sessionId: state.browserPanelRemoteSessionId || state.browserMediaState.remoteAudioSessionId,
+      kinds: ["audio", "video"],
+    });
   });
   elements.panelModeBuild?.addEventListener("click", () => {
     setMode("build");
@@ -4211,6 +5073,10 @@ function bindEvents() {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
       return;
     }
+    if (state.browserOverlayOpen) {
+      setPrivateBrowserOverlayOpen(false);
+      return;
+    }
     if (state.builderSelection) {
       setBuilderSelection("", "");
       return;
@@ -4268,11 +5134,13 @@ async function init() {
   renderEventLog();
   renderPrivateChat();
   renderPrivateShare();
+  updatePrivateBrowserPanel();
   renderBuildSummary();
   renderSessionSummary();
   ensurePreview();
   setLauncherTab(getPreferredLauncherTab());
   setMode(state.mode);
+  setSelectedPrivateBrowserShareMode(state.browserShareMode);
   updateShellState();
   await fetchAuthConfig();
   await refreshAuthState();
