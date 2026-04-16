@@ -35,6 +35,39 @@ test("normalizeSceneDoc keeps safe defaults and strips executable screen content
   assert.doesNotMatch(scene.screens[0].html, /onclick=/i);
 });
 
+test("normalizeSceneDoc remaps raw entity references onto normalized ids", () => {
+  const scene = normalizeSceneDoc({
+    primitives: [
+      { id: "crate one", shape: "box" },
+    ],
+    texts: [
+      { id: "score text", value: "0" },
+    ],
+    particles: [
+      { id: "spark trail", target_id: "crate one", effect: "sparkles" },
+    ],
+    prefabs: [
+      { id: "set a", name: "Set A", entity_ids: ["crate one", "score text"] },
+    ],
+    rules: [
+      {
+        id: "launch force",
+        trigger: "key_press",
+        action: "apply_force",
+        key: "space",
+        target_id: "crate one",
+        payload: { text_id: "score text" },
+      },
+    ],
+  });
+
+  assert.equal(scene.primitives[0].id, "primitive_crate-one");
+  assert.equal(scene.particles[0].target_id, "primitive_crate-one");
+  assert.deepEqual(scene.prefabs[0].entity_ids, ["primitive_crate-one", "text3d_score-text"]);
+  assert.equal(scene.rules[0].target_id, "primitive_crate-one");
+  assert.equal(scene.rules[0].payload.text_id, "text3d_score-text");
+});
+
 test("export validation preserves prefab docs and locked lineage credits", () => {
   const exported = buildPrivateWorldExportPackage({
     world: {

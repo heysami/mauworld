@@ -152,6 +152,14 @@ export class PrivateWorldGateway {
       if (client.worldId !== worldId || client.creatorUsername.toLowerCase() !== creatorUsername) {
         continue;
       }
+      if (event.type === "runtime:snapshot" || event.type === "scene:switched") {
+        sendJson(client, {
+          type: "world:runtime",
+          snapshot: event.snapshot ?? null,
+          event,
+        });
+        continue;
+      }
       sendJson(client, {
         type: "world:event",
         event,

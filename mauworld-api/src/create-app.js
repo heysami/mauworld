@@ -528,6 +528,17 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     jsonOk(res, payload);
   }));
 
+  app.post("/api/private/worlds/:worldId/input", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.queuePrivateWorldInput(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      key: requireString(req.body?.key, "key"),
+      state: req.body?.state === "up" ? "up" : "down",
+    });
+    jsonOk(res, payload);
+  }));
+
   app.post("/api/private/worlds/:worldId/locks/acquire", asyncRoute(async (req, res) => {
     const { profile } = await requireUser(req, store);
     const payload = await store.acquirePrivateWorldEntityLock(profile, {

@@ -49,6 +49,7 @@ const elements = {
   browserFrame: document.querySelector("[data-world-browser-frame]"),
   browserPlaceholder: document.querySelector("[data-world-browser-placeholder]"),
   browserResume: document.querySelector("[data-world-browser-resume]"),
+  privateLaunch: document.querySelector("[data-world-private-launch]"),
   nameInput: document.querySelector("[data-world-name-input]"),
   chatComposer: document.querySelector("[data-world-chat-composer]"),
   chatInput: document.querySelector("[data-world-chat-input]"),
@@ -647,6 +648,38 @@ function htmlEscape(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function buildPrivateWorldLauncherUrl(options = {}) {
+  const url = new URL("/social/private-worlds.html", window.location.origin);
+  const position = getNavigationPosition();
+  if (state.meta?.worldSnapshotId) {
+    url.searchParams.set("publicWorldSnapshotId", state.meta.worldSnapshotId);
+  }
+  url.searchParams.set("anchorX", position.x.toFixed(3));
+  url.searchParams.set("anchorY", position.y.toFixed(3));
+  url.searchParams.set("anchorZ", position.z.toFixed(3));
+  if (options.worldId) {
+    url.searchParams.set("worldId", options.worldId);
+  }
+  if (options.creatorUsername) {
+    url.searchParams.set("creatorUsername", options.creatorUsername);
+  }
+  if (options.autojoin === true) {
+    url.searchParams.set("autojoin", "true");
+  }
+  return url.toString();
+}
+
+function updatePrivateWorldLauncher() {
+  if (!elements.privateLaunch) {
+    return;
+  }
+  elements.privateLaunch.href = buildPrivateWorldLauncherUrl();
+}
+
+function launchPrivateWorld(options = {}) {
+  window.location.href = buildPrivateWorldLauncherUrl(options);
 }
 
 function truncateText(value, maxLength) {
@@ -2526,6 +2559,10 @@ function isClickablePayloadPickable(payload) {
     );
   }
 
+  if (payload.type === "private-world-miniature") {
+    return Boolean(payload.data?.world_id && payload.data?.creator_username);
+  }
+
   return true;
 }
 
@@ -4390,6 +4427,29 @@ function buildPrivateWorldMiniatureObject(entry) {
   group.add(detailGroup);
   group.add(playerDots);
 
+  const labelWidth = clamp(12 + String(entry.name || "Private World").length * 0.24, 14, 24);
+  const labelHeight = labelWidth * (160 / 768);
+  const label = createBillboard(
+    createCompactCardTexture(
+      entry.name || "Private World",
+      entry.creator_username ? `@${entry.creator_username}` : "Active instance",
+      {
+        accent: "#ff4f6d",
+        secondary: "#2dd8ff",
+      },
+    ),
+    labelWidth,
+    labelHeight,
+    {
+      opacity: 0.94,
+      fog: false,
+      depthTest: false,
+      renderOrder: 11,
+    },
+  );
+  label.position.set(0, miniatureHeight + 1.1, 0);
+  group.add(label);
+
   for (const voxel of (entry.compiled?.miniature?.static_voxels ?? []).slice(0, 120)) {
     const position = mapPoint(voxel.position);
     const scaleVector = voxel.scale ?? { x: 1, y: 1, z: 1 };
@@ -4476,6 +4536,7 @@ function buildPrivateWorldMiniatureObject(entry) {
     group,
     dome,
     baseDomeScaleY: dome.scale.y,
+    label,
     silhouetteGroup,
     detailGroup,
     playerDots,
@@ -4484,6 +4545,37 @@ function buildPrivateWorldMiniatureObject(entry) {
     phase: Math.random() * Math.PI * 2,
     basePlate,
   };
+  const clickablePayloads = [
+    {
+      type: "private-world-miniature",
+      mesh: dome,
+      data: {
+        world_id: entry.world_id,
+        creator_username: entry.creator_username,
+        name: entry.name,
+      },
+    },
+    {
+      type: "private-world-miniature",
+      mesh: basePlate,
+      data: {
+        world_id: entry.world_id,
+        creator_username: entry.creator_username,
+        name: entry.name,
+      },
+    },
+    {
+      type: "private-world-miniature",
+      mesh: label,
+      data: {
+        world_id: entry.world_id,
+        creator_username: entry.creator_username,
+        name: entry.name,
+      },
+    },
+  ];
+  sceneState.clickable.push(...clickablePayloads);
+  animatedEntry.clickablePayloads = clickablePayloads;
   sceneState.animatedPrivateWorldMiniatures.push(animatedEntry);
   return animatedEntry;
 }
@@ -4493,6 +4585,7 @@ function updatePrivateWorldMiniatures(elapsedSeconds) {
     const distance = sceneState.camera.position.distanceTo(entry.group.position);
     const isNear = distance <= entry.nearDistance;
     const isMid = distance > entry.nearDistance && distance <= entry.midDistance;
+    entry.label.visible = isNear || isMid;
     entry.silhouetteGroup.visible = isMid;
     entry.detailGroup.visible = isNear;
     entry.playerDots.visible = isNear;
@@ -6380,6 +6473,7 @@ function updateMetaPanel() {
 
 function updateCameraPanel() {
   if (!elements.camera) {
+    updatePrivateWorldLauncher();
     return;
   }
   const position = getNavigationPosition();
@@ -6393,6 +6487,7 @@ function updateCameraPanel() {
       <div><strong>Height</strong><span>${position.y.toFixed(1)}</span></div>
     </div>
   `;
+  updatePrivateWorldLauncher();
 }
 
 function getStreamCounts() {
@@ -8126,6 +8221,12 @@ function pickSceneObject(event) {
     openTagCloud(payload.data);
   } else if (payload.type === "browser-screen") {
     focusBrowserScreen(payload.data?.sessionId);
+  } else if (payload.type === "private-world-miniature") {
+    launchPrivateWorld({
+      worldId: payload.data?.world_id,
+      creatorUsername: payload.data?.creator_username,
+      autojoin: true,
+    });
   }
 }
 
@@ -8566,6 +8667,10 @@ async function launchSharedBrowser() {
 function registerInput() {
   setSelectedBrowserShareMode(state.browserShareMode);
   window.addEventListener("resize", resizeScene);
+  elements.privateLaunch?.addEventListener("click", (event) => {
+    event.preventDefault();
+    launchPrivateWorld();
+  });
   const resumeBrowserMediaFromGesture = () => {
     resumeBrowserMediaPlayback();
   };

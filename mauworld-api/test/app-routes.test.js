@@ -123,6 +123,12 @@ function createStubStore() {
         },
       };
     },
+    async queuePrivateWorldInput(_profile, payload) {
+      return {
+        accepted: true,
+        player_entity_id: payload.key === "w" ? "player_one" : "player_two",
+      };
+    },
   };
 }
 
@@ -381,4 +387,25 @@ test("private world export endpoint returns a forkable package attachment", asyn
   assert.equal(response.body.ok, true);
   assert.equal(response.body.package.format, "mauworld.private-world.v1");
   assert.match(String(response.headers["content-disposition"] || ""), /mw_origin123\.mauworld\.json/i);
+});
+
+test("private world runtime input endpoint accepts player controls", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/private/worlds/mw_origin123/input")
+    .set("Authorization", "Bearer token")
+    .send({
+      creatorUsername: "maker",
+      key: "w",
+      state: "down",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.accepted, true);
+  assert.equal(response.body.player_entity_id, "player_one");
 });

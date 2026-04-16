@@ -141,6 +141,27 @@ function ensureEntityId(prefix, value) {
   return `${prefix}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
+function rememberEntityAlias(aliasMap, rawValue, normalizedValue) {
+  const raw = String(rawValue ?? "").trim();
+  if (!raw || !normalizedValue) {
+    return;
+  }
+  aliasMap.set(raw, normalizedValue);
+  const slug = slugToken(raw);
+  if (slug) {
+    aliasMap.set(slug, normalizedValue);
+  }
+  aliasMap.set(normalizedValue, normalizedValue);
+}
+
+function resolveEntityAlias(aliasMap, value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  return aliasMap.get(raw) ?? aliasMap.get(slugToken(raw)) ?? raw;
+}
+
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value ?? null));
 }
@@ -416,15 +437,76 @@ export function normalizeSceneDoc(input = {}) {
   const settingsCameraMode = String(source.settings?.camera_mode ?? source.settings?.cameraMode ?? "third_person")
     .trim()
     .toLowerCase();
-  const voxels = (Array.isArray(source.voxels) ? source.voxels : []).slice(0, 4096).map(sanitizeVoxelEntry);
-  const primitives = (Array.isArray(source.primitives) ? source.primitives : []).slice(0, 512).map(sanitizePrimitiveEntry);
-  const screens = (Array.isArray(source.screens) ? source.screens : []).slice(0, 64).map(sanitizeScreenEntry);
-  const players = (Array.isArray(source.players) ? source.players : []).slice(0, PRIVATE_WORLD_LIMITS.maxPlayers).map(sanitizePlayerEntry);
-  const texts = (Array.isArray(source.texts) ? source.texts : []).slice(0, 256).map(sanitizeText3Entry);
-  const triggerZones = (Array.isArray(source.trigger_zones ?? source.triggerZones) ? (source.trigger_zones ?? source.triggerZones) : []).slice(0, 128).map(sanitizeTriggerZoneEntry);
-  const prefabs = (Array.isArray(source.prefabs) ? source.prefabs : []).slice(0, 256).map(sanitizePrefabEntry);
-  const particles = (Array.isArray(source.particles) ? source.particles : []).slice(0, 256).map(sanitizeParticleEntry);
-  const rules = (Array.isArray(source.rules) ? source.rules : []).slice(0, 256).map(sanitizeRuleEntry);
+  const entityAliases = new Map();
+  const voxels = (Array.isArray(source.voxels) ? source.voxels : []).slice(0, 4096).map((entry, index) => {
+    const value = sanitizeVoxelEntry(entry, index);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
+  const primitives = (Array.isArray(source.primitives) ? source.primitives : []).slice(0, 512).map((entry, index) => {
+    const value = sanitizePrimitiveEntry(entry, index);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
+  const screens = (Array.isArray(source.screens) ? source.screens : []).slice(0, 64).map((entry, index) => {
+    const value = sanitizeScreenEntry(entry, index);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
+  const players = (Array.isArray(source.players) ? source.players : []).slice(0, PRIVATE_WORLD_LIMITS.maxPlayers).map((entry, index) => {
+    const value = sanitizePlayerEntry(entry, index);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
+  const texts = (Array.isArray(source.texts) ? source.texts : []).slice(0, 256).map((entry, index) => {
+    const value = sanitizeText3Entry(entry, index);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
+  const triggerZones = (Array.isArray(source.trigger_zones ?? source.triggerZones) ? (source.trigger_zones ?? source.triggerZones) : []).slice(0, 128).map((entry, index) => {
+    const value = sanitizeTriggerZoneEntry(entry, index);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
+  const prefabs = (Array.isArray(source.prefabs) ? source.prefabs : []).slice(0, 256).map((entry, index) => {
+    const value = sanitizePrefabEntry(entry, index);
+    return {
+      ...value,
+      entity_ids: Array.from(new Set((value.entity_ids ?? []).map((entityId) => resolveEntityAlias(entityAliases, entityId)).filter(Boolean))),
+    };
+  });
+  const particles = (Array.isArray(source.particles) ? source.particles : []).slice(0, 256).map((entry, index) => {
+    const value = sanitizeParticleEntry(entry, index);
+    return {
+      ...value,
+      target_id: resolveEntityAlias(entityAliases, value.target_id),
+    };
+  });
+  const rules = (Array.isArray(source.rules) ? source.rules : []).slice(0, 256).map((entry, index) => {
+    const value = sanitizeRuleEntry(entry, index);
+    const payload = cloneJson(value.payload ?? {});
+    if (payload.target_id || payload.targetId) {
+      const mappedTargetId = resolveEntityAlias(entityAliases, payload.target_id ?? payload.targetId);
+      payload.target_id = mappedTargetId;
+      delete payload.targetId;
+    }
+    if (payload.particle_id || payload.particleId) {
+      const mappedParticleId = resolveEntityAlias(entityAliases, payload.particle_id ?? payload.particleId);
+      payload.particle_id = mappedParticleId;
+      delete payload.particleId;
+    }
+    if (payload.text_id || payload.textId) {
+      const mappedTextId = resolveEntityAlias(entityAliases, payload.text_id ?? payload.textId);
+      payload.text_id = mappedTextId;
+      delete payload.textId;
+    }
+    return {
+      ...value,
+      source_id: resolveEntityAlias(entityAliases, value.source_id),
+      target_id: resolveEntityAlias(entityAliases, value.target_id),
+      payload,
+    };
+  });
   const scriptDsl = String(source.script_dsl ?? source.scriptDsl ?? buildRuleDsl(rules)).trim().slice(0, 20000);
   return {
     settings: {

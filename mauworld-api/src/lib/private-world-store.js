@@ -367,6 +367,16 @@ function emitPrivateWorldEvent(store, event) {
   }
 }
 
+async function syncRuntimeForWorld(store, world, creator) {
+  if (!store.privateWorldRuntime?.syncWorldByReference || !world?.world_id || !creator?.username) {
+    return null;
+  }
+  return await store.privateWorldRuntime.syncWorldByReference({
+    worldId: world.world_id,
+    creatorUsername: creator.username,
+  });
+}
+
 async function buildWorldDetail(store, { world, creator, requesterProfile = null, includeContent = false, allowGuest = false } = {}) {
   const collaborators = await loadWorldCollaborators(store, world.id);
   const collaboratorRole = requesterProfile
@@ -397,6 +407,12 @@ async function buildWorldDetail(store, { world, creator, requesterProfile = null
   const locks = permissions.can_edit && scenes.length > 0
     ? await loadWorldLocks(store, world.id, scenes[0].id)
     : [];
+  const runtimeSnapshot = activeInstance
+    ? (
+        store.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
+        ?? await syncRuntimeForWorld(store, world, creator)
+      )
+    : null;
   const isImported = Boolean(
     world.imported_at
     || world.origin_world_id
@@ -456,6 +472,7 @@ async function buildWorldDetail(store, { world, creator, requesterProfile = null
             participants: activeParticipants.map(serializeVisibleParticipant).filter(Boolean),
             viewer_count: activeParticipants.length,
             visible_participant_count: activeParticipants.filter((row) => row.visible_to_others !== false).length,
+            runtime: runtimeSnapshot,
             locks: locks.map((row) => ({
               scene_id: row.scene_id,
               entity_key: row.entity_key,
@@ -524,6 +541,10 @@ export function installPrivateWorldStore(MauworldStore) {
     return () => {
       this.__privateWorldSubscribers?.delete(listener);
     };
+  };
+
+  MauworldStore.prototype.publishPrivateWorldEvent = function publishPrivateWorldEvent(event) {
+    emitPrivateWorldEvent(this, event);
   };
 
   MauworldStore.prototype.getPublicAuthConfig = async function getPublicAuthConfig() {
@@ -744,6 +765,7 @@ export function installPrivateWorldStore(MauworldStore) {
       world_id: updated.world_id,
       creator_username: creator.username,
     });
+    await syncRuntimeForWorld(this, updated, creator);
     return await buildWorldDetail(this, {
       world: updated,
       creator,
@@ -828,6 +850,7 @@ export function installPrivateWorldStore(MauworldStore) {
       creator_username: creator.username,
       scene_id: scene.id,
     });
+    await syncRuntimeForWorld(this, world, creator);
 
     return {
       scene: serializeScene(scene),
@@ -882,6 +905,7 @@ export function installPrivateWorldStore(MauworldStore) {
       creator_username: creator.username,
       prefab_id: prefab.id,
     });
+    await syncRuntimeForWorld(this, world, creator);
     return {
       prefab: serializePrefab(prefab),
     };
@@ -1285,6 +1309,7 @@ export function installPrivateWorldStore(MauworldStore) {
       creator_username: creator.username,
       instance_id: instance.id,
     });
+    await syncRuntimeForWorld(this, world, creator);
 
     const detail = await buildWorldDetail(this, {
       world,
@@ -1333,6 +1358,7 @@ export function installPrivateWorldStore(MauworldStore) {
         creator_username: creator.username,
         instance_id: instance.id,
       });
+      await syncRuntimeForWorld(this, world, creator);
       return {
         removed: true,
         active: false,
@@ -1344,6 +1370,7 @@ export function installPrivateWorldStore(MauworldStore) {
       creator_username: creator.username,
       instance_id: instance.id,
     });
+    await syncRuntimeForWorld(this, world, creator);
     return {
       removed: true,
       active: true,
@@ -1374,6 +1401,7 @@ export function installPrivateWorldStore(MauworldStore) {
       creator_username: creator.username,
       instance_id: instance.id,
     });
+    await syncRuntimeForWorld(this, world, creator);
     return {
       ready: input.ready === true,
     };
@@ -1416,6 +1444,7 @@ export function installPrivateWorldStore(MauworldStore) {
       creator_username: creator.username,
       instance_id: updated.id,
     });
+    await syncRuntimeForWorld(this, world, creator);
     return {
       instance: updated,
     };
@@ -1456,9 +1485,25 @@ export function installPrivateWorldStore(MauworldStore) {
       creator_username: creator.username,
       instance_id: updated.id,
     });
+    await syncRuntimeForWorld(this, world, creator);
     return {
       instance: updated,
     };
+  };
+
+  MauworldStore.prototype.queuePrivateWorldInput = async function queuePrivateWorldInput(profile, input = {}) {
+    const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
+    if (!this.privateWorldRuntime?.queueInputByReference) {
+      throw new HttpError(503, "Private world runtime is unavailable");
+    }
+    const result = await this.privateWorldRuntime.queueInputByReference({
+      worldId: world.world_id,
+      creatorUsername: creator.username,
+      profile,
+      key: input.key,
+      state: input.state,
+    });
+    return result;
   };
 
   MauworldStore.prototype.acquirePrivateWorldEntityLock = async function acquirePrivateWorldEntityLock(profile, input = {}) {

@@ -2,12 +2,14 @@ import http from "node:http";
 import { createApp } from "./create-app.js";
 import { loadConfig } from "./config.js";
 import { installPrivateWorldGateway } from "./lib/private-world-gateway.js";
+import { installPrivateWorldRuntime } from "./lib/private-world-runtime.js";
 import { installRealtimeGateway } from "./lib/realtime-gateway.js";
 import { shouldRepairPublicWorld } from "./lib/moltbook-import.js";
 import { MauworldStore } from "./lib/supabase-store.js";
 
 const config = loadConfig();
 const store = new MauworldStore(config);
+const privateWorldRuntime = installPrivateWorldRuntime(store);
 const shouldRunStartupMaintenance =
   /^https?:\/\//i.test(config.publicBaseUrl)
   && !/\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(config.publicBaseUrl);
@@ -223,6 +225,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     void Promise.allSettled([
       realtimeGateway.dispose(),
       privateWorldGateway.dispose(),
+      privateWorldRuntime.stop(),
     ]);
   });
 }
