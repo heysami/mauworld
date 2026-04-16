@@ -2492,6 +2492,7 @@ function renderSessionSummary() {
   if (!elements.panelSessionLabel || !elements.panelOpenAccess) {
     return;
   }
+  const localParticipant = getLocalParticipant();
   if (state.session && state.profile) {
     elements.panelSessionLabel.textContent = `Signed in as @${state.profile.username || "user"}. Access opens profile and sign out.`;
     elements.panelOpenAccess.textContent = "Profile";
@@ -2500,6 +2501,11 @@ function renderSessionSummary() {
   if (state.session) {
     elements.panelSessionLabel.textContent = "Signed in. Access opens profile and sign out.";
     elements.panelOpenAccess.textContent = "Profile";
+    return;
+  }
+  if (localParticipant?.join_role === "guest") {
+    elements.panelSessionLabel.textContent = "Viewing as guest. Access opens sign in or account creation.";
+    elements.panelOpenAccess.textContent = "Access";
     return;
   }
   elements.panelSessionLabel.textContent = "Signed out. Access opens sign in or account creation.";
@@ -3186,7 +3192,9 @@ function renderPrivateChat() {
   const chatHint = !state.selectedWorld
     ? "Open Worlds to create or enter a private world."
     : !state.session
-      ? "Open Access to sign in, then enter this world."
+      ? localParticipant
+        ? "Viewing as guest. Sign in to chat, edit, or take a player."
+        : "Enter as guest to look around, or sign in for chat and editing."
       : !localParticipant
         ? "Enter this world to speak nearby."
         : "";
