@@ -22,7 +22,7 @@ const PRIVATE_CAMERA = {
   wheelFactor: 0.045,
 };
 const PRIVATE_PLAYER_VIEW = {
-  lookHeight: 4.8,
+  lookHeight: 7.6,
   minRadius: 16,
   maxRadius: 110,
   defaultRadius: 28,
@@ -240,7 +240,7 @@ const state = {
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
   launcherTab: "create",
-  privatePanelTab: "build",
+  privatePanelTab: "chat",
   mode: "play",
   lockHeartbeatTimer: 0,
   privateChatEntries: [],
@@ -1149,10 +1149,21 @@ function getPrivateViewerRigConfig(world = state.selectedWorld) {
   const length = Math.max(4, Number(world?.length ?? (world ? 40 : 64)) || (world ? 40 : 64));
   const height = Math.max(2, Number(world?.height ?? (world ? 10 : 12)) || (world ? 10 : 12));
   const span = Math.max(width, length);
-  const minRadius = clampNumber(span * 0.14, 9, 7, 22);
-  const defaultRadius = clampNumber(span * 0.3, 14, minRadius + 3, 32);
-  const maxRadius = clampNumber(span * 0.56, 28, defaultRadius + 5, 62);
-  const spawnHeight = clampNumber(height * 0.32, PRIVATE_CAMERA.minY + 0.8, PRIVATE_CAMERA.minY + 0.8, Math.max(PRIVATE_CAMERA.minY + 1.4, height * 0.7));
+  const minRadius = clampNumber(span * 0.22, 16, 12, 28);
+  const defaultRadius = clampNumber(span * 0.38, 24, minRadius + 4, 42);
+  const maxRadius = clampNumber(span * 0.72, 52, defaultRadius + 8, 84);
+  const spawnHeight = clampNumber(
+    Math.max(height * 0.5, 8),
+    8,
+    8,
+    Math.max(12, Math.min(24, height * 0.78 + 4)),
+  );
+  const lookHeight = clampNumber(
+    Math.max(height * 0.72, PRIVATE_PLAYER_VIEW.lookHeight),
+    PRIVATE_PLAYER_VIEW.lookHeight,
+    6,
+    Math.max(PRIVATE_PLAYER_VIEW.lookHeight + 1.4, height + 4),
+  );
   return {
     width,
     length,
@@ -1161,6 +1172,7 @@ function getPrivateViewerRigConfig(world = state.selectedWorld) {
     defaultRadius,
     maxRadius,
     spawnHeight,
+    lookHeight,
     minY: PRIVATE_CAMERA.minY,
     maxY: Math.max(PRIVATE_CAMERA.minY + 8, height + 12),
   };
@@ -1242,8 +1254,9 @@ function getPrivateFlatForwardVector(yaw = privateInputState.yaw) {
   return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
 }
 
-function getPrivatePlayerLookTarget(position = state.viewerPosition) {
-  return position.clone().add(new THREE.Vector3(0, PRIVATE_PLAYER_VIEW.lookHeight, 0));
+function getPrivatePlayerLookTarget(position = state.viewerPosition, world = state.selectedWorld) {
+  const rig = getPrivateViewerRigConfig(world);
+  return position.clone().add(new THREE.Vector3(0, rig.lookHeight, 0));
 }
 
 function getPrivateCameraForwardVector(yaw = privateInputState.yaw, pitch = privateInputState.pitch) {
@@ -1319,9 +1332,10 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
     rig.maxRadius,
   );
   const cosPitch = Math.cos(privateInputState.pitch);
+  const heightBias = Math.max(4.8, rig.spawnHeight * 0.46);
   preview.camera.position.set(
     target.x + Math.sin(privateInputState.yaw) * cosPitch * radius,
-    Math.max(1.6, target.y - Math.sin(privateInputState.pitch) * radius),
+    Math.max(2.8, target.y + heightBias - Math.sin(privateInputState.pitch) * radius),
     target.z + Math.cos(privateInputState.yaw) * cosPitch * radius,
   );
   preview.camera.lookAt(target);
@@ -3947,9 +3961,9 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
       ? new THREE.PlaneGeometry(bounds.width, bounds.length)
       : new THREE.CircleGeometry(groundRadius, 72),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(world ? "#eef6ff" : PRIVATE_WORLD_STYLE.ground),
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.ground),
       transparent: true,
-      opacity: 1,
+      opacity: world ? 0.98 : 1,
       side: THREE.DoubleSide,
     }),
   );
@@ -3957,24 +3971,34 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   ground.position.y = 0;
   preview.environment.add(ground);
 
-  const groundRim = new THREE.Mesh(
-    new THREE.RingGeometry(groundRadius * 0.985, groundRadius, 96),
-    new THREE.MeshBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
-      transparent: true,
-      opacity: world ? 0.34 : 0.46,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      fog: false,
-    }),
-  );
+  const groundRim = world
+    ? new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.PlaneGeometry(bounds.width, bounds.length)),
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
+        transparent: true,
+        opacity: 0.54,
+        fog: false,
+      }),
+    )
+    : new THREE.Mesh(
+      new THREE.RingGeometry(groundRadius * 0.985, groundRadius, 96),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
+        transparent: true,
+        opacity: 0.46,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
   groundRim.rotation.x = -Math.PI / 2;
   groundRim.position.y = 0.02;
   preview.environment.add(groundRim);
 
   const gridSize = Math.max(bounds.width, bounds.length);
   const gridDivisions = Math.max(4, Math.round(gridSize));
-  const grid = new THREE.GridHelper(gridSize, gridDivisions, "#8fb8ff", "#c7dcff");
+  const grid = new THREE.GridHelper(gridSize, gridDivisions, "#7fa7ff", "#bfd6ff");
   grid.position.y = 0.04;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
     material.opacity = 0.32;
@@ -4015,20 +4039,20 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   }
   if (preview.groundRim) {
     preview.groundRim.visible = true;
-    preview.groundRim.material.opacity = noWorld ? 0.46 : (showGridHint ? 0.52 : 0.34);
+    preview.groundRim.material.opacity = noWorld ? 0.46 : (showGridHint ? 0.62 : 0.5);
   }
-  preview.buildGrid.visible = buildMode || noWorld || showGridHint;
+  preview.buildGrid.visible = noWorld || Boolean(state.selectedWorld);
   if (preview.buildGrid.material) {
     const materials = Array.isArray(preview.buildGrid.material)
       ? preview.buildGrid.material
       : [preview.buildGrid.material];
     for (const material of materials) {
-      material.opacity = noWorld ? 0.22 : (showGridHint ? 0.38 : (buildMode ? 0.32 : 0));
+      material.opacity = noWorld ? 0.22 : (showGridHint ? 0.44 : (buildMode ? 0.34 : 0.22));
     }
   }
   if (preview.buildFootprint) {
     preview.buildFootprint.visible = true;
-    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (showGridHint ? 0.4 : (buildMode ? 0.44 : 0.16));
+    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (showGridHint ? 0.48 : (buildMode ? 0.5 : 0.34));
   }
 }
 
@@ -4048,10 +4072,45 @@ function buildWorldBoundsPreview(world = state.selectedWorld) {
       color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
       transparent: true,
       opacity: world.world_type === "field" ? 0.22 : 0.32,
+      fog: false,
     }),
   );
   boundsLines.position.set(0, height / 2, 0);
   group.add(boundsLines);
+
+  if (world.world_type === "room") {
+    const wallMaterial = new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#ffffff"),
+      transparent: true,
+      opacity: 0.2,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false,
+    });
+    const backWall = new THREE.Mesh(new THREE.PlaneGeometry(width, height), wallMaterial.clone());
+    backWall.position.set(0, height / 2, -length / 2);
+    const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(length, height), wallMaterial.clone());
+    leftWall.rotation.y = Math.PI / 2;
+    leftWall.position.set(-width / 2, height / 2, 0);
+    const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(length, height), wallMaterial.clone());
+    rightWall.rotation.y = -Math.PI / 2;
+    rightWall.position.set(width / 2, height / 2, 0);
+    group.add(backWall, leftWall, rightWall);
+  }
+
+  if (world.world_type === "board") {
+    const rail = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(width, Math.max(0.4, height * 0.14), length)),
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color(PRIVATE_WORLD_STYLE.outline),
+        transparent: true,
+        opacity: 0.26,
+        fog: false,
+      }),
+    );
+    rail.position.y = Math.max(0.2, height * 0.07);
+    group.add(rail);
+  }
   return group;
 }
 
