@@ -3791,6 +3791,8 @@ function buildPreviewEnvironment(preview) {
   const environment = new THREE.Group();
   preview.scene.add(environment);
   preview.environment = environment;
+  preview.ground = null;
+  preview.groundGlow = null;
   preview.buildGrid = null;
   refreshPrivatePreviewEnvironment(preview);
 }
@@ -3832,6 +3834,33 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   preview.environmentKey = nextKey;
   clearPrivatePreviewEnvironment(preview);
 
+  const groundRadius = clampNumber(Math.max(bounds.width, bounds.length) * 0.82, 48, 28, 240);
+  const groundGlow = new THREE.Mesh(
+    new THREE.CircleGeometry(groundRadius * 1.12, 72),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.groundGlow),
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  groundGlow.rotation.x = -Math.PI / 2;
+  groundGlow.position.y = -2.08;
+  preview.environment.add(groundGlow);
+
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(groundRadius, 72),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.ground),
+      transparent: true,
+      opacity: 0.98,
+    }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -2;
+  preview.environment.add(ground);
+
   const gridSize = Math.max(bounds.width, bounds.length);
   const gridDivisions = Math.max(8, Math.min(96, Math.round(gridSize)));
   const grid = new THREE.GridHelper(gridSize, gridDivisions, "#d8e9ff", "#edf5ff");
@@ -3843,6 +3872,8 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
     material.fog = false;
   }
   preview.environment.add(grid);
+  preview.ground = ground;
+  preview.groundGlow = groundGlow;
   preview.buildGrid = grid;
   syncPrivatePreviewEnvironmentState(preview);
 }
@@ -3852,6 +3883,12 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
     return;
   }
   const buildMode = state.mode === "build" && isEditor();
+  if (preview.ground) {
+    preview.ground.visible = true;
+  }
+  if (preview.groundGlow) {
+    preview.groundGlow.visible = true;
+  }
   preview.buildGrid.visible = buildMode;
 }
 
