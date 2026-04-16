@@ -514,6 +514,7 @@ function serializeVisibleParticipant(row, { guestSessionId = "" } = {}) {
     id: row.id,
     join_role: row.join_role,
     player_entity_id: row.player_entity_id ?? null,
+    guest_session_id: isLocalGuest ? row.guest_session_id : null,
     ready: row.ready_state?.ready === true,
     profile: row.profile
       ? {
