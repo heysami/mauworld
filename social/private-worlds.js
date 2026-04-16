@@ -3853,6 +3853,7 @@ function buildPreviewEnvironment(preview) {
   preview.scene.add(environment);
   preview.environment = environment;
   preview.ground = null;
+  preview.groundRim = null;
   preview.groundGlow = null;
   preview.buildGrid = null;
   preview.buildFootprint = null;
@@ -3902,12 +3903,27 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
     new THREE.MeshBasicMaterial({
       color: new THREE.Color(PRIVATE_WORLD_STYLE.ground),
       transparent: true,
-      opacity: 1,
+      opacity: 0.98,
     }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -2;
   preview.environment.add(ground);
+
+  const groundRim = new THREE.Mesh(
+    new THREE.RingGeometry(groundRadius * 0.985, groundRadius, 96),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
+      transparent: true,
+      opacity: world ? 0.34 : 0.46,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  groundRim.rotation.x = -Math.PI / 2;
+  groundRim.position.y = -1.98;
+  preview.environment.add(groundRim);
 
   const gridSize = Math.max(bounds.width, bounds.length);
   const gridDivisions = Math.max(4, Math.round(gridSize));
@@ -3933,6 +3949,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   footprint.position.y = 0.02;
   preview.environment.add(footprint);
   preview.ground = ground;
+  preview.groundRim = groundRim;
   preview.groundGlow = null;
   preview.buildGrid = grid;
   preview.buildFootprint = footprint;
@@ -3943,14 +3960,27 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   if (!preview?.buildGrid) {
     return;
   }
+  const noWorld = !state.selectedWorld;
   const buildMode = state.mode === "build" && isEditor();
   if (preview.ground) {
     preview.ground.visible = true;
   }
-  preview.buildGrid.visible = buildMode;
+  if (preview.groundRim) {
+    preview.groundRim.visible = true;
+    preview.groundRim.material.opacity = noWorld ? 0.46 : 0.28;
+  }
+  preview.buildGrid.visible = buildMode || noWorld;
+  if (preview.buildGrid.material) {
+    const materials = Array.isArray(preview.buildGrid.material)
+      ? preview.buildGrid.material
+      : [preview.buildGrid.material];
+    for (const material of materials) {
+      material.opacity = noWorld ? 0.2 : (buildMode ? 0.32 : 0);
+    }
+  }
   if (preview.buildFootprint) {
     preview.buildFootprint.visible = true;
-    preview.buildFootprint.material.opacity = buildMode ? 0.44 : 0.16;
+    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (buildMode ? 0.44 : 0.16);
   }
 }
 
