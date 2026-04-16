@@ -229,6 +229,7 @@ const state = {
   worldSocket: null,
   preview: null,
   eventLog: [],
+  livePresence: new Map(),
   joinedAsGuest: false,
   joined: false,
   launcherOpen: true,
@@ -420,6 +421,15 @@ function normalizeAngle(angle) {
   return next;
 }
 
+function hashPrivateString(value = "") {
+  let hash = 0;
+  const source = String(value ?? "");
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash << 5) - hash + source.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash);
+}
+
 function createOutlineShell(geometry, color, scale = 1.08) {
   const shell = new THREE.Mesh(
     geometry.clone(),
@@ -532,6 +542,346 @@ function createViewerAvatarFigure(options = {}) {
     halo,
     orb,
   };
+}
+
+function getPrivatePresenceEntryId(entry = {}) {
+  return String(entry.viewer_session_id ?? entry.viewerSessionId ?? entry.id ?? "").trim();
+}
+
+function getPrivatePresenceDisplayName(entry = {}) {
+  const actor = entry.actor ?? {};
+  const actorName = String(actor.display_name ?? actor.displayName ?? "").trim();
+  if (actorName) {
+    return actorName;
+  }
+  const movementName = String(entry.movement_state?.displayName ?? entry.movement_state?.display_name ?? "").trim();
+  if (movementName) {
+    return movementName;
+  }
+  return "viewer";
+}
+
+function buildPrivatePresenceObject(entry) {
+  const presenceId = getPrivatePresenceEntryId(entry);
+  const displayName = getPrivatePresenceDisplayName(entry);
+  const seed = hashPrivateString(presenceId || displayName);
+  const accents = PRIVATE_WORLD_STYLE.accents;
+  const primary = accents[seed % accents.length];
+  const secondary = accents[(seed + 2) % accents.length];
+  const tertiary = accents[(seed + 4) % accents.length];
+  const figure = createViewerAvatarFigure({
+    scale: 0.72,
+    outlineColor: primary,
+    primary,
+    secondary,
+    tertiary,
+  });
+  figure.group.position.set(
+    Number(entry.position_x ?? 0) || 0,
+    Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
+    Number(entry.position_z ?? 0) || 0,
+  );
+  return {
+    id: presenceId,
+    group: figure.group,
+    halo: figure.halo,
+    orb: figure.orb,
+    orbBaseY: figure.orb.position.y,
+    baseY: Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
+    position: new THREE.Vector3(
+      Number(entry.position_x ?? 0) || 0,
+      Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
+      Number(entry.position_z ?? 0) || 0,
+    ),
+    targetPosition: new THREE.Vector3(
+      Number(entry.position_x ?? 0) || 0,
+      Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
+      Number(entry.position_z ?? 0) || 0,
+    ),
+    displayName,
+    bob: 0.55 + Math.random() * 0.35,
+    phase: Math.random() * Math.PI * 2,
+  };
+}
+
+function getPrivateBrowserHostPosition(hostSessionId = "") {
+  const normalized = String(hostSessionId ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === getPrivateViewerSessionId()) {
+    const position = getPrivatePresencePosition();
+    return new THREE.Vector3(position.x, position.y, position.z);
+  }
+  const entry = state.livePresence.get(normalized);
+  if (!entry) {
+    return null;
+  }
+  return new THREE.Vector3(
+    Number(entry.position_x ?? 0) || 0,
+    Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
+    Number(entry.position_z ?? 0) || 0,
+  );
+}
+
+function createPrivateShareBubbleTexture(session = {}) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 320;
+  const context = canvas.getContext("2d");
+  const shareKind = String(session.shareKind ?? "screen");
+  const accent = shareKind === "audio"
+    ? PRIVATE_WORLD_STYLE.accents[3]
+    : shareKind === "camera"
+      ? PRIVATE_WORLD_STYLE.accents[0]
+      : PRIVATE_WORLD_STYLE.accents[1];
+  const symbol = shareKind === "audio"
+    ? "Voice"
+    : shareKind === "camera"
+      ? "Video"
+      : "Screen";
+  const title = getPrivateBrowserSessionTitle(session).slice(0, 36);
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "rgba(255,255,255,0.96)";
+  context.strokeStyle = "#33407a";
+  context.lineWidth = 12;
+  const radius = 34;
+  context.beginPath();
+  context.moveTo(radius, 16);
+  context.lineTo(canvas.width - radius, 16);
+  context.quadraticCurveTo(canvas.width - 16, 16, canvas.width - 16, radius);
+  context.lineTo(canvas.width - 16, canvas.height - radius - 28);
+  context.quadraticCurveTo(canvas.width - 16, canvas.height - 44, canvas.width - radius, canvas.height - 44);
+  context.lineTo(186, canvas.height - 44);
+  context.lineTo(130, canvas.height - 16);
+  context.lineTo(138, canvas.height - 44);
+  context.lineTo(radius, canvas.height - 44);
+  context.quadraticCurveTo(16, canvas.height - 44, 16, canvas.height - radius - 28);
+  context.lineTo(16, radius);
+  context.quadraticCurveTo(16, 16, radius, 16);
+  context.closePath();
+  context.fill();
+  context.stroke();
+
+  context.fillStyle = accent;
+  context.globalAlpha = 0.12;
+  context.fillRect(28, 30, canvas.width - 56, 82);
+  context.globalAlpha = 1;
+
+  context.fillStyle = "#24336d";
+  context.font = "800 38px Manrope, sans-serif";
+  context.textBaseline = "middle";
+  context.fillText(symbol, 42, 70);
+  context.font = "700 34px Manrope, sans-serif";
+  context.fillText(title || `${symbol} live`, 42, 170, canvas.width - 84);
+  context.fillStyle = "#7282b9";
+  context.font = "600 26px Manrope, sans-serif";
+  context.fillText("live nearby", 42, 224);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function removePrivateShareBubbleEntry(sessionId) {
+  const preview = state.preview;
+  const entry = preview?.browserShareEntries?.get(sessionId);
+  if (!entry) {
+    return;
+  }
+  preview.browserShareEntries.delete(sessionId);
+  entry.group.parent?.remove(entry.group);
+  entry.texture?.dispose?.();
+  entry.mesh.geometry?.dispose?.();
+  entry.mesh.material?.dispose?.();
+}
+
+function ensurePrivateShareBubbleEntry(session = {}) {
+  const preview = state.preview;
+  if (!preview?.browserShares) {
+    return null;
+  }
+  const sessionId = String(session.sessionId ?? "").trim();
+  if (!sessionId) {
+    return null;
+  }
+  const existing = preview.browserShareEntries.get(sessionId);
+  if (existing) {
+    return existing;
+  }
+  const texture = createPrivateShareBubbleTexture(session);
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(7.8, 4.9),
+    new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+    }),
+  );
+  const group = new THREE.Group();
+  group.add(mesh);
+  preview.browserShares.add(group);
+  const entry = {
+    sessionId,
+    group,
+    mesh,
+    texture,
+    key: "",
+  };
+  preview.browserShareEntries.set(sessionId, entry);
+  return entry;
+}
+
+function reconcilePrivateShareBubbles() {
+  const preview = state.preview;
+  if (!preview?.browserShareEntries) {
+    return;
+  }
+  const activeIds = new Set([...state.browserSessions.keys()]);
+  for (const sessionId of [...preview.browserShareEntries.keys()]) {
+    if (!activeIds.has(sessionId)) {
+      removePrivateShareBubbleEntry(sessionId);
+    }
+  }
+  for (const session of state.browserSessions.values()) {
+    ensurePrivateShareBubbleEntry(session);
+  }
+}
+
+function updatePrivateShareBubbles(elapsedSeconds) {
+  const preview = state.preview;
+  if (!preview?.browserShareEntries?.size || !preview?.camera) {
+    return;
+  }
+  for (const session of state.browserSessions.values()) {
+    const entry = ensurePrivateShareBubbleEntry(session);
+    if (!entry) {
+      continue;
+    }
+    const hostPosition = getPrivateBrowserHostPosition(session.hostSessionId);
+    if (!hostPosition) {
+      entry.group.visible = false;
+      continue;
+    }
+    const nextKey = `${session.shareKind || "screen"}:${getPrivateBrowserSessionTitle(session)}`;
+    if (entry.key !== nextKey) {
+      entry.texture?.dispose?.();
+      entry.texture = createPrivateShareBubbleTexture(session);
+      entry.mesh.material.map = entry.texture;
+      entry.mesh.material.needsUpdate = true;
+      entry.key = nextKey;
+    }
+    entry.group.visible = true;
+    entry.group.position.copy(hostPosition);
+    entry.group.position.y += 18 + Math.sin(elapsedSeconds * 1.2) * 0.5;
+    entry.mesh.quaternion.copy(preview.camera.quaternion);
+  }
+}
+
+function removePrivatePresenceObject(presenceId) {
+  const preview = state.preview;
+  const entry = preview?.presenceEntries?.get(presenceId);
+  if (!entry) {
+    return;
+  }
+  preview.presenceEntries.delete(presenceId);
+  entry.group.parent?.remove(entry.group);
+  entry.group.traverse((node) => {
+    node.geometry?.dispose?.();
+    if (Array.isArray(node.material)) {
+      node.material.forEach((material) => material?.dispose?.());
+    } else {
+      node.material?.dispose?.();
+    }
+  });
+}
+
+function upsertPrivatePresenceObject(entry) {
+  const preview = state.preview;
+  const presenceId = getPrivatePresenceEntryId(entry);
+  if (!preview?.presence || !presenceId || presenceId === getPrivateViewerSessionId()) {
+    return;
+  }
+  const displayName = getPrivatePresenceDisplayName(entry);
+  const existing = preview.presenceEntries.get(presenceId);
+  if (!existing) {
+    const next = buildPrivatePresenceObject(entry);
+    preview.presenceEntries.set(presenceId, next);
+    preview.presence.add(next.group);
+    return;
+  }
+  existing.displayName = displayName;
+  existing.baseY = Number(entry.position_y ?? existing.baseY) || existing.baseY;
+  existing.targetPosition.set(
+    Number(entry.position_x ?? existing.targetPosition.x) || 0,
+    Number(entry.position_y ?? existing.targetPosition.y) || existing.targetPosition.y,
+    Number(entry.position_z ?? existing.targetPosition.z) || 0,
+  );
+}
+
+function reconcilePrivatePresenceScene() {
+  const preview = state.preview;
+  if (!preview?.presenceEntries) {
+    return;
+  }
+  const desiredIds = new Set(
+    [...state.livePresence.values()]
+      .map((entry) => getPrivatePresenceEntryId(entry))
+      .filter((presenceId) => presenceId && presenceId !== getPrivateViewerSessionId()),
+  );
+  for (const presenceId of [...preview.presenceEntries.keys()]) {
+    if (!desiredIds.has(presenceId)) {
+      removePrivatePresenceObject(presenceId);
+    }
+  }
+  for (const entry of state.livePresence.values()) {
+    upsertPrivatePresenceObject(entry);
+  }
+}
+
+function mergePrivatePresenceRows(rows = [], options = {}) {
+  if (options.replaceViewerSnapshot) {
+    state.livePresence.clear();
+  }
+  for (const entry of rows) {
+    const presenceId = getPrivatePresenceEntryId(entry);
+    if (!presenceId || presenceId === getPrivateViewerSessionId()) {
+      continue;
+    }
+    state.livePresence.set(presenceId, {
+      ...entry,
+    });
+  }
+  reconcilePrivatePresenceScene();
+}
+
+function removePrivatePresence(presenceId) {
+  const normalized = String(presenceId ?? "").trim();
+  if (!normalized) {
+    return;
+  }
+  state.livePresence.delete(normalized);
+  removePrivatePresenceObject(normalized);
+}
+
+function updatePrivatePresenceScene(deltaSeconds, elapsedSeconds) {
+  const preview = state.preview;
+  if (!preview?.presenceEntries) {
+    return;
+  }
+  for (const entry of preview.presenceEntries.values()) {
+    entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 7.5));
+    entry.group.position.copy(entry.position);
+    entry.group.position.y = entry.baseY + Math.sin(elapsedSeconds * entry.bob + entry.phase) * 0.9;
+    if (entry.halo) {
+      entry.halo.rotation.z += deltaSeconds * 1.14;
+    }
+    if (entry.orb) {
+      entry.orb.position.y = entry.orbBaseY + Math.sin(elapsedSeconds * 1.4 + entry.phase) * 0.26;
+    }
+  }
 }
 
 function getPreferredLauncherTab() {
@@ -890,6 +1240,43 @@ function sendWorldSocketMessage(payload) {
   }
   state.worldSocket.send(JSON.stringify(payload));
   return true;
+}
+
+function getPrivatePresencePosition() {
+  const possessed = getPossessedRuntimePlayer();
+  if (possessed?.position) {
+    return {
+      x: Number(possessed.position.x ?? 0) || 0,
+      y: Number(possessed.position.y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
+      z: Number(possessed.position.z ?? 0) || 0,
+      heading: Number(possessed.rotation?.y ?? privateInputState.yaw) || privateInputState.yaw,
+    };
+  }
+  return {
+    x: state.viewerPosition.x,
+    y: state.viewerPosition.y,
+    z: state.viewerPosition.z,
+    heading: privateInputState.yaw,
+  };
+}
+
+function sendPrivatePresence(force = false) {
+  if (!state.session || !state.joined || !getLocalParticipant()) {
+    return false;
+  }
+  const now = performance.now();
+  if (!force && now - state.lastPresenceSentAt < 120) {
+    return false;
+  }
+  state.lastPresenceSentAt = now;
+  const position = getPrivatePresencePosition();
+  return sendWorldSocketMessage({
+    type: "presence:update",
+    position_x: Number(position.x.toFixed(4)),
+    position_y: Number(position.y.toFixed(4)),
+    position_z: Number(position.z.toFixed(4)),
+    heading_y: Number(position.heading.toFixed(4)),
+  });
 }
 
 function pushPrivateChatEntry(payload = {}) {
@@ -1329,6 +1716,7 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
     syncPrivateBrowserMediaSubscription(next.sessionId, false);
   }
 
+  reconcilePrivateShareBubbles();
   updatePrivateBrowserPanel();
   renderPrivateLiveSharesList();
 }
@@ -1355,6 +1743,7 @@ function handlePrivateBrowserStop(payload = {}) {
       setPrivateBrowserPreviewStream(null);
     }
   }
+  reconcilePrivateShareBubbles();
   updatePrivateBrowserPanel();
   renderPrivateLiveSharesList();
 }
@@ -1381,6 +1770,7 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
     void state.browserMediaController?.disconnect?.();
     state.browserMediaController = null;
   }
+  reconcilePrivateShareBubbles();
   updatePrivateBrowserPanel();
   renderPrivateLiveSharesList();
 }
@@ -1738,6 +2128,8 @@ async function refreshAuthState() {
     state.worlds = [];
     state.runtimeSnapshot = null;
     state.privateChatEntries = [];
+    state.livePresence.clear();
+    reconcilePrivatePresenceScene();
     state.pressedRuntimeKeys.clear();
     privateInputState.keys.clear();
     privateInputState.sprintHoldSeconds = 0;
@@ -3273,17 +3665,23 @@ function ensurePreview() {
     camera,
     root: new THREE.Group(),
     actors: new THREE.Group(),
+    presence: new THREE.Group(),
+    browserShares: new THREE.Group(),
     trails: new THREE.Group(),
     raycaster: new THREE.Raycaster(),
     entityPickables: [],
     entityMeshes: new Map(),
     effectSystems: [],
     trailPuffs: [],
+    presenceEntries: new Map(),
+    browserShareEntries: new Map(),
     lastFrameAt: performance.now(),
   };
   buildPreviewEnvironment(state.preview);
   state.preview.scene.add(state.preview.root);
   state.preview.scene.add(state.preview.actors);
+  state.preview.scene.add(state.preview.presence);
+  state.preview.scene.add(state.preview.browserShares);
   state.preview.scene.add(state.preview.trails);
   ensureViewerAvatar(state.preview);
   resetViewerRig();
@@ -3318,6 +3716,9 @@ function ensurePreview() {
       updatePrivateMovement(state.preview, deltaSeconds);
       syncPrivateLocalAvatar(state.preview, timestamp / 1000);
     }
+    sendPrivatePresence();
+    updatePrivatePresenceScene(deltaSeconds, timestamp / 1000);
+    updatePrivateShareBubbles(timestamp / 1000);
     updatePreviewEffects(state.preview, timestamp / 1000);
     updateViewerTrailPuffs(state.preview, deltaSeconds);
     state.preview.renderer.render(state.preview.scene, state.preview.camera);
@@ -3931,6 +4332,7 @@ function connectWorldSocket() {
     renderPrivateChat();
     updatePrivateBrowserPanel();
     renderPrivateLiveSharesList();
+    sendPrivatePresence(true);
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -3948,6 +4350,12 @@ function connectWorldSocket() {
         updatePreviewFromSelection();
       } else if (payload.type === "world:error") {
         pushEvent("world:error", payload.message || "Unknown world socket error");
+      } else if (payload.type === "presence:snapshot") {
+        mergePrivatePresenceRows(payload.presence ?? [], { replaceViewerSnapshot: true });
+      } else if (payload.type === "presence:update") {
+        mergePrivatePresenceRows([payload.presence ?? {}]);
+      } else if (payload.type === "presence:remove") {
+        removePrivatePresence(payload.viewerSessionId);
       } else if (payload.type === "chat:event") {
         pushPrivateChatEntry(payload);
       } else if (payload.type === "chat:error") {
@@ -3994,6 +4402,8 @@ function connectWorldSocket() {
   });
   socket.addEventListener("close", () => {
     state.worldSocketKey = "";
+    state.livePresence.clear();
+    reconcilePrivatePresenceScene();
     renderPrivateChat();
     updatePrivateBrowserPanel();
     renderPrivateLiveSharesList();
@@ -4028,6 +4438,8 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.worldMenuOpen = false;
   if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
     state.privateChatEntries = [];
+    state.livePresence.clear();
+    reconcilePrivatePresenceScene();
     resetViewerRig(payload.world);
     resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
   }
@@ -4294,6 +4706,8 @@ async function leaveWorld() {
   });
   state.joined = false;
   state.joinedAsGuest = false;
+  state.livePresence.clear();
+  reconcilePrivatePresenceScene();
   state.pressedRuntimeKeys.clear();
   privateInputState.keys.clear();
   privateInputState.sprintHoldSeconds = 0;

@@ -114,6 +114,7 @@ export class PrivateWorldGateway {
         guestSessionId: guestSessionId || null,
         viewerSessionId: auth?.profile?.id ? `profile:${auth.profile.id}` : (guestSessionId || `guest:${Math.random().toString(36).slice(2, 10)}`),
         displayName: auth?.profile?.display_name || auth?.profile?.username || "guest viewer",
+        presence: null,
         chatRateLimitState: {},
         messageQueue: Promise.resolve(),
       };
@@ -132,6 +133,7 @@ export class PrivateWorldGateway {
         type: "world:snapshot",
         world: detail.world,
       });
+      this.sendExistingPresence(client);
       await this.syncBrowserAudience(client.browserWorldKey);
       this.sendExistingBrowserSessions(client);
     } catch (error) {
@@ -164,6 +166,10 @@ export class PrivateWorldGateway {
     }
     if (type === "chat:send") {
       this.handleChatSend(client, message);
+      return;
+    }
+    if (type === "presence:update") {
+      this.handlePresenceUpdate(client, message);
       return;
     }
     if (type === "browser:start") {
@@ -281,6 +287,64 @@ export class PrivateWorldGateway {
       displayName: client.displayName,
       text,
       createdAt: new Date().toISOString(),
+    });
+  }
+
+  buildPresencePayload(client) {
+    if (!client?.profile || !client?.presence) {
+      return null;
+    }
+    return {
+      viewerSessionId: client.viewerSessionId,
+      viewer_session_id: client.viewerSessionId,
+      actor_type: "viewer",
+      actor: {
+        display_name: client.displayName,
+      },
+      movement_state: {
+        displayName: client.displayName,
+      },
+      position_x: client.presence.position_x,
+      position_y: client.presence.position_y,
+      position_z: client.presence.position_z,
+      heading_y: client.presence.heading_y,
+    };
+  }
+
+  sendExistingPresence(client) {
+    const presence = this.getWorldClients(client.worldId, client.creatorUsername)
+      .map((entry) => this.buildPresencePayload(entry))
+      .filter(Boolean);
+    sendJson(client, {
+      type: "presence:snapshot",
+      presence,
+    });
+  }
+
+  handlePresenceUpdate(client, message) {
+    if (!client?.profile) {
+      return;
+    }
+    const positionX = Number(message.position_x);
+    const positionY = Number(message.position_y);
+    const positionZ = Number(message.position_z);
+    const headingY = Number(message.heading_y);
+    if (!Number.isFinite(positionX) || !Number.isFinite(positionY) || !Number.isFinite(positionZ)) {
+      return;
+    }
+    client.presence = {
+      position_x: positionX,
+      position_y: positionY,
+      position_z: positionZ,
+      heading_y: Number.isFinite(headingY) ? headingY : 0,
+    };
+    const presence = this.buildPresencePayload(client);
+    if (!presence) {
+      return;
+    }
+    this.broadcastToWorld(client.worldId, client.creatorUsername, {
+      type: "presence:update",
+      presence,
     });
   }
 
@@ -451,6 +515,12 @@ export class PrivateWorldGateway {
       await this.browserManager.stopSession(browserSession.id ?? browserSession.sessionId);
     } else {
       await this.syncBrowserAudience(client.browserWorldKey);
+    }
+    if (client.profile) {
+      this.broadcastToWorld(client.worldId, client.creatorUsername, {
+        type: "presence:remove",
+        viewerSessionId: client.viewerSessionId,
+      });
     }
   }
 
