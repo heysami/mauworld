@@ -1321,7 +1321,7 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
   const cosPitch = Math.cos(privateInputState.pitch);
   preview.camera.position.set(
     target.x + Math.sin(privateInputState.yaw) * cosPitch * radius,
-    target.y - Math.sin(privateInputState.pitch) * radius,
+    Math.max(1.6, target.y - Math.sin(privateInputState.pitch) * radius),
     target.z + Math.cos(privateInputState.yaw) * cosPitch * radius,
   );
   preview.camera.lookAt(target);
@@ -3950,6 +3950,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
       color: new THREE.Color(world ? "#eef6ff" : PRIVATE_WORLD_STYLE.ground),
       transparent: true,
       opacity: 1,
+      side: THREE.DoubleSide,
     }),
   );
   ground.rotation.x = -Math.PI / 2;
