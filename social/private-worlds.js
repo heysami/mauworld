@@ -519,6 +519,20 @@ function createViewerAvatarFigure(options = {}) {
   const tertiary = options.tertiary ?? accents.tertiary;
   const group = new THREE.Group();
   const poseRoot = new THREE.Group();
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(3.9 * scale, 40),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#dfe7f5"),
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = 0.05;
+  shadow.scale.set(1.16, 0.72, 1);
+  group.add(shadow);
   group.add(poseRoot);
 
   const bodyGeometry = new THREE.CapsuleGeometry(1.45 * scale, 2.4 * scale, 6, 16);
@@ -607,6 +621,7 @@ function createViewerAvatarFigure(options = {}) {
     poseRoot,
     halo,
     orb,
+    shadow,
   };
 }
 
@@ -3934,7 +3949,8 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   }
   preview.buildGrid.visible = buildMode;
   if (preview.buildFootprint) {
-    preview.buildFootprint.visible = buildMode;
+    preview.buildFootprint.visible = true;
+    preview.buildFootprint.material.opacity = buildMode ? 0.44 : 0.16;
   }
 }
 
