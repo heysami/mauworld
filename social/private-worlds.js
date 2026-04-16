@@ -8,8 +8,30 @@ const { mauworldApiUrl } = window.MauworldSocial;
 
 const AI_KEY_STORAGE_KEY = "mauworldPrivateWorldAiKey";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
-const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
+const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 const LAUNCHER_TABS = new Set(["create", "worlds", "access", "import"]);
+const PRIVATE_PANEL_TABS = new Set(["chat", "share", "build", "world"]);
+const PRIVATE_CAMERA = {
+  minY: 0,
+  maxY: 360,
+  lookMin: -1.1,
+  lookMax: 1.1,
+  movementSpeed: 48,
+  verticalSpeed: 34,
+  wheelFactor: 0.045,
+};
+const PRIVATE_PLAYER_VIEW = {
+  lookHeight: 7.6,
+  minRadius: 16,
+  maxRadius: 110,
+  defaultRadius: 28,
+};
+const PRIVATE_SPRINT = {
+  maxMultiplier: 5,
+  rampSeconds: 10,
+  decaySeconds: 10,
+};
+const PRIVATE_CHAT_MAX_ENTRIES = 28;
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
   fog: "#eff7ff",
@@ -50,6 +72,32 @@ const elements = {
   resolveForm: document.querySelector("[data-resolve-form]"),
   selectedTitle: document.querySelector("[data-selected-title]"),
   selectedSubtitle: document.querySelector("[data-selected-subtitle]"),
+  panelTitle: document.querySelector("[data-private-panel-title]"),
+  panelSubtitle: document.querySelector("[data-private-panel-subtitle]"),
+  panelChatComposer: document.querySelector("[data-private-chat-composer]"),
+  panelChatInput: document.querySelector("[data-private-chat-input]"),
+  panelChatStatus: document.querySelector("[data-private-chat-status]"),
+  panelChatLog: document.querySelector("[data-private-chat-log]"),
+  panelShareCopy: document.querySelector("[data-private-copy-link]"),
+  panelShareNative: document.querySelector("[data-private-native-share]"),
+  panelShareBadge: document.querySelector("[data-private-share-badge]"),
+  panelShareCurrent: document.querySelector("[data-private-share-current]"),
+  panelShareStatus: document.querySelector("[data-private-share-status]"),
+  panelShareMeta: document.querySelector("[data-private-share-meta]"),
+  panelBuildSummary: document.querySelector("[data-private-build-summary]"),
+  panelWorldMeta: document.querySelector("[data-private-panel-world-meta]"),
+  panelEvents: document.querySelector("[data-private-panel-events]"),
+  panelModeBuild: document.querySelector("[data-private-panel-mode-build]"),
+  panelModePlay: document.querySelector("[data-private-panel-mode-play]"),
+  panelScenes: document.querySelector("[data-private-panel-scenes]"),
+  panelWorld: document.querySelector("[data-private-panel-world]"),
+  panelExport: document.querySelector("[data-private-panel-export]"),
+  panelEnter: document.querySelector("[data-private-panel-enter]"),
+  panelLeave: document.querySelector("[data-private-panel-leave]"),
+  panelReady: document.querySelector("[data-private-panel-ready]"),
+  panelStart: document.querySelector("[data-private-panel-start]"),
+  panelRelease: document.querySelector("[data-private-panel-release]"),
+  panelReset: document.querySelector("[data-private-panel-reset]"),
   exportWorld: document.querySelector("[data-export-world]"),
   joinWorld: document.querySelector("[data-join-world]"),
   leaveWorld: document.querySelector("[data-leave-world]"),
@@ -94,6 +142,8 @@ const elements = {
 
 elements.launcherTabButtons = [...document.querySelectorAll("[data-launcher-tab]")];
 elements.launcherSections = [...document.querySelectorAll("[data-launcher-section]")];
+elements.privatePanelTabButtons = [...document.querySelectorAll("[data-private-panel-tab]")];
+elements.privatePanelViews = [...document.querySelectorAll("[data-private-panel-view]")];
 
 const state = {
   authConfig: null,
@@ -119,13 +169,18 @@ const state = {
   pressedRuntimeKeys: new Set(),
   pressedViewerKeys: new Set(),
   launcherTab: "create",
+  privatePanelTab: "chat",
   mode: "play",
   lockHeartbeatTimer: 0,
+  privateChatEntries: [],
   viewerYaw: -0.65,
   viewerPitch: -0.32,
-  viewerMoveSpeed: 18,
+  viewerMoveSpeed: PRIVATE_CAMERA.movementSpeed,
   viewerPosition: new THREE.Vector3(0, 0, 10),
   viewerCameraPosition: new THREE.Vector3(8, 6, 20),
+  cameraRadius: PRIVATE_PLAYER_VIEW.defaultRadius,
+  sprintHoldSeconds: 0,
+  lastPresenceSentAt: 0,
   viewerLookActive: false,
   viewerLookPointerId: 0,
   viewerLookLastX: 0,
@@ -150,6 +205,30 @@ function setStatus(text) {
   }
 }
 
+function getPrivateViewerSessionId() {
+  if (state.profile?.id) {
+    return `profile:${state.profile.id}`;
+  }
+  return getGuestSessionId();
+}
+
+function getPrivateDisplayName() {
+  return state.profile?.display_name || state.profile?.username || "guest viewer";
+}
+
+function setPrivatePanelTab(tab) {
+  const nextTab = PRIVATE_PANEL_TABS.has(tab) ? tab : "chat";
+  state.privatePanelTab = nextTab;
+  for (const button of elements.privatePanelTabButtons ?? []) {
+    const active = button.getAttribute("data-private-panel-tab") === nextTab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+  for (const view of elements.privatePanelViews ?? []) {
+    view.hidden = view.getAttribute("data-private-panel-view") !== nextTab;
+  }
+}
+
 function updateShellState() {
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
@@ -161,6 +240,7 @@ function updateShellState() {
     Boolean(state.builderSelection && state.mode === "build" && isEditor()),
   );
   setLauncherTab(state.launcherTab);
+  setPrivatePanelTab(state.privatePanelTab);
 }
 
 function setLauncherOpen(open) {
@@ -412,11 +492,14 @@ function getViewerSpawnPosition(world = state.selectedWorld) {
 function resetViewerRig(world = state.selectedWorld) {
   state.viewerYaw = -0.65;
   state.viewerPitch = -0.24;
+  state.viewerMoveSpeed = PRIVATE_CAMERA.movementSpeed;
+  state.cameraRadius = PRIVATE_PLAYER_VIEW.defaultRadius;
+  state.sprintHoldSeconds = 0;
   state.viewerPosition.copy(getViewerSpawnPosition(world));
-  const forward = new THREE.Vector3(Math.sin(state.viewerYaw), 0, -Math.cos(state.viewerYaw)).normalize();
-  state.viewerCameraPosition.copy(state.viewerPosition)
-    .addScaledVector(forward, -16.8)
-    .add(new THREE.Vector3(0, 8.2, 0));
+  state.viewerCameraPosition.set(state.viewerPosition.x, state.viewerPosition.y + 12, state.viewerPosition.z + state.cameraRadius);
+  if (state.preview?.camera) {
+    syncPrivateCameraToFollowTarget(state.preview);
+  }
   if (state.preview?.viewerAvatar) {
     state.preview.viewerAvatar.position.copy(state.viewerPosition);
     state.preview.viewerAvatar.lastPosition.copy(state.viewerPosition);
@@ -439,6 +522,97 @@ function setByPath(target, path, value) {
     cursor = cursor[key];
   }
   cursor[segments[segments.length - 1]] = value;
+}
+
+function getPrivateFlatForwardVector(yaw = state.viewerYaw) {
+  return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
+}
+
+function getPrivatePlayerLookTarget(position = state.viewerPosition) {
+  return position.clone().add(new THREE.Vector3(0, PRIVATE_PLAYER_VIEW.lookHeight, 0));
+}
+
+function getPrivateCameraForwardVector(yaw = state.viewerYaw, pitch = state.viewerPitch) {
+  const cosPitch = Math.cos(pitch);
+  return new THREE.Vector3(
+    -Math.sin(yaw) * cosPitch,
+    Math.sin(pitch),
+    -Math.cos(yaw) * cosPitch,
+  ).normalize();
+}
+
+function getPrivateCameraPlanarBasis(preview = state.preview) {
+  const fallbackForward = getPrivateFlatForwardVector();
+  if (!preview?.camera) {
+    return {
+      forward: fallbackForward,
+      right: new THREE.Vector3(Math.cos(state.viewerYaw), 0, -Math.sin(state.viewerYaw)),
+    };
+  }
+
+  const forward = new THREE.Vector3();
+  preview.camera.getWorldDirection(forward);
+  forward.y = 0;
+  if (forward.lengthSq() < 0.000001) {
+    forward.copy(fallbackForward);
+  } else {
+    forward.normalize();
+  }
+
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
+  if (right.lengthSq() < 0.000001) {
+    right.set(Math.cos(state.viewerYaw), 0, -Math.sin(state.viewerYaw));
+  } else {
+    right.normalize();
+  }
+  return { forward, right };
+}
+
+function getPrivateCameraMovementBasis(preview = state.preview) {
+  const planarBasis = getPrivateCameraPlanarBasis(preview);
+  if (!preview?.camera) {
+    return planarBasis;
+  }
+  const fullForward = new THREE.Vector3();
+  preview.camera.getWorldDirection(fullForward);
+  if (fullForward.lengthSq() < 0.000001) {
+    return planarBasis;
+  }
+  fullForward.normalize();
+
+  const tiltMix = Math.max(0, Math.min(1, (Math.abs(state.viewerPitch) - 0.34) / 0.5));
+  const forward = planarBasis.forward.clone().lerp(fullForward, tiltMix);
+  if (forward.lengthSq() < 0.000001) {
+    forward.copy(planarBasis.forward);
+  } else {
+    forward.normalize();
+  }
+
+  return {
+    forward,
+    right: planarBasis.right,
+  };
+}
+
+function syncPrivateCameraToFollowTarget(preview = state.preview) {
+  if (!preview?.camera) {
+    return;
+  }
+  const target = getPrivatePlayerLookTarget();
+  const radius = clampNumber(
+    state.cameraRadius,
+    PRIVATE_PLAYER_VIEW.defaultRadius,
+    PRIVATE_PLAYER_VIEW.minRadius,
+    PRIVATE_PLAYER_VIEW.maxRadius,
+  );
+  const cosPitch = Math.cos(state.viewerPitch);
+  preview.camera.position.set(
+    target.x + Math.sin(state.viewerYaw) * cosPitch * radius,
+    target.y - Math.sin(state.viewerPitch) * radius,
+    target.z + Math.cos(state.viewerYaw) * cosPitch * radius,
+  );
+  preview.camera.lookAt(target);
+  state.viewerCameraPosition.copy(preview.camera.position);
 }
 
 function deleteByPath(target, path) {
@@ -624,6 +798,49 @@ function buildSocketUrl(worldId, creatorUsername) {
   return url.toString();
 }
 
+function sendWorldSocketMessage(payload) {
+  if (!state.worldSocket || state.worldSocket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  state.worldSocket.send(JSON.stringify(payload));
+  return true;
+}
+
+function pushPrivateChatEntry(payload = {}) {
+  const text = String(payload.text ?? "").trim();
+  if (!text) {
+    return;
+  }
+  const actorSessionId = String(payload.actorSessionId ?? payload.viewerSessionId ?? "").trim();
+  const createdAt = payload.createdAt
+    ? new Date(payload.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  state.privateChatEntries.unshift({
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    actorSessionId,
+    displayName: String(payload.displayName ?? payload.actor?.display_name ?? "viewer").trim() || "viewer",
+    text,
+    createdAt,
+  });
+  state.privateChatEntries = state.privateChatEntries.slice(0, PRIVATE_CHAT_MAX_ENTRIES);
+  renderPrivateChat();
+}
+
+function sendPrivateChat(text) {
+  const message = String(text ?? "").trim();
+  if (!message || !state.selectedWorld || !state.session || !getLocalParticipant()) {
+    return false;
+  }
+  const sent = sendWorldSocketMessage({
+    type: "chat:send",
+    text: message,
+  });
+  if (sent && elements.panelChatInput) {
+    elements.panelChatInput.value = "";
+  }
+  return sent;
+}
+
 async function apiFetch(path, options = {}) {
   const headers = {
     "Content-Type": "application/json",
@@ -665,6 +882,7 @@ async function refreshAuthState() {
     state.profile = null;
     state.worlds = [];
     state.runtimeSnapshot = null;
+    state.privateChatEntries = [];
     state.pressedRuntimeKeys.clear();
     state.pressedViewerKeys.clear();
     renderProfile();
@@ -777,6 +995,29 @@ function buildMetaRows(world) {
         : "Original world",
     },
   ];
+}
+
+function buildPrivateWorldEntryUrl(world = state.selectedWorld) {
+  if (!world) {
+    return "";
+  }
+  const url = new URL("/social/private-worlds.html", window.location.origin);
+  url.searchParams.set("worldId", world.world_id);
+  url.searchParams.set("creatorUsername", world.creator.username);
+  url.searchParams.set("autojoin", "true");
+  return url.toString();
+}
+
+function renderMetaRows(target, rows) {
+  if (!target) {
+    return;
+  }
+  target.innerHTML = rows.map((row) => `
+    <div class="pw-world-meta__row">
+      <strong>${htmlEscape(row.label)}</strong>
+      <span>${htmlEscape(row.value)}</span>
+    </div>
+  `).join("");
 }
 
 function getSelectedScene() {
@@ -1343,12 +1584,121 @@ function renderPrefabList(sceneDoc) {
 
 function renderWorldMeta() {
   const rows = buildMetaRows(state.selectedWorld);
-  elements.worldMeta.innerHTML = rows.map((row) => `
-    <div class="pw-world-meta__row">
-      <strong>${htmlEscape(row.label)}</strong>
-      <span>${htmlEscape(row.value)}</span>
-    </div>
+  renderMetaRows(elements.worldMeta, rows);
+  renderMetaRows(elements.panelWorldMeta, rows);
+}
+
+function renderPrivateChat() {
+  if (!elements.panelChatLog || !elements.panelChatInput || !elements.panelChatStatus) {
+    return;
+  }
+  const localParticipant = getLocalParticipant();
+  const canChat = Boolean(state.session && state.selectedWorld && localParticipant);
+  elements.panelChatInput.disabled = !canChat;
+  elements.panelChatInput.placeholder = !state.selectedWorld
+    ? "Open a world to chat"
+    : !localParticipant
+      ? "Enter the world to chat"
+      : !state.session
+        ? "Sign in to chat"
+        : "Say something in this private world";
+  elements.panelChatStatus.textContent = !state.selectedWorld
+    ? "Open a world to chat."
+    : !localParticipant
+      ? "Enter the world to chat."
+      : !state.session
+        ? "Guests can view, but only signed-in participants can chat."
+        : "Everyone inside this private world sees this chat.";
+
+  if (!state.privateChatEntries.length) {
+    elements.panelChatLog.innerHTML = '<article class="world-live-result"><strong class="world-live-result__title">No chat yet</strong><p class="world-result__body">Walk in and say something.</p></article>';
+    return;
+  }
+  const localSessionId = getPrivateViewerSessionId();
+  elements.panelChatLog.innerHTML = state.privateChatEntries.map((entry) => `
+    <article class="world-live-result ${entry.actorSessionId === localSessionId ? "is-active" : ""}">
+      <div class="world-live-result__top">
+        <strong class="world-live-result__title">${htmlEscape(entry.displayName || "viewer")}</strong>
+        <span class="world-live-result__count">${htmlEscape(entry.createdAt)}</span>
+      </div>
+      <p class="world-result__body">${htmlEscape(entry.text || "")}</p>
+    </article>
   `).join("");
+}
+
+function renderPrivateShare() {
+  if (!elements.panelShareBadge || !elements.panelShareCurrent || !elements.panelShareStatus || !elements.panelShareMeta) {
+    return;
+  }
+  const world = state.selectedWorld;
+  const shareUrl = buildPrivateWorldEntryUrl(world);
+  const isActive = Boolean(world?.active_instance);
+  const canShare = Boolean(world);
+  if (elements.panelShareCopy) {
+    elements.panelShareCopy.disabled = !canShare;
+  }
+  if (elements.panelShareNative) {
+    elements.panelShareNative.disabled = !canShare || typeof navigator.share !== "function";
+  }
+  elements.panelShareBadge.dataset.state = isActive ? "live" : "offline";
+  elements.panelShareBadge.textContent = isActive ? "live" : "idle";
+  elements.panelShareCurrent.textContent = world ? world.name : "No world selected";
+  elements.panelShareStatus.textContent = !world
+    ? "Open a world to copy its entry link."
+    : isActive
+      ? "Send this entry link to bring someone straight into the active private world."
+      : "This world is inactive, but the link still resolves the world for signed-in access.";
+  elements.panelShareMeta.innerHTML = !world ? "" : `
+    <div class="pw-world-meta__row">
+      <strong>Creator</strong>
+      <span>${htmlEscape(world.creator.username)}</span>
+    </div>
+    <div class="pw-world-meta__row">
+      <strong>Type</strong>
+      <span>${htmlEscape(world.world_type)} · ${htmlEscape(world.template_size)}</span>
+    </div>
+    <div class="pw-world-meta__row">
+      <strong>Occupancy</strong>
+      <span>${Number(world.active_instance?.viewer_count ?? 0)} / ${Number(world.max_viewers ?? 20)}</span>
+    </div>
+    <div class="pw-world-meta__row">
+      <strong>Entry Link</strong>
+      <span>${htmlEscape(shareUrl)}</span>
+    </div>
+  `;
+}
+
+function renderBuildSummary() {
+  if (!elements.panelBuildSummary) {
+    return;
+  }
+  const world = state.selectedWorld;
+  const localParticipant = getLocalParticipant(world);
+  if (!world) {
+    elements.panelBuildSummary.innerHTML = `
+      <div class="pw-world-meta__row">
+        <strong>Session</strong>
+        <span>Open or create a world to enter.</span>
+      </div>
+    `;
+    return;
+  }
+  elements.panelBuildSummary.innerHTML = `
+    <div class="pw-world-meta__row">
+      <strong>Mode</strong>
+      <span>${state.mode === "build" ? "Build" : "Play"} · ${isEditor() ? "editor access" : "viewer access"}</span>
+    </div>
+    <div class="pw-world-meta__row">
+      <strong>Presence</strong>
+      <span>${localParticipant ? `${localParticipant.join_role}${localParticipant.player_entity_id ? " · possessed" : ""}` : "outside world"}</span>
+    </div>
+    <div class="pw-world-meta__row">
+      <strong>Controls</strong>
+      <span>${state.mode === "build"
+        ? "Select in-world, drag to move, Shift + wheel to rotate, Alt + wheel to scale."
+        : "WASD to move, Q/E to rise or drop, drag to look, wheel to zoom."}</span>
+    </div>
+  `;
 }
 
 function renderCollaborators() {
@@ -1395,7 +1745,7 @@ function renderRuntimeStatus() {
         ? "Build mode: click to select, drag to move, Shift + wheel to rotate, Alt + wheel to scale."
         : getLocalParticipant()?.join_role === "player"
           ? "WASD / Arrows to move, Space to jump, Release to return to viewer."
-          : "Viewer mode by default. Click a player capsule in Play to possess it."}</span>
+          : "Viewer mode by default. WASD to move, Q/E to rise or drop, drag to look, wheel to zoom, then click a player capsule to possess it."}</span>
     </div>
     ${runtimePlayers.length > 0 ? `
       <div class="pw-world-meta__row">
@@ -1423,15 +1773,26 @@ function renderSelectedWorld() {
   elements.selectedSubtitle.textContent = world
     ? `${world.about} · ${world.creator.username}${world.lineage?.imported_at ? ` · forked from ${world.lineage.origin_world_id}` : ""}`
     : "Pick a world or resolve one by id and creator.";
+  if (elements.panelTitle) {
+    elements.panelTitle.textContent = world?.name || "No world selected";
+  }
+  if (elements.panelSubtitle) {
+    elements.panelSubtitle.textContent = world
+      ? `${world.creator.username} · ${world.world_type}${world.active_instance ? ` · ${world.active_instance.status}` : ""}`
+      : "Open or create a world to enter the scene.";
+  }
   renderWorldMeta();
   renderSceneStrip();
   renderSceneEditor();
   renderCollaborators();
   renderRuntimeStatus();
+  renderBuildSummary();
+  renderPrivateShare();
 
   const hasWorld = Boolean(world);
   const canEdit = isEditor();
   const localParticipant = getLocalParticipant(world);
+  state.joined = Boolean(localParticipant);
   const joinedAsPlayer = localParticipant?.join_role === "player";
   if (elements.sceneToolsToggle) {
     elements.sceneToolsToggle.disabled = !hasWorld || !canEdit;
@@ -1449,6 +1810,41 @@ function renderSelectedWorld() {
   elements.saveCollaborator.disabled = !hasWorld || !canEdit;
   elements.generateHtml.disabled = !hasWorld || !state.session;
   elements.generateScript.disabled = !hasWorld || !state.session;
+  if (elements.panelModeBuild) {
+    elements.panelModeBuild.disabled = !hasWorld || !canEdit;
+    elements.panelModeBuild.classList.toggle("is-active", state.mode === "build");
+  }
+  if (elements.panelModePlay) {
+    elements.panelModePlay.disabled = !hasWorld;
+    elements.panelModePlay.classList.toggle("is-active", state.mode === "play");
+  }
+  if (elements.panelScenes) {
+    elements.panelScenes.disabled = !hasWorld || !canEdit;
+  }
+  if (elements.panelWorld) {
+    elements.panelWorld.disabled = !hasWorld;
+  }
+  if (elements.panelExport) {
+    elements.panelExport.disabled = !hasWorld || !state.session;
+  }
+  if (elements.panelEnter) {
+    elements.panelEnter.disabled = !hasWorld;
+  }
+  if (elements.panelLeave) {
+    elements.panelLeave.disabled = !hasWorld || !localParticipant;
+  }
+  if (elements.panelReady) {
+    elements.panelReady.disabled = !hasWorld || !state.session || !joinedAsPlayer;
+  }
+  if (elements.panelStart) {
+    elements.panelStart.disabled = !hasWorld || !state.session || !world.active_instance;
+  }
+  if (elements.panelRelease) {
+    elements.panelRelease.disabled = !hasWorld || !state.session || !joinedAsPlayer;
+  }
+  if (elements.panelReset) {
+    elements.panelReset.disabled = !hasWorld || !canEdit;
+  }
 
   for (const button of [
     elements.addVoxel,
@@ -1477,6 +1873,7 @@ function renderSelectedWorld() {
   setMode(state.mode);
   updateShellState();
   updatePreviewFromSelection();
+  renderPrivateChat();
 }
 
 function snapBuildValue(value, step = 0.1) {
@@ -1636,9 +2033,8 @@ function adjustSelectedEntityByWheel(event) {
 }
 
 function updateBuildCamera(preview, deltaSeconds) {
+  const { forward, right } = getPrivateCameraMovementBasis(preview);
   const moveDirection = new THREE.Vector3();
-  const forward = new THREE.Vector3(Math.sin(state.viewerYaw), 0, Math.cos(state.viewerYaw) * -1).normalize();
-  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
   if (state.pressedViewerKeys.has("w") || state.pressedViewerKeys.has("arrowup")) {
     moveDirection.add(forward);
   }
@@ -1651,16 +2047,20 @@ function updateBuildCamera(preview, deltaSeconds) {
   if (state.pressedViewerKeys.has("a") || state.pressedViewerKeys.has("arrowleft")) {
     moveDirection.sub(right);
   }
-  if (moveDirection.lengthSq() > 0.0001) {
-    moveDirection.normalize().multiplyScalar(state.viewerMoveSpeed * deltaSeconds);
-    preview.camera.position.add(moveDirection);
+  if (state.pressedViewerKeys.has("e")) {
+    moveDirection.y += 1;
   }
-  const lookTarget = new THREE.Vector3(
-    preview.camera.position.x + Math.sin(state.viewerYaw) * Math.cos(state.viewerPitch),
-    preview.camera.position.y + Math.sin(state.viewerPitch),
-    preview.camera.position.z - Math.cos(state.viewerYaw) * Math.cos(state.viewerPitch),
-  );
-  preview.camera.lookAt(lookTarget);
+  if (state.pressedViewerKeys.has("q")) {
+    moveDirection.y -= 1;
+  }
+  if (moveDirection.lengthSq() > 0.0001) {
+    moveDirection.normalize();
+    const verticalOnly = Math.abs(moveDirection.y) > 0 && Math.abs(moveDirection.x) < 0.0001 && Math.abs(moveDirection.z) < 0.0001;
+    const speed = verticalOnly ? PRIVATE_CAMERA.verticalSpeed : state.viewerMoveSpeed;
+    state.viewerPosition.addScaledVector(moveDirection, speed * deltaSeconds);
+    state.viewerPosition.y = clampNumber(state.viewerPosition.y, 0, PRIVATE_CAMERA.minY, PRIVATE_CAMERA.maxY);
+  }
+  syncPrivateCameraToFollowTarget(preview);
 }
 
 function ensureViewerAvatar(preview) {
@@ -1701,9 +2101,8 @@ function updateEmbodiedViewer(preview, deltaSeconds, elapsedSeconds) {
   const avatar = ensureViewerAvatar(preview);
   avatar.group.visible = true;
 
+  const { forward, right } = getPrivateCameraMovementBasis(preview);
   const moveDirection = new THREE.Vector3();
-  const forward = new THREE.Vector3(Math.sin(state.viewerYaw), 0, -Math.cos(state.viewerYaw)).normalize();
-  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
   if (state.pressedViewerKeys.has("w") || state.pressedViewerKeys.has("arrowup")) {
     moveDirection.add(forward);
   }
@@ -1716,37 +2115,42 @@ function updateEmbodiedViewer(preview, deltaSeconds, elapsedSeconds) {
   if (state.pressedViewerKeys.has("a") || state.pressedViewerKeys.has("arrowleft")) {
     moveDirection.sub(right);
   }
+  if (state.pressedViewerKeys.has("e")) {
+    moveDirection.y += 1;
+  }
+  if (state.pressedViewerKeys.has("q")) {
+    moveDirection.y -= 1;
+  }
+  const sprintPressed = state.pressedViewerKeys.has("shift");
+  if (sprintPressed) {
+    state.sprintHoldSeconds = Math.min(PRIVATE_SPRINT.rampSeconds, state.sprintHoldSeconds + deltaSeconds);
+  } else {
+    state.sprintHoldSeconds = Math.max(0, state.sprintHoldSeconds - (deltaSeconds * PRIVATE_SPRINT.rampSeconds) / PRIVATE_SPRINT.decaySeconds);
+  }
+  const sprintMix = PRIVATE_SPRINT.rampSeconds > 0 ? state.sprintHoldSeconds / PRIVATE_SPRINT.rampSeconds : 0;
+  const speedMultiplier = 1 + (PRIVATE_SPRINT.maxMultiplier - 1) * Math.max(0, Math.min(1, sprintMix));
+  const planarMovement = moveDirection.clone();
+  planarMovement.y = 0;
   if (moveDirection.lengthSq() > 0.0001) {
-    moveDirection.normalize().multiplyScalar(state.viewerMoveSpeed * deltaSeconds);
-    state.viewerPosition.add(moveDirection);
+    moveDirection.normalize();
+    const verticalOnly = planarMovement.lengthSq() < 0.0001 && Math.abs(moveDirection.y) > 0;
+    const speed = verticalOnly ? PRIVATE_CAMERA.verticalSpeed : state.viewerMoveSpeed * speedMultiplier;
+    state.viewerPosition.addScaledVector(moveDirection, speed * deltaSeconds);
+    state.viewerPosition.y = clampNumber(state.viewerPosition.y, 0, PRIVATE_CAMERA.minY, PRIVATE_CAMERA.maxY);
   }
 
   updateMascotMotion(avatar, {
     deltaSeconds,
     elapsedSeconds,
     nextPosition: state.viewerPosition,
-    maxSpeed: state.viewerMoveSpeed * 1.2,
+    maxSpeed: state.viewerMoveSpeed * PRIVATE_SPRINT.maxMultiplier,
     movementBasisForward: forward,
     movementBasisRight: right,
     idleFacingYaw: normalizeAngle(state.viewerYaw + Math.PI),
     bobAmplitude: 0.16,
     bobSpeed: 1.6,
   });
-
-  const lookLift = 4.2 + Math.sin(state.viewerPitch) * 2.1;
-  const lookDistance = 5.8 + Math.cos(state.viewerPitch) * 2.2;
-  const lookTarget = state.viewerPosition.clone()
-    .addScaledVector(forward, lookDistance)
-    .add(new THREE.Vector3(0, lookLift, 0));
-  const desiredCameraPosition = state.viewerPosition.clone()
-    .addScaledVector(forward, -16.6)
-    .add(new THREE.Vector3(0, 8.4 - state.viewerPitch * 2.1, 0));
-  state.viewerCameraPosition.lerp(
-    desiredCameraPosition,
-    1 - Math.exp(-deltaSeconds * 6.5),
-  );
-  preview.camera.position.copy(state.viewerCameraPosition);
-  preview.camera.lookAt(lookTarget);
+  syncPrivateCameraToFollowTarget(preview);
 }
 
 function updatePossessedCamera(preview) {
@@ -1913,7 +2317,7 @@ function ensurePreview() {
 
   const camera = new THREE.PerspectiveCamera(48, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 5000);
   camera.position.copy(state.viewerCameraPosition);
-  camera.lookAt(state.viewerPosition.x, state.viewerPosition.y + 4, state.viewerPosition.z);
+  camera.lookAt(getPrivatePlayerLookTarget());
 
   const ambient = new THREE.HemisphereLight("#ffffff", "#d9e7fa", 1.52);
   const sunLight = new THREE.DirectionalLight("#fff7df", 1.28);
@@ -1939,6 +2343,7 @@ function ensurePreview() {
   state.preview.scene.add(state.preview.actors);
   ensureViewerAvatar(state.preview);
   resetViewerRig();
+  syncPrivateCameraToFollowTarget(state.preview);
 
   const render = (timestamp = performance.now()) => {
     if (!state.preview) {
@@ -1984,7 +2389,7 @@ function ensurePreview() {
         return;
       }
     }
-    if (state.mode !== "play") {
+    if (state.mode !== "play" && state.mode !== "build") {
       return;
     }
     state.viewerLookActive = true;
@@ -2006,8 +2411,14 @@ function ensurePreview() {
     const deltaY = event.clientY - state.viewerLookLastY;
     state.viewerLookLastX = event.clientX;
     state.viewerLookLastY = event.clientY;
-    state.viewerYaw -= deltaX * 0.005;
-    state.viewerPitch = Math.max(-1.2, Math.min(1.2, state.viewerPitch - deltaY * 0.004));
+    state.viewerYaw -= deltaX * 0.0045;
+    state.viewerPitch = clampNumber(
+      state.viewerPitch - deltaY * 0.0036,
+      state.viewerPitch,
+      PRIVATE_CAMERA.lookMin,
+      PRIVATE_CAMERA.lookMax,
+    );
+    syncPrivateCameraToFollowTarget(state.preview);
   });
   elements.previewCanvas.addEventListener("pointerup", (event) => {
     if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
@@ -2032,11 +2443,16 @@ function ensurePreview() {
       return;
     }
     event.preventDefault();
-    if (state.mode !== "play" || getPossessedRuntimePlayer()) {
+    if (getPossessedRuntimePlayer()) {
       return;
     }
-    const forward = new THREE.Vector3(Math.sin(state.viewerYaw), Math.sin(state.viewerPitch), -Math.cos(state.viewerYaw)).normalize();
-    state.preview.camera.position.addScaledVector(forward, event.deltaY > 0 ? -1.5 : 1.5);
+    state.cameraRadius = clampNumber(
+      state.cameraRadius + event.deltaY * PRIVATE_CAMERA.wheelFactor,
+      state.cameraRadius,
+      PRIVATE_PLAYER_VIEW.minRadius,
+      PRIVATE_PLAYER_VIEW.maxRadius,
+    );
+    syncPrivateCameraToFollowTarget(state.preview);
   }, { passive: false });
   elements.previewCanvas.addEventListener("click", (event) => {
     const hit = raycastPreviewPointer(event);
@@ -2462,6 +2878,9 @@ function connectWorldSocket() {
   }
   const socket = new WebSocket(buildSocketUrl(world.world_id, world.creator.username));
   state.worldSocket = socket;
+  socket.addEventListener("open", () => {
+    renderPrivateChat();
+  });
   socket.addEventListener("message", (event) => {
     try {
       const payload = JSON.parse(event.data);
@@ -2478,6 +2897,13 @@ function connectWorldSocket() {
         updatePreviewFromSelection();
       } else if (payload.type === "world:error") {
         pushEvent("world:error", payload.message || "Unknown world socket error");
+      } else if (payload.type === "chat:event") {
+        pushPrivateChatEntry(payload);
+      } else if (payload.type === "chat:error") {
+        pushEvent("chat:error", payload.message || "Could not send chat");
+        if (elements.panelChatStatus) {
+          elements.panelChatStatus.textContent = payload.message || "Could not send chat.";
+        }
       } else if (payload.type === "world:snapshot") {
         if (payload.world?.world_id === state.selectedWorld?.world_id) {
           state.selectedWorld = payload.world;
@@ -2490,6 +2916,9 @@ function connectWorldSocket() {
       // ignore malformed frames
     }
   });
+  socket.addEventListener("close", () => {
+    renderPrivateChat();
+  });
 }
 
 function disconnectWorldSocket() {
@@ -2497,6 +2926,7 @@ function disconnectWorldSocket() {
     state.worldSocket.close();
     state.worldSocket = null;
   }
+  renderPrivateChat();
 }
 
 async function openWorld(worldId, creatorUsername, includeContent = true) {
@@ -2516,6 +2946,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.sceneDrawerOpen = false;
   state.worldMenuOpen = false;
   if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
+    state.privateChatEntries = [];
     resetViewerRig(payload.world);
   }
   syncRuntimeFromWorld(payload.world);
@@ -2723,7 +3154,7 @@ async function joinWorld() {
     body: {
       creatorUsername: state.selectedWorld.creator.username,
       guestSessionId: state.session ? undefined : getGuestSessionId(),
-      displayName: state.profile?.display_name || "guest viewer",
+      displayName: getPrivateDisplayName(),
       joinRole: state.session ? "viewer" : "guest",
       publicWorldSnapshotId: anchor.publicWorldSnapshotId,
       position_x: anchor.position_x,
@@ -3291,13 +3722,19 @@ async function releaseSceneLock() {
 }
 
 function renderEventLog() {
-  elements.eventLog.innerHTML = state.eventLog.map((entry) => `
+  const markup = state.eventLog.map((entry) => `
     <article class="pw-event-log__item">
       <strong>${htmlEscape(entry.title)}</strong>
       <div>${htmlEscape(entry.body || "")}</div>
       <small>${htmlEscape(entry.createdAt)}</small>
     </article>
   `).join("") || '<article class="pw-event-log__item">No live events yet.</article>';
+  if (elements.eventLog) {
+    elements.eventLog.innerHTML = markup;
+  }
+  if (elements.panelEvents) {
+    elements.panelEvents.innerHTML = markup;
+  }
 }
 
 function bindEvents() {
@@ -3315,6 +3752,87 @@ function bindEvents() {
       setLauncherTab(button.getAttribute("data-launcher-tab") || getPreferredLauncherTab());
     });
   }
+  for (const button of elements.privatePanelTabButtons ?? []) {
+    button.addEventListener("click", () => {
+      setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "chat");
+    });
+  }
+  elements.panelChatComposer?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!sendPrivateChat(elements.panelChatInput?.value || "")) {
+      renderPrivateChat();
+    }
+  });
+  elements.panelShareCopy?.addEventListener("click", async () => {
+    const shareUrl = buildPrivateWorldEntryUrl();
+    if (!shareUrl) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      if (elements.panelShareStatus) {
+        elements.panelShareStatus.textContent = "Entry link copied.";
+      }
+    } catch (error) {
+      setStatus(error.message || "Could not copy entry link");
+    }
+  });
+  elements.panelShareNative?.addEventListener("click", async () => {
+    const shareUrl = buildPrivateWorldEntryUrl();
+    if (!shareUrl || !navigator.share) {
+      return;
+    }
+    try {
+      await navigator.share({
+        title: state.selectedWorld?.name || "Mauworld Private World",
+        text: state.selectedWorld?.about || "Join this private Mauworld scene.",
+        url: shareUrl,
+      });
+    } catch (_error) {
+      // user canceled native share
+    }
+  });
+  elements.panelModeBuild?.addEventListener("click", () => {
+    setMode("build");
+    renderSelectedWorld();
+  });
+  elements.panelModePlay?.addEventListener("click", () => {
+    setMode("play");
+    renderSelectedWorld();
+  });
+  elements.panelScenes?.addEventListener("click", () => {
+    if (state.selectedWorld && isEditor()) {
+      setSceneDrawerOpen(true);
+      setPrivatePanelTab("build");
+    }
+  });
+  elements.panelWorld?.addEventListener("click", () => {
+    if (state.selectedWorld) {
+      setWorldMenuOpen(true);
+      setPrivatePanelTab("world");
+    }
+  });
+  elements.panelExport?.addEventListener("click", () => {
+    void exportWorld();
+  });
+  elements.panelEnter?.addEventListener("click", () => {
+    void joinWorld();
+  });
+  elements.panelLeave?.addEventListener("click", () => {
+    void leaveWorld();
+  });
+  elements.panelReady?.addEventListener("click", () => {
+    void setReady();
+  });
+  elements.panelStart?.addEventListener("click", () => {
+    void startScene();
+  });
+  elements.panelRelease?.addEventListener("click", () => {
+    void releasePlayer();
+  });
+  elements.panelReset?.addEventListener("click", () => {
+    void resetScene();
+  });
   elements.sceneToolsToggle?.addEventListener("click", () => {
     if (!state.selectedWorld) {
       return;
@@ -3635,6 +4153,9 @@ async function handleLaunchRequest() {
 async function init() {
   bindEvents();
   renderEventLog();
+  renderPrivateChat();
+  renderPrivateShare();
+  renderBuildSummary();
   ensurePreview();
   setLauncherTab(getPreferredLauncherTab());
   setMode(state.mode);

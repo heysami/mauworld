@@ -23,10 +23,125 @@
       <div class="pw-atmosphere" aria-hidden="true"></div>
       <div class="pw-grid-glow" aria-hidden="true"></div>
 
+      <aside class="world-panel pw-mau-panel" data-private-panel aria-label="Private world tools">
+        <div class="world-panel__bar">
+          <div class="world-panel__brand">
+            <strong>Private Worlds</strong>
+            <span class="pw-mau-panel__brand-copy">Walk in, build what changes, then play it.</span>
+          </div>
+          <div class="world-panel__bar-actions">
+            <button type="button" class="world-panel__portal" data-launcher-toggle>Worlds</button>
+            <a class="world-panel__portal" href="/social/world.html">Public Mauworld</a>
+          </div>
+        </div>
+
+        <div class="world-panel__identity">
+          <div class="pw-mau-panel__identity">
+            <strong data-private-panel-title>No world selected</strong>
+            <span data-private-panel-subtitle>Open or create a world to enter the scene.</span>
+          </div>
+        </div>
+
+        <div class="world-panel__tabs" role="tablist" aria-label="Private world tools">
+          <button
+            type="button"
+            class="world-panel__tab is-active"
+            data-private-panel-tab="chat"
+            role="tab"
+            aria-selected="true"
+          >Chat</button>
+          <button
+            type="button"
+            class="world-panel__tab"
+            data-private-panel-tab="share"
+            role="tab"
+            aria-selected="false"
+          >Share</button>
+          <button
+            type="button"
+            class="world-panel__tab"
+            data-private-panel-tab="build"
+            role="tab"
+            aria-selected="false"
+          >Build</button>
+          <button
+            type="button"
+            class="world-panel__tab"
+            data-private-panel-tab="world"
+            role="tab"
+            aria-selected="false"
+          >World</button>
+        </div>
+
+        <section class="world-panel__view" data-private-panel-view="chat" role="tabpanel">
+          <form class="world-panel-chat" data-private-chat-composer>
+            <label class="world-panel-chat__field">
+              <input
+                type="text"
+                maxlength="160"
+                data-private-chat-input
+                placeholder="Enter the world to chat"
+                autocomplete="off"
+                aria-label="Chat in this private world"
+              />
+            </label>
+          </form>
+          <p class="world-live-status" data-private-chat-status>Enter the world to chat.</p>
+          <section class="world-live-panel" aria-label="Private world chat">
+            <div class="world-live-results pw-chat-log" data-private-chat-log></div>
+          </section>
+        </section>
+
+        <section class="world-panel__view" data-private-panel-view="share" role="tabpanel" hidden>
+          <section class="world-browser-panel pw-share-panel" aria-label="World invite">
+            <div class="world-browser-panel__head">
+              <strong>Share this world</strong>
+              <div class="world-browser-panel__actions">
+                <button type="button" data-private-copy-link disabled>Copy Link</button>
+                <button type="button" class="is-muted" data-private-native-share disabled>Share</button>
+              </div>
+            </div>
+            <div class="world-browser-summary">
+              <div class="world-browser-summary__row">
+                <span class="world-browser-summary__badge" data-private-share-badge data-state="offline">idle</span>
+                <strong class="world-browser-summary__current" data-private-share-current>No world selected</strong>
+              </div>
+              <p class="world-browser-summary__hint" data-private-share-status>Open a world to copy its entry link.</p>
+            </div>
+            <div class="pw-share-meta" data-private-share-meta></div>
+          </section>
+        </section>
+
+        <section class="world-panel__view" data-private-panel-view="build" role="tabpanel" hidden>
+          <div class="pw-build-summary" data-private-build-summary></div>
+          <div class="pw-action-grid">
+            <button type="button" data-private-panel-mode-build>Build Mode</button>
+            <button type="button" data-private-panel-mode-play>Play Mode</button>
+            <button type="button" data-private-panel-scenes>Scenes</button>
+            <button type="button" data-private-panel-world>World</button>
+            <button type="button" data-private-panel-export>Export</button>
+            <button type="button" data-private-panel-enter>Enter</button>
+            <button type="button" data-private-panel-leave>Leave</button>
+          </div>
+          <div class="pw-action-grid pw-action-grid--runtime">
+            <button type="button" data-private-panel-ready>Ready</button>
+            <button type="button" data-private-panel-start>Start Scene</button>
+            <button type="button" data-private-panel-release>Release Player</button>
+            <button type="button" data-private-panel-reset>Reset</button>
+          </div>
+        </section>
+
+        <section class="world-panel__view" data-private-panel-view="world" role="tabpanel" hidden>
+          <div class="pw-world-meta" data-private-panel-world-meta></div>
+          <div class="pw-panel__header">
+            <h2>Live feed</h2>
+          </div>
+          <div class="pw-event-log pw-panel-event-log" data-private-panel-events></div>
+        </section>
+      </aside>
+
       <header class="pw-topbar">
         <div class="pw-topbar__cluster">
-          <a class="world-panel__portal pw-topbar__portal" href="/social/world.html">Public Mauworld</a>
-          <button type="button" class="pw-ghost-button" data-launcher-toggle>Worlds</button>
           <div class="pw-world-identity">
             <div class="pw-world-identity__eyebrow">Private World</div>
             <div class="pw-world-identity__title" data-selected-title>No world selected</div>

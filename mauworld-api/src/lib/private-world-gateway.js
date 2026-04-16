@@ -1,4 +1,5 @@
 import { WebSocket, WebSocketServer } from "ws";
+import { checkChatRateLimit, sanitizeChatText } from "./realtime-state.js";
 
 const PRIVATE_WORLD_REALTIME_PATH = "/api/ws/private/worlds";
 
@@ -83,6 +84,9 @@ export class PrivateWorldGateway {
         creatorUsername,
         profile: auth?.profile ?? null,
         guestSessionId: guestSessionId || null,
+        viewerSessionId: auth?.profile?.id ? `profile:${auth.profile.id}` : (guestSessionId || `guest:${Math.random().toString(36).slice(2, 10)}`),
+        displayName: auth?.profile?.display_name || auth?.profile?.username || "guest viewer",
+        chatRateLimitState: {},
       };
       this.clients.add(client);
       socket.on("message", (buffer) => {
@@ -118,7 +122,57 @@ export class PrivateWorldGateway {
     }
     if (type === "world:refresh") {
       void this.refreshClient(client);
+      return;
     }
+    if (type === "chat:send") {
+      this.handleChatSend(client, message);
+    }
+  }
+
+  getWorldClients(worldId, creatorUsername) {
+    const normalizedCreator = String(creatorUsername ?? "").trim().toLowerCase();
+    return [...this.clients].filter(
+      (client) => client.worldId === worldId && client.creatorUsername.toLowerCase() === normalizedCreator,
+    );
+  }
+
+  broadcastToWorld(worldId, creatorUsername, payload) {
+    for (const client of this.getWorldClients(worldId, creatorUsername)) {
+      sendJson(client, payload);
+    }
+  }
+
+  handleChatSend(client, message) {
+    if (!client?.profile) {
+      sendJson(client, {
+        type: "chat:error",
+        message: "Guests cannot chat in private worlds.",
+      });
+      return;
+    }
+    const text = sanitizeChatText(message.text, 160);
+    if (!text) {
+      return;
+    }
+    const rateLimit = checkChatRateLimit(client.chatRateLimitState ?? {}, {
+      now: Date.now(),
+      text,
+    });
+    client.chatRateLimitState = rateLimit.state ?? client.chatRateLimitState ?? {};
+    if (!rateLimit.allowed) {
+      sendJson(client, {
+        type: "chat:error",
+        message: rateLimit.reason || "Chat rate limit reached.",
+      });
+      return;
+    }
+    this.broadcastToWorld(client.worldId, client.creatorUsername, {
+      type: "chat:event",
+      actorSessionId: client.viewerSessionId,
+      displayName: client.displayName,
+      text,
+      createdAt: new Date().toISOString(),
+    });
   }
 
   async refreshClient(client) {
