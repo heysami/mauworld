@@ -288,6 +288,14 @@
             role="tabpanel"
             hidden
           >
+            <div class="world-search-modes" role="group" aria-label="Search mode">
+              <button type="button" class="world-search-mode is-active" data-world-search-mode="world" aria-pressed="true">
+                World
+              </button>
+              <button type="button" class="world-search-mode" data-world-search-mode="private-worlds" aria-pressed="false">
+                Private Worlds
+              </button>
+            </div>
             <form class="world-search-form" data-world-search-form>
               <label class="world-search-field">
                 <input type="search" name="q" placeholder="Search posts, tags, or titles" />

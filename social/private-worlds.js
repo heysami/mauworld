@@ -10,6 +10,17 @@ const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 
 const elements = {
+  launcher: document.querySelector("[data-launcher]"),
+  launcherToggle: document.querySelector("[data-launcher-toggle]"),
+  launcherClose: document.querySelector("[data-launcher-close]"),
+  sceneDrawer: document.querySelector("[data-scene-drawer]"),
+  sceneToolsToggle: document.querySelector("[data-scene-tools-toggle]"),
+  sceneToolsClose: document.querySelector("[data-scene-tools-close]"),
+  worldMenu: document.querySelector("[data-world-menu]"),
+  worldMenuToggle: document.querySelector("[data-world-menu-toggle]"),
+  worldMenuClose: document.querySelector("[data-world-menu-close]"),
+  inspector: document.querySelector("[data-inspector]"),
+  selectionClear: document.querySelector("[data-selection-clear]"),
   authForm: document.querySelector("[data-auth-form]"),
   authState: document.querySelector("[data-auth-state]"),
   authStatus: document.querySelector("[data-auth-status]"),
@@ -84,6 +95,9 @@ const state = {
   eventLog: [],
   joinedAsGuest: false,
   joined: false,
+  launcherOpen: true,
+  sceneDrawerOpen: false,
+  worldMenuOpen: false,
   activeLockEntityKey: "",
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
@@ -114,6 +128,43 @@ function setStatus(text) {
   if (elements.authStatus) {
     elements.authStatus.textContent = text || "";
   }
+}
+
+function updateShellState() {
+  document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
+  document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
+  document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
+  document.body.classList.toggle("is-world-menu-open", state.worldMenuOpen === true);
+  document.body.classList.toggle(
+    "has-selection",
+    Boolean(state.builderSelection && state.mode === "build" && isEditor()),
+  );
+}
+
+function setLauncherOpen(open) {
+  state.launcherOpen = open === true;
+  if (state.launcherOpen) {
+    state.sceneDrawerOpen = false;
+    state.worldMenuOpen = false;
+    state.builderSelection = null;
+  }
+  updateShellState();
+}
+
+function setSceneDrawerOpen(open) {
+  state.sceneDrawerOpen = open === true;
+  if (state.sceneDrawerOpen) {
+    state.worldMenuOpen = false;
+  }
+  updateShellState();
+}
+
+function setWorldMenuOpen(open) {
+  state.worldMenuOpen = open === true;
+  if (state.worldMenuOpen) {
+    state.sceneDrawerOpen = false;
+  }
+  updateShellState();
 }
 
 function pushEvent(title, body) {
@@ -282,26 +333,13 @@ function ensureBuilderSelection(sceneDoc = parseSceneTextarea()) {
   if (selected) {
     return selected;
   }
-  for (const config of ENTITY_COLLECTIONS) {
-    const first = getEntityArray(sceneDoc, config.key)[0];
-    if (first) {
-      state.builderSelection = {
-        kind: config.kind,
-        id: first.id,
-      };
-      return {
-        ...config,
-        index: 0,
-        entry: first,
-      };
-    }
-  }
   state.builderSelection = null;
   return null;
 }
 
 function setBuilderSelection(kind, id) {
   state.builderSelection = kind && id ? { kind, id } : null;
+  updateShellState();
   renderSceneBuilder();
   updatePreviewFromSelection();
 }
@@ -344,6 +382,7 @@ function getLaunchRequest() {
     worldId: worldId || "",
     creatorUsername: creatorUsername || "",
     autojoin: params.get("autojoin") === "true",
+    fork: params.get("fork") === "true",
   };
 }
 
@@ -556,6 +595,10 @@ function getRenderableSceneDoc() {
 function setMode(mode) {
   const nextMode = mode === "build" && isEditor() ? "build" : "play";
   state.mode = nextMode;
+  if (nextMode === "play") {
+    state.builderSelection = null;
+    state.sceneDrawerOpen = false;
+  }
   document.body.classList.toggle("is-play-mode", nextMode === "play");
   elements.modeBuild?.classList.toggle("is-active", nextMode === "build");
   elements.modePlay?.classList.toggle("is-active", nextMode === "play");
@@ -566,6 +609,7 @@ function setMode(mode) {
   if (elements.modePlay) {
     elements.modePlay.setAttribute("aria-pressed", String(nextMode === "play"));
   }
+  updateShellState();
   updatePreviewFromSelection();
 }
 
@@ -660,12 +704,15 @@ function renderSceneBuilder() {
   try {
     sceneDoc = parseSceneTextarea();
   } catch (_error) {
+    state.builderSelection = null;
+    updateShellState();
     elements.entitySections.innerHTML = '<div class="pw-builder-group"><p class="pw-builder-empty">Fix the scene JSON to continue editing.</p></div>';
     elements.entityEditor.innerHTML = "";
     elements.prefabList.innerHTML = "";
     return;
   }
   const selected = ensureBuilderSelection(sceneDoc);
+  updateShellState();
   renderEntitySections(sceneDoc, selected);
   renderEntityInspector(sceneDoc, selected);
   renderPrefabList(sceneDoc);
@@ -1134,6 +1181,12 @@ function renderRuntimeStatus() {
 function renderSelectedWorld() {
   const world = state.selectedWorld;
   syncRuntimeFromWorld(world);
+  if (!world) {
+    state.builderSelection = null;
+    state.sceneDrawerOpen = false;
+    state.worldMenuOpen = false;
+    state.launcherOpen = true;
+  }
   if (state.mode === "build" && !isEditor()) {
     state.mode = "play";
   }
@@ -1151,6 +1204,12 @@ function renderSelectedWorld() {
   const canEdit = isEditor();
   const localParticipant = getLocalParticipant(world);
   const joinedAsPlayer = localParticipant?.join_role === "player";
+  if (elements.sceneToolsToggle) {
+    elements.sceneToolsToggle.disabled = !hasWorld || !canEdit;
+  }
+  if (elements.worldMenuToggle) {
+    elements.worldMenuToggle.disabled = !hasWorld;
+  }
   elements.exportWorld.disabled = !hasWorld || !state.session;
   elements.joinWorld.disabled = !hasWorld;
   elements.leaveWorld.disabled = !hasWorld;
@@ -1187,6 +1246,7 @@ function renderSelectedWorld() {
   }
 
   setMode(state.mode);
+  updateShellState();
   updatePreviewFromSelection();
 }
 
@@ -1823,6 +1883,9 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.selectedSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
   state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
   state.builderSelection = null;
+  state.launcherOpen = false;
+  state.sceneDrawerOpen = false;
+  state.worldMenuOpen = false;
   syncRuntimeFromWorld(payload.world);
   renderSelectedWorld();
   connectWorldSocket();
@@ -1903,8 +1966,13 @@ async function handleCreateWorld(event) {
   });
   pushEvent("world:created", `${payload.world.name} created`);
   await loadWorlds();
-  await loadPublicWorlds();
+  state.mode = "build";
   await openWorld(payload.world.world_id, payload.world.creator.username, true);
+  try {
+    await joinWorld();
+  } catch (error) {
+    setStatus(error.message);
+  }
   elements.createWorldForm.reset();
 }
 
@@ -1953,6 +2021,36 @@ async function exportWorld() {
   pushEvent("world:exported", state.selectedWorld.world_id);
 }
 
+async function forkSelectedWorld() {
+  if (!state.selectedWorld || !state.session) {
+    throw new Error("Sign in to fork this world.");
+  }
+  const response = await fetch(mauworldApiUrl(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/export`, {
+    creatorUsername: state.selectedWorld.creator.username,
+  }), {
+    headers: {
+      Authorization: `Bearer ${state.session.access_token}`,
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || `Fork export failed (${response.status})`);
+  }
+  const imported = await apiFetch("/private/worlds/import", {
+    method: "POST",
+    body: payload.package,
+  });
+  pushEvent("world:forked", `${imported.world.world_id} from ${state.selectedWorld.world_id}`);
+  state.mode = "build";
+  await loadWorlds();
+  await openWorld(imported.world.world_id, imported.world.creator.username, true);
+  try {
+    await joinWorld();
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
 async function importPackage(event) {
   event.preventDefault();
   if (!state.session) {
@@ -1970,7 +2068,6 @@ async function importPackage(event) {
   });
   pushEvent("world:imported", payload.world.world_id);
   await loadWorlds();
-  await loadPublicWorlds();
   await openWorld(payload.world.world_id, payload.world.creator.username, true);
   elements.importForm.reset();
 }
@@ -2464,15 +2561,10 @@ function attachQuickAddButtons() {
   });
 
   elements.addRule.addEventListener("click", () => {
-    mutateSceneDoc((sceneDoc) => {
-      sceneDoc.rules = sceneDoc.rules || [];
-      sceneDoc.rules.push({
-        id: `rule_${sceneDoc.rules.length + 1}`,
-        trigger: "all_players_ready",
-        action: "start_scene",
-      });
-      sceneDoc.script_dsl = (sceneDoc.script_dsl ? `${sceneDoc.script_dsl}\n` : "") + "all_players_ready -> start_scene";
-    });
+    setSceneDrawerOpen(true);
+    window.setTimeout(() => {
+      elements.sceneForm?.elements?.scriptDsl?.focus?.();
+    }, 0);
   });
 }
 
@@ -2576,6 +2668,33 @@ function renderEventLog() {
 }
 
 function bindEvents() {
+  elements.launcherToggle?.addEventListener("click", () => {
+    setLauncherOpen(!state.launcherOpen);
+  });
+  elements.launcherClose?.addEventListener("click", () => {
+    setLauncherOpen(false);
+  });
+  elements.sceneToolsToggle?.addEventListener("click", () => {
+    if (!state.selectedWorld) {
+      return;
+    }
+    setSceneDrawerOpen(!state.sceneDrawerOpen);
+  });
+  elements.sceneToolsClose?.addEventListener("click", () => {
+    setSceneDrawerOpen(false);
+  });
+  elements.worldMenuToggle?.addEventListener("click", () => {
+    if (!state.selectedWorld) {
+      return;
+    }
+    setWorldMenuOpen(!state.worldMenuOpen);
+  });
+  elements.worldMenuClose?.addEventListener("click", () => {
+    setWorldMenuOpen(false);
+  });
+  elements.selectionClear?.addEventListener("click", () => {
+    setBuilderSelection("", "");
+  });
   elements.authForm.addEventListener("submit", handleAuthSubmit);
   elements.authForm.querySelector('[data-auth-action="signup"]').addEventListener("click", async () => {
     try {
@@ -2651,6 +2770,7 @@ function bindEvents() {
       return;
     }
     state.selectedSceneId = button.getAttribute("data-scene-id");
+    setSceneDrawerOpen(false);
     renderSelectedWorld();
   });
   elements.sceneForm.addEventListener("submit", saveScene);
@@ -2812,6 +2932,29 @@ function bindEvents() {
       void sendRuntimeInput(key, "up");
     }
   });
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
+      return;
+    }
+    if (state.builderSelection) {
+      setBuilderSelection("", "");
+      return;
+    }
+    if (state.worldMenuOpen) {
+      setWorldMenuOpen(false);
+      return;
+    }
+    if (state.sceneDrawerOpen) {
+      setSceneDrawerOpen(false);
+      return;
+    }
+    if (state.launcherOpen) {
+      setLauncherOpen(false);
+    }
+  });
   attachQuickAddButtons();
 }
 
@@ -2825,6 +2968,18 @@ async function handleLaunchRequest() {
   }
   state.launchHandled = true;
   await openWorld(launch.worldId, launch.creatorUsername, true);
+  if (launch.fork) {
+    try {
+      await forkSelectedWorld();
+      return;
+    } catch (error) {
+      setStatus(error.message);
+      if (!state.session) {
+        setLauncherOpen(true);
+      }
+      pushEvent("launcher:fork:error", error.message);
+    }
+  }
   if (launch.autojoin) {
     try {
       await joinWorld();
@@ -2840,8 +2995,8 @@ async function init() {
   bindEvents();
   renderEventLog();
   ensurePreview();
+  updateShellState();
   await fetchAuthConfig();
-  await loadPublicWorlds();
   await refreshAuthState();
   await handleLaunchRequest();
 }

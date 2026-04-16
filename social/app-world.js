@@ -62,6 +62,7 @@ elements.panelTabs = [...document.querySelectorAll("[data-world-panel-tab]")];
 elements.panelTabPanels = [...document.querySelectorAll("[data-world-panel-tab-panel]")];
 elements.browserShareModes = [...document.querySelectorAll("[data-world-browser-share-mode]")];
 elements.chatReactionButtons = [...document.querySelectorAll("[data-world-chat-reaction]")];
+elements.searchModeButtons = [...document.querySelectorAll("[data-world-search-mode]")];
 
 elements.focusPieces = {
   top: document.querySelector('[data-world-focus-piece="top"]'),
@@ -74,6 +75,7 @@ const WORLD_API = {
   meta: "/public/world/current/meta",
   stream: "/public/world/current/stream",
   search: "/public/world/search",
+  privateWorldSearch: "/public/private-worlds",
   presence: "/public/world/current/presence",
   browserMediaToken: "/public/world/current/browser-media-token",
 };
@@ -153,9 +155,11 @@ const state = {
   meta: null,
   stream: null,
   searchPayload: null,
+  searchMode: "world",
   activePanelTab: "chat",
   activeResultId: null,
   focusedResult: null,
+  focusedPrivateWorld: null,
   openTagId: null,
   hoveredResultId: null,
   activeCellWindow: null,
@@ -651,6 +655,79 @@ function htmlEscape(value) {
     .replaceAll("'", "&#39;");
 }
 
+function getPrivateWorldResultKey(world = {}) {
+  const worldId = String(world.world_id ?? "").trim();
+  const creatorUsername = String(world.creator?.username ?? world.creator_username ?? "").trim().toLowerCase();
+  return `${worldId}:${creatorUsername}`;
+}
+
+function normalizePrivateWorldResult(world = {}) {
+  const creatorUsername = String(world.creator?.username ?? world.creator_username ?? "").trim().toLowerCase();
+  return {
+    kind: "private-world",
+    ...world,
+    creator: world.creator
+      ? world.creator
+      : {
+          username: creatorUsername || "unknown",
+          display_name: (world.creator_display_name ?? creatorUsername) || "Unknown",
+        },
+    lineage: {
+      is_imported: Boolean(
+        world.lineage?.is_imported
+        || world.origin_world_id
+        || world.origin_creator_username
+        || world.origin_world_name,
+      ),
+      origin_world_id: world.lineage?.origin_world_id ?? world.origin_world_id ?? null,
+      origin_creator_username: world.lineage?.origin_creator_username ?? world.origin_creator_username ?? null,
+      origin_world_name: world.lineage?.origin_world_name ?? world.origin_world_name ?? null,
+      imported_at: world.lineage?.imported_at ?? world.imported_at ?? null,
+    },
+    active_instance: world.active_instance
+      ? {
+          ...world.active_instance,
+          anchor_position: world.active_instance.anchor_position ?? (
+            Number.isFinite(world.anchor_position_x) || Number.isFinite(world.anchor_position_z)
+              ? {
+                  x: world.anchor_position_x,
+                  y: world.anchor_position_y,
+                  z: world.anchor_position_z,
+                }
+              : null
+          ),
+          miniature: world.active_instance.miniature ?? (
+            Number.isFinite(world.miniature_width) || Number.isFinite(world.miniature_length)
+              ? {
+                  width: world.miniature_width,
+                  length: world.miniature_length,
+                  height: world.miniature_height,
+                }
+              : null
+          ),
+        }
+      : (
+        Number.isFinite(world.anchor_position_x) || Number.isFinite(world.anchor_position_z)
+          ? {
+              status: world.status ?? "active",
+              viewer_count: Number(world.viewer_count ?? 0) || 0,
+              anchor_world_snapshot_id: world.anchor_world_snapshot_id ?? null,
+              anchor_position: {
+                x: world.anchor_position_x,
+                y: world.anchor_position_y,
+                z: world.anchor_position_z,
+              },
+              miniature: {
+                width: world.miniature_width,
+                length: world.miniature_length,
+                height: world.miniature_height,
+              },
+            }
+          : null
+      ),
+  };
+}
+
 function buildPrivateWorldLauncherUrl(options = {}) {
   const url = new URL("/social/private-worlds.html", window.location.origin);
   const position = getNavigationPosition();
@@ -668,6 +745,9 @@ function buildPrivateWorldLauncherUrl(options = {}) {
   }
   if (options.autojoin === true) {
     url.searchParams.set("autojoin", "true");
+  }
+  if (options.fork === true) {
+    url.searchParams.set("fork", "true");
   }
   return url.toString();
 }
@@ -1753,6 +1833,40 @@ function setSearchStatus(text) {
   }
 }
 
+function updateSearchModeControls() {
+  const searchInput = elements.searchForm?.querySelector('input[name="q"]');
+  for (const button of elements.searchModeButtons) {
+    const active = button?.getAttribute("data-world-search-mode") === state.searchMode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  if (searchInput) {
+    searchInput.placeholder = state.searchMode === "private-worlds"
+      ? "Search active private worlds or press Go to browse"
+      : "Search posts, tags, or titles";
+  }
+}
+
+function setSearchMode(mode, options = {}) {
+  const nextMode = mode === "private-worlds" ? "private-worlds" : "world";
+  if (state.searchMode === nextMode && options.force !== true) {
+    return;
+  }
+  state.searchMode = nextMode;
+  state.searchSubmitted = false;
+  state.searchPayload = null;
+  elements.resultsPanel?.classList.add("is-empty");
+  if (elements.results) {
+    elements.results.innerHTML = "";
+  }
+  updateSearchModeControls();
+  if (nextMode === "private-worlds") {
+    setSearchStatus("Browse active private worlds from here, then enter through the dome.");
+  } else {
+    setSearchStatus("");
+  }
+}
+
 function setLiveShareStatus(text) {
   if (elements.liveStatus) {
     elements.liveStatus.textContent = text;
@@ -1789,7 +1903,9 @@ function clearSearchResults() {
   if (elements.results) {
     elements.results.innerHTML = "";
   }
-  setSearchStatus("");
+  setSearchStatus(state.searchMode === "private-worlds"
+    ? "Browse active private worlds from here, then enter through the dome."
+    : "");
 }
 
 function clearSearchQuery() {
@@ -2034,6 +2150,89 @@ function hasSearchIntent() {
     || String(formData.get("q") ?? "").trim()
     || String(formData.get("tag") ?? "").trim(),
   );
+}
+
+function isPrivateWorldSelection(result) {
+  return result?.kind === "private-world";
+}
+
+function focusPrivateWorldDome(result) {
+  const world = normalizePrivateWorldResult(result);
+  const activeInstance = world.active_instance;
+  const anchor = activeInstance?.anchor_position;
+  if (!anchor) {
+    renderSelected(world);
+    showToast("That private world is no longer active right now.");
+    return false;
+  }
+
+  clearBrowserFocus();
+  cancelTravelAnimation();
+  setPostFocusMode(false);
+  state.focusedResult = null;
+  state.focusedPrivateWorld = world;
+  state.activeResultId = getPrivateWorldResultKey(world);
+  state.openTagId = null;
+  syncExpandedTagState();
+  if (sceneState.floorMarker) {
+    sceneState.floorMarker.visible = true;
+    sceneState.floorMarker.position.set(
+      Number(anchor.x ?? 0) || 0,
+      0.2,
+      Number(anchor.z ?? 0) || 0,
+    );
+  }
+
+  const start = getNavigationPosition().clone();
+  const anchorPosition = new THREE.Vector3(
+    Number(anchor.x ?? 0) || 0,
+    Number(anchor.y ?? 0) || 0,
+    Number(anchor.z ?? 0) || 0,
+  );
+  const miniature = activeInstance.miniature ?? {};
+  const orbitRadius = clamp(
+    14 + Math.max(
+      Number(miniature.width ?? 0) || 0,
+      Number(miniature.length ?? 0) || 0,
+    ) * 0.75,
+    18,
+    34,
+  );
+  const offset = new THREE.Vector3(
+    start.x - anchorPosition.x,
+    0,
+    start.z - anchorPosition.z,
+  );
+  if (offset.lengthSq() < 0.0001) {
+    offset.copy(getFlatForwardVector(inputState.yaw));
+  } else {
+    offset.normalize();
+  }
+  const destination = anchorPosition.clone().add(offset.multiplyScalar(orbitRadius));
+  destination.y = clamp(
+    anchorPosition.y + Math.max(10, (Number(miniature.height ?? 0) || 0) * 2.4),
+    CAMERA.minY,
+    CAMERA.maxY,
+  );
+  const lookTarget = anchorPosition.clone().add(new THREE.Vector3(0, Math.max(4, (Number(miniature.height ?? 0) || 0) * 0.9), 0));
+  const eyePosition = destination.clone().add(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
+  const { yaw, pitch } = computeLookAngles(eyePosition, lookTarget);
+  const distance = start.distanceTo(destination);
+  state.focusAnimation = {
+    startedAt: performance.now(),
+    durationMs: clamp(Math.round(distance * 24), 700, 2200),
+    fromPosition: start,
+    toPosition: destination,
+    fromYaw: inputState.yaw,
+    toYaw: yaw,
+    fromPitch: inputState.pitch,
+    toPitch: pitch,
+    fromRadius: state.cameraRadius,
+    toRadius: clamp(Math.max(24, orbitRadius + 6), PLAYER_VIEW.minRadius, PLAYER_VIEW.maxRadius),
+  };
+  renderSelected(world);
+  loadStreamForPosition(destination, true).catch((error) => showToast(error.message));
+  return true;
 }
 
 function createLabelTexture(lines, options = {}) {
@@ -4397,6 +4596,8 @@ function buildPrivateWorldMiniatureObject(entry) {
     new THREE.CylinderGeometry(1, 1, 0.08, 28),
     new THREE.MeshStandardMaterial({
       color: "#9bb0c8",
+      emissive: "#000000",
+      emissiveIntensity: 0,
       transparent: true,
       opacity: 0.24,
       roughness: 0.92,
@@ -4411,6 +4612,8 @@ function buildPrivateWorldMiniatureObject(entry) {
     new THREE.SphereGeometry(1, 28, 18, 0, Math.PI * 2, 0, Math.PI / 2),
     new THREE.MeshPhongMaterial({
       color: "#d7e7ff",
+      emissive: "#000000",
+      emissiveIntensity: 0,
       transparent: true,
       opacity: 0.22,
       shininess: 90,
@@ -4545,6 +4748,8 @@ function buildPrivateWorldMiniatureObject(entry) {
   const midDistance = clamp(nearDistance * 2.2, 118, 250);
   const animatedEntry = {
     id: String(entry.id ?? ""),
+    worldId: String(entry.world_id ?? ""),
+    creatorUsername: String(entry.creator_username ?? "").trim().toLowerCase(),
     group,
     dome,
     baseDomeScaleY: dome.scale.y,
@@ -4566,6 +4771,26 @@ function buildPrivateWorldMiniatureObject(entry) {
         world_id: entry.world_id,
         creator_username: entry.creator_username,
         name: entry.name,
+        about: entry.about,
+        world_type: entry.world_type,
+        template_size: entry.template_size,
+        viewer_count: entry.viewer_count,
+        lineage: entry.lineage,
+        active_instance: {
+          status: "active",
+          viewer_count: entry.viewer_count,
+          anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
+          anchor_position: {
+            x: entry.anchor_position_x,
+            y: entry.anchor_position_y,
+            z: entry.anchor_position_z,
+          },
+          miniature: {
+            width: entry.miniature_width,
+            length: entry.miniature_length,
+            height: entry.miniature_height,
+          },
+        },
       },
     },
     {
@@ -4575,6 +4800,26 @@ function buildPrivateWorldMiniatureObject(entry) {
         world_id: entry.world_id,
         creator_username: entry.creator_username,
         name: entry.name,
+        about: entry.about,
+        world_type: entry.world_type,
+        template_size: entry.template_size,
+        viewer_count: entry.viewer_count,
+        lineage: entry.lineage,
+        active_instance: {
+          status: "active",
+          viewer_count: entry.viewer_count,
+          anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
+          anchor_position: {
+            x: entry.anchor_position_x,
+            y: entry.anchor_position_y,
+            z: entry.anchor_position_z,
+          },
+          miniature: {
+            width: entry.miniature_width,
+            length: entry.miniature_length,
+            height: entry.miniature_height,
+          },
+        },
       },
     },
     {
@@ -4584,6 +4829,26 @@ function buildPrivateWorldMiniatureObject(entry) {
         world_id: entry.world_id,
         creator_username: entry.creator_username,
         name: entry.name,
+        about: entry.about,
+        world_type: entry.world_type,
+        template_size: entry.template_size,
+        viewer_count: entry.viewer_count,
+        lineage: entry.lineage,
+        active_instance: {
+          status: "active",
+          viewer_count: entry.viewer_count,
+          anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
+          anchor_position: {
+            x: entry.anchor_position_x,
+            y: entry.anchor_position_y,
+            z: entry.anchor_position_z,
+          },
+          miniature: {
+            width: entry.miniature_width,
+            length: entry.miniature_length,
+            height: entry.miniature_height,
+          },
+        },
       },
     },
   ];
@@ -4600,14 +4865,23 @@ function updatePrivateWorldMiniatures(elapsedSeconds) {
     const isMid = distance > entry.nearDistance && distance <= entry.midDistance;
     const allowNear = entry.serverLodBand === "near";
     const allowMid = entry.serverLodBand === "near" || entry.serverLodBand === "mid";
+    const focusedKey = state.focusedPrivateWorld ? getPrivateWorldResultKey(state.focusedPrivateWorld) : "";
+    const isFocused = focusedKey && focusedKey === `${entry.worldId}:${entry.creatorUsername}`;
     entry.label.visible = isNear || isMid || entry.serverLodBand !== "far";
     entry.silhouetteGroup.visible = allowMid && (isMid || (entry.serverLodBand === "mid" && isNear));
     entry.detailGroup.visible = allowNear && isNear;
     entry.playerDots.visible = allowNear && isNear;
+    entry.dome.material.color.set(isFocused ? "#f8d4e2" : "#d7e7ff");
+    entry.dome.material.emissive.set(isFocused ? "#ff4f6d" : "#000000");
+    entry.dome.material.emissiveIntensity = isFocused ? 0.14 : 0;
+    entry.basePlate.material.color.set(isFocused ? "#ffd1db" : "#9bb0c8");
+    entry.basePlate.material.emissive.set(isFocused ? "#ff4f6d" : "#000000");
+    entry.basePlate.material.emissiveIntensity = isFocused ? 0.18 : 0;
     entry.dome.material.opacity = isNear ? 0.12 : isMid ? 0.18 : 0.24;
-    entry.basePlate.material.opacity = isNear ? 0.28 : 0.22;
+    entry.basePlate.material.opacity = isFocused ? 0.36 : (isNear ? 0.28 : 0.22);
     const pulse = 1 + Math.sin(elapsedSeconds * 0.8 + entry.phase) * 0.018;
     entry.dome.scale.y = entry.baseDomeScaleY * pulse;
+    entry.label.scale.setScalar(isFocused ? 1.04 : 1);
   }
 }
 
@@ -5956,6 +6230,7 @@ function closeSelectedPost() {
   setPostFocusMode(false);
   state.activeResultId = null;
   state.focusedResult = null;
+  state.focusedPrivateWorld = null;
   state.openTagId = null;
   if (sceneState.floorMarker) {
     sceneState.floorMarker.visible = false;
@@ -5974,6 +6249,7 @@ function openTagCloud(entry) {
     state.openTagId = null;
     state.activeResultId = null;
     state.focusedResult = null;
+    state.focusedPrivateWorld = null;
     state.focusAnimation = null;
     if (sceneState.floorMarker) {
       sceneState.floorMarker.visible = false;
@@ -5987,6 +6263,7 @@ function openTagCloud(entry) {
   state.openTagId = entry.tag_id;
   state.activeResultId = null;
   state.focusedResult = null;
+  state.focusedPrivateWorld = null;
   if (sceneState.floorMarker) {
     sceneState.floorMarker.visible = false;
   }
@@ -6572,6 +6849,45 @@ function renderSelected(result) {
     elements.selected.innerHTML = "";
     return;
   }
+  if (isPrivateWorldSelection(result)) {
+    const world = normalizePrivateWorldResult(result);
+    const activeInstance = world.active_instance ?? {};
+    const occupancy = activeInstance.viewer_count != null
+      ? `${Number(activeInstance.viewer_count) || 0} inside now`
+      : "No live occupancy";
+    const dimensions = `${Number(world.width ?? 0)} x ${Number(world.length ?? 0)} x ${Number(world.height ?? 0)}`;
+    const lineage = world.lineage?.is_imported
+      ? `Forked from ${world.lineage.origin_world_name || world.lineage.origin_world_id || "another world"} by @${world.lineage.origin_creator_username || "unknown"}`
+      : "Original world";
+    elements.inspector?.classList.remove("is-empty");
+    elements.focusKind.textContent = "Private World";
+    elements.selected.innerHTML = `
+      <div class="world-selected__title">${htmlEscape(world.name || "Private world")}</div>
+      <div class="world-selected__meta">
+        <span>@${htmlEscape(world.creator?.username || world.creator_username || "unknown")}</span>
+        <span>${htmlEscape(world.world_type || "world")}</span>
+        <span>${htmlEscape(dimensions)}</span>
+        <span>${htmlEscape(occupancy)}</span>
+      </div>
+      <p class="world-selected__body">${htmlEscape(world.about || "No description yet.")}</p>
+      <div class="world-selected__stack">
+        <div class="world-selected__card">
+          <div class="world-selected__label">Entry</div>
+          <div class="world-selected__copy">${htmlEscape(activeInstance.status === "active" ? "The dome is live in Mauworld right now." : "This world is not active right now.")}</div>
+        </div>
+        <div class="world-selected__card">
+          <div class="world-selected__label">Credits</div>
+          <div class="world-selected__copy">${htmlEscape(lineage)}</div>
+        </div>
+      </div>
+      <div class="world-selected__actions">
+        <button class="world-selected__button" type="button" data-private-world-action="view" data-private-world-id="${htmlEscape(world.world_id)}" data-private-world-creator="${htmlEscape(world.creator?.username || world.creator_username || "")}">View</button>
+        <button class="world-selected__button world-selected__button--primary" type="button" data-private-world-action="enter" data-private-world-id="${htmlEscape(world.world_id)}" data-private-world-creator="${htmlEscape(world.creator?.username || world.creator_username || "")}">Enter</button>
+        <button class="world-selected__button" type="button" data-private-world-action="fork" data-private-world-id="${htmlEscape(world.world_id)}" data-private-world-creator="${htmlEscape(world.creator?.username || world.creator_username || "")}">Fork</button>
+      </div>
+    `;
+    return;
+  }
 
   elements.inspector?.classList.remove("is-empty");
   const post = result.post ?? {};
@@ -6606,6 +6922,7 @@ function renderSelected(result) {
 }
 
 function focusOnDestination(result) {
+  state.focusedPrivateWorld = null;
   startGuidedTravel(normalizeWorldResult(result));
 }
 
@@ -6750,6 +7067,60 @@ function renderLiveSharesList() {
 }
 
 function renderSearchResults() {
+  if (state.searchPayload?.mode === "private-worlds") {
+    const worlds = state.searchPayload?.worlds ?? [];
+    if (worlds.length === 0) {
+      if (!hasSearchIntent()) {
+        elements.resultsPanel?.classList.add("is-empty");
+        elements.results.innerHTML = "";
+        return;
+      }
+      elements.resultsPanel?.classList.remove("is-empty");
+      elements.results.innerHTML = '<p class="world-empty">No active private worlds match this search right now.</p>';
+      return;
+    }
+
+    elements.resultsPanel?.classList.remove("is-empty");
+    elements.results.innerHTML = worlds
+      .map((world) => {
+        const key = getPrivateWorldResultKey(world);
+        const isActive = state.activeResultId === key;
+        const occupancy = Number(world.active_instance?.viewer_count ?? 0) || 0;
+        const credits = world.lineage?.is_imported
+          ? `Forked from ${world.lineage.origin_world_name || world.lineage.origin_world_id || "another world"}`
+          : "Original world";
+        return `
+          <button class="world-result ${isActive ? "is-active" : ""}" type="button" data-private-world-result="${htmlEscape(key)}">
+            <div class="world-result__title">${htmlEscape(world.name || "Private world")}</div>
+            <p class="world-result__body">${htmlEscape(world.about || "No description yet.")}</p>
+            <div class="world-result__meta">
+              <span>@${htmlEscape(world.creator?.username || world.creator_username || "unknown")}</span>
+              <span>${htmlEscape(world.world_type || "world")}</span>
+              <span>${Number(world.width ?? 0)}x${Number(world.length ?? 0)}x${Number(world.height ?? 0)}</span>
+              <span>${occupancy} inside</span>
+              <span>${htmlEscape(credits)}</span>
+            </div>
+          </button>
+        `;
+      })
+      .join("");
+
+    for (const button of elements.results.querySelectorAll("[data-private-world-result]")) {
+      button.addEventListener("click", () => {
+        const key = button.getAttribute("data-private-world-result");
+        const world = worlds.find((entry) => getPrivateWorldResultKey(entry) === key);
+        if (!world) {
+          return;
+        }
+        state.activeResultId = key;
+        focusPrivateWorldDome(world);
+        clearSearchQuery();
+        clearSearchResults();
+      });
+    }
+    return;
+  }
+
   const hits = state.searchPayload?.hits ?? [];
   if (hits.length === 0) {
     if (!hasSearchIntent()) {
@@ -6891,14 +7262,38 @@ async function runSearch() {
   const formData = new FormData(elements.searchForm);
   const query = String(formData.get("q") ?? "").trim();
   const tag = String(formData.get("tag") ?? "").trim();
-  if (!query && !tag) {
+  if (state.searchMode !== "private-worlds" && !query && !tag) {
     clearSearchResults();
     return;
   }
   state.searchLoading = true;
   state.searchSubmitted = true;
-  setSearchStatus("Searching the current world...");
+  setSearchStatus(state.searchMode === "private-worlds"
+    ? "Scanning active private worlds..."
+    : "Searching the current world...");
   try {
+    if (state.searchMode === "private-worlds") {
+      const payload = await fetchJson(WORLD_API.privateWorldSearch, {
+        q: query,
+        limit: 12,
+      });
+      const normalizedPayload = {
+        mode: "private-worlds",
+        worlds: (payload.worlds ?? []).map((world) => normalizePrivateWorldResult(world)),
+      };
+      state.searchPayload = normalizedPayload;
+      if (!state.activeResultId && normalizedPayload.worlds[0]) {
+        state.activeResultId = getPrivateWorldResultKey(normalizedPayload.worlds[0]);
+        renderSelected(normalizedPayload.worlds[0]);
+      }
+      renderSearchResults();
+      setSearchStatus(
+        normalizedPayload.worlds.length > 0
+          ? `${normalizedPayload.worlds.length} active private ${normalizedPayload.worlds.length === 1 ? "world" : "worlds"}`
+          : "No active private worlds match right now.",
+      );
+      return;
+    }
     const payload = await fetchJson(WORLD_API.search, {
       q: query,
       tag,
@@ -6917,7 +7312,9 @@ async function runSearch() {
     renderSearchResults();
     setSearchStatus("");
   } catch (error) {
-    state.searchPayload = { hits: [] };
+    state.searchPayload = state.searchMode === "private-worlds"
+      ? { mode: "private-worlds", worlds: [] }
+      : { hits: [] };
     renderSearchResults();
     setSearchStatus(error.message);
   } finally {
@@ -8241,11 +8638,8 @@ function pickSceneObject(event) {
   } else if (payload.type === "browser-screen") {
     focusBrowserScreen(payload.data?.sessionId);
   } else if (payload.type === "private-world-miniature") {
-    launchPrivateWorld({
-      worldId: payload.data?.world_id,
-      creatorUsername: payload.data?.creator_username,
-      autojoin: true,
-    });
+    focusPrivateWorldDome(normalizePrivateWorldResult(payload.data));
+    setWorldPanelTab("search");
   }
 }
 
@@ -8822,10 +9216,41 @@ function registerInput() {
 
   const searchInput = elements.searchForm?.querySelector('input[name="q"]');
   searchInput?.addEventListener("input", () => {
-    if (String(searchInput.value ?? "").trim()) {
+    if (String(searchInput.value ?? "").trim() || state.searchMode === "private-worlds") {
       return;
     }
     clearSearchResults();
+  });
+  for (const button of elements.searchModeButtons) {
+    button.addEventListener("click", () => {
+      const nextMode = button.getAttribute("data-world-search-mode") || "world";
+      setSearchMode(nextMode);
+      setWorldPanelTab("search");
+      if (nextMode === "private-worlds") {
+        runSearch().catch((error) => showToast(error.message));
+      }
+    });
+  }
+  elements.selected?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-private-world-action]");
+    if (!button) {
+      return;
+    }
+    const worldId = button.getAttribute("data-private-world-id");
+    const creatorUsername = button.getAttribute("data-private-world-creator");
+    const action = button.getAttribute("data-private-world-action");
+    if (!worldId || !creatorUsername) {
+      return;
+    }
+    if (action === "enter") {
+      launchPrivateWorld({ worldId, creatorUsername, autojoin: true });
+      return;
+    }
+    if (action === "fork") {
+      launchPrivateWorld({ worldId, creatorUsername, fork: true });
+      return;
+    }
+    launchPrivateWorld({ worldId, creatorUsername });
   });
 
   elements.chatInput?.addEventListener("input", updateChatCounter);
@@ -9048,6 +9473,7 @@ async function bootstrapWorld() {
   syncViewerNameInput();
   initScene();
   registerInput();
+  updateSearchModeControls();
   renderSelected(null);
   renderSearchResults();
   renderLiveSharesList();

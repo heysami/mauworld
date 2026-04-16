@@ -810,25 +810,38 @@ export function installPrivateWorldStore(MauworldStore) {
     const limit = clampLimit(input.limit, 18, 60);
     const query = lower(input.q);
     const worldType = lower(input.worldType);
-    let builder = this.serviceClient
-      .from("private_worlds")
-      .select("*")
-      .order("updated_at", { ascending: false })
-      .limit(limit * 3);
-    if (worldType) {
-      builder = builder.eq("world_type", worldType);
+    const activeRows = await must(
+      this.serviceClient
+        .from("private_world_active_instances")
+        .select("*")
+        .order("last_active_at", { ascending: false })
+        .limit(limit * 4),
+      "Could not load active private worlds",
+    );
+    if (activeRows.length === 0) {
+      return {
+        worlds: [],
+      };
     }
-    const rows = await must(builder, "Could not load searchable private worlds");
-    const filteredRows = rows
-      .filter((row) => !query || String(row.search_text ?? "").includes(query))
+    const worldRows = await must(
+      this.serviceClient.from("private_worlds").select("*").in("id", activeRows.map((row) => row.world_id)),
+      "Could not load searchable private worlds",
+    );
+    const worldById = new Map(worldRows.map((row) => [row.id, row]));
+    const matchedRows = activeRows
+      .map((activeInstance) => ({
+        activeInstance,
+        world: worldById.get(activeInstance.world_id) ?? null,
+      }))
+      .filter((entry) => entry.world)
+      .filter((entry) => !worldType || entry.world.world_type === worldType)
+      .filter((entry) => !query || String(entry.world.search_text ?? "").includes(query))
       .slice(0, limit);
-    const creatorProfiles = await loadProfilesByIds(this, filteredRows.map((row) => row.creator_profile_id));
-    const activeInstances = await loadActiveInstancesForWorldIds(this, filteredRows.map((row) => row.id));
-    const participantCounts = await loadParticipantCountsForInstanceIds(this, [...activeInstances.values()].map((row) => row.id));
+    const creatorProfiles = await loadProfilesByIds(this, matchedRows.map((entry) => entry.world.creator_profile_id));
+    const participantCounts = await loadParticipantCountsForInstanceIds(this, matchedRows.map((entry) => entry.activeInstance.id));
     return {
-      worlds: filteredRows.map((row) => {
+      worlds: matchedRows.map(({ world: row, activeInstance }) => {
         const creator = creatorProfiles.get(row.creator_profile_id) ?? null;
-        const activeInstance = activeInstances.get(row.id) ?? null;
         const isImported = Boolean(
           row.imported_at
           || row.origin_world_id
@@ -859,14 +872,24 @@ export function installPrivateWorldStore(MauworldStore) {
             origin_world_id: isImported ? (row.origin_world_id ?? row.world_id) : null,
             origin_creator_username: isImported ? row.origin_creator_username : null,
             origin_world_name: isImported ? row.origin_world_name : null,
+            imported_at: isImported ? (row.imported_at ?? null) : null,
           },
-          active_instance: activeInstance
-            ? {
-                status: activeInstance.status,
-                viewer_count: participantCounts.get(activeInstance.id) ?? 0,
-                anchor_world_snapshot_id: activeInstance.anchor_world_snapshot_id,
-              }
-            : null,
+          active_instance: {
+            status: activeInstance.status,
+            viewer_count: participantCounts.get(activeInstance.id) ?? 0,
+            active_scene_id: activeInstance.active_scene_id,
+            anchor_world_snapshot_id: activeInstance.anchor_world_snapshot_id,
+            anchor_position: {
+              x: activeInstance.anchor_position_x,
+              y: activeInstance.anchor_position_y,
+              z: activeInstance.anchor_position_z,
+            },
+            miniature: {
+              width: activeInstance.miniature_width,
+              length: activeInstance.miniature_length,
+              height: activeInstance.miniature_height,
+            },
+          },
         };
       }),
     };
@@ -2216,7 +2239,11 @@ export function installPrivateWorldStore(MauworldStore) {
         id: row.id,
         world_id: world.world_id,
         name: world.name,
+        about: world.about,
+        world_type: world.world_type,
         creator_username: creator?.username ?? null,
+        template_size: world.template_size,
+        anchor_world_snapshot_id: row.anchor_world_snapshot_id,
         anchor_position_x: row.anchor_position_x,
         anchor_position_y: row.anchor_position_y,
         anchor_position_z: row.anchor_position_z,
@@ -2225,6 +2252,19 @@ export function installPrivateWorldStore(MauworldStore) {
         miniature_width: row.miniature_width,
         miniature_length: row.miniature_length,
         miniature_height: row.miniature_height,
+        viewer_count: participants.length,
+        lineage: {
+          is_imported: Boolean(
+            world.imported_at
+            || world.origin_world_id
+            || world.origin_creator_username
+            || world.origin_world_name
+          ),
+          origin_world_id: world.origin_world_id ?? null,
+          origin_creator_username: world.origin_creator_username ?? null,
+          origin_world_name: world.origin_world_name ?? null,
+          imported_at: world.imported_at ?? null,
+        },
         lod_band: lodBand,
         compiled: {
           miniature: miniaturePayload,
