@@ -29,11 +29,13 @@ body.private-worlds-body {
 
 .private-worlds-scene-shell::before,
 body.private-worlds-body .world-scene-shell::before {
-  display: none;
+  content: none !important;
+  display: none !important;
 }
 
 .private-worlds-shell::after {
-  display: none;
+  content: none !important;
+  display: none !important;
 }
 
 body.private-worlds-body.is-launcher-open .private-worlds-shell::after {

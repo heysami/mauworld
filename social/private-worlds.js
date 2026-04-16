@@ -3,7 +3,7 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { createPatternedMaterial } from "./private-world-materials.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 import { createBrowserMediaController } from "./world-browser-media.js";
-import { updateMascotMotion } from "./world-visitors.js";
+import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -65,6 +65,11 @@ const PRIVATE_SPRINT = {
   decaySeconds: 10,
 };
 const PRIVATE_CHAT_MAX_ENTRIES = 28;
+const PRIVATE_CHAT_BUBBLE_BASE_WIDTH = 18;
+const PRIVATE_CHAT_BUBBLE_BASE_HEIGHT = 12;
+const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 820;
+const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 620;
+const PRIVATE_CHAT_BUBBLE_MAX_LINES = 8;
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
   fog: "#eff7ff",
@@ -243,6 +248,7 @@ const state = {
   mode: "play",
   lockHeartbeatTimer: 0,
   privateChatEntries: [],
+  activeChats: new Map(),
   browserSessions: new Map(),
   localBrowserSessionId: "",
   browserMediaController: null,
@@ -445,6 +451,21 @@ function createOutlineShell(geometry, color, scale = 1.08) {
   return shell;
 }
 
+function createPrivateBillboard(texture, width, height, options = {}) {
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: options.depthTest ?? true,
+    depthWrite: false,
+    opacity: options.opacity ?? 1,
+    fog: options.fog ?? true,
+  });
+  const geometry = new THREE.PlaneGeometry(width, height);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.renderOrder = options.renderOrder ?? 10;
+  return mesh;
+}
+
 function createViewerAvatarFigure(options = {}) {
   const scale = options.scale ?? 0.92;
   const outlineColor = options.outlineColor ?? PRIVATE_WORLD_STYLE.outline;
@@ -544,6 +565,175 @@ function createViewerAvatarFigure(options = {}) {
   };
 }
 
+function isEmojiOnlyPrivateChatText(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return false;
+  }
+  const compact = trimmed.replace(/\s+/gu, "");
+  return /^(?:\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)+$/u.test(compact);
+}
+
+function createPrivateActorBubbleState(color, options = {}) {
+  const bubble = createPrivateBillboard(
+    createBubbleTexture("💬", {
+      accent: color,
+      stroke: PRIVATE_WORLD_STYLE.outline,
+      text: "",
+    }),
+    PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
+    PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
+    {
+      opacity: 0,
+      fog: false,
+      depthTest: false,
+      renderOrder: 11,
+      persistent: options.persistent === true,
+    },
+  );
+  bubble.visible = false;
+  bubble.position.set(0, 15.2, 0);
+  return {
+    mesh: bubble,
+    currentKey: "",
+    opacity: 0,
+    targetOpacity: 0,
+    duration: 0,
+    elapsed: 0,
+    highEnergy: false,
+    bounceCount: 0,
+    anchorY: 15.2,
+    baseWidth: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
+    baseHeight: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
+    width: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
+    height: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
+    targetWidth: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
+    targetHeight: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
+  };
+}
+
+function getPrivateChatBubbleTargetSize(texture, bubble) {
+  const baseWidth = Number(bubble?.baseWidth) || PRIVATE_CHAT_BUBBLE_BASE_WIDTH;
+  const baseHeight = Number(bubble?.baseHeight) || PRIVATE_CHAT_BUBBLE_BASE_HEIGHT;
+  const layout = texture?.userData?.bubbleLayout ?? null;
+  if (!layout?.hasText) {
+    return { width: baseWidth, height: baseHeight };
+  }
+  const maxTextureWidth = Math.max(
+    1,
+    Number(layout.maxWidth) || Number(layout.width) || PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH,
+  );
+  const maxTextureHeight = Math.max(
+    1,
+    Number(layout.maxHeight) || Number(layout.height) || PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT,
+  );
+  return {
+    width: clampNumber(
+      baseWidth * ((Number(layout.width) || maxTextureWidth) / maxTextureWidth),
+      baseWidth,
+      6.2,
+      baseWidth,
+    ),
+    height: clampNumber(
+      baseHeight * ((Number(layout.height) || maxTextureHeight) / maxTextureHeight),
+      baseHeight,
+      4.9,
+      baseHeight,
+    ),
+  };
+}
+
+function applyPrivateChatBubbleToActor(actorEntry, chatEvent) {
+  if (!actorEntry?.bubble) {
+    return;
+  }
+  if (!chatEvent || Date.parse(chatEvent.expiresAt ?? 0) <= Date.now()) {
+    actorEntry.bubble.targetOpacity = 0;
+    return;
+  }
+  const accent = actorEntry.bubbleAccent ?? PRIVATE_WORLD_STYLE.accents[1];
+  const text = String(chatEvent.text ?? "").trim();
+  const emojiOnly = chatEvent.mode !== "placeholder" && isEmojiOnlyPrivateChatText(text);
+  const symbol = chatEvent.mode === "placeholder" ? "..." : emojiOnly ? text : "💬";
+  const bubbleText = emojiOnly ? "" : text;
+  const bubbleKey = `${chatEvent.mode}:${text}:${accent}`;
+  if (actorEntry.bubble.currentKey !== bubbleKey) {
+    const previousMap = actorEntry.bubble.mesh.material.map;
+    const nextTexture = createBubbleTexture(symbol, {
+      accent,
+      stroke: PRIVATE_WORLD_STYLE.outline,
+      text: bubbleText,
+      width: bubbleText ? PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH : undefined,
+      height: bubbleText ? PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT : undefined,
+      maxLines: bubbleText ? PRIVATE_CHAT_BUBBLE_MAX_LINES : undefined,
+    });
+    actorEntry.bubble.mesh.material.map = nextTexture;
+    actorEntry.bubble.mesh.material.needsUpdate = true;
+    const nextSize = getPrivateChatBubbleTargetSize(nextTexture, actorEntry.bubble);
+    actorEntry.bubble.targetWidth = nextSize.width;
+    actorEntry.bubble.targetHeight = nextSize.height;
+    previousMap?.dispose?.();
+    actorEntry.bubble.currentKey = bubbleKey;
+  }
+  actorEntry.bubble.mesh.visible = true;
+  actorEntry.bubble.targetOpacity = 1;
+  actorEntry.bubble.duration = Math.max(0.5, (Date.parse(chatEvent.expiresAt) - Date.now()) / 1000);
+  actorEntry.bubble.elapsed = 0;
+  actorEntry.bubble.highEnergy = chatEvent.mode !== "placeholder";
+  actorEntry.bubble.bounceCount = actorEntry.bubble.highEnergy ? 2 : 0;
+}
+
+function updatePrivateActorBubble(actorEntry, deltaSeconds, camera = state.preview?.camera) {
+  if (!actorEntry?.bubble?.mesh) {
+    return;
+  }
+  actorEntry.bubble.width += (actorEntry.bubble.targetWidth - actorEntry.bubble.width) * (1 - Math.exp(-deltaSeconds * 12));
+  actorEntry.bubble.height += (actorEntry.bubble.targetHeight - actorEntry.bubble.height) * (1 - Math.exp(-deltaSeconds * 12));
+  actorEntry.bubble.opacity += (actorEntry.bubble.targetOpacity - actorEntry.bubble.opacity) * (1 - Math.exp(-deltaSeconds * 10));
+  if (Math.abs(actorEntry.bubble.opacity - actorEntry.bubble.targetOpacity) < 0.004) {
+    actorEntry.bubble.opacity = actorEntry.bubble.targetOpacity;
+  }
+  if (actorEntry.bubble.targetOpacity > 0) {
+    actorEntry.bubble.elapsed += deltaSeconds;
+    if (actorEntry.bubble.elapsed >= actorEntry.bubble.duration) {
+      actorEntry.bubble.targetOpacity = 0;
+    }
+  }
+  const bounce =
+    actorEntry.bubble.highEnergy && actorEntry.bubble.duration > 0
+      ? Math.abs(Math.sin((actorEntry.bubble.elapsed / actorEntry.bubble.duration) * Math.PI * actorEntry.bubble.bounceCount)) * 0.9
+      : 0;
+  actorEntry.bubble.mesh.visible = actorEntry.bubble.opacity > 0.01 && actorEntry.group.visible !== false;
+  actorEntry.bubble.mesh.position.y = actorEntry.bubble.anchorY + bounce;
+  const pulse = 0.92 + actorEntry.bubble.opacity * 0.08;
+  actorEntry.bubble.mesh.scale.set(
+    (actorEntry.bubble.width / actorEntry.bubble.baseWidth) * pulse,
+    (actorEntry.bubble.height / actorEntry.bubble.baseHeight) * pulse,
+    1,
+  );
+  actorEntry.bubble.mesh.material.opacity = actorEntry.bubble.opacity * (actorEntry.opacity ?? 1);
+  if (camera) {
+    actorEntry.bubble.mesh.quaternion.copy(camera.quaternion);
+  }
+}
+
+function pruneExpiredPrivateChatEvents() {
+  const now = Date.now();
+  for (const [presenceId, event] of state.activeChats.entries()) {
+    if (Date.parse(event.expiresAt ?? 0) > now) {
+      continue;
+    }
+    state.activeChats.delete(presenceId);
+    const presenceEntry = state.preview?.presenceEntries?.get(presenceId);
+    if (presenceEntry?.bubble) {
+      presenceEntry.bubble.targetOpacity = 0;
+    }
+    if (presenceId === getPrivateViewerSessionId() && state.preview?.viewerAvatar?.bubble) {
+      state.preview.viewerAvatar.bubble.targetOpacity = 0;
+    }
+  }
+}
+
 function getPrivatePresenceEntryId(entry = {}) {
   return String(entry.viewer_session_id ?? entry.viewerSessionId ?? entry.id ?? "").trim();
 }
@@ -581,6 +771,8 @@ function buildPrivatePresenceObject(entry) {
     Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
     Number(entry.position_z ?? 0) || 0,
   );
+  const bubble = createPrivateActorBubbleState(primary);
+  figure.group.add(bubble.mesh);
   return {
     id: presenceId,
     group: figure.group,
@@ -601,6 +793,8 @@ function buildPrivatePresenceObject(entry) {
     displayName,
     bob: 0.55 + Math.random() * 0.35,
     phase: Math.random() * Math.PI * 2,
+    bubble,
+    bubbleAccent: primary,
   };
 }
 
@@ -625,64 +819,23 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
 }
 
 function createPrivateShareBubbleTexture(session = {}) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 320;
-  const context = canvas.getContext("2d");
   const shareKind = String(session.shareKind ?? "screen");
   const accent = shareKind === "audio"
     ? PRIVATE_WORLD_STYLE.accents[3]
     : shareKind === "camera"
       ? PRIVATE_WORLD_STYLE.accents[0]
       : PRIVATE_WORLD_STYLE.accents[1];
-  const symbol = shareKind === "audio"
-    ? "Voice"
-    : shareKind === "camera"
-      ? "Video"
-      : "Screen";
-  const title = getPrivateBrowserSessionTitle(session).slice(0, 36);
-
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "rgba(255,255,255,0.96)";
-  context.strokeStyle = "#33407a";
-  context.lineWidth = 12;
-  const radius = 34;
-  context.beginPath();
-  context.moveTo(radius, 16);
-  context.lineTo(canvas.width - radius, 16);
-  context.quadraticCurveTo(canvas.width - 16, 16, canvas.width - 16, radius);
-  context.lineTo(canvas.width - 16, canvas.height - radius - 28);
-  context.quadraticCurveTo(canvas.width - 16, canvas.height - 44, canvas.width - radius, canvas.height - 44);
-  context.lineTo(186, canvas.height - 44);
-  context.lineTo(130, canvas.height - 16);
-  context.lineTo(138, canvas.height - 44);
-  context.lineTo(radius, canvas.height - 44);
-  context.quadraticCurveTo(16, canvas.height - 44, 16, canvas.height - radius - 28);
-  context.lineTo(16, radius);
-  context.quadraticCurveTo(16, 16, radius, 16);
-  context.closePath();
-  context.fill();
-  context.stroke();
-
-  context.fillStyle = accent;
-  context.globalAlpha = 0.12;
-  context.fillRect(28, 30, canvas.width - 56, 82);
-  context.globalAlpha = 1;
-
-  context.fillStyle = "#24336d";
-  context.font = "800 38px Manrope, sans-serif";
-  context.textBaseline = "middle";
-  context.fillText(symbol, 42, 70);
-  context.font = "700 34px Manrope, sans-serif";
-  context.fillText(title || `${symbol} live`, 42, 170, canvas.width - 84);
-  context.fillStyle = "#7282b9";
-  context.font = "600 26px Manrope, sans-serif";
-  context.fillText("live nearby", 42, 224);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-  return texture;
+  const symbol = shareKind === "audio" ? "Voice" : shareKind === "camera" ? "Video" : "Screen";
+  return createBubbleTexture(symbol, {
+    accent,
+    stroke: PRIVATE_WORLD_STYLE.outline,
+    text: getPrivateBrowserSessionTitle(session).slice(0, 60),
+    label: "LIVE",
+    badge: shareKind === "audio" ? "voice" : shareKind === "camera" ? "video" : "screen",
+    width: 700,
+    height: 420,
+    maxLines: 3,
+  });
 }
 
 function removePrivateShareBubbleEntry(sessionId) {
@@ -791,8 +944,12 @@ function removePrivatePresenceObject(presenceId) {
   entry.group.traverse((node) => {
     node.geometry?.dispose?.();
     if (Array.isArray(node.material)) {
-      node.material.forEach((material) => material?.dispose?.());
+      node.material.forEach((material) => {
+        material?.map?.dispose?.();
+        material?.dispose?.();
+      });
     } else {
+      node.material?.map?.dispose?.();
       node.material?.dispose?.();
     }
   });
@@ -810,6 +967,7 @@ function upsertPrivatePresenceObject(entry) {
     const next = buildPrivatePresenceObject(entry);
     preview.presenceEntries.set(presenceId, next);
     preview.presence.add(next.group);
+    applyPrivateChatBubbleToActor(next, state.activeChats.get(presenceId));
     return;
   }
   existing.displayName = displayName;
@@ -881,6 +1039,7 @@ function updatePrivatePresenceScene(deltaSeconds, elapsedSeconds) {
     if (entry.orb) {
       entry.orb.position.y = entry.orbBaseY + Math.sin(elapsedSeconds * 1.4 + entry.phase) * 0.26;
     }
+    updatePrivateActorBubble(entry, deltaSeconds, preview.camera);
   }
 }
 
@@ -920,6 +1079,34 @@ function getViewerSpawnPosition(world = state.selectedWorld) {
     PRIVATE_CAMERA.minY,
     Math.min(length * 0.26, 26),
   );
+}
+
+function getPrivateWorldBounds(world = state.selectedWorld) {
+  const width = Math.max(4, Number(world?.width ?? 40) || 40);
+  const length = Math.max(4, Number(world?.length ?? 40) || 40);
+  const height = Math.max(2, Number(world?.height ?? 10) || 10);
+  return {
+    width,
+    length,
+    height,
+    minX: -width / 2,
+    maxX: width / 2,
+    minZ: -length / 2,
+    maxZ: length / 2,
+    minY: PRIVATE_CAMERA.minY,
+    maxY: Math.max(PRIVATE_CAMERA.minY, height + 36),
+  };
+}
+
+function clampViewerPositionToWorldBounds(position, world = state.selectedWorld) {
+  if (!position) {
+    return position;
+  }
+  const bounds = getPrivateWorldBounds(world);
+  position.x = clampNumber(position.x, position.x, bounds.minX, bounds.maxX);
+  position.z = clampNumber(position.z, position.z, bounds.minZ, bounds.maxZ);
+  position.y = clampNumber(position.y, position.y, bounds.minY, bounds.maxY);
+  return position;
 }
 
 function resetViewerRig(world = state.selectedWorld) {
@@ -1285,6 +1472,8 @@ function pushPrivateChatEntry(payload = {}) {
     return;
   }
   const actorSessionId = String(payload.actorSessionId ?? payload.viewerSessionId ?? "").trim();
+  const expiresAt = payload.expiresAt
+    || new Date(Date.now() + Math.max(2200, Math.min(8800, text.length * 82 + 2400))).toISOString();
   const createdAt = payload.createdAt
     ? new Date(payload.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1296,6 +1485,20 @@ function pushPrivateChatEntry(payload = {}) {
     createdAt,
   });
   state.privateChatEntries = state.privateChatEntries.slice(0, PRIVATE_CHAT_MAX_ENTRIES);
+  if (actorSessionId) {
+    state.activeChats.set(actorSessionId, {
+      text,
+      mode: payload.mode === "placeholder" ? "placeholder" : "full",
+      expiresAt,
+    });
+    const presenceEntry = state.preview?.presenceEntries?.get(actorSessionId);
+    if (presenceEntry) {
+      applyPrivateChatBubbleToActor(presenceEntry, state.activeChats.get(actorSessionId));
+    }
+    if (actorSessionId === getPrivateViewerSessionId() && state.preview?.viewerAvatar) {
+      applyPrivateChatBubbleToActor(state.preview.viewerAvatar, state.activeChats.get(actorSessionId));
+    }
+  }
   renderPrivateChat();
 }
 
@@ -2128,6 +2331,7 @@ async function refreshAuthState() {
     state.worlds = [];
     state.runtimeSnapshot = null;
     state.privateChatEntries = [];
+    state.activeChats.clear();
     state.livePresence.clear();
     reconcilePrivatePresenceScene();
     state.pressedRuntimeKeys.clear();
@@ -2350,6 +2554,7 @@ function setMode(mode) {
     elements.modePlay.setAttribute("aria-pressed", String(nextMode === "play"));
   }
   updateShellState();
+  syncPrivatePreviewEnvironmentState();
   updatePreviewFromSelection();
 }
 
@@ -3461,10 +3666,14 @@ function ensureViewerAvatar(preview) {
     targetLeanX: 0,
     targetLeanZ: 0,
     facingYaw: normalizeAngle(privateInputState.yaw + Math.PI),
+    bubbleAccent: PRIVATE_WORLD_STYLE.accents[0],
+    bubble: createPrivateActorBubbleState(PRIVATE_WORLD_STYLE.accents[0], { persistent: true }),
   };
+  avatar.group.add(avatar.bubble.mesh);
   avatar.group.position.copy(state.viewerPosition);
   preview.actors.add(avatar.group);
   preview.viewerAvatar = avatar;
+  applyPrivateChatBubbleToActor(avatar, state.activeChats.get(getPrivateViewerSessionId()));
   return avatar;
 }
 
@@ -3524,6 +3733,7 @@ function updatePrivateMovement(preview, deltaSeconds) {
     PRIVATE_CAMERA.minY,
     PRIVATE_CAMERA.maxY,
   );
+  clampViewerPositionToWorldBounds(state.viewerPosition);
   syncPrivateCameraToFollowTarget(preview);
   leaveViewerMovementTrail(preview, previousPosition, state.viewerPosition, deltaSeconds);
 }
@@ -3545,6 +3755,7 @@ function syncPrivateLocalAvatar(preview, elapsedSeconds) {
     bobAmplitude: 0.16,
     bobSpeed: 1.6,
   });
+  updatePrivateActorBubble(avatar, deltaSeconds, preview.camera);
 }
 
 function updatePossessedCamera(preview) {
@@ -3579,31 +3790,84 @@ function updatePossessedCamera(preview) {
 function buildPreviewEnvironment(preview) {
   const environment = new THREE.Group();
   preview.scene.add(environment);
+  preview.environment = environment;
+  preview.ground = null;
+  preview.buildGrid = null;
+  refreshPrivatePreviewEnvironment(preview);
+}
+
+function clearPrivatePreviewEnvironment(preview) {
+  if (!preview?.environment) {
+    return;
+  }
+  for (const child of [...preview.environment.children]) {
+    if (!child) {
+      continue;
+    }
+    preview.environment.remove(child);
+    child.traverse?.((node) => {
+      node.geometry?.dispose?.();
+      if (Array.isArray(node.material)) {
+        node.material.forEach((material) => {
+          material?.map?.dispose?.();
+          material?.dispose?.();
+        });
+      } else {
+        node.material?.map?.dispose?.();
+        node.material?.dispose?.();
+      }
+    });
+  }
+}
+
+function refreshPrivatePreviewEnvironment(preview = state.preview, world = state.selectedWorld) {
+  if (!preview?.environment) {
+    return;
+  }
+  const bounds = getPrivateWorldBounds(world);
+  const nextKey = `${bounds.width}:${bounds.length}:${bounds.height}`;
+  if (preview.environmentKey === nextKey) {
+    syncPrivatePreviewEnvironmentState(preview);
+    return;
+  }
+  preview.environmentKey = nextKey;
+  clearPrivatePreviewEnvironment(preview);
 
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(1200, 1200),
+    new THREE.PlaneGeometry(bounds.width, bounds.length),
     new THREE.MeshBasicMaterial({
-      color: "#ffffff",
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.ground),
+      transparent: true,
+      opacity: 1,
       side: THREE.DoubleSide,
     }),
   );
   floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.03;
-  environment.add(floor);
+  floor.position.y = -0.04;
+  preview.environment.add(floor);
 
-  const grid = new THREE.GridHelper(220, 110, "#e6f0ff", "#f3f8ff");
+  const gridSize = Math.max(bounds.width, bounds.length);
+  const gridDivisions = Math.max(8, Math.min(96, Math.round(gridSize)));
+  const grid = new THREE.GridHelper(gridSize, gridDivisions, "#d8e9ff", "#edf5ff");
   grid.position.y = 0;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
-    material.opacity = 0.1;
+    material.opacity = 0.18;
     material.transparent = true;
     material.depthWrite = false;
+    material.fog = false;
   }
-  environment.add(grid);
+  preview.environment.add(grid);
 
-  preview.environment = environment;
-  preview.worldGlowRing = null;
-  preview.horizonRing = null;
-  preview.atmosphereField = null;
+  preview.ground = floor;
+  preview.buildGrid = grid;
+  syncPrivatePreviewEnvironmentState(preview);
+}
+
+function syncPrivatePreviewEnvironmentState(preview = state.preview) {
+  if (!preview?.buildGrid) {
+    return;
+  }
+  preview.buildGrid.visible = state.mode === "build" && isEditor();
 }
 
 function buildWorldBoundsPreview(world = state.selectedWorld) {
@@ -3646,18 +3910,18 @@ function ensurePreview() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PRIVATE_WORLD_STYLE.background);
-  scene.fog = null;
+  scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 120, 980);
 
-  const camera = new THREE.PerspectiveCamera(48, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 5000);
+  const camera = new THREE.PerspectiveCamera(58, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 1800);
   camera.position.copy(state.viewerCameraPosition);
+  camera.rotation.order = "YXZ";
   camera.lookAt(getPrivatePlayerLookTarget());
 
-  const ambient = new THREE.HemisphereLight("#ffffff", "#d9e7fa", 1.52);
-  const sunLight = new THREE.DirectionalLight("#fff7df", 1.28);
-  sunLight.position.set(34, 42, 18);
-  const rimLight = new THREE.DirectionalLight("#9be9ff", 0.54);
-  rimLight.position.set(-24, 20, -14);
-  scene.add(ambient, sunLight, rimLight);
+  const ambient = new THREE.HemisphereLight("#ffffff", "#ffe8f8", 1.48);
+  ambient.position.set(0, 180, 0);
+  const sunLight = new THREE.DirectionalLight("#fff4be", 1.16);
+  sunLight.position.set(120, 280, 80);
+  scene.add(ambient, sunLight);
 
   state.preview = {
     renderer,
@@ -3698,15 +3962,7 @@ function ensurePreview() {
     state.preview.camera.aspect = width / Math.max(1, height);
     state.preview.camera.updateProjectionMatrix();
     state.preview.renderer.setSize(width, height, false);
-    if (state.preview.worldGlowRing) {
-      state.preview.worldGlowRing.rotation.z += deltaSeconds * 0.03;
-    }
-    if (state.preview.horizonRing) {
-      state.preview.horizonRing.rotation.z -= deltaSeconds * 0.02;
-    }
-    if (state.preview.atmosphereField) {
-      state.preview.atmosphereField.rotation.y += deltaSeconds * 0.004;
-    }
+    refreshPrivatePreviewEnvironment(state.preview);
     const possessed = state.mode === "play" && updatePossessedCamera(state.preview);
     if (possessed) {
       if (state.preview.viewerAvatar) {
@@ -3717,6 +3973,7 @@ function ensurePreview() {
       syncPrivateLocalAvatar(state.preview, timestamp / 1000);
     }
     sendPrivatePresence();
+    pruneExpiredPrivateChatEvents();
     updatePrivatePresenceScene(deltaSeconds, timestamp / 1000);
     updatePrivateShareBubbles(timestamp / 1000);
     updatePreviewEffects(state.preview, timestamp / 1000);
@@ -4126,7 +4383,8 @@ function updatePreviewFromSelection() {
   const runtimeTransforms = getRuntimeTransformMaps();
   const particleEffects = [];
   const selectedEntity = state.builderSelection;
-  const boundsPreview = buildWorldBoundsPreview(state.selectedWorld);
+  refreshPrivatePreviewEnvironment(preview, state.selectedWorld);
+  const boundsPreview = state.mode === "build" && isEditor() ? buildWorldBoundsPreview(state.selectedWorld) : null;
   if (boundsPreview) {
     preview.root.add(boundsPreview);
   }
@@ -4438,6 +4696,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.worldMenuOpen = false;
   if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
     state.privateChatEntries = [];
+    state.activeChats.clear();
     state.livePresence.clear();
     reconcilePrivatePresenceScene();
     resetViewerRig(payload.world);
@@ -4706,6 +4965,7 @@ async function leaveWorld() {
   });
   state.joined = false;
   state.joinedAsGuest = false;
+  state.activeChats.clear();
   state.livePresence.clear();
   reconcilePrivatePresenceScene();
   state.pressedRuntimeKeys.clear();
