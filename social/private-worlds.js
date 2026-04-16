@@ -3947,9 +3947,9 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
       ? new THREE.PlaneGeometry(bounds.width, bounds.length)
       : new THREE.CircleGeometry(groundRadius, 72),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(world ? "#f6fbff" : PRIVATE_WORLD_STYLE.ground),
+      color: new THREE.Color(world ? "#eef6ff" : PRIVATE_WORLD_STYLE.ground),
       transparent: true,
-      opacity: 0.98,
+      opacity: 1,
     }),
   );
   ground.rotation.x = -Math.PI / 2;
@@ -4014,7 +4014,7 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   }
   if (preview.groundRim) {
     preview.groundRim.visible = true;
-    preview.groundRim.material.opacity = noWorld ? 0.46 : (showGridHint ? 0.38 : 0.28);
+    preview.groundRim.material.opacity = noWorld ? 0.46 : (showGridHint ? 0.52 : 0.34);
   }
   preview.buildGrid.visible = buildMode || noWorld || showGridHint;
   if (preview.buildGrid.material) {
@@ -4022,12 +4022,12 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
       ? preview.buildGrid.material
       : [preview.buildGrid.material];
     for (const material of materials) {
-      material.opacity = noWorld ? 0.2 : (showGridHint ? 0.18 : (buildMode ? 0.32 : 0));
+      material.opacity = noWorld ? 0.2 : (showGridHint ? 0.28 : (buildMode ? 0.32 : 0));
     }
   }
   if (preview.buildFootprint) {
     preview.buildFootprint.visible = true;
-    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (showGridHint ? 0.28 : (buildMode ? 0.44 : 0.16));
+    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (showGridHint ? 0.4 : (buildMode ? 0.44 : 0.16));
   }
 }
 
