@@ -13,7 +13,7 @@ const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "ar
 const LAUNCHER_TABS = new Set(["create", "worlds", "access", "import"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
 const PRIVATE_CAMERA = {
-  minY: 12,
+  minY: 2.5,
   maxY: 360,
   lookMin: -1.1,
   lookMax: 1.1,
@@ -1127,21 +1127,43 @@ function setLauncherTab(tab) {
 
 function getViewerSpawnPosition(world = state.selectedWorld) {
   if (!world) {
-    return new THREE.Vector3(0, PRIVATE_CAMERA.minY, 0);
+    return new THREE.Vector3(0, PRIVATE_CAMERA.minY + 0.8, 0);
   }
+  const rig = getPrivateViewerRigConfig(world);
   const width = Math.max(12, Number(world?.width ?? 40) || 40);
   const length = Math.max(12, Number(world?.length ?? 40) || 40);
   return new THREE.Vector3(
     Math.max(-width * 0.12, -6),
-    PRIVATE_CAMERA.minY,
+    rig.spawnHeight,
     Math.min(length * 0.26, 26),
   );
 }
 
-function getPrivateWorldBounds(world = state.selectedWorld) {
+function getPrivateViewerRigConfig(world = state.selectedWorld) {
   const width = Math.max(4, Number(world?.width ?? (world ? 40 : 64)) || (world ? 40 : 64));
   const length = Math.max(4, Number(world?.length ?? (world ? 40 : 64)) || (world ? 40 : 64));
   const height = Math.max(2, Number(world?.height ?? (world ? 10 : 12)) || (world ? 10 : 12));
+  const span = Math.max(width, length);
+  const minRadius = clampNumber(span * 0.12, 8, 6, 18);
+  const defaultRadius = clampNumber(span * 0.24, 12, minRadius + 2, 26);
+  const maxRadius = clampNumber(span * 0.48, 24, defaultRadius + 4, 54);
+  const spawnHeight = clampNumber(height * 0.32, PRIVATE_CAMERA.minY + 0.8, PRIVATE_CAMERA.minY + 0.8, Math.max(PRIVATE_CAMERA.minY + 1.4, height * 0.7));
+  return {
+    width,
+    length,
+    height,
+    minRadius,
+    defaultRadius,
+    maxRadius,
+    spawnHeight,
+    minY: PRIVATE_CAMERA.minY,
+    maxY: Math.max(PRIVATE_CAMERA.minY + 8, height + 12),
+  };
+}
+
+function getPrivateWorldBounds(world = state.selectedWorld) {
+  const rig = getPrivateViewerRigConfig(world);
+  const { width, length, height } = rig;
   return {
     width,
     length,
@@ -1150,8 +1172,8 @@ function getPrivateWorldBounds(world = state.selectedWorld) {
     maxX: width / 2,
     minZ: -length / 2,
     maxZ: length / 2,
-    minY: PRIVATE_CAMERA.minY,
-    maxY: Math.max(PRIVATE_CAMERA.minY, height + 36),
+    minY: rig.minY,
+    maxY: rig.maxY,
   };
 }
 
@@ -1167,6 +1189,7 @@ function clampViewerPositionToWorldBounds(position, world = state.selectedWorld)
 }
 
 function resetViewerRig(world = state.selectedWorld) {
+  const rig = getPrivateViewerRigConfig(world);
   privateInputState.yaw = 0;
   privateInputState.pitch = 0.66;
   privateInputState.sprintHoldSeconds = 0;
@@ -1174,11 +1197,15 @@ function resetViewerRig(world = state.selectedWorld) {
   privateInputState.pointerMoved = false;
   privateInputState.dragDistance = 0;
   privateInputState.keys.clear();
-  state.cameraRadius = PRIVATE_PLAYER_VIEW.defaultRadius;
+  state.cameraRadius = rig.defaultRadius;
   state.trailAccumulator = 0;
   state.viewerSuppressClickAt = 0;
   state.viewerPosition.copy(getViewerSpawnPosition(world));
-  state.viewerCameraPosition.set(state.viewerPosition.x, state.viewerPosition.y + 12, state.viewerPosition.z + state.cameraRadius);
+  state.viewerCameraPosition.set(
+    state.viewerPosition.x,
+    state.viewerPosition.y + Math.max(4, rig.defaultRadius * 0.42),
+    state.viewerPosition.z + state.cameraRadius,
+  );
   if (state.preview?.camera) {
     syncPrivateCameraToFollowTarget(state.preview);
   }
@@ -1278,12 +1305,13 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
   if (!preview?.camera) {
     return;
   }
+  const rig = getPrivateViewerRigConfig();
   const target = getPrivatePlayerLookTarget();
   const radius = clampNumber(
     state.cameraRadius,
     state.cameraRadius,
-    PRIVATE_PLAYER_VIEW.minRadius,
-    PRIVATE_PLAYER_VIEW.maxRadius,
+    rig.minRadius,
+    rig.maxRadius,
   );
   const cosPitch = Math.cos(privateInputState.pitch);
   preview.camera.position.set(
@@ -4160,11 +4188,12 @@ function ensurePreview() {
     if (getPossessedRuntimePlayer()) {
       return;
     }
+    const rig = getPrivateViewerRigConfig();
     state.cameraRadius = clampNumber(
       state.cameraRadius + event.deltaY * PRIVATE_CAMERA.wheelFactor,
-      PRIVATE_PLAYER_VIEW.defaultRadius,
-      PRIVATE_PLAYER_VIEW.minRadius,
-      PRIVATE_PLAYER_VIEW.maxRadius,
+      rig.defaultRadius,
+      rig.minRadius,
+      rig.maxRadius,
     );
     syncPrivateCameraToFollowTarget(state.preview);
   }, { passive: false });
