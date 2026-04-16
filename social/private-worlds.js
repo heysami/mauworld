@@ -72,15 +72,17 @@ const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 620;
 const PRIVATE_CHAT_BUBBLE_MAX_LINES = 8;
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
-  fog: "#eff7ff",
+  fog: "#f4fbff",
   ground: "#ffffff",
-  groundGlow: "#fff3be",
   line: "#c9dcff",
   lineMuted: "#deebfa",
   outline: "#33407a",
   white: "#ffffff",
+  trailOutline: "#bcc3cf",
   accents: ["#ff4fa8", "#2dd8ff", "#ffd84d", "#7ce85b", "#ff9548", "#7ed7ff"],
 };
+
+let privateToonGradientTexture = null;
 
 const elements = {
   launcher: document.querySelector("[data-launcher]"),
@@ -95,7 +97,6 @@ const elements = {
   inspector: document.querySelector("[data-inspector]"),
   selectionClear: document.querySelector("[data-selection-clear]"),
   authForm: document.querySelector("[data-auth-form]"),
-  authState: document.querySelector("[data-auth-state]"),
   authStatus: document.querySelector("[data-auth-status]"),
   profileForm: document.querySelector("[data-profile-form]"),
   createWorldForm: document.querySelector("[data-create-world-form]"),
@@ -108,8 +109,6 @@ const elements = {
   worldList: document.querySelector("[data-world-list]"),
   importForm: document.querySelector("[data-import-form]"),
   resolveForm: document.querySelector("[data-resolve-form]"),
-  selectedTitle: document.querySelector("[data-selected-title]"),
-  selectedSubtitle: document.querySelector("[data-selected-subtitle]"),
   panelTitle: document.querySelector("[data-private-panel-title]"),
   panelSubtitle: document.querySelector("[data-private-panel-subtitle]"),
   panelSessionLabel: document.querySelector("[data-private-session-label]"),
@@ -155,11 +154,6 @@ const elements = {
   panelStart: document.querySelector("[data-private-panel-start]"),
   panelRelease: document.querySelector("[data-private-panel-release]"),
   panelReset: document.querySelector("[data-private-panel-reset]"),
-  exportWorld: document.querySelector("[data-export-world]"),
-  joinWorld: document.querySelector("[data-join-world]"),
-  leaveWorld: document.querySelector("[data-leave-world]"),
-  modeBuild: document.querySelector("[data-mode-build]"),
-  modePlay: document.querySelector("[data-mode-play]"),
   worldMeta: document.querySelector("[data-world-meta]"),
   sceneStrip: document.querySelector("[data-scene-strip]"),
   sceneForm: document.querySelector("[data-scene-form]"),
@@ -445,6 +439,44 @@ function hashPrivateString(value = "") {
   return Math.abs(hash);
 }
 
+function pickPrivateAccent(seed, offset = 0) {
+  return PRIVATE_WORLD_STYLE.accents[(hashPrivateString(seed) + offset) % PRIVATE_WORLD_STYLE.accents.length];
+}
+
+function pickPrivateAccentSet(seed) {
+  return {
+    primary: pickPrivateAccent(seed, 0),
+    secondary: pickPrivateAccent(seed, 2),
+    tertiary: pickPrivateAccent(seed, 4),
+  };
+}
+
+function getPrivateToonGradientTexture() {
+  if (privateToonGradientTexture) {
+    return privateToonGradientTexture;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 4;
+  canvas.height = 1;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#444444";
+  context.fillRect(0, 0, 1, 1);
+  context.fillStyle = "#8d8d8d";
+  context.fillRect(1, 0, 1, 1);
+  context.fillStyle = "#d7d7d7";
+  context.fillRect(2, 0, 1, 1);
+  context.fillStyle = "#ffffff";
+  context.fillRect(3, 0, 1, 1);
+
+  privateToonGradientTexture = new THREE.CanvasTexture(canvas);
+  privateToonGradientTexture.minFilter = THREE.NearestFilter;
+  privateToonGradientTexture.magFilter = THREE.NearestFilter;
+  privateToonGradientTexture.generateMipmaps = false;
+  privateToonGradientTexture.needsUpdate = true;
+  return privateToonGradientTexture;
+}
+
 function createOutlineShell(geometry, color, scale = 1.08) {
   const shell = new THREE.Mesh(
     geometry.clone(),
@@ -476,11 +508,13 @@ function createPrivateBillboard(texture, width, height, options = {}) {
 }
 
 function createViewerAvatarFigure(options = {}) {
+  const seed = options.seed ?? "viewer-self";
   const scale = options.scale ?? 0.92;
-  const outlineColor = options.outlineColor ?? PRIVATE_WORLD_STYLE.outline;
-  const primary = options.primary ?? PRIVATE_WORLD_STYLE.accents[1];
-  const secondary = options.secondary ?? PRIVATE_WORLD_STYLE.accents[0];
-  const tertiary = options.tertiary ?? PRIVATE_WORLD_STYLE.accents[2];
+  const accents = pickPrivateAccentSet(seed);
+  const outlineColor = options.outlineColor ?? PRIVATE_WORLD_STYLE.accents[0];
+  const primary = options.primary ?? accents.primary;
+  const secondary = options.secondary ?? accents.secondary;
+  const tertiary = options.tertiary ?? accents.tertiary;
   const group = new THREE.Group();
   const poseRoot = new THREE.Group();
   group.add(poseRoot);
@@ -2332,7 +2366,6 @@ async function fetchAuthConfig() {
 }
 
 async function refreshAuthState() {
-  elements.authState.textContent = state.session ? "Signed in" : "Signed out";
   renderSessionSummary();
   if (!state.session) {
     await releaseSceneLock();
@@ -2558,15 +2591,6 @@ function setMode(mode) {
     state.privatePanelTab = "build";
   }
   document.body.classList.toggle("is-play-mode", nextMode === "play");
-  elements.modeBuild?.classList.toggle("is-active", nextMode === "build");
-  elements.modePlay?.classList.toggle("is-active", nextMode === "play");
-  if (elements.modeBuild) {
-    elements.modeBuild.setAttribute("aria-pressed", String(nextMode === "build"));
-    elements.modeBuild.disabled = !isEditor();
-  }
-  if (elements.modePlay) {
-    elements.modePlay.setAttribute("aria-pressed", String(nextMode === "play"));
-  }
   updateShellState();
   syncPrivatePreviewEnvironmentState();
   updatePreviewFromSelection();
@@ -3368,10 +3392,6 @@ function renderSelectedWorld() {
   if (state.mode === "build" && !isEditor()) {
     state.mode = "play";
   }
-  elements.selectedTitle.textContent = world?.name || "No world selected";
-  elements.selectedSubtitle.textContent = world
-    ? `${world.about} · ${world.creator.username}${world.lineage?.imported_at ? ` · forked from ${world.lineage.origin_world_id}` : ""}`
-    : "Pick a world or resolve one by id and creator.";
   if (elements.panelTitle) {
     elements.panelTitle.textContent = world?.name || "No world selected";
   }
@@ -3410,9 +3430,6 @@ function renderSelectedWorld() {
   if (elements.worldMenuToggle) {
     elements.worldMenuToggle.disabled = !hasWorld;
   }
-  elements.exportWorld.disabled = !hasWorld || !state.session;
-  elements.joinWorld.disabled = !hasWorld;
-  elements.leaveWorld.disabled = !hasWorld;
   elements.readyToggle.disabled = !hasWorld || !state.session || !joinedAsPlayer;
   elements.startScene.disabled = !hasWorld || !state.session || !world.active_instance;
   elements.releasePlayer.disabled = !hasWorld || !state.session || !joinedAsPlayer;
@@ -3668,10 +3685,8 @@ function ensureViewerAvatar(preview) {
     return preview.viewerAvatar;
   }
   const figure = createViewerAvatarFigure({
-    outlineColor: PRIVATE_WORLD_STYLE.outline,
-    primary: PRIVATE_WORLD_STYLE.accents[1],
-    secondary: PRIVATE_WORLD_STYLE.accents[0],
-    tertiary: PRIVATE_WORLD_STYLE.accents[2],
+    seed: "viewer-self",
+    outlineColor: PRIVATE_WORLD_STYLE.accents[0],
   });
   const avatar = {
     group: figure.group,
@@ -3860,26 +3875,12 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   clearPrivatePreviewEnvironment(preview);
 
   const groundRadius = clampNumber(Math.max(bounds.width, bounds.length) * 0.82, 48, 28, 240);
-  const groundGlow = new THREE.Mesh(
-    new THREE.CircleGeometry(groundRadius * 1.12, 72),
-    new THREE.MeshBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.groundGlow),
-      transparent: true,
-      opacity: 0.18,
-      depthWrite: false,
-      fog: false,
-    }),
-  );
-  groundGlow.rotation.x = -Math.PI / 2;
-  groundGlow.position.y = -2.08;
-  preview.environment.add(groundGlow);
-
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(groundRadius, 72),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color(PRIVATE_WORLD_STYLE.ground),
       transparent: true,
-      opacity: 0.98,
+      opacity: 1,
     }),
   );
   ground.rotation.x = -Math.PI / 2;
@@ -3910,7 +3911,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   footprint.position.y = 0.02;
   preview.environment.add(footprint);
   preview.ground = ground;
-  preview.groundGlow = groundGlow;
+  preview.groundGlow = null;
   preview.buildGrid = grid;
   preview.buildFootprint = footprint;
   syncPrivatePreviewEnvironmentState(preview);
@@ -3923,9 +3924,6 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   const buildMode = state.mode === "build" && isEditor();
   if (preview.ground) {
     preview.ground.visible = true;
-  }
-  if (preview.groundGlow) {
-    preview.groundGlow.visible = true;
   }
   preview.buildGrid.visible = buildMode;
   if (preview.buildFootprint) {
@@ -3963,19 +3961,17 @@ function ensurePreview() {
   const renderer = new THREE.WebGLRenderer({
     canvas: elements.previewCanvas,
     antialias: true,
-    alpha: true,
+    alpha: false,
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(elements.previewCanvas.clientWidth || 640, 360, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.02;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PRIVATE_WORLD_STYLE.background);
-  scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 120, 980);
+  scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 170, 1600);
 
-  const camera = new THREE.PerspectiveCamera(58, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 1800);
+  const camera = new THREE.PerspectiveCamera(58, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 2400);
   camera.position.copy(state.viewerCameraPosition);
   camera.rotation.order = "YXZ";
   camera.lookAt(getPrivatePlayerLookTarget());
@@ -4280,13 +4276,14 @@ function spawnViewerTrailPuff(preview, position, travelVector) {
     geometry,
     new THREE.MeshToonMaterial({
       color: new THREE.Color(PRIVATE_WORLD_STYLE.white),
+      gradientMap: getPrivateToonGradientTexture(),
       transparent: true,
       opacity: 0.94,
       depthWrite: false,
       fog: false,
     }),
   );
-  const shell = createOutlineShell(geometry, "#bcc3cf", 1.12);
+  const shell = createOutlineShell(geometry, PRIVATE_WORLD_STYLE.trailOutline, 1.12);
   shell.material.opacity = 0.58;
   mesh.add(shell);
   group.add(mesh);
@@ -5794,23 +5791,6 @@ function bindEvents() {
   });
   elements.importForm.addEventListener("submit", importPackage);
   elements.resolveForm.addEventListener("submit", resolveWorld);
-  elements.exportWorld.addEventListener("click", () => {
-    void exportWorld();
-  });
-  elements.modeBuild.addEventListener("click", () => {
-    setMode("build");
-    renderSelectedWorld();
-  });
-  elements.modePlay.addEventListener("click", () => {
-    setMode("play");
-    renderSelectedWorld();
-  });
-  elements.joinWorld.addEventListener("click", () => {
-    void joinWorld();
-  });
-  elements.leaveWorld.addEventListener("click", () => {
-    void leaveWorld();
-  });
   elements.sceneStrip.addEventListener("click", (event) => {
     const button = event.target.closest("[data-scene-id]");
     if (!button) {
