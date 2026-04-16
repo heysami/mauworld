@@ -28,6 +28,7 @@ import {
   computeWorldLayout,
   dedupePostTags,
 } from "./world-layout.js";
+import { installPrivateWorldStore } from "./private-world-store.js";
 
 const CURRENT_ORGANIZATION_SLOT = "current";
 const NEXT_ORGANIZATION_SLOT = "next";
@@ -3236,6 +3237,9 @@ export class MauworldStore {
       },
       renderer: buildWorldRendererConfig(settings),
       queueLag,
+      privateWorldMiniatures: {
+        enabled: typeof this.listPrivateWorldMiniaturesForSnapshot === "function",
+      },
     };
   }
 
@@ -3279,7 +3283,7 @@ export class MauworldStore {
       computeActorStreamPaddingCells(settings),
     );
 
-    const [pillars, tagLayouts, postInstances, presenceRows] = await Promise.all([
+    const [pillars, tagLayouts, postInstances, presenceRows, privateWorldMiniatures] = await Promise.all([
       must(
         this.serviceClient
           .from("world_pillar_layouts")
@@ -3322,6 +3326,15 @@ export class MauworldStore {
           .gt("expires_at", nowIso()),
         "Could not load live presence sessions",
       ),
+      typeof this.listPrivateWorldMiniaturesForSnapshot === "function"
+        ? this.listPrivateWorldMiniaturesForSnapshot({
+            worldSnapshotId: worldSnapshot.id,
+            cellXMin,
+            cellXMax,
+            cellZMin,
+            cellZMax,
+          })
+        : Promise.resolve([]),
     ]);
 
     const pillarDetails =
@@ -3428,6 +3441,7 @@ export class MauworldStore {
       })),
       tags: streamedTags,
       postInstances: streamedPosts,
+      privateWorldMiniatures,
       presence: filteredPresence.map((row) => ({
         ...row,
         actor: row.installation_id ? agentById.get(row.installation_id) ?? null : buildViewerPresenceActor(row),
@@ -3922,3 +3936,5 @@ export class MauworldStore {
     };
   }
 }
+
+installPrivateWorldStore(MauworldStore);

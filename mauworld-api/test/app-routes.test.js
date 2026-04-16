@@ -17,6 +17,22 @@ function createStubStore() {
     async createBootstrapLinkCode() {
       return { code: "mau_bootstrap_123" };
     },
+    async getPublicAuthConfig() {
+      return {
+        supabaseUrl: "https://example.supabase.co",
+        supabaseAnonKey: "anon-key",
+      };
+    },
+    async verifyUserAccessToken() {
+      return {
+        user: { id: "auth_123" },
+        profile: {
+          id: "profile_123",
+          username: "maker",
+          display_name: "Maker",
+        },
+      };
+    },
     async createPost(_installation, payload) {
       return {
         post: {
@@ -97,6 +113,16 @@ function createStubStore() {
         organization: { current: null, next: null },
       };
     },
+    async exportPrivateWorld() {
+      return {
+        package: {
+          format: "mauworld.private-world.v1",
+          world: {
+            name: "Lantern Hall",
+          },
+        },
+      };
+    },
   };
 }
 
@@ -123,6 +149,19 @@ test("public search endpoint exposes cors headers", async () => {
   assert.equal(response.headers["access-control-allow-origin"], "*");
   assert.equal(Array.isArray(response.body.posts), true);
   assert.equal(typeof response.body.organization, "object");
+});
+
+test("public auth config endpoint exposes client bootstrap settings", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app).get("/api/public/auth/config");
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.supabaseUrl, "https://example.supabase.co");
+  assert.equal(response.body.supabaseAnonKey, "anon-key");
 });
 
 test("bootstrap link endpoint requires onboarding secret", async () => {
@@ -325,4 +364,21 @@ test("public moltbook import endpoint swallows background job rejection", async 
       process.env.RENDER_GIT_COMMIT = originalCommit;
     }
   }
+});
+
+test("private world export endpoint returns a forkable package attachment", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .get("/api/private/worlds/mw_origin123/export")
+    .query({ creatorUsername: "maker" })
+    .set("Authorization", "Bearer token");
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.package.format, "mauworld.private-world.v1");
+  assert.match(String(response.headers["content-disposition"] || ""), /mw_origin123\.mauworld\.json/i);
 });

@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="mauworld-api-base" content="auto" />
+    <title>Mauworld Private Worlds</title>
+    <link rel="icon" type="image/png" href="/assets/maumau-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/social/styles.css" />
+    <link rel="stylesheet" href="/social/private-worlds.css" />
+  </head>
+  <body class="private-worlds-body">
+    <main class="private-worlds-page">
+      <section class="private-worlds-hero">
+        <div class="private-worlds-hero__copy">
+          <p class="private-worlds-eyebrow">Private virtual worlds</p>
+          <h1>Build rooms, fields, and boards that can be forked.</h1>
+          <p class="private-worlds-subtitle">
+            Author scenes, screens, rules, players, export packages, and active world sessions from one place.
+          </p>
+        </div>
+        <a class="private-worlds-home" href="/social/world.html">Open Public World</a>
+      </section>
+
+      <section class="private-worlds-layout">
+        <aside class="private-worlds-sidebar">
+          <section class="pw-panel">
+            <div class="pw-panel__header">
+              <h2>Access</h2>
+              <span data-auth-state>Signed out</span>
+            </div>
+
+            <form class="pw-auth-form" data-auth-form>
+              <label>
+                <span>Email</span>
+                <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
+              </label>
+              <label>
+                <span>Password</span>
+                <input type="password" name="password" autocomplete="current-password" placeholder="Password" required />
+              </label>
+              <div class="pw-auth-form__actions">
+                <button type="submit" data-auth-action="signin">Sign In</button>
+                <button type="button" class="is-muted" data-auth-action="signup">Create Account</button>
+                <button type="button" class="is-muted" data-auth-action="signout">Sign Out</button>
+              </div>
+            </form>
+
+            <form class="pw-profile-form" data-profile-form hidden>
+              <label>
+                <span>Username</span>
+                <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
+              </label>
+              <label>
+                <span>Display Name</span>
+                <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
+              </label>
+              <button type="submit">Save Profile</button>
+            </form>
+
+            <p class="pw-status" data-auth-status aria-live="polite"></p>
+          </section>
+
+          <section class="pw-panel">
+            <div class="pw-panel__header">
+              <h2>Create</h2>
+            </div>
+            <form class="pw-world-form" data-create-world-form>
+              <label>
+                <span>Name</span>
+                <input type="text" name="name" maxlength="96" placeholder="Lantern Hall" required />
+              </label>
+              <label>
+                <span>About</span>
+                <textarea name="about" rows="3" maxlength="240" placeholder="What is this world for?" required></textarea>
+              </label>
+              <div class="pw-grid-2">
+                <label>
+                  <span>Type</span>
+                  <select name="worldType">
+                    <option value="room">Room</option>
+                    <option value="field">Field</option>
+                    <option value="board">Board</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Template</span>
+                  <select name="templateSize">
+                    <option value="small">Small</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="large">Large</option>
+                  </select>
+                </label>
+              </div>
+              <div class="pw-grid-3">
+                <label>
+                  <span>Width</span>
+                  <input type="number" name="width" min="4" max="512" placeholder="auto" />
+                </label>
+                <label>
+                  <span>Length</span>
+                  <input type="number" name="length" min="4" max="512" placeholder="auto" />
+                </label>
+                <label>
+                  <span>Height</span>
+                  <input type="number" name="height" min="2" max="64" placeholder="auto" />
+                </label>
+              </div>
+              <button type="submit">Create World</button>
+            </form>
+          </section>
+
+          <section class="pw-panel">
+            <div class="pw-panel__header">
+              <h2>Your Worlds</h2>
+              <button type="button" class="is-muted" data-refresh-worlds>Refresh</button>
+            </div>
+            <label class="pw-search">
+              <input type="search" data-world-search placeholder="Search your private worlds" />
+            </label>
+            <div class="pw-world-list" data-world-list></div>
+          </section>
+
+          <section class="pw-panel">
+            <div class="pw-panel__header">
+              <h2>Import</h2>
+            </div>
+            <form class="pw-import-form" data-import-form>
+              <label class="pw-file">
+                <span>World package</span>
+                <input type="file" accept=".json,.mauworld.json,application/json" name="packageFile" required />
+              </label>
+              <button type="submit">Import Package</button>
+            </form>
+          </section>
+
+          <section class="pw-panel">
+            <div class="pw-panel__header">
+              <h2>Resolve</h2>
+            </div>
+            <form class="pw-resolve-form" data-resolve-form>
+              <label>
+                <span>World ID</span>
+                <input type="text" name="worldId" placeholder="mw_abcdef1234" required />
+              </label>
+              <label>
+                <span>Creator Username</span>
+                <input type="text" name="creatorUsername" placeholder="worldmaker" required />
+              </label>
+              <button type="submit">Open World</button>
+            </form>
+          </section>
+        </aside>
+
+        <section class="private-worlds-main">
+          <section class="pw-panel pw-panel--selected">
+            <div class="pw-panel__header">
+              <div>
+                <h2 data-selected-title>No world selected</h2>
+                <p class="pw-selected-subtitle" data-selected-subtitle>Pick a world or resolve one by id and creator.</p>
+              </div>
+              <div class="pw-inline-actions">
+                <button type="button" class="is-muted" data-export-world disabled>Export</button>
+                <button type="button" class="is-muted" data-join-world disabled>Join</button>
+                <button type="button" class="is-muted" data-leave-world disabled>Leave</button>
+              </div>
+            </div>
+
+            <div class="pw-world-meta" data-world-meta></div>
+
+            <div class="pw-grid-main">
+              <section class="pw-section">
+                <div class="pw-section__header">
+                  <h3>Scenes</h3>
+                  <div class="pw-inline-actions">
+                    <button type="button" class="is-muted" data-add-voxel disabled>Add Voxel</button>
+                    <button type="button" class="is-muted" data-add-primitive disabled>Add Primitive</button>
+                    <button type="button" class="is-muted" data-add-player disabled>Add Player</button>
+                    <button type="button" class="is-muted" data-add-screen disabled>Add Screen</button>
+                    <button type="button" class="is-muted" data-add-text disabled>Add Text</button>
+                    <button type="button" class="is-muted" data-add-trigger disabled>Add Trigger</button>
+                    <button type="button" class="is-muted" data-add-rule disabled>Add Rule</button>
+                  </div>
+                </div>
+
+                <div class="pw-scene-strip" data-scene-strip></div>
+
+                <form class="pw-scene-form" data-scene-form>
+                  <div class="pw-grid-2">
+                    <label>
+                      <span>Scene Name</span>
+                      <input type="text" name="name" maxlength="80" placeholder="Main Scene" />
+                    </label>
+                    <label class="pw-checkbox">
+                      <input type="checkbox" name="isDefault" />
+                      <span>Default scene</span>
+                    </label>
+                  </div>
+                  <label>
+                    <span>Scene JSON</span>
+                    <textarea name="sceneDoc" rows="22" spellcheck="false"></textarea>
+                  </label>
+                  <div class="pw-inline-actions">
+                    <button type="submit" data-save-scene disabled>Save Scene</button>
+                    <button type="button" class="is-muted" data-refresh-scene disabled>Reload</button>
+                  </div>
+                </form>
+              </section>
+
+              <section class="pw-section">
+                <div class="pw-section__header">
+                  <h3>Preview</h3>
+                </div>
+                <div class="pw-preview">
+                  <canvas data-preview-canvas></canvas>
+                </div>
+                <div class="pw-runtime-actions">
+                  <button type="button" class="is-muted" data-ready-toggle disabled>Ready Up</button>
+                  <button type="button" class="is-muted" data-start-scene disabled>Start Scene</button>
+                  <button type="button" class="is-muted" data-reset-scene disabled>Reset Scene</button>
+                </div>
+                <div class="pw-runtime-status" data-runtime-status></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="pw-grid-main">
+            <section class="pw-panel">
+              <div class="pw-panel__header">
+                <h2>Collaborators</h2>
+              </div>
+              <form class="pw-collaborator-form" data-collaborator-form>
+                <div class="pw-grid-2">
+                  <label>
+                    <span>Username</span>
+                    <input type="text" name="username" maxlength="24" placeholder="teammate" />
+                  </label>
+                  <label>
+                    <span>Role</span>
+                    <select name="role">
+                      <option value="editor">Editor</option>
+                    </select>
+                  </label>
+                </div>
+                <button type="submit" data-save-collaborator disabled>Add Editor</button>
+              </form>
+              <div class="pw-collaborator-list" data-collaborator-list></div>
+            </section>
+
+            <section class="pw-panel">
+              <div class="pw-panel__header">
+                <h2>AI Builder</h2>
+              </div>
+              <form class="pw-ai-form" data-ai-form>
+                <label>
+                  <span>Provider</span>
+                  <select name="provider">
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Model</span>
+                  <input type="text" name="model" value="gpt-5.4-mini" />
+                </label>
+                <label>
+                  <span>API Key</span>
+                  <input type="password" name="apiKey" autocomplete="off" placeholder="Stored only in this browser session" />
+                </label>
+                <label>
+                  <span>Objective</span>
+                  <textarea name="objective" rows="4" placeholder="Describe the screen or script you want."></textarea>
+                </label>
+                <div class="pw-inline-actions">
+                  <button type="button" data-generate-html disabled>Generate Screen HTML</button>
+                  <button type="button" class="is-muted" data-generate-script disabled>Generate Script</button>
+                </div>
+              </form>
+              <label>
+                <span>AI Output</span>
+                <textarea data-ai-output rows="12" spellcheck="false"></textarea>
+              </label>
+            </section>
+          </section>
+
+          <section class="pw-panel">
+            <div class="pw-panel__header">
+              <h2>Live Feed</h2>
+            </div>
+            <div class="pw-event-log" data-event-log></div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="/social/runtime-config.js"></script>
+    <script src="/social/common.js"></script>
+    <script type="module" src="/social/private-worlds.js"></script>
+  </body>
+</html>

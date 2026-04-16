@@ -1,6 +1,7 @@
 import express from "express";
 import { HttpError, asyncRoute, installCors, installErrorHandler, jsonOk, requireArray, requireString } from "./lib/http.js";
 import { createBrowserMediaToken } from "./lib/livekit-media.js";
+import { generatePrivateWorldAiArtifact } from "./lib/private-world-ai.js";
 
 function extractBearerToken(req) {
   const header = req.headers.authorization || "";
@@ -37,6 +38,13 @@ async function requireAgent(req, store) {
   return verified;
 }
 
+async function requireUser(req, store) {
+  const verified = await store.verifyUserAccessToken(extractBearerToken(req));
+  req.authUser = verified.user;
+  req.authProfile = verified.profile;
+  return verified;
+}
+
 export function createApp({ config, store, runMoltbookImportJob = null, getMoltbookImportJobStatus = null }) {
   const app = express();
   installCors(app);
@@ -44,6 +52,10 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
 
   app.get("/health", asyncRoute(async (_req, res) => {
     jsonOk(res, await store.health());
+  }));
+
+  app.get("/api/public/auth/config", asyncRoute(async (_req, res) => {
+    jsonOk(res, await store.getPublicAuthConfig());
   }));
 
   app.post("/api/agent/link/start", asyncRoute(async (req, res) => {
@@ -316,6 +328,254 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
   app.post("/api/admin/sync-curated-corpus", asyncRoute(async (req, res) => {
     requireAdmin(req, config);
     const payload = await store.syncCuratedCorpus();
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/private/profile", asyncRoute(async (req, res) => {
+    const { user } = await requireUser(req, store);
+    const payload = await store.getUserProfile(user);
+    jsonOk(res, payload);
+  }));
+
+  app.patch("/api/private/profile", asyncRoute(async (req, res) => {
+    const { user } = await requireUser(req, store);
+    const payload = await store.upsertUserProfile(user, {
+      username: req.body?.username,
+      displayName: req.body?.displayName,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/private/worlds", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.listPrivateWorlds(profile, {
+      q: req.query.q,
+      limit: req.query.limit,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.createPrivateWorld(profile, req.body ?? {});
+    jsonOk(res, payload, 201);
+  }));
+
+  app.get("/api/private/worlds/:worldId", asyncRoute(async (req, res) => {
+    const token = extractBearerToken(req);
+    const verified = token ? await store.verifyUserAccessToken(token) : null;
+    const payload = await store.getPrivateWorldDetail({
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.query.creatorUsername, "creatorUsername"),
+      profile: verified?.profile ?? null,
+      includeContent: req.query.includeContent === "true",
+      allowGuest: !verified,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.patch("/api/private/worlds/:worldId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.updatePrivateWorld(profile, {
+      ...req.body,
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/scenes", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.savePrivateWorldScene(profile, {
+      ...req.body,
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload, 201);
+  }));
+
+  app.patch("/api/private/worlds/:worldId/scenes/:sceneId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.savePrivateWorldScene(profile, {
+      ...req.body,
+      sceneId: requireString(req.params.sceneId, "sceneId"),
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/prefabs", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.savePrivateWorldPrefab(profile, {
+      ...req.body,
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload, 201);
+  }));
+
+  app.patch("/api/private/worlds/:worldId/prefabs/:prefabId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.savePrivateWorldPrefab(profile, {
+      ...req.body,
+      prefabId: requireString(req.params.prefabId, "prefabId"),
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/collaborators", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.setPrivateWorldCollaborator(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      username: requireString(req.body?.username, "username"),
+      role: req.body?.role,
+    });
+    jsonOk(res, payload, 201);
+  }));
+
+  app.delete("/api/private/worlds/:worldId/collaborators/:username", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.removePrivateWorldCollaborator(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.query.creatorUsername, "creatorUsername"),
+      username: requireString(req.params.username, "username"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/private/worlds/:worldId/export", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.exportPrivateWorld(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.query.creatorUsername, "creatorUsername"),
+    });
+    const filename = `${req.params.worldId}.mauworld.json`;
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.status(200).json({
+      ok: true,
+      ...payload,
+    });
+  }));
+
+  app.post("/api/private/worlds/import", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.importPrivateWorld(profile, {
+      package: req.body?.package ?? req.body,
+    });
+    jsonOk(res, payload, 201);
+  }));
+
+  app.post("/api/private/worlds/:worldId/join", asyncRoute(async (req, res) => {
+    const token = extractBearerToken(req);
+    const verified = token ? await store.verifyUserAccessToken(token) : null;
+    const payload = await store.joinPrivateWorld({
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      profile: verified?.profile ?? null,
+      guestSessionId: req.body?.guestSessionId,
+      displayName: req.body?.displayName,
+      joinRole: req.body?.joinRole,
+      playerEntityId: req.body?.playerEntityId,
+      publicWorldSnapshotId: req.body?.publicWorldSnapshotId,
+      position_x: req.body?.position_x,
+      position_y: req.body?.position_y,
+      position_z: req.body?.position_z,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/leave", asyncRoute(async (req, res) => {
+    const token = extractBearerToken(req);
+    const verified = token ? await store.verifyUserAccessToken(token) : null;
+    const payload = await store.leavePrivateWorld({
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      profile: verified?.profile ?? null,
+      guestSessionId: req.body?.guestSessionId,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/ready", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.setPrivateWorldReadyState(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      ready: req.body?.ready === true,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/start-scene", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.startPrivateWorldScene(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/reset-scene", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.resetPrivateWorldScene(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/locks/acquire", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.acquirePrivateWorldEntityLock(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      sceneId: requireString(req.body?.sceneId, "sceneId"),
+      entityKey: requireString(req.body?.entityKey, "entityKey"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/locks/release", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.releasePrivateWorldEntityLock(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      sceneId: requireString(req.body?.sceneId, "sceneId"),
+      entityKey: requireString(req.body?.entityKey, "entityKey"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/ai/screen-html", asyncRoute(async (req, res) => {
+    await requireUser(req, store);
+    const payload = await generatePrivateWorldAiArtifact({
+      artifactType: "screen_html",
+      provider: req.body?.provider ?? "openai",
+      model: req.body?.model,
+      apiKey: req.body?.apiKey,
+      worldName: req.body?.worldName,
+      worldAbout: req.body?.worldAbout,
+      objective: req.body?.objective,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/ai/script", asyncRoute(async (req, res) => {
+    await requireUser(req, store);
+    const payload = await generatePrivateWorldAiArtifact({
+      artifactType: "world_script",
+      provider: req.body?.provider ?? "openai",
+      model: req.body?.model,
+      apiKey: req.body?.apiKey,
+      worldName: req.body?.worldName,
+      worldAbout: req.body?.worldAbout,
+      objective: req.body?.objective,
+      sceneSummary: req.body?.sceneSummary,
+    });
     jsonOk(res, payload);
   }));
 

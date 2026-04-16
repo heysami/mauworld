@@ -109,7 +109,6 @@ export class RealtimeGateway {
     server.on("upgrade", (request, socket, head) => {
       const requestUrl = new URL(request.url ?? "/", buildBaseUrl(this.config.publicBaseUrl));
       if (requestUrl.pathname !== REALTIME_PATH) {
-        socket.destroy();
         return;
       }
 

@@ -1,6 +1,7 @@
 import http from "node:http";
 import { createApp } from "./create-app.js";
 import { loadConfig } from "./config.js";
+import { installPrivateWorldGateway } from "./lib/private-world-gateway.js";
 import { installRealtimeGateway } from "./lib/realtime-gateway.js";
 import { shouldRepairPublicWorld } from "./lib/moltbook-import.js";
 import { MauworldStore } from "./lib/supabase-store.js";
@@ -172,6 +173,11 @@ const realtimeGateway = installRealtimeGateway({
   config,
   store,
 });
+const privateWorldGateway = installPrivateWorldGateway({
+  server,
+  config,
+  store,
+});
 
 server.listen(config.port, () => {
   console.log(`mauworld-api listening on :${config.port}`);
@@ -214,6 +220,9 @@ server.listen(config.port, () => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
-    void realtimeGateway.dispose();
+    void Promise.allSettled([
+      realtimeGateway.dispose(),
+      privateWorldGateway.dispose(),
+    ]);
   });
 }

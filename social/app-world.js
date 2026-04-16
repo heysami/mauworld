@@ -226,6 +226,7 @@ const state = {
     pillars: new Map(),
     tags: new Map(),
     posts: new Map(),
+    privateWorldMiniatures: new Map(),
   },
 };
 
@@ -250,6 +251,7 @@ const sceneState = {
   trails: new THREE.Group(),
   player: new THREE.Group(),
   browserScreens: new THREE.Group(),
+  privateWorldMiniatures: new THREE.Group(),
   billboards: [],
   persistentBillboards: [],
   animatedDecor: [],
@@ -259,6 +261,7 @@ const sceneState = {
   animatedPresence: [],
   animatedChatBubbleGhosts: [],
   animatedBrowserScreens: [],
+  animatedPrivateWorldMiniatures: [],
   presenceEntries: new Map(),
   browserScreenEntries: new Map(),
   clickable: [],
@@ -789,6 +792,9 @@ function mergeStreamIntoCache(streamPayload) {
   for (const post of streamPayload.postInstances ?? []) {
     state.worldCache.posts.set(getPostCacheKey(post), post);
   }
+  for (const miniature of streamPayload.privateWorldMiniatures ?? []) {
+    state.worldCache.privateWorldMiniatures.set(String(miniature.id ?? ""), miniature);
+  }
 }
 
 function pruneWorldCache() {
@@ -810,14 +816,24 @@ function pruneWorldCache() {
   const tagMaxX = window.cell_x_max + tagPadding;
   const tagMinZ = window.cell_z_min - tagPadding;
   const tagMaxZ = window.cell_z_max + tagPadding;
+  const getEntryCellX = (entry) => (
+    Number.isFinite(entry?.cell_x)
+      ? entry.cell_x
+      : entry?.anchor_cell_x
+  );
+  const getEntryCellZ = (entry) => (
+    Number.isFinite(entry?.cell_z)
+      ? entry.cell_z
+      : entry?.anchor_cell_z
+  );
   const shouldKeep = (entry, bounds) =>
-    !Number.isFinite(entry?.cell_x)
-    || !Number.isFinite(entry?.cell_z)
+    !Number.isFinite(getEntryCellX(entry))
+    || !Number.isFinite(getEntryCellZ(entry))
     || (
-      entry.cell_x >= bounds.minX
-      && entry.cell_x <= bounds.maxX
-      && entry.cell_z >= bounds.minZ
-      && entry.cell_z <= bounds.maxZ
+      getEntryCellX(entry) >= bounds.minX
+      && getEntryCellX(entry) <= bounds.maxX
+      && getEntryCellZ(entry) >= bounds.minZ
+      && getEntryCellZ(entry) <= bounds.maxZ
     );
 
   for (const [key, entry] of state.worldCache.pillars.entries()) {
@@ -845,6 +861,11 @@ function pruneWorldCache() {
       state.worldCache.posts.delete(key);
     }
   }
+  for (const [key, entry] of state.worldCache.privateWorldMiniatures.entries()) {
+    if (!shouldKeep(entry, { minX, maxX, minZ, maxZ })) {
+      state.worldCache.privateWorldMiniatures.delete(key);
+    }
+  }
 }
 
 function filterPresenceRows(presence = []) {
@@ -870,15 +891,25 @@ function getCachedWorldPayload(presence = []) {
   const tagMaxX = window ? window.cell_x_max + tagPadding : Number.POSITIVE_INFINITY;
   const tagMinZ = window ? window.cell_z_min - tagPadding : Number.NEGATIVE_INFINITY;
   const tagMaxZ = window ? window.cell_z_max + tagPadding : Number.POSITIVE_INFINITY;
+  const getEntryCellX = (entry) => (
+    Number.isFinite(entry?.cell_x)
+      ? entry.cell_x
+      : entry?.anchor_cell_x
+  );
+  const getEntryCellZ = (entry) => (
+    Number.isFinite(entry?.cell_z)
+      ? entry.cell_z
+      : entry?.anchor_cell_z
+  );
   const shouldRender = (entry, bounds) =>
     !window
-    || !Number.isFinite(entry?.cell_x)
-    || !Number.isFinite(entry?.cell_z)
+    || !Number.isFinite(getEntryCellX(entry))
+    || !Number.isFinite(getEntryCellZ(entry))
     || (
-      entry.cell_x >= bounds.minX
-      && entry.cell_x <= bounds.maxX
-      && entry.cell_z >= bounds.minZ
-      && entry.cell_z <= bounds.maxZ
+      getEntryCellX(entry) >= bounds.minX
+      && getEntryCellX(entry) <= bounds.maxX
+      && getEntryCellZ(entry) >= bounds.minZ
+      && getEntryCellZ(entry) <= bounds.maxZ
     );
 
   const postInstances = [...state.worldCache.posts.values()]
@@ -910,6 +941,8 @@ function getCachedWorldPayload(presence = []) {
       .sort((left, right) => (right.active_post_count ?? 0) - (left.active_post_count ?? 0)),
     postInstances,
     presence: filterPresenceRows(presence),
+    privateWorldMiniatures: [...state.worldCache.privateWorldMiniatures.values()]
+      .filter((entry) => shouldRender(entry, { minX, maxX, minZ, maxZ })),
   };
 }
 
@@ -4240,6 +4273,236 @@ function syncLocalAvatar(elapsedSeconds = sceneState.clock.elapsedTime) {
   updateActorBubble(avatar, deltaSeconds);
 }
 
+function getPrivateMiniatureSourceBounds(entry = {}) {
+  const compiled = entry.compiled?.miniature ?? {};
+  const bounds = {
+    minX: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY,
+    minZ: Number.POSITIVE_INFINITY,
+    maxZ: Number.NEGATIVE_INFINITY,
+  };
+
+  const includePoint = (position = {}, scale = { x: 0.5, y: 0.5, z: 0.5 }) => {
+    const halfX = Math.max(0.25, Number(scale.x ?? 0.5) / 2);
+    const halfY = Math.max(0.25, Number(scale.y ?? 0.5) / 2);
+    const halfZ = Math.max(0.25, Number(scale.z ?? 0.5) / 2);
+    const x = Number(position.x ?? 0) || 0;
+    const y = Number(position.y ?? 0) || 0;
+    const z = Number(position.z ?? 0) || 0;
+    bounds.minX = Math.min(bounds.minX, x - halfX);
+    bounds.maxX = Math.max(bounds.maxX, x + halfX);
+    bounds.minY = Math.min(bounds.minY, y - halfY);
+    bounds.maxY = Math.max(bounds.maxY, y + halfY);
+    bounds.minZ = Math.min(bounds.minZ, z - halfZ);
+    bounds.maxZ = Math.max(bounds.maxZ, z + halfZ);
+  };
+
+  for (const voxel of compiled.static_voxels ?? []) {
+    includePoint(voxel.position, voxel.scale);
+  }
+  for (const screen of compiled.screens ?? []) {
+    includePoint(screen.position, screen.scale);
+  }
+  for (const player of [...(compiled.players ?? []), ...(entry.visible_players ?? [])]) {
+    includePoint(player.position, { x: 0.8, y: 1.2, z: 0.8 });
+  }
+
+  if (!Number.isFinite(bounds.minX)) {
+    return {
+      centerX: 0,
+      centerY: 0,
+      centerZ: 0,
+      width: 1,
+      height: 1,
+      length: 1,
+    };
+  }
+
+  return {
+    centerX: (bounds.minX + bounds.maxX) / 2,
+    centerY: (bounds.minY + bounds.maxY) / 2,
+    centerZ: (bounds.minZ + bounds.maxZ) / 2,
+    width: Math.max(1, bounds.maxX - bounds.minX),
+    height: Math.max(1, bounds.maxY - bounds.minY),
+    length: Math.max(1, bounds.maxZ - bounds.minZ),
+  };
+}
+
+function buildPrivateWorldMiniatureObject(entry) {
+  const group = new THREE.Group();
+  group.position.set(
+    Number(entry.anchor_position_x ?? 0) || 0,
+    Number(entry.anchor_position_y ?? 0) || 0,
+    Number(entry.anchor_position_z ?? 0) || 0,
+  );
+
+  const miniatureWidth = Math.max(2, Number(entry.miniature_width ?? 0) || 2);
+  const miniatureLength = Math.max(2, Number(entry.miniature_length ?? 0) || 2);
+  const miniatureHeight = Math.max(1.6, Number(entry.miniature_height ?? 0) || 1.6);
+  const longestSide = Math.max(miniatureWidth, miniatureLength);
+  const sourceBounds = getPrivateMiniatureSourceBounds(entry);
+  const scale = Math.min(
+    (miniatureWidth * 0.78) / Math.max(1, sourceBounds.width),
+    (miniatureHeight * 0.72) / Math.max(1, sourceBounds.height),
+    (miniatureLength * 0.78) / Math.max(1, sourceBounds.length),
+  );
+  const contentBaseY = miniatureHeight * 0.36;
+  const mapPoint = (position = {}) => new THREE.Vector3(
+    ((Number(position.x ?? 0) || 0) - sourceBounds.centerX) * scale,
+    ((Number(position.y ?? 0) || 0) - sourceBounds.centerY) * scale + contentBaseY,
+    ((Number(position.z ?? 0) || 0) - sourceBounds.centerZ) * scale,
+  );
+
+  const basePlate = new THREE.Mesh(
+    new THREE.CylinderGeometry(1, 1, 0.08, 28),
+    new THREE.MeshStandardMaterial({
+      color: "#9bb0c8",
+      transparent: true,
+      opacity: 0.24,
+      roughness: 0.92,
+      metalness: 0.04,
+    }),
+  );
+  basePlate.scale.set(miniatureWidth * 0.48, 1, miniatureLength * 0.48);
+  basePlate.position.y = 0.02;
+  group.add(basePlate);
+
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 28, 18, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshPhongMaterial({
+      color: "#d7e7ff",
+      transparent: true,
+      opacity: 0.22,
+      shininess: 90,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  dome.scale.set(miniatureWidth * 0.5, miniatureHeight, miniatureLength * 0.5);
+  group.add(dome);
+
+  const silhouetteGroup = new THREE.Group();
+  const detailGroup = new THREE.Group();
+  const playerDots = new THREE.Group();
+  group.add(silhouetteGroup);
+  group.add(detailGroup);
+  group.add(playerDots);
+
+  for (const voxel of (entry.compiled?.miniature?.static_voxels ?? []).slice(0, 120)) {
+    const position = mapPoint(voxel.position);
+    const scaleVector = voxel.scale ?? { x: 1, y: 1, z: 1 };
+    const meshScale = {
+      x: Math.max(0.12, (Number(scaleVector.x ?? 1) || 1) * scale),
+      y: Math.max(0.12, (Number(scaleVector.y ?? 1) || 1) * scale),
+      z: Math.max(0.12, (Number(scaleVector.z ?? 1) || 1) * scale),
+    };
+
+    const silhouette = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({
+        color: "#8c94a1",
+        roughness: 0.9,
+        metalness: 0.02,
+      }),
+    );
+    silhouette.position.copy(position);
+    silhouette.scale.set(meshScale.x, meshScale.y, meshScale.z);
+    silhouetteGroup.add(silhouette);
+
+    const detail = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({
+        color: voxel.material?.color ?? "#b8bec8",
+        roughness: 0.82,
+        metalness: 0.06,
+      }),
+    );
+    detail.position.copy(position);
+    detail.scale.set(meshScale.x, meshScale.y, meshScale.z);
+    detailGroup.add(detail);
+  }
+
+  for (const screen of (entry.compiled?.miniature?.screens ?? []).slice(0, 16)) {
+    const screenMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 0.08),
+      new THREE.MeshStandardMaterial({
+        color: "#f8fbff",
+        emissive: "#5f7ca0",
+        emissiveIntensity: 0.22,
+        roughness: 0.42,
+        metalness: 0.08,
+      }),
+    );
+    const screenScale = screen.scale ?? { x: 4, y: 2.25, z: 0.2 };
+    screenMesh.position.copy(mapPoint(screen.position));
+    screenMesh.scale.set(
+      Math.max(0.18, (Number(screenScale.x ?? 4) || 4) * scale),
+      Math.max(0.18, (Number(screenScale.y ?? 2.25) || 2.25) * scale),
+      Math.max(0.05, (Number(screenScale.z ?? 0.2) || 0.2) * scale),
+    );
+    detailGroup.add(screenMesh);
+  }
+
+  for (const player of entry.visible_players ?? []) {
+    if (!player.position) {
+      continue;
+    }
+    const marker = new THREE.Group();
+    const outline = new THREE.Mesh(
+      new THREE.SphereGeometry(0.18, 12, 12),
+      new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.95 }),
+    );
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11, 12, 12),
+      new THREE.MeshBasicMaterial({ color: "#ff4f6d" }),
+    );
+    const glow = new THREE.Mesh(
+      new THREE.SphereGeometry(0.26, 12, 12),
+      new THREE.MeshBasicMaterial({ color: "#ff4f6d", transparent: true, opacity: 0.18 }),
+    );
+    marker.add(glow);
+    marker.add(outline);
+    marker.add(core);
+    marker.position.copy(mapPoint(player.position));
+    playerDots.add(marker);
+  }
+
+  const nearDistance = clamp(46 + longestSide * 2.8, 54, 112);
+  const midDistance = clamp(nearDistance * 2.2, 118, 250);
+  const animatedEntry = {
+    id: String(entry.id ?? ""),
+    group,
+    dome,
+    baseDomeScaleY: dome.scale.y,
+    silhouetteGroup,
+    detailGroup,
+    playerDots,
+    nearDistance,
+    midDistance,
+    phase: Math.random() * Math.PI * 2,
+    basePlate,
+  };
+  sceneState.animatedPrivateWorldMiniatures.push(animatedEntry);
+  return animatedEntry;
+}
+
+function updatePrivateWorldMiniatures(elapsedSeconds) {
+  for (const entry of sceneState.animatedPrivateWorldMiniatures) {
+    const distance = sceneState.camera.position.distanceTo(entry.group.position);
+    const isNear = distance <= entry.nearDistance;
+    const isMid = distance > entry.nearDistance && distance <= entry.midDistance;
+    entry.silhouetteGroup.visible = isMid;
+    entry.detailGroup.visible = isNear;
+    entry.playerDots.visible = isNear;
+    entry.dome.material.opacity = isNear ? 0.12 : isMid ? 0.18 : 0.24;
+    entry.basePlate.material.opacity = isNear ? 0.28 : 0.22;
+    const pulse = 1 + Math.sin(elapsedSeconds * 0.8 + entry.phase) * 0.018;
+    entry.dome.scale.y = entry.baseDomeScaleY * pulse;
+  }
+}
+
 function getBrowserPlaceholderBadge(session) {
   if (!session || session.hostSessionId === state.viewerSessionId || session.deliveryMode !== "placeholder") {
     return "";
@@ -5862,6 +6125,7 @@ function rebuildScene(streamPayload) {
   sceneState.animatedTags = [];
   sceneState.animatedPresence = [];
   sceneState.animatedChatBubbleGhosts = [];
+  sceneState.animatedPrivateWorldMiniatures = [];
   sceneState.clickable = [];
   sceneState.presenceEntries = new Map();
 
@@ -5870,6 +6134,7 @@ function rebuildScene(streamPayload) {
   clearGroup(sceneState.tags);
   clearGroup(sceneState.posts);
   clearGroup(sceneState.presence);
+  clearGroup(sceneState.privateWorldMiniatures);
   unregisterBillboardsInGroup(sceneState.chatBubbleGhosts);
   clearGroup(sceneState.chatBubbleGhosts);
 
@@ -5886,6 +6151,10 @@ function rebuildScene(streamPayload) {
   for (const presence of streamPayload.presence) {
     const presenceEntry = buildPresenceObject(presence);
     sceneState.presence.add(presenceEntry.group);
+  }
+  for (const miniature of streamPayload.privateWorldMiniatures ?? []) {
+    const miniatureEntry = buildPrivateWorldMiniatureObject(miniature);
+    sceneState.privateWorldMiniatures.add(miniatureEntry.group);
   }
   rebuildConnections(streamPayload.pillars, streamPayload.tags, streamPayload.postInstances);
   sceneState.visitorSystem?.syncAmbient(streamPayload.tags);
@@ -5959,6 +6228,7 @@ function initScene() {
   sceneState.root.add(sceneState.posts);
   sceneState.root.add(sceneState.presence);
   sceneState.root.add(sceneState.browserScreens);
+  sceneState.root.add(sceneState.privateWorldMiniatures);
   sceneState.root.add(sceneState.visitors);
   sceneState.root.add(sceneState.player);
   sceneState.root.add(sceneState.trails);
@@ -8631,6 +8901,7 @@ function animate() {
   updateMovement(deltaSeconds);
   updateSnow(deltaSeconds, elapsedSeconds);
   updateAnimatedObjects(deltaSeconds, elapsedSeconds);
+  updatePrivateWorldMiniatures(elapsedSeconds);
   updateBrowserFocusTracking(deltaSeconds);
   updateFocusVeil();
   updateCameraPanel();
