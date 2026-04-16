@@ -70,6 +70,10 @@ const PRIVATE_CHAT_BUBBLE_BASE_HEIGHT = 12;
 const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 820;
 const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 620;
 const PRIVATE_CHAT_BUBBLE_MAX_LINES = 8;
+const PRIVATE_BROWSER_RADIUS = 96;
+const PRIVATE_BROWSER_ASPECT_RATIO = 16 / 9;
+const PRIVATE_BROWSER_SCREEN_WIDTH = 20;
+const PRIVATE_BROWSER_PLACEHOLDER_ASPECT_RATIO = 384 / 280;
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
   fog: "#f4fbff",
@@ -832,7 +836,7 @@ function buildPrivatePresenceObject(entry) {
     Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
     Number(entry.position_z ?? 0) || 0,
   );
-  const bubble = createPrivateActorBubbleState(primary, { anchorY: 15.2 * (0.4 / 0.92) });
+  const bubble = createPrivateActorBubbleState(primary);
   figure.group.add(bubble.mesh);
   return {
     id: presenceId,
@@ -880,24 +884,209 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
   );
 }
 
+function getPrivateBrowserSessionShareKind(session = {}) {
+  return normalizeBrowserShareKind(session?.shareKind, session?.sessionMode === "remote-browser" ? "browser" : "screen");
+}
+
+function getPrivateBrowserPlaceholderBadge(session = {}) {
+  if (
+    !session
+    || String(session.hostSessionId ?? "").trim() === getPrivateViewerSessionId()
+    || session.deliveryMode !== "placeholder"
+  ) {
+    return "";
+  }
+  const maxViewers = getPrivateBrowserSessionMaxViewers(session);
+  const viewerCount = getPrivateBrowserSessionViewerCount(session);
+  if (viewerCount < maxViewers) {
+    return "";
+  }
+  const hostPosition = getPrivateBrowserHostPosition(session.hostSessionId);
+  if (!hostPosition) {
+    return "";
+  }
+  const listenerPosition = getPrivatePresencePosition();
+  const planarDistance = Math.hypot(
+    listenerPosition.x - hostPosition.x,
+    listenerPosition.z - hostPosition.z,
+  );
+  if (planarDistance > Math.max(16, PRIVATE_BROWSER_RADIUS)) {
+    return "";
+  }
+  return "FULL";
+}
+
+function getPrivateBrowserPlaceholderTextureKey(session = {}) {
+  return [
+    getPrivateBrowserSessionShareKind(session),
+    String(session?.deliveryMode ?? "placeholder"),
+    String(getPrivateBrowserPlaceholderBadge(session)),
+  ].join(":");
+}
+
 function createPrivateShareBubbleTexture(session = {}) {
-  const shareKind = String(session.shareKind ?? "screen");
+  const shareKind = getPrivateBrowserSessionShareKind(session);
+  const badge = getPrivateBrowserPlaceholderBadge(session);
   const accent = shareKind === "audio"
     ? PRIVATE_WORLD_STYLE.accents[3]
     : shareKind === "camera"
       ? PRIVATE_WORLD_STYLE.accents[0]
       : PRIVATE_WORLD_STYLE.accents[1];
-  const symbol = shareKind === "audio" ? "Voice" : shareKind === "camera" ? "Video" : "Screen";
+  const symbol = shareKind === "audio"
+    ? "📞"
+    : shareKind === "camera"
+      ? "🤩"
+      : "📺";
   return createBubbleTexture(symbol, {
     accent,
     stroke: PRIVATE_WORLD_STYLE.outline,
-    text: getPrivateBrowserSessionTitle(session).slice(0, 60),
-    label: "LIVE",
-    badge: shareKind === "audio" ? "voice" : shareKind === "camera" ? "video" : "screen",
-    width: 700,
-    height: 420,
-    maxLines: 3,
+    badge,
+    badgeBackground: badge ? "rgba(255, 79, 168, 0.92)" : undefined,
+    badgeStroke: badge ? "rgba(255, 255, 255, 0.26)" : undefined,
   });
+}
+
+function updatePrivateShareBubbleGeometry(entry) {
+  if (!entry?.frame || !entry?.frameShell) {
+    return;
+  }
+  const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO;
+  if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
+    return;
+  }
+  const width = PRIVATE_BROWSER_SCREEN_WIDTH;
+  const height = width / Math.max(0.1, aspectRatio);
+  entry.frame.geometry.dispose();
+  entry.frame.geometry = new THREE.PlaneGeometry(width, height);
+  entry.frameShell.geometry.dispose();
+  entry.frameShell.geometry = new THREE.PlaneGeometry(width + 1.2, height + 1.2);
+  entry.geometryAspectRatio = aspectRatio;
+}
+
+function updatePrivateShareBubbleAspectFromVideo(entry, videoElement) {
+  if (!entry || !videoElement) {
+    return;
+  }
+  const applyAspect = () => {
+    const width = Math.max(0, Math.floor(Number(videoElement.videoWidth) || 0));
+    const height = Math.max(0, Math.floor(Number(videoElement.videoHeight) || 0));
+    if (!width || !height) {
+      return;
+    }
+    const nextAspectRatio = width / Math.max(1, height);
+    if (Math.abs(nextAspectRatio - (Number(entry.session?.aspectRatio) || 0)) < 0.01) {
+      return;
+    }
+    entry.session = {
+      ...entry.session,
+      aspectRatio: nextAspectRatio,
+    };
+    updatePrivateShareBubbleGeometry(entry);
+  };
+  if (videoElement.videoWidth && videoElement.videoHeight) {
+    applyAspect();
+    return;
+  }
+  videoElement.addEventListener("loadedmetadata", applyAspect, { once: true });
+}
+
+function isPrivateShareBubbleShowingLiveMedia(entry) {
+  return Boolean(entry?.deliveryMode === "full" && (entry.videoTexture || entry.currentFrameId > 0));
+}
+
+function updatePrivateShareBubblePresentation(entry) {
+  if (!entry?.frame) {
+    return;
+  }
+  const nextPlaceholderKey = getPrivateBrowserPlaceholderTextureKey(entry.session);
+  if (entry.placeholderKey !== nextPlaceholderKey) {
+    entry.placeholderTexture?.dispose?.();
+    entry.placeholderTexture = createPrivateShareBubbleTexture(entry.session);
+    entry.placeholderKey = nextPlaceholderKey;
+  }
+  const hasRemoteVideo = entry.deliveryMode === "full" && entry.videoTexture;
+  const hasLiveFrame = entry.deliveryMode === "full" && entry.currentFrameId > 0;
+  const desiredMap = hasRemoteVideo
+    ? entry.videoTexture
+    : hasLiveFrame
+      ? entry.liveTexture
+      : entry.placeholderTexture;
+  const showingPlaceholder = desiredMap === entry.placeholderTexture;
+  const shareKind = getPrivateBrowserSessionShareKind(entry.session);
+  const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO;
+  const baseWidth = PRIVATE_BROWSER_SCREEN_WIDTH;
+  const baseHeight = baseWidth / Math.max(0.1, aspectRatio);
+  const bubbleWidth = shareKind === "audio" ? 7.8 : 8.6;
+  const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_PLACEHOLDER_ASPECT_RATIO;
+  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
+  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
+  entry.frame.scale.set(scaleX, scaleY, 1);
+  entry.frame.position.set(0, 0, 0);
+  entry.frame.material.depthTest = false;
+  entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
+  entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
+  entry.frameShell.visible = false;
+  if (entry.frame.material.map !== desiredMap) {
+    entry.frame.material.map = desiredMap;
+    entry.frame.material.needsUpdate = true;
+  }
+  entry.frame.material.needsUpdate = true;
+}
+
+function setPrivateShareBubbleVideo(sessionId, videoElement) {
+  const preview = state.preview;
+  if (!preview?.browserShareEntries) {
+    return;
+  }
+  const entry = preview.browserShareEntries.get(sessionId);
+  if (!entry || !videoElement) {
+    return;
+  }
+  if (entry.videoElement === videoElement && entry.videoTexture) {
+    updatePrivateShareBubblePresentation(entry);
+    return;
+  }
+  clearPrivateShareBubbleVideo(sessionId);
+  entry.videoElement = videoElement;
+  entry.videoTexture = new THREE.VideoTexture(videoElement);
+  entry.videoTexture.colorSpace = THREE.SRGBColorSpace;
+  entry.videoTexture.generateMipmaps = false;
+  entry.videoTexture.minFilter = THREE.LinearFilter;
+  entry.videoTexture.magFilter = THREE.LinearFilter;
+  updatePrivateShareBubbleAspectFromVideo(entry, videoElement);
+  updatePrivateShareBubblePresentation(entry);
+}
+
+function clearPrivateShareBubbleVideo(sessionId) {
+  const preview = state.preview;
+  if (!preview?.browserShareEntries) {
+    return;
+  }
+  const entry = preview.browserShareEntries.get(sessionId);
+  if (!entry) {
+    return;
+  }
+  entry.videoTexture?.dispose?.();
+  entry.videoTexture = null;
+  if (entry.videoElement && entry.videoElement !== elements.panelBrowserVideo) {
+    entry.videoElement.remove?.();
+  }
+  entry.videoElement = null;
+  updatePrivateShareBubblePresentation(entry);
+}
+
+function updatePrivateShareBubbleFrame(sessionId, frame) {
+  const preview = state.preview;
+  if (!preview?.browserShareEntries) {
+    return;
+  }
+  const entry = preview.browserShareEntries.get(sessionId);
+  if (!entry || !frame?.dataUrl || Number(frame.frameId ?? 0) <= entry.currentFrameId) {
+    return;
+  }
+  entry.currentFrameId = Number(frame.frameId ?? 0);
+  entry.liveImage.src = frame.dataUrl;
+  updatePrivateShareBubblePresentation(entry);
 }
 
 function removePrivateShareBubbleEntry(sessionId) {
@@ -906,11 +1095,15 @@ function removePrivateShareBubbleEntry(sessionId) {
   if (!entry) {
     return;
   }
+  clearPrivateShareBubbleVideo(sessionId);
   preview.browserShareEntries.delete(sessionId);
   entry.group.parent?.remove(entry.group);
-  entry.texture?.dispose?.();
-  entry.mesh.geometry?.dispose?.();
-  entry.mesh.material?.dispose?.();
+  entry.liveTexture?.dispose?.();
+  entry.placeholderTexture?.dispose?.();
+  entry.frame.geometry?.dispose?.();
+  entry.frameShell.geometry?.dispose?.();
+  entry.frame.material?.dispose?.();
+  entry.frameShell.material?.dispose?.();
 }
 
 function ensurePrivateShareBubbleEntry(session = {}) {
@@ -924,28 +1117,66 @@ function ensurePrivateShareBubbleEntry(session = {}) {
   }
   const existing = preview.browserShareEntries.get(sessionId);
   if (existing) {
+    existing.session = { ...existing.session, ...session };
+    existing.hostSessionId = String(session.hostSessionId ?? existing.hostSessionId ?? "").trim();
+    updatePrivateShareBubbleGeometry(existing);
     return existing;
   }
-  const texture = createPrivateShareBubbleTexture(session);
-  const mesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(7.8, 4.9),
+
+  const aspectRatio = Number(session.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO;
+  const width = PRIVATE_BROWSER_SCREEN_WIDTH;
+  const height = width / Math.max(0.1, aspectRatio);
+  const group = new THREE.Group();
+  const frameShell = new THREE.Mesh(
+    new THREE.PlaneGeometry(width + 1.2, height + 1.2),
     new THREE.MeshBasicMaterial({
-      map: texture,
+      color: new THREE.Color("#0d1537"),
       transparent: true,
+      opacity: 0.92,
       depthWrite: false,
+      fog: false,
     }),
   );
-  const group = new THREE.Group();
-  group.add(mesh);
+  frameShell.renderOrder = 9;
+  group.add(frameShell);
+
+  const liveImage = new Image();
+  const liveTexture = new THREE.Texture(liveImage);
+  liveTexture.colorSpace = THREE.SRGBColorSpace;
+  liveImage.addEventListener("load", () => {
+    liveTexture.needsUpdate = true;
+  });
+  const placeholderTexture = createPrivateShareBubbleTexture(session);
+  const frame = createPrivateBillboard(placeholderTexture, width, height, {
+    opacity: 1,
+    fog: false,
+    depthTest: false,
+    renderOrder: 10,
+    persistent: true,
+  });
+  group.add(frame);
   preview.browserShares.add(group);
   const entry = {
     sessionId,
+    hostSessionId: String(session.hostSessionId ?? "").trim(),
+    session,
     group,
-    mesh,
-    texture,
-    key: "",
+    frameShell,
+    frame,
+    liveImage,
+    liveTexture,
+    placeholderTexture,
+    placeholderKey: getPrivateBrowserPlaceholderTextureKey(session),
+    videoElement: null,
+    videoTexture: null,
+    position: new THREE.Vector3(),
+    targetPosition: new THREE.Vector3(),
+    currentFrameId: 0,
+    deliveryMode: String(session.deliveryMode ?? "placeholder"),
+    geometryAspectRatio: aspectRatio,
   };
   preview.browserShareEntries.set(sessionId, entry);
+  updatePrivateShareBubblePresentation(entry);
   return entry;
 }
 
@@ -961,7 +1192,28 @@ function reconcilePrivateShareBubbles() {
     }
   }
   for (const session of state.browserSessions.values()) {
-    ensurePrivateShareBubbleEntry(session);
+    const entry = ensurePrivateShareBubbleEntry(session);
+    if (!entry) {
+      continue;
+    }
+    entry.deliveryMode = session.deliveryMode ?? "placeholder";
+    entry.session = session;
+    entry.hostSessionId = String(session.hostSessionId ?? entry.hostSessionId ?? "").trim();
+    updatePrivateShareBubbleGeometry(entry);
+    if (session.hasVideo === false) {
+      clearPrivateShareBubbleVideo(session.sessionId);
+    }
+    if (session._remoteElement) {
+      setPrivateShareBubbleVideo(session.sessionId, session._remoteElement);
+    } else if (
+      session.hostSessionId === getPrivateViewerSessionId()
+      && state.localBrowserShare?.sessionId === session.sessionId
+      && state.localBrowserShare?.hasVideo
+      && elements.panelBrowserVideo
+    ) {
+      setPrivateShareBubbleVideo(session.sessionId, elements.panelBrowserVideo);
+    }
+    updatePrivateShareBubblePresentation(entry);
   }
 }
 
@@ -980,18 +1232,21 @@ function updatePrivateShareBubbles(elapsedSeconds) {
       entry.group.visible = false;
       continue;
     }
-    const nextKey = `${session.shareKind || "screen"}:${getPrivateBrowserSessionTitle(session)}`;
-    if (entry.key !== nextKey) {
-      entry.texture?.dispose?.();
-      entry.texture = createPrivateShareBubbleTexture(session);
-      entry.mesh.material.map = entry.texture;
-      entry.mesh.material.needsUpdate = true;
-      entry.key = nextKey;
-    }
+    entry.session = session;
+    entry.hostSessionId = String(session.hostSessionId ?? entry.hostSessionId ?? "").trim();
+    entry.deliveryMode = session.deliveryMode ?? "placeholder";
+    updatePrivateShareBubbleGeometry(entry);
+    updatePrivateShareBubblePresentation(entry);
+    const showingLiveMedia = isPrivateShareBubbleShowingLiveMedia(entry);
+    entry.targetPosition.copy(hostPosition);
+    entry.targetPosition.y += showingLiveMedia
+      ? 18 + Math.sin(elapsedSeconds * 1.3) * 0.7
+      : 15.4 + Math.sin(elapsedSeconds * 1.1) * 0.18;
+    entry.position.lerp(entry.targetPosition, 0.22);
     entry.group.visible = true;
-    entry.group.position.copy(hostPosition);
-    entry.group.position.y += 18 + Math.sin(elapsedSeconds * 1.2) * 0.5;
-    entry.mesh.quaternion.copy(preview.camera.quaternion);
+    entry.group.position.copy(entry.position);
+    entry.group.rotation.set(0, 0, 0);
+    entry.frame.quaternion.copy(preview.camera.quaternion);
   }
 }
 
@@ -1903,6 +2158,9 @@ function getPrivateBrowserMediaController() {
         elements.panelBrowserVideo.hidden = false;
         ensurePrivateBrowserVideoPlayback(elements.panelBrowserVideo);
       }
+      if (element) {
+        setPrivateShareBubbleVideo(sessionId, element);
+      }
       updatePrivateBrowserPanel();
     },
     onRemoteTrackRemoved: ({ sessionId }) => {
@@ -1923,6 +2181,7 @@ function getPrivateBrowserMediaController() {
       if (state.browserMediaState.remoteVideoSessionId === sessionId) {
         state.browserMediaState.remoteVideoSessionId = "";
       }
+      clearPrivateShareBubbleVideo(sessionId);
       updatePrivateBrowserPanel();
     },
     onRemoteAudioState: ({ sessionId, available, blocked, error }) => {
@@ -2007,9 +2266,15 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
     ...sessionPatch,
     deliveryMode: sessionPatch.deliveryMode ?? previous.deliveryMode ?? "placeholder",
     frameTransport: sessionPatch.frameTransport ?? previous.frameTransport ?? "jpeg-sequence",
+    lastFrameDataUrl: sessionPatch.lastFrameDataUrl ?? previous.lastFrameDataUrl ?? "",
+    lastFrameId: Number(sessionPatch.lastFrameId ?? previous.lastFrameId) || 0,
     sessionMode: sessionPatch.sessionMode ?? previous.sessionMode ?? "display-share",
+    aspectRatio: Number(sessionPatch.aspectRatio ?? previous.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO,
   };
   state.browserSessions.set(sessionId, next);
+  if (next.hasVideo === false) {
+    clearPrivateShareBubbleVideo(next.sessionId);
+  }
 
   if (next.hostSessionId === getPrivateViewerSessionId()) {
     state.localBrowserSessionId = next.sessionId;
@@ -2033,8 +2298,41 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
   }
 
   reconcilePrivateShareBubbles();
+  if (
+    next.hostSessionId === getPrivateViewerSessionId()
+    && state.localBrowserShare?.sessionId === next.sessionId
+    && state.localBrowserShare?.hasVideo
+    && elements.panelBrowserVideo
+  ) {
+    setPrivateShareBubbleVideo(next.sessionId, elements.panelBrowserVideo);
+  }
+  if (next.lastFrameDataUrl && next.lastFrameId > 0) {
+    updatePrivateShareBubbleFrame(next.sessionId, {
+      sessionId: next.sessionId,
+      frameId: next.lastFrameId,
+      dataUrl: next.lastFrameDataUrl,
+    });
+  }
   updatePrivateBrowserPanel();
   renderPrivateLiveSharesList();
+}
+
+function handlePrivateBrowserFrame(payload = {}) {
+  const sessionId = String(payload.sessionId ?? "").trim();
+  const existing = state.browserSessions.get(sessionId);
+  if (!existing) {
+    return;
+  }
+  const next = {
+    ...existing,
+    lastFrameDataUrl: payload.dataUrl,
+    lastFrameId: Number(payload.frameId ?? 0) || 0,
+    title: payload.title ?? existing.title,
+    url: payload.url ?? existing.url,
+  };
+  state.browserSessions.set(sessionId, next);
+  updatePrivateShareBubbleFrame(sessionId, payload);
+  updatePrivateBrowserPanel();
 }
 
 function handlePrivateBrowserStop(payload = {}) {
@@ -3798,7 +4096,6 @@ function ensureViewerAvatar(preview) {
     bubbleAccent: PRIVATE_WORLD_STYLE.accents[0],
     bubble: createPrivateActorBubbleState(PRIVATE_WORLD_STYLE.accents[0], {
       persistent: true,
-      anchorY: 15.2 * (0.46 / 0.92),
     }),
   };
   avatar.group.add(avatar.bubble.mesh);
@@ -4890,6 +5187,8 @@ function connectWorldSocket() {
           maxViewers: payload.maxViewers,
         });
         syncPrivateBrowserMediaSubscription(payload.sessionId, false);
+      } else if (payload.type === "browser:frame") {
+        handlePrivateBrowserFrame(payload);
       } else if (payload.type === "browser:stop") {
         handlePrivateBrowserStop(payload);
       } else if (payload.type === "browser:error") {
