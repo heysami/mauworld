@@ -511,7 +511,7 @@ function createPrivateBillboard(texture, width, height, options = {}) {
 
 function createViewerAvatarFigure(options = {}) {
   const seed = options.seed ?? "viewer-self";
-  const scale = options.scale ?? 0.92;
+  const scale = options.scale ?? 0.52;
   const accents = pickPrivateAccentSet(seed);
   const outlineColor = options.outlineColor ?? PRIVATE_WORLD_STYLE.accents[0];
   const primary = options.primary ?? accents.primary;
@@ -635,6 +635,7 @@ function isEmojiOnlyPrivateChatText(value) {
 }
 
 function createPrivateActorBubbleState(color, options = {}) {
+  const anchorY = Number(options.anchorY ?? 15.2) || 15.2;
   const bubble = createPrivateBillboard(
     createBubbleTexture("💬", {
       accent: color,
@@ -652,7 +653,7 @@ function createPrivateActorBubbleState(color, options = {}) {
     },
   );
   bubble.visible = false;
-  bubble.position.set(0, 15.2, 0);
+  bubble.position.set(0, anchorY, 0);
   return {
     mesh: bubble,
     currentKey: "",
@@ -662,7 +663,7 @@ function createPrivateActorBubbleState(color, options = {}) {
     elapsed: 0,
     highEnergy: false,
     bounceCount: 0,
-    anchorY: 15.2,
+    anchorY,
     baseWidth: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
     baseHeight: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
     width: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
@@ -820,7 +821,7 @@ function buildPrivatePresenceObject(entry) {
   const secondary = accents[(seed + 2) % accents.length];
   const tertiary = accents[(seed + 4) % accents.length];
   const figure = createViewerAvatarFigure({
-    scale: 0.72,
+    scale: 0.4,
     outlineColor: primary,
     primary,
     secondary,
@@ -831,7 +832,7 @@ function buildPrivatePresenceObject(entry) {
     Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
     Number(entry.position_z ?? 0) || 0,
   );
-  const bubble = createPrivateActorBubbleState(primary);
+  const bubble = createPrivateActorBubbleState(primary, { anchorY: 15.2 * (0.4 / 0.92) });
   figure.group.add(bubble.mesh);
   return {
     id: presenceId,
@@ -3736,6 +3737,7 @@ function ensureViewerAvatar(preview) {
   }
   const figure = createViewerAvatarFigure({
     seed: "viewer-self",
+    scale: 0.46,
     outlineColor: PRIVATE_WORLD_STYLE.accents[0],
   });
   const avatar = {
@@ -3756,7 +3758,10 @@ function ensureViewerAvatar(preview) {
     targetLeanZ: 0,
     facingYaw: normalizeAngle(privateInputState.yaw + Math.PI),
     bubbleAccent: PRIVATE_WORLD_STYLE.accents[0],
-    bubble: createPrivateActorBubbleState(PRIVATE_WORLD_STYLE.accents[0], { persistent: true }),
+    bubble: createPrivateActorBubbleState(PRIVATE_WORLD_STYLE.accents[0], {
+      persistent: true,
+      anchorY: 15.2 * (0.46 / 0.92),
+    }),
   };
   avatar.group.add(avatar.bubble.mesh);
   avatar.group.position.copy(state.viewerPosition);
