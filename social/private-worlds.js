@@ -327,7 +327,11 @@ function setPrivatePanelTab(tab, options = {}) {
   for (const button of elements.privatePanelTabButtons ?? []) {
     const active = button.getAttribute("data-private-panel-tab") === nextTab;
     button.classList.toggle("is-active", active);
-    button.setAttribute("aria-selected", String(active));
+    if (button.getAttribute("role") === "tab") {
+      button.setAttribute("aria-selected", String(active));
+    } else {
+      button.setAttribute("aria-pressed", String(active));
+    }
   }
   for (const view of elements.privatePanelViews ?? []) {
     view.hidden = view.getAttribute("data-private-panel-view") !== nextTab;

@@ -80,6 +80,10 @@ body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
   overflow: auto;
 }
 
+.pw-mau-panel .world-panel__tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .pw-mau-panel__brand-copy {
   color: var(--pw-muted);
   font-size: 0.78rem;
@@ -460,6 +464,14 @@ body.private-worlds-body.is-launcher-open .pw-launcher {
 .pw-launcher__views {
   display: grid;
   gap: 14px;
+}
+
+.pw-panel-modes {
+  justify-content: start;
+}
+
+body.private-worlds-body:not(.has-world) .pw-panel-modes {
+  display: none;
 }
 
 .pw-launcher-section {
