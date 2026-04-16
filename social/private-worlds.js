@@ -111,6 +111,7 @@ const state = {
   viewerLookPointerId: 0,
   viewerLookLastX: 0,
   viewerLookLastY: 0,
+  buildDrag: null,
   launchHandled: false,
 };
 
@@ -1167,7 +1168,11 @@ function renderRuntimeStatus() {
     </div>
     <div class="pw-world-meta__row">
       <strong>Controls</strong>
-      <span>${getLocalParticipant()?.join_role === "player" ? "WASD / Arrows to move, Space to jump, Release to return to viewer" : "Viewer mode by default. Click a player capsule in Play to possess it."}</span>
+      <span>${state.mode === "build" && isEditor()
+        ? "Build mode: click to select, drag to move, Shift + wheel to rotate, Alt + wheel to scale."
+        : getLocalParticipant()?.join_role === "player"
+          ? "WASD / Arrows to move, Space to jump, Release to return to viewer."
+          : "Viewer mode by default. Click a player capsule in Play to possess it."}</span>
     </div>
     ${runtimePlayers.length > 0 ? `
       <div class="pw-world-meta__row">
@@ -1250,6 +1255,11 @@ function renderSelectedWorld() {
   updatePreviewFromSelection();
 }
 
+function snapBuildValue(value, step = 0.1) {
+  const safeStep = Math.max(0.01, Number(step) || 0.1);
+  return Math.round((Number(value) || 0) / safeStep) * safeStep;
+}
+
 function raycastPreviewPointer(event) {
   const preview = ensurePreview();
   if (!preview) {
@@ -1262,6 +1272,143 @@ function raycastPreviewPointer(event) {
   );
   preview.raycaster.setFromCamera(pointer, preview.camera);
   return preview.raycaster.intersectObjects(preview.entityPickables, false)[0] ?? null;
+}
+
+function getBuildDragPoint(event, plane) {
+  const preview = ensurePreview();
+  if (!preview || !plane) {
+    return null;
+  }
+  const rect = elements.previewCanvas.getBoundingClientRect();
+  const pointer = new THREE.Vector2(
+    ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+    -(((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
+  );
+  preview.raycaster.setFromCamera(pointer, preview.camera);
+  const point = new THREE.Vector3();
+  return preview.raycaster.ray.intersectPlane(plane, point) ? point : null;
+}
+
+function canDirectManipulateSelection(kind) {
+  return kind === "voxel"
+    || kind === "primitive"
+    || kind === "player"
+    || kind === "screen"
+    || kind === "text"
+    || kind === "trigger"
+    || kind === "prefab_instance";
+}
+
+function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
+  const entityKind = hit?.object?.userData?.privateWorldEntityKind;
+  const entityId = hit?.object?.userData?.privateWorldEntityId;
+  if (!entityKind || !entityId) {
+    return false;
+  }
+  setBuilderSelection(entityKind, entityId);
+  if (!canDirectManipulateSelection(entityKind)) {
+    return false;
+  }
+  let sceneDoc = null;
+  try {
+    sceneDoc = parseSceneTextarea();
+  } catch (_error) {
+    return false;
+  }
+  const selected = getSelectedEntity(sceneDoc);
+  if (!selected?.entry) {
+    return false;
+  }
+  const planeY = Number(selected.entry.position?.y ?? 0) || 0;
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
+  const point = getBuildDragPoint(event, plane);
+  if (!point) {
+    return false;
+  }
+  state.buildDrag = {
+    pointerId: event.pointerId,
+    kind: selected.kind,
+    id: selected.entry.id,
+    plane,
+    startPoint: point.clone(),
+    startPosition: deepClone(selected.entry.position ?? { x: 0, y: planeY, z: 0 }),
+  };
+  return true;
+}
+
+function updateBuildDrag(event) {
+  if (!state.buildDrag || state.buildDrag.pointerId !== event.pointerId) {
+    return false;
+  }
+  const point = getBuildDragPoint(event, state.buildDrag.plane);
+  if (!point) {
+    return false;
+  }
+  const delta = new THREE.Vector3().subVectors(point, state.buildDrag.startPoint);
+  const step = state.buildDrag.kind === "voxel" ? 0.5 : state.buildDrag.kind === "trigger" ? 0.25 : 0.1;
+  void acquireSceneLock();
+  mutateSceneDoc((sceneDoc) => {
+    const selected = getSelectedEntity(sceneDoc);
+    if (!selected?.entry || selected.entry.id !== state.buildDrag?.id) {
+      return;
+    }
+    selected.entry.position = selected.entry.position || { x: 0, y: 0, z: 0 };
+    selected.entry.position.x = snapBuildValue(state.buildDrag.startPosition.x + delta.x, step);
+    selected.entry.position.z = snapBuildValue(state.buildDrag.startPosition.z + delta.z, step);
+    selected.entry.position.y = state.buildDrag.startPosition.y;
+  });
+  return true;
+}
+
+function endBuildDrag(pointerId = 0) {
+  if (!state.buildDrag || (pointerId && state.buildDrag.pointerId !== pointerId)) {
+    return;
+  }
+  state.buildDrag = null;
+}
+
+function adjustSelectedEntityByWheel(event) {
+  if (!isEditor() || state.mode !== "build" || !state.builderSelection) {
+    return false;
+  }
+  const rotateMode = event.shiftKey;
+  const scaleMode = event.altKey;
+  if (!rotateMode && !scaleMode) {
+    return false;
+  }
+  event.preventDefault();
+  const delta = Number(event.deltaY) || 0;
+  void acquireSceneLock();
+  mutateSceneDoc((sceneDoc) => {
+    const selected = getSelectedEntity(sceneDoc);
+    if (!selected?.entry) {
+      return;
+    }
+    if (rotateMode) {
+      selected.entry.rotation = selected.entry.rotation || { x: 0, y: 0, z: 0 };
+      selected.entry.rotation.y = clampNumber(
+        (selected.entry.rotation.y ?? 0) + delta * 0.004,
+        selected.entry.rotation.y ?? 0,
+        -Math.PI * 8,
+        Math.PI * 8,
+      );
+      return;
+    }
+    if (typeof selected.entry.scale === "number") {
+      selected.entry.scale = clampNumber((selected.entry.scale ?? 1) + delta * -0.003, selected.entry.scale ?? 1, 0.2, 64);
+      return;
+    }
+    selected.entry.scale = selected.entry.scale || { x: 1, y: 1, z: 1 };
+    for (const axis of ["x", "y", "z"]) {
+      selected.entry.scale[axis] = clampNumber(
+        (selected.entry.scale?.[axis] ?? 1) + delta * -0.003,
+        selected.entry.scale?.[axis] ?? 1,
+        0.1,
+        128,
+      );
+    }
+  });
+  return true;
 }
 
 function updateFloatingViewerCamera(preview, deltaSeconds) {
@@ -1384,6 +1531,12 @@ function ensurePreview() {
 
   window.addEventListener("resize", render);
   elements.previewCanvas.addEventListener("pointerdown", (event) => {
+    if (state.mode === "build" && isEditor()) {
+      if (beginBuildDrag(event)) {
+        elements.previewCanvas.setPointerCapture(event.pointerId);
+        return;
+      }
+    }
     if (state.mode !== "play") {
       return;
     }
@@ -1394,6 +1547,11 @@ function ensurePreview() {
     elements.previewCanvas.setPointerCapture(event.pointerId);
   });
   elements.previewCanvas.addEventListener("pointermove", (event) => {
+    if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
+      event.preventDefault();
+      updateBuildDrag(event);
+      return;
+    }
     if (!state.viewerLookActive || state.viewerLookPointerId !== event.pointerId) {
       return;
     }
@@ -1405,12 +1563,27 @@ function ensurePreview() {
     state.viewerPitch = Math.max(-1.2, Math.min(1.2, state.viewerPitch - deltaY * 0.004));
   });
   elements.previewCanvas.addEventListener("pointerup", (event) => {
+    if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
+      endBuildDrag(event.pointerId);
+      elements.previewCanvas.releasePointerCapture?.(event.pointerId);
+      return;
+    }
+    if (state.viewerLookPointerId === event.pointerId) {
+      state.viewerLookActive = false;
+      elements.previewCanvas.releasePointerCapture?.(event.pointerId);
+    }
+  });
+  elements.previewCanvas.addEventListener("pointercancel", (event) => {
+    endBuildDrag(event.pointerId);
     if (state.viewerLookPointerId === event.pointerId) {
       state.viewerLookActive = false;
       elements.previewCanvas.releasePointerCapture?.(event.pointerId);
     }
   });
   elements.previewCanvas.addEventListener("wheel", (event) => {
+    if (adjustSelectedEntityByWheel(event)) {
+      return;
+    }
     event.preventDefault();
     if (state.mode !== "play" || getPossessedRuntimePlayer()) {
       return;
