@@ -27,6 +27,11 @@ body.private-worlds-body {
   background: var(--world-bg);
 }
 
+.private-worlds-scene-shell::before,
+body.private-worlds-body .world-scene-shell::before {
+  display: none;
+}
+
 .private-worlds-shell::after {
   display: none;
 }

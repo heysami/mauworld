@@ -11,7 +11,7 @@ const AI_KEY_STORAGE_KEY = "mauworldPrivateWorldAiKey";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 const LAUNCHER_TABS = new Set(["create", "worlds", "access", "import"]);
-const PRIVATE_PANEL_TABS = new Set(["chat", "share", "build", "world"]);
+const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
 const PRIVATE_CAMERA = {
   minY: 12,
   maxY: 360,
@@ -111,8 +111,10 @@ const elements = {
   panelOpenAccess: document.querySelector("[data-private-open-access]"),
   panelChatComposer: document.querySelector("[data-private-chat-composer]"),
   panelChatInput: document.querySelector("[data-private-chat-input]"),
-  panelChatStatus: document.querySelector("[data-private-chat-status]"),
-  panelChatLog: document.querySelector("[data-private-chat-log]"),
+  panelLiveSearchForm: document.querySelector("[data-private-live-search-form]"),
+  panelLiveSearchInput: document.querySelector("[data-private-live-search-input]"),
+  panelLiveStatus: document.querySelector("[data-private-live-status]"),
+  panelLiveResults: document.querySelector("[data-private-live-results]"),
   panelShareStatus: document.querySelector("[data-private-share-status]"),
   panelShareMeta: document.querySelector("[data-private-share-meta]"),
   panelShareCopy: document.querySelector("[data-private-copy-link]"),
@@ -253,6 +255,7 @@ const state = {
   viewerPosition: new THREE.Vector3(0, PRIVATE_CAMERA.minY, 10),
   viewerCameraPosition: new THREE.Vector3(8, PRIVATE_CAMERA.minY + 6, 20),
   cameraRadius: PRIVATE_PLAYER_VIEW.defaultRadius,
+  liveShareQuery: "",
   trailAccumulator: 0,
   lastPresenceSentAt: 0,
   viewerSuppressClickAt: 0,
@@ -316,6 +319,9 @@ function setPrivatePanelTab(tab) {
   }
   for (const view of elements.privatePanelViews ?? []) {
     view.hidden = view.getAttribute("data-private-panel-view") !== nextTab;
+  }
+  if (nextTab === "live") {
+    renderPrivateLiveSharesList();
   }
 }
 
@@ -430,7 +436,7 @@ function createOutlineShell(geometry, color, scale = 1.08) {
 }
 
 function createViewerAvatarFigure(options = {}) {
-  const scale = options.scale ?? 0.72;
+  const scale = options.scale ?? 0.92;
   const outlineColor = options.outlineColor ?? PRIVATE_WORLD_STYLE.outline;
   const primary = options.primary ?? PRIVATE_WORLD_STYLE.accents[1];
   const secondary = options.secondary ?? PRIVATE_WORLD_STYLE.accents[0];
@@ -439,10 +445,10 @@ function createViewerAvatarFigure(options = {}) {
   const poseRoot = new THREE.Group();
   group.add(poseRoot);
 
-  const bodyGeometry = new THREE.CapsuleGeometry(1.38 * scale, 2.24 * scale, 6, 16);
-  const headGeometry = new THREE.SphereGeometry(2.08 * scale, 24, 24);
-  const earGeometry = new THREE.ConeGeometry(0.76 * scale, 1.8 * scale, 16);
-  const limbGeometry = new THREE.CapsuleGeometry(0.36 * scale, 1.18 * scale, 4, 10);
+  const bodyGeometry = new THREE.CapsuleGeometry(1.45 * scale, 2.4 * scale, 6, 16);
+  const headGeometry = new THREE.SphereGeometry(2.15 * scale, 24, 24);
+  const earGeometry = new THREE.ConeGeometry(0.8 * scale, 1.9 * scale, 16);
+  const limbGeometry = new THREE.CapsuleGeometry(0.38 * scale, 1.3 * scale, 4, 10);
 
   const whiteMaterial = new THREE.MeshToonMaterial({ color: new THREE.Color(PRIVATE_WORLD_STYLE.white) });
   const primaryMaterial = new THREE.MeshToonMaterial({ color: new THREE.Color(primary) });
@@ -450,25 +456,25 @@ function createViewerAvatarFigure(options = {}) {
   const faceMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(outlineColor), fog: false });
 
   const bodyShell = createOutlineShell(bodyGeometry, outlineColor, 1.12);
-  bodyShell.position.y = 4.1 * scale;
+  bodyShell.position.y = 4.2 * scale;
   poseRoot.add(bodyShell);
 
   const body = new THREE.Mesh(bodyGeometry, whiteMaterial);
-  body.position.y = 4.1 * scale;
+  body.position.y = 4.2 * scale;
   poseRoot.add(body);
 
   const headShell = createOutlineShell(headGeometry, outlineColor, 1.12);
-  headShell.position.y = 8.08 * scale;
+  headShell.position.y = 8.3 * scale;
   poseRoot.add(headShell);
 
   const head = new THREE.Mesh(headGeometry, whiteMaterial);
-  head.position.y = 8.08 * scale;
+  head.position.y = 8.3 * scale;
   poseRoot.add(head);
 
   for (const side of [-1, 1]) {
-    const earShell = createOutlineShell(earGeometry, side > 0 ? primary : secondary, 1.12);
-    earShell.position.set(side * 1.36 * scale, 10.68 * scale, 0);
-    earShell.rotation.z = side * 0.34;
+    const earShell = createOutlineShell(earGeometry, primary, 1.12);
+    earShell.position.set(side * 1.45 * scale, 11 * scale, 0);
+    earShell.rotation.z = side * 0.36;
     poseRoot.add(earShell);
 
     const ear = new THREE.Mesh(earGeometry, side > 0 ? primaryMaterial : secondaryMaterial);
@@ -477,18 +483,18 @@ function createViewerAvatarFigure(options = {}) {
     poseRoot.add(ear);
 
     const arm = new THREE.Mesh(limbGeometry, side > 0 ? secondaryMaterial : primaryMaterial);
-    arm.position.set(side * 2.14 * scale, 4.72 * scale, 0.1 * scale);
-    arm.rotation.z = side * 0.82;
+    arm.position.set(side * 2.25 * scale, 4.9 * scale, 0.1 * scale);
+    arm.rotation.z = side * 0.84;
     poseRoot.add(arm);
   }
 
   for (const side of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.24 * scale, 10, 10), faceMaterial);
-    eye.position.set(side * 0.68 * scale, 8.2 * scale, 1.85 * scale);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.25 * scale, 10, 10), faceMaterial);
+    eye.position.set(side * 0.72 * scale, 8.45 * scale, 1.92 * scale);
     poseRoot.add(eye);
 
     const cheek = new THREE.Mesh(
-      new THREE.SphereGeometry(0.28 * scale, 10, 10),
+      new THREE.SphereGeometry(0.3 * scale, 10, 10),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(side > 0 ? primary : secondary),
         transparent: true,
@@ -496,42 +502,29 @@ function createViewerAvatarFigure(options = {}) {
         fog: false,
       }),
     );
-    cheek.position.set(side * 1.14 * scale, 7.48 * scale, 1.74 * scale);
+    cheek.position.set(side * 1.2 * scale, 7.65 * scale, 1.8 * scale);
     poseRoot.add(cheek);
   }
 
   const halo = new THREE.Mesh(
-    new THREE.TorusGeometry(2.76 * scale, 0.18 * scale, 10, 42),
+    new THREE.TorusGeometry(2.9 * scale, 0.2 * scale, 10, 42),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color(primary),
       transparent: true,
-      opacity: 0.86,
+      opacity: 0.9,
       fog: false,
     }),
   );
   halo.rotation.x = Math.PI / 2;
-  halo.position.y = 5.3 * scale;
+  halo.position.y = 5.6 * scale;
   poseRoot.add(halo);
 
   const orb = new THREE.Mesh(
-    new THREE.SphereGeometry(0.42 * scale, 16, 16),
+    new THREE.SphereGeometry(0.46 * scale, 16, 16),
     new THREE.MeshToonMaterial({ color: new THREE.Color(tertiary) }),
   );
-  orb.position.set(0, 12.1 * scale, 0);
+  orb.position.set(0, 12.8 * scale, 0);
   poseRoot.add(orb);
-
-  const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(3.2 * scale, 32),
-    new THREE.MeshBasicMaterial({
-      color: new THREE.Color("#b8c8e8"),
-      transparent: true,
-      opacity: 0.18,
-      depthWrite: false,
-    }),
-  );
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.02;
-  group.add(shadow);
 
   return {
     group,
@@ -1337,6 +1330,7 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
   }
 
   updatePrivateBrowserPanel();
+  renderPrivateLiveSharesList();
 }
 
 function handlePrivateBrowserStop(payload = {}) {
@@ -1362,6 +1356,7 @@ function handlePrivateBrowserStop(payload = {}) {
     }
   }
   updatePrivateBrowserPanel();
+  renderPrivateLiveSharesList();
 }
 
 function resetPrivateBrowserState({ disconnectController = false, stopTracks = false } = {}) {
@@ -1387,6 +1382,7 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
     state.browserMediaController = null;
   }
   updatePrivateBrowserPanel();
+  renderPrivateLiveSharesList();
 }
 
 async function launchPrivateScreenShare() {
@@ -1586,7 +1582,7 @@ function updatePrivateBrowserPanel() {
   }
 
   if (!world) {
-    setPrivateBrowserStatus("Open a private world to use live share.");
+    setPrivateBrowserStatus("Open a world to use nearby share.");
     updatePrivateBrowserSummary({
       state: "offline",
       badge: "Offline",
@@ -1594,7 +1590,7 @@ function updatePrivateBrowserPanel() {
       hint: "Open a world first.",
     });
   } else if (!state.session) {
-    setPrivateBrowserStatus("Guests can watch but cannot start live share.");
+    setPrivateBrowserStatus("Guests can watch but cannot start nearby share.");
     updatePrivateBrowserSummary({
       state: "offline",
       badge: "Signed out",
@@ -1621,21 +1617,21 @@ function updatePrivateBrowserPanel() {
     });
   } else if (localSession) {
     const shareKind = getBrowserShareKindLabel(localSession.shareKind || "screen");
-    setPrivateBrowserStatus(`${shareKind} is live inside this private world.`);
+    setPrivateBrowserStatus(`${shareKind} is live nearby.`);
     updatePrivateBrowserSummary({
       state: "live",
       badge: "Live",
       current: `${shareKind} live${localSession.title ? ` - ${localSession.title}` : ""}`,
-      hint: "Everyone inside this private world can watch this live share.",
+      hint: "Change the type, then press Share again to replace the live share.",
     });
   } else if (remoteSession) {
     const shareKind = getBrowserShareKindLabel(remoteSession.shareKind || "screen");
-    setPrivateBrowserStatus(`Watching ${shareKind.toLowerCase()} from inside this private world.`);
+    setPrivateBrowserStatus(`Watching ${shareKind.toLowerCase()} nearby.`);
     updatePrivateBrowserSummary({
       state: "live",
       badge: "Live",
       current: remoteSession.title || `${shareKind} live`,
-      hint: "Someone in this private world is live right now.",
+      hint: "Open Live to jump between active shares.",
     });
   } else if (state.browserMediaState.enabled === false) {
     setPrivateBrowserStatus("Live share is unavailable right now.");
@@ -1648,12 +1644,12 @@ function updatePrivateBrowserPanel() {
   } else {
     const draftKind = getBrowserShareKindLabel(getSelectedPrivateBrowserShareMode());
     const draftTitle = sanitizeBrowserShareTitle(elements.panelBrowserShareTitle?.value ?? "", "");
-    setPrivateBrowserStatus("Share a screen, video, or voice inside this private world.");
+    setPrivateBrowserStatus("Share a screen, video, or voice nearby.");
     updatePrivateBrowserSummary({
       state: "idle",
       badge: "Idle",
       current: draftTitle ? `Ready: ${draftKind} "${draftTitle}"` : `Ready: ${draftKind}`,
-      hint: "Press Share to go live in this private world.",
+      hint: "Pick a type, add a title if you want, then press Share.",
     });
   }
 
@@ -1675,7 +1671,7 @@ function updatePrivateBrowserPanel() {
   }
   if (elements.panelBrowserPlaceholder) {
     const hasDisplayedVideo = Boolean(previewStream || (remoteSession && elements.panelBrowserVideo?.srcObject));
-    let placeholder = "Share a screen, video, or voice inside this private world.";
+    let placeholder = "Share a screen, video, or voice nearby.";
     if (needsPlaybackStart) {
       placeholder = "Browser blocked autoplay. Press start to watch this live stream.";
     } else if (needsAudioStart) {
@@ -2476,7 +2472,7 @@ function renderWorldMeta() {
 }
 
 function renderPrivateChat() {
-  if (!elements.panelChatLog || !elements.panelChatInput || !elements.panelChatStatus) {
+  if (!elements.panelChatInput) {
     return;
   }
   const localParticipant = getLocalParticipant();
@@ -2492,28 +2488,123 @@ function renderPrivateChat() {
       : !localParticipant
         ? "Enter the world to chat"
         : "/ say something nearby and press Enter";
-  elements.panelChatStatus.textContent = !state.session
-    ? "Signed out. Access opens sign in or account creation."
-    : !state.selectedWorld
-      ? "Open a world to chat."
-      : !localParticipant
-        ? "Enter the world to chat."
-        : "Everyone inside this private world hears this lane.";
+}
 
-  if (!state.privateChatEntries.length) {
-    elements.panelChatLog.innerHTML = '<article class="world-live-result"><strong class="world-live-result__title">No chat yet</strong><p class="world-result__body">Walk in and say something.</p></article>';
+function getPrivateBrowserSessionTitle(session = {}) {
+  const explicitTitle = sanitizeBrowserShareTitle(session?.title ?? "", "");
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+  if (session?.url) {
+    return session.url;
+  }
+  return `${getBrowserShareKindLabel(session?.shareKind || "screen")} live`;
+}
+
+function getPrivateBrowserSessionViewerCount(session = {}) {
+  const value = Number(session.viewerCount);
+  if (Number.isFinite(value) && value >= 0) {
+    return Math.max(0, Math.floor(value));
+  }
+  return 0;
+}
+
+function getPrivateBrowserSessionMaxViewers(session = {}) {
+  const value = Number(session.maxViewers);
+  if (Number.isFinite(value) && value > 0) {
+    return Math.max(1, Math.floor(value));
+  }
+  return 20;
+}
+
+function getPrivateLiveShareSessions(query = "") {
+  const normalizedQuery = String(query ?? "").trim().toLowerCase();
+  return [...state.browserSessions.values()]
+    .filter((session) => {
+      if (!normalizedQuery) {
+        return true;
+      }
+      return getPrivateBrowserSessionTitle(session).toLowerCase().includes(normalizedQuery);
+    })
+    .sort((left, right) =>
+      Number(right.hostSessionId === getPrivateViewerSessionId()) - Number(left.hostSessionId === getPrivateViewerSessionId())
+      || getPrivateBrowserSessionViewerCount(right) - getPrivateBrowserSessionViewerCount(left)
+      || Date.parse(right.startedAt ?? 0) - Date.parse(left.startedAt ?? 0)
+      || getPrivateBrowserSessionTitle(left).localeCompare(getPrivateBrowserSessionTitle(right)));
+}
+
+function focusPrivateLiveShare(sessionId) {
+  const session = state.browserSessions.get(sessionId);
+  if (!session) {
+    renderPrivateLiveSharesList();
+    return false;
+  }
+  if (session.hostSessionId === getPrivateViewerSessionId()) {
+    state.browserPanelRemoteSessionId = "";
+  } else {
+    state.browserPanelRemoteSessionId = session.sessionId;
+  }
+  updatePrivateBrowserPanel();
+  setPrivatePanelTab("share");
+  return true;
+}
+
+function renderPrivateLiveSharesList() {
+  if (!elements.panelLiveResults || !elements.panelLiveStatus) {
     return;
   }
-  const localSessionId = getPrivateViewerSessionId();
-  elements.panelChatLog.innerHTML = state.privateChatEntries.map((entry) => `
-    <article class="world-live-result ${entry.actorSessionId === localSessionId ? "is-active" : ""}">
-      <div class="world-live-result__top">
-        <strong class="world-live-result__title">${htmlEscape(entry.displayName || "viewer")}</strong>
-        <span class="world-live-result__count">${htmlEscape(entry.createdAt)}</span>
-      </div>
-      <p class="world-result__body">${htmlEscape(entry.text || "")}</p>
-    </article>
-  `).join("");
+  const query = String(state.liveShareQuery ?? "");
+  const allSessions = getPrivateLiveShareSessions("");
+  const filteredSessions = query.trim() ? getPrivateLiveShareSessions(query) : allSessions;
+
+  if (allSessions.length === 0) {
+    elements.panelLiveStatus.textContent = "No live shares right now.";
+    elements.panelLiveResults.innerHTML = "";
+    return;
+  }
+
+  if (filteredSessions.length === 0) {
+    elements.panelLiveStatus.textContent = "No live shares match that title.";
+    elements.panelLiveResults.innerHTML = "";
+    return;
+  }
+
+  elements.panelLiveStatus.textContent = query.trim()
+    ? `${filteredSessions.length} matching live ${filteredSessions.length === 1 ? "share" : "shares"}`
+    : `${filteredSessions.length} live ${filteredSessions.length === 1 ? "share" : "shares"}`;
+
+  elements.panelLiveResults.innerHTML = filteredSessions.map((session) => {
+    const title = getPrivateBrowserSessionTitle(session);
+    const shareKindLabel = getBrowserShareKindLabel(session.shareKind || "screen");
+    const viewerCount = Math.min(getPrivateBrowserSessionViewerCount(session), getPrivateBrowserSessionMaxViewers(session));
+    const maxViewers = getPrivateBrowserSessionMaxViewers(session);
+    const isOwn = session.hostSessionId === getPrivateViewerSessionId();
+    const isActive =
+      session.sessionId === state.browserPanelRemoteSessionId
+      || (isOwn && session.sessionId === state.localBrowserSessionId);
+    return `
+      <button
+        class="world-live-result ${isActive ? "is-active" : ""}"
+        type="button"
+        data-private-live-session-id="${htmlEscape(session.sessionId)}"
+      >
+        <div class="world-live-result__top">
+          <div class="world-live-result__title">${htmlEscape(title)}</div>
+          <div class="world-live-result__count">${viewerCount}/${maxViewers} viewers</div>
+        </div>
+        <div class="world-live-result__meta">
+          <span class="world-live-result__badge">${htmlEscape(shareKindLabel)}</span>
+          <span>${isOwn ? "You are sharing this now." : "Someone here is sharing now."}</span>
+        </div>
+      </button>
+    `;
+  }).join("");
+
+  for (const button of elements.panelLiveResults.querySelectorAll("[data-private-live-session-id]")) {
+    button.addEventListener("click", () => {
+      focusPrivateLiveShare(button.getAttribute("data-private-live-session-id"));
+    });
+  }
 }
 
 function renderPrivateShare() {
@@ -3098,7 +3189,7 @@ function buildPreviewEnvironment(preview) {
   preview.scene.add(environment);
 
   const floor = new THREE.Mesh(
-    new THREE.CircleGeometry(260, 120),
+    new THREE.PlaneGeometry(1200, 1200),
     new THREE.MeshBasicMaterial({
       color: "#ffffff",
       side: THREE.DoubleSide,
@@ -3108,11 +3199,12 @@ function buildPreviewEnvironment(preview) {
   floor.position.y = -0.03;
   environment.add(floor);
 
-  const grid = new THREE.GridHelper(160, 80, PRIVATE_WORLD_STYLE.line, PRIVATE_WORLD_STYLE.lineMuted);
+  const grid = new THREE.GridHelper(220, 110, "#e6f0ff", "#f3f8ff");
   grid.position.y = 0;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
-    material.opacity = 0.18;
+    material.opacity = 0.1;
     material.transparent = true;
+    material.depthWrite = false;
   }
   environment.add(grid);
 
@@ -3838,6 +3930,7 @@ function connectWorldSocket() {
   socket.addEventListener("open", () => {
     renderPrivateChat();
     updatePrivateBrowserPanel();
+    renderPrivateLiveSharesList();
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -3859,9 +3952,6 @@ function connectWorldSocket() {
         pushPrivateChatEntry(payload);
       } else if (payload.type === "chat:error") {
         pushEvent("chat:error", payload.message || "Could not send chat");
-        if (elements.panelChatStatus) {
-          elements.panelChatStatus.textContent = payload.message || "Could not send chat.";
-        }
       } else if (payload.type === "browser:session") {
         updatePrivateBrowserSessionState(payload.session ?? {});
       } else if (payload.type === "browser:subscribe") {
@@ -3906,6 +3996,7 @@ function connectWorldSocket() {
     state.worldSocketKey = "";
     renderPrivateChat();
     updatePrivateBrowserPanel();
+    renderPrivateLiveSharesList();
   });
 }
 
@@ -4776,6 +4867,15 @@ function bindEvents() {
       }
     });
   }
+  elements.panelLiveSearchInput?.addEventListener("input", () => {
+    state.liveShareQuery = String(elements.panelLiveSearchInput?.value ?? "");
+    renderPrivateLiveSharesList();
+  });
+  elements.panelLiveSearchForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    state.liveShareQuery = String(elements.panelLiveSearchInput?.value ?? "");
+    renderPrivateLiveSharesList();
+  });
   elements.panelShareCopy?.addEventListener("click", async () => {
     const shareUrl = buildPrivateWorldEntryUrl();
     if (!shareUrl) {

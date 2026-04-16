@@ -63,6 +63,13 @@
           <button
             type="button"
             class="world-panel__tab"
+            data-private-panel-tab="live"
+            role="tab"
+            aria-selected="false"
+          >Live</button>
+          <button
+            type="button"
+            class="world-panel__tab"
             data-private-panel-tab="build"
             role="tab"
             aria-selected="false"
@@ -103,16 +110,12 @@
             <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="👀" aria-label="Watching">👀</button>
             <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="🙌" aria-label="Hands up">🙌</button>
           </div>
-          <p class="world-live-status" data-private-chat-status>Enter the world to chat.</p>
-          <section class="world-live-panel" aria-label="Private world chat">
-            <div class="world-live-results pw-chat-log" data-private-chat-log></div>
-          </section>
         </section>
 
         <section class="world-panel__view" data-private-panel-view="share" role="tabpanel" hidden>
           <section class="world-browser-panel pw-share-panel" data-private-browser-panel aria-label="Live share">
             <div class="world-browser-panel__head">
-              <strong>Live Share</strong>
+              <strong>Nearby Share</strong>
               <div class="world-browser-panel__actions">
                 <button type="button" class="is-muted" data-private-browser-expand aria-expanded="false">Focus</button>
                 <button type="button" data-private-browser-launch disabled>Share</button>
@@ -157,7 +160,7 @@
               ></video>
               <img class="world-browser-stage__frame" data-private-browser-frame alt="" hidden />
               <div class="world-browser-stage__placeholder" data-private-browser-placeholder>
-                Share a screen, video, or voice inside this private world.
+                Share a screen, video, or voice nearby.
               </div>
               <button type="button" class="world-browser-stage__resume" data-private-browser-resume hidden>
                 Start Stream
@@ -169,6 +172,24 @@
             </p>
           </section>
           <div data-private-browser-dock hidden></div>
+        </section>
+
+        <section class="world-panel__view" data-private-panel-view="live" role="tabpanel" hidden>
+          <form class="world-live-search-form" data-private-live-search-form>
+            <label class="world-search-field">
+              <input
+                type="search"
+                data-private-live-search-input
+                placeholder="Search live share titles"
+                autocomplete="off"
+                aria-label="Search live share titles"
+              />
+            </label>
+          </form>
+          <p class="world-live-status" data-private-live-status>No live shares yet.</p>
+          <section class="world-live-panel" aria-label="Live shares">
+            <div class="world-live-results" data-private-live-results></div>
+          </section>
         </section>
 
         <section class="world-panel__view" data-private-panel-view="build" role="tabpanel" hidden>
