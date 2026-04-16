@@ -1675,6 +1675,8 @@ function renderBuildSummary() {
   }
   const world = state.selectedWorld;
   const localParticipant = getLocalParticipant(world);
+  const runtime = state.runtimeSnapshot ?? world?.active_instance?.runtime ?? null;
+  const activeSceneName = runtime?.scene_name || world?.active_instance?.active_scene_name || getSelectedScene()?.name || "Main Scene";
   if (!world) {
     elements.panelBuildSummary.innerHTML = `
       <div class="pw-world-meta__row">
@@ -1688,6 +1690,14 @@ function renderBuildSummary() {
     <div class="pw-world-meta__row">
       <strong>Mode</strong>
       <span>${state.mode === "build" ? "Build" : "Play"} · ${isEditor() ? "editor access" : "viewer access"}</span>
+    </div>
+    <div class="pw-world-meta__row">
+      <strong>Scene</strong>
+      <span>${htmlEscape(activeSceneName)}</span>
+    </div>
+    <div class="pw-world-meta__row">
+      <strong>Status</strong>
+      <span>${htmlEscape(runtime?.status || world.active_instance?.status || "inactive")}${runtime?.tick ? ` · tick ${Number(runtime.tick)}` : ""}</span>
     </div>
     <div class="pw-world-meta__row">
       <strong>Presence</strong>
