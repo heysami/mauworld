@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildPrivateWorldExportPackage,
+  compilePrivateWorldScriptDsl,
+  compileSceneDoc,
   computeMiniatureDimensions,
   normalizeSceneDoc,
   validatePrivateWorldExportPackage,
@@ -116,9 +118,74 @@ test("export validation preserves prefab docs and locked lineage credits", () =>
   assert.equal(parsed.credits.origin_creator_username, "maker");
   assert.equal(parsed.world.default_scene_name, "Main Scene");
   assert.equal(parsed.prefabs.length, 1);
-  assert.deepEqual(parsed.prefabs[0].prefab_doc, {
-    primitives: [{ id: "primitive_portal", shape: "box" }],
-    texts: [{ id: "text_portal", value: "Portal" }],
-  });
+  assert.equal(parsed.prefabs[0].prefab_doc.primitives[0].id, "primitive_primitive-portal");
+  assert.equal(parsed.prefabs[0].prefab_doc.texts[0].id, "text3d_text-portal");
+  assert.equal(parsed.prefabs[0].prefab_doc.texts[0].value, "Portal");
   assert.equal(parsed.scenes[0].name, "Main Scene");
+});
+
+test("compilePrivateWorldScriptDsl translates DSL triggers and actions", () => {
+  const compiled = compilePrivateWorldScriptDsl(`
+    zone_enter from trigger_start -> apply_force to crate force(0,4,0)
+    all_players_ready -> start_scene
+  `, {
+    entityAliases: new Map([
+      ["trigger_start", "trigger_start"],
+      ["crate", "primitive_crate"],
+    ]),
+  });
+
+  assert.equal(compiled.rules.length, 2);
+  assert.equal(compiled.rules[0].trigger, "zone_enter");
+  assert.equal(compiled.rules[0].source_id, "trigger_start");
+  assert.equal(compiled.rules[0].target_id, "primitive_crate");
+  assert.deepEqual(compiled.rules[0].payload.force, { x: 0, y: 4, z: 0 });
+  assert.equal(compiled.rules[1].action, "start_scene");
+});
+
+test("compileSceneDoc flattens linked prefab instances into runtime scene data", () => {
+  const compiled = compileSceneDoc({
+    prefab_instances: [
+      {
+        id: "arch-instance",
+        prefab_id: "prefab_arch",
+        position: { x: 5, y: 0, z: 1 },
+      },
+    ],
+  }, {
+    world_type: "room",
+    width: 40,
+    length: 20,
+    height: 10,
+  }, {
+    prefabs: [
+      {
+        id: "prefab_arch",
+        prefab_doc: {
+          primitives: [
+            {
+              id: "arch-block",
+              shape: "box",
+              position: { x: 1, y: 2, z: 0 },
+              scale: { x: 2, y: 1, z: 1 },
+            },
+          ],
+          screens: [
+            {
+              id: "arch-screen",
+              position: { x: 0, y: 3, z: 0 },
+              html: "<div>Arch</div>",
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  assert.equal(compiled.runtime.resolved_scene_doc.prefab_instances.length, 1);
+  assert.equal(compiled.runtime.resolved_scene_doc.primitives.length, 1);
+  assert.equal(compiled.runtime.resolved_scene_doc.screens.length, 1);
+  assert.equal(compiled.runtime.resolved_scene_doc.primitives[0].position.x, 6);
+  assert.equal(compiled.runtime.resolved_scene_doc.screens[0].position.y, 3);
+  assert.equal(compiled.stats.prefab_instance_count, 1);
 });

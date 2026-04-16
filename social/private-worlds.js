@@ -1,5 +1,6 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+import { renderScreenHtmlTexture } from "./screen-texture.js";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -23,6 +24,8 @@ const elements = {
   exportWorld: document.querySelector("[data-export-world]"),
   joinWorld: document.querySelector("[data-join-world]"),
   leaveWorld: document.querySelector("[data-leave-world]"),
+  modeBuild: document.querySelector("[data-mode-build]"),
+  modePlay: document.querySelector("[data-mode-play]"),
   worldMeta: document.querySelector("[data-world-meta]"),
   sceneStrip: document.querySelector("[data-scene-strip]"),
   sceneForm: document.querySelector("[data-scene-form]"),
@@ -32,6 +35,7 @@ const elements = {
   runtimeStatus: document.querySelector("[data-runtime-status]"),
   readyToggle: document.querySelector("[data-ready-toggle]"),
   startScene: document.querySelector("[data-start-scene]"),
+  releasePlayer: document.querySelector("[data-release-player]"),
   resetScene: document.querySelector("[data-reset-scene]"),
   collaboratorForm: document.querySelector("[data-collaborator-form]"),
   saveCollaborator: document.querySelector("[data-save-collaborator]"),
@@ -66,6 +70,16 @@ const state = {
   activeLockEntityKey: "",
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
+  pressedViewerKeys: new Set(),
+  mode: "play",
+  lockHeartbeatTimer: 0,
+  viewerYaw: -0.65,
+  viewerPitch: -0.32,
+  viewerMoveSpeed: 18,
+  viewerLookActive: false,
+  viewerLookPointerId: 0,
+  viewerLookLastX: 0,
+  viewerLookLastY: 0,
   launchHandled: false,
 };
 
@@ -204,10 +218,12 @@ async function fetchAuthConfig() {
 async function refreshAuthState() {
   elements.authState.textContent = state.session ? "Signed in" : "Signed out";
   if (!state.session) {
+    await releaseSceneLock();
     state.profile = null;
     state.worlds = [];
     state.runtimeSnapshot = null;
     state.pressedRuntimeKeys.clear();
+    state.pressedViewerKeys.clear();
     renderProfile();
     renderWorldList();
     renderSelectedWorld();
@@ -300,7 +316,42 @@ function getLocalParticipant(world = state.selectedWorld) {
   if (state.profile?.username) {
     return world.active_instance.participants.find((entry) => entry.profile?.username === state.profile.username) ?? null;
   }
-  return null;
+  return world.active_instance.participants.find((entry) => entry.guest_session_id === getGuestSessionId()) ?? null;
+}
+
+function getPossessedRuntimePlayer() {
+  const localParticipant = getLocalParticipant();
+  if (!localParticipant?.player_entity_id) {
+    return null;
+  }
+  return state.runtimeSnapshot?.players?.find((entry) => entry.id === localParticipant.player_entity_id) ?? null;
+}
+
+function getRenderableSceneDoc() {
+  const scene = getSelectedScene();
+  if (!scene) {
+    return null;
+  }
+  if (state.mode === "play") {
+    return scene.compiled_doc?.runtime?.resolved_scene_doc ?? scene.scene_doc ?? null;
+  }
+  return parseSceneTextarea();
+}
+
+function setMode(mode) {
+  const nextMode = mode === "build" && isEditor() ? "build" : "play";
+  state.mode = nextMode;
+  document.body.classList.toggle("is-play-mode", nextMode === "play");
+  elements.modeBuild?.classList.toggle("is-active", nextMode === "build");
+  elements.modePlay?.classList.toggle("is-active", nextMode === "play");
+  if (elements.modeBuild) {
+    elements.modeBuild.setAttribute("aria-pressed", String(nextMode === "build"));
+    elements.modeBuild.disabled = !isEditor();
+  }
+  if (elements.modePlay) {
+    elements.modePlay.setAttribute("aria-pressed", String(nextMode === "play"));
+  }
+  updatePreviewFromSelection();
 }
 
 function syncRuntimeFromWorld(world = state.selectedWorld) {
@@ -329,14 +380,19 @@ function parseSceneTextarea() {
 function renderSceneEditor() {
   const scene = getSelectedScene();
   const canEdit = isEditor();
+  const buildMode = state.mode === "build";
   elements.sceneForm.elements.name.value = scene?.name || "";
   elements.sceneForm.elements.isDefault.checked = scene?.is_default === true;
   elements.sceneForm.elements.sceneDoc.value = scene ? JSON.stringify(scene.scene_doc, null, 2) : "";
-  elements.saveScene.disabled = !canEdit || !scene;
+  elements.saveScene.disabled = !canEdit || !scene || !buildMode;
   elements.refreshScene.disabled = !scene;
-  elements.sceneForm.elements.name.disabled = !canEdit;
-  elements.sceneForm.elements.isDefault.disabled = !canEdit;
-  elements.sceneForm.elements.sceneDoc.disabled = !canEdit;
+  elements.sceneForm.elements.name.disabled = !canEdit || !buildMode;
+  elements.sceneForm.elements.isDefault.disabled = !canEdit || !buildMode;
+  elements.sceneForm.elements.sceneDoc.disabled = !canEdit || !buildMode;
+  const buildPanel = document.querySelector("[data-build-panel]");
+  if (buildPanel) {
+    buildPanel.hidden = false;
+  }
 }
 
 function renderSceneStrip() {
@@ -397,7 +453,7 @@ function renderRuntimeStatus() {
     </div>
     <div class="pw-world-meta__row">
       <strong>Controls</strong>
-      <span>${getLocalParticipant()?.join_role === "player" ? "WASD / Arrows to move, Space to jump" : "Join as player to drive the runtime"}</span>
+      <span>${getLocalParticipant()?.join_role === "player" ? "WASD / Arrows to move, Space to jump, Release to return to viewer" : "Viewer mode by default. Click a player capsule in Play to possess it."}</span>
     </div>
     ${runtimePlayers.length > 0 ? `
       <div class="pw-world-meta__row">
@@ -411,6 +467,9 @@ function renderRuntimeStatus() {
 function renderSelectedWorld() {
   const world = state.selectedWorld;
   syncRuntimeFromWorld(world);
+  if (state.mode === "build" && !isEditor()) {
+    state.mode = "play";
+  }
   elements.selectedTitle.textContent = world?.name || "No world selected";
   elements.selectedSubtitle.textContent = world
     ? `${world.about} · ${world.creator.username}${world.lineage?.imported_at ? ` · forked from ${world.lineage.origin_world_id}` : ""}`
@@ -430,6 +489,7 @@ function renderSelectedWorld() {
   elements.leaveWorld.disabled = !hasWorld;
   elements.readyToggle.disabled = !hasWorld || !state.session || !joinedAsPlayer;
   elements.startScene.disabled = !hasWorld || !state.session || !world.active_instance;
+  elements.releasePlayer.disabled = !hasWorld || !state.session || !joinedAsPlayer;
   elements.resetScene.disabled = !hasWorld || !canEdit;
   elements.saveCollaborator.disabled = !hasWorld || !canEdit;
   elements.generateHtml.disabled = !hasWorld || !state.session;
@@ -444,10 +504,82 @@ function renderSelectedWorld() {
     elements.addTrigger,
     elements.addRule,
   ]) {
-    button.disabled = !hasWorld || !canEdit;
+    button.disabled = !hasWorld || !canEdit || state.mode !== "build";
   }
 
+  setMode(state.mode);
   updatePreviewFromSelection();
+}
+
+function raycastPreviewPointer(event) {
+  const preview = ensurePreview();
+  if (!preview) {
+    return null;
+  }
+  const rect = elements.previewCanvas.getBoundingClientRect();
+  const pointer = new THREE.Vector2(
+    ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+    -(((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
+  );
+  preview.raycaster.setFromCamera(pointer, preview.camera);
+  return preview.raycaster.intersectObjects(preview.playerPickables, false)[0] ?? null;
+}
+
+function updateFloatingViewerCamera(preview, deltaSeconds) {
+  const moveDirection = new THREE.Vector3();
+  const forward = new THREE.Vector3(Math.sin(state.viewerYaw), 0, Math.cos(state.viewerYaw) * -1).normalize();
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+  if (state.pressedViewerKeys.has("w") || state.pressedViewerKeys.has("arrowup")) {
+    moveDirection.add(forward);
+  }
+  if (state.pressedViewerKeys.has("s") || state.pressedViewerKeys.has("arrowdown")) {
+    moveDirection.sub(forward);
+  }
+  if (state.pressedViewerKeys.has("d") || state.pressedViewerKeys.has("arrowright")) {
+    moveDirection.add(right);
+  }
+  if (state.pressedViewerKeys.has("a") || state.pressedViewerKeys.has("arrowleft")) {
+    moveDirection.sub(right);
+  }
+  if (moveDirection.lengthSq() > 0.0001) {
+    moveDirection.normalize().multiplyScalar(state.viewerMoveSpeed * deltaSeconds);
+    preview.camera.position.add(moveDirection);
+  }
+  const lookTarget = new THREE.Vector3(
+    preview.camera.position.x + Math.sin(state.viewerYaw) * Math.cos(state.viewerPitch),
+    preview.camera.position.y + Math.sin(state.viewerPitch),
+    preview.camera.position.z - Math.cos(state.viewerYaw) * Math.cos(state.viewerPitch),
+  );
+  preview.camera.lookAt(lookTarget);
+}
+
+function updatePossessedCamera(preview) {
+  const player = getPossessedRuntimePlayer();
+  if (!player) {
+    return false;
+  }
+  const yaw = Number(player.rotation?.y ?? 0) || 0;
+  if (player.camera_mode === "first_person") {
+    preview.camera.position.set(player.position.x, player.position.y + 1.25 * (player.scale || 1), player.position.z);
+    preview.camera.lookAt(
+      player.position.x + Math.sin(yaw) * 4,
+      player.position.y + 1.1 * (player.scale || 1),
+      player.position.z - Math.cos(yaw) * 4,
+    );
+    return true;
+  }
+  if (player.camera_mode === "top_down") {
+    preview.camera.position.set(player.position.x, player.position.y + 18, player.position.z + 0.01);
+    preview.camera.lookAt(player.position.x, player.position.y, player.position.z);
+    return true;
+  }
+  preview.camera.position.set(
+    player.position.x - Math.sin(yaw) * 7,
+    player.position.y + 4.2,
+    player.position.z + Math.cos(yaw) * 7,
+  );
+  preview.camera.lookAt(player.position.x, player.position.y + 1.2, player.position.z);
+  return true;
 }
 
 function ensurePreview() {
@@ -484,23 +616,77 @@ function ensurePreview() {
     scene,
     camera,
     root: new THREE.Group(),
+    raycaster: new THREE.Raycaster(),
+    playerPickables: [],
+    lastFrameAt: performance.now(),
   };
   state.preview.scene.add(state.preview.root);
 
-  const render = () => {
+  const render = (timestamp = performance.now()) => {
     if (!state.preview) {
       return;
     }
+    const deltaSeconds = Math.min(0.05, Math.max(0.001, (timestamp - state.preview.lastFrameAt) / 1000));
+    state.preview.lastFrameAt = timestamp;
     const width = elements.previewCanvas.clientWidth || 640;
     const height = elements.previewCanvas.clientHeight || 360;
     state.preview.camera.aspect = width / Math.max(1, height);
     state.preview.camera.updateProjectionMatrix();
     state.preview.renderer.setSize(width, height, false);
+    if (!(state.mode === "play" && updatePossessedCamera(state.preview))) {
+      updateFloatingViewerCamera(state.preview, deltaSeconds);
+    }
     state.preview.renderer.render(state.preview.scene, state.preview.camera);
+    window.requestAnimationFrame(render);
   };
 
   window.addEventListener("resize", render);
-  render();
+  elements.previewCanvas.addEventListener("pointerdown", (event) => {
+    if (state.mode !== "play") {
+      return;
+    }
+    state.viewerLookActive = true;
+    state.viewerLookPointerId = event.pointerId;
+    state.viewerLookLastX = event.clientX;
+    state.viewerLookLastY = event.clientY;
+    elements.previewCanvas.setPointerCapture(event.pointerId);
+  });
+  elements.previewCanvas.addEventListener("pointermove", (event) => {
+    if (!state.viewerLookActive || state.viewerLookPointerId !== event.pointerId) {
+      return;
+    }
+    const deltaX = event.clientX - state.viewerLookLastX;
+    const deltaY = event.clientY - state.viewerLookLastY;
+    state.viewerLookLastX = event.clientX;
+    state.viewerLookLastY = event.clientY;
+    state.viewerYaw -= deltaX * 0.005;
+    state.viewerPitch = Math.max(-1.2, Math.min(1.2, state.viewerPitch - deltaY * 0.004));
+  });
+  elements.previewCanvas.addEventListener("pointerup", (event) => {
+    if (state.viewerLookPointerId === event.pointerId) {
+      state.viewerLookActive = false;
+      elements.previewCanvas.releasePointerCapture?.(event.pointerId);
+    }
+  });
+  elements.previewCanvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    if (state.mode !== "play" || getPossessedRuntimePlayer()) {
+      return;
+    }
+    const forward = new THREE.Vector3(Math.sin(state.viewerYaw), Math.sin(state.viewerPitch), -Math.cos(state.viewerYaw)).normalize();
+    state.preview.camera.position.addScaledVector(forward, event.deltaY > 0 ? -1.5 : 1.5);
+  }, { passive: false });
+  elements.previewCanvas.addEventListener("click", (event) => {
+    if (state.mode !== "play" || !state.session || getLocalParticipant()?.join_role === "player") {
+      return;
+    }
+    const hit = raycastPreviewPointer(event);
+    const playerEntityId = hit?.object?.userData?.privateWorldPlayerId;
+    if (playerEntityId) {
+      void occupyPlayer(playerEntityId);
+    }
+  });
+  window.requestAnimationFrame(render);
   return state.preview;
 }
 
@@ -509,6 +695,7 @@ function clearPreviewRoot() {
   if (!preview) {
     return;
   }
+  preview.playerPickables = [];
   for (const child of [...preview.root.children]) {
     preview.root.remove(child);
     child.traverse((node) => {
@@ -578,9 +765,11 @@ function updatePreviewFromSelection() {
 
   let sceneDoc = null;
   try {
-    sceneDoc = parseSceneTextarea();
+    sceneDoc = getRenderableSceneDoc();
   } catch (_error) {
-    preview.renderer.render(preview.scene, preview.camera);
+    return;
+  }
+  if (!sceneDoc) {
     return;
   }
 
@@ -626,36 +815,60 @@ function updatePreviewFromSelection() {
 
   for (const player of sceneDoc.players ?? []) {
     const runtimePlayer = runtimeTransforms.playerById.get(player.id);
-    addMesh(
+    const mesh = addMesh(
       new THREE.CapsuleGeometry(0.35, 1.3, 8, 16),
       makeMaterial(runtimePlayer?.occupied_by_username ? "#ff5a6f" : (player.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f")),
       runtimePlayer?.position || player.position || { x: 0, y: 1, z: 0 },
       runtimePlayer?.rotation || player.rotation || { x: 0, y: 0, z: 0 },
       { x: player.scale || 1, y: player.scale || 1, z: player.scale || 1 },
     );
+    mesh.userData.privateWorldPlayerId = player.id;
+    preview.playerPickables.push(mesh);
   }
 
   for (const [playerId, runtimePlayer] of runtimeTransforms.playerById.entries()) {
     if ((sceneDoc.players ?? []).some((entry) => entry.id === playerId)) {
       continue;
     }
-    addMesh(
+    const mesh = addMesh(
       new THREE.CapsuleGeometry(0.35, 1.3, 8, 16),
       makeMaterial(runtimePlayer?.occupied_by_username ? "#ff5a6f" : "#ff8e4f"),
       runtimePlayer.position || { x: 0, y: 1, z: 0 },
       runtimePlayer.rotation || { x: 0, y: 0, z: 0 },
       { x: 1, y: 1, z: 1 },
     );
+    mesh.userData.privateWorldPlayerId = playerId;
+    preview.playerPickables.push(mesh);
   }
 
   for (const screen of sceneDoc.screens ?? []) {
-    addMesh(
+    const material = new THREE.MeshStandardMaterial({
+      color: screen.material?.color || "#ffffff",
+      roughness: 0.42,
+      metalness: 0.08,
+      emissive: "#4f6d8f",
+      emissiveIntensity: 0.2,
+    });
+    const mesh = addMesh(
       new THREE.BoxGeometry(1, 1, 0.1),
-      makeMaterial(screen.material?.color || "#ffffff"),
+      material,
       screen.position || { x: 0, y: 2, z: 0 },
       screen.rotation || { x: 0, y: 0, z: 0 },
       screen.scale || { x: 4, y: 2, z: 0.1 },
     );
+    void renderScreenHtmlTexture(THREE, screen, {
+      width: 1024,
+      height: 576,
+    }).then((texture) => {
+      if (!texture || !mesh.parent) {
+        return;
+      }
+      material.map = texture;
+      material.emissiveIntensity = 0.06;
+      material.needsUpdate = true;
+    }).catch(() => {
+      // ignore transient screen texture failures
+    });
   }
 
   for (const [objectId, runtimePrimitive] of runtimeTransforms.dynamicById.entries()) {
@@ -689,8 +902,6 @@ function updatePreviewFromSelection() {
     mesh.scale.set(trigger.scale?.x || 2, trigger.scale?.y || 2, trigger.scale?.z || 2);
     preview.root.add(mesh);
   }
-
-  preview.renderer.render(preview.scene, preview.camera);
 }
 
 function connectWorldSocket() {
@@ -706,11 +917,12 @@ function connectWorldSocket() {
       const payload = JSON.parse(event.data);
       if (payload.type === "world:event") {
         pushEvent(payload.event?.type || "world:event", JSON.stringify(payload.event));
-        void openWorld(world.world_id, world.creator.username, isEditor());
+        void openWorld(world.world_id, world.creator.username, true);
       } else if (payload.type === "world:runtime") {
         state.runtimeSnapshot = payload.snapshot ?? null;
         if (state.selectedWorld?.active_instance && payload.snapshot?.active_scene_id) {
           state.selectedWorld.active_instance.active_scene_id = payload.snapshot.active_scene_id;
+          state.selectedSceneId = payload.snapshot.active_scene_id;
         }
         renderRuntimeStatus();
         updatePreviewFromSelection();
@@ -719,7 +931,7 @@ function connectWorldSocket() {
       } else if (payload.type === "world:snapshot") {
         if (payload.world?.world_id === state.selectedWorld?.world_id) {
           state.selectedWorld = payload.world;
-          state.selectedSceneId = getSelectedScene()?.id || payload.world?.scenes?.[0]?.id || "";
+          state.selectedSceneId = payload.world?.active_instance?.active_scene_id || getSelectedScene()?.id || payload.world?.scenes?.[0]?.id || "";
           syncRuntimeFromWorld(payload.world);
           renderSelectedWorld();
         }
@@ -745,7 +957,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
     },
   });
   state.selectedWorld = payload.world;
-  state.selectedSceneId = payload.world?.scenes?.[0]?.id || "";
+  state.selectedSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
   syncRuntimeFromWorld(payload.world);
   renderSelectedWorld();
   connectWorldSocket();
@@ -901,7 +1113,7 @@ async function resolveWorld(event) {
   const formData = new FormData(elements.resolveForm);
   const worldId = String(formData.get("worldId") ?? "").trim();
   const creatorUsername = String(formData.get("creatorUsername") ?? "").trim();
-  await openWorld(worldId, creatorUsername, Boolean(state.session));
+  await openWorld(worldId, creatorUsername, true);
 }
 
 async function joinWorld() {
@@ -915,7 +1127,7 @@ async function joinWorld() {
       creatorUsername: state.selectedWorld.creator.username,
       guestSessionId: state.session ? undefined : getGuestSessionId(),
       displayName: state.profile?.display_name || "guest viewer",
-      joinRole: state.session ? "player" : "guest",
+      joinRole: state.session ? "viewer" : "guest",
       publicWorldSnapshotId: anchor.publicWorldSnapshotId,
       position_x: anchor.position_x,
       position_y: anchor.position_y,
@@ -927,6 +1139,36 @@ async function joinWorld() {
   state.selectedWorld = payload.world;
   renderSelectedWorld();
   pushEvent("world:joined", `${payload.world.name}`);
+}
+
+async function occupyPlayer(playerEntityId) {
+  if (!state.selectedWorld || !state.session) {
+    return;
+  }
+  await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/occupy`, {
+    method: "POST",
+    body: {
+      creatorUsername: state.selectedWorld.creator.username,
+      playerEntityId,
+    },
+  });
+  pushEvent("player:occupied", playerEntityId);
+  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+}
+
+async function releasePlayer() {
+  if (!state.selectedWorld || !state.session) {
+    return;
+  }
+  await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/release`, {
+    method: "POST",
+    body: {
+      creatorUsername: state.selectedWorld.creator.username,
+    },
+  });
+  state.pressedRuntimeKeys.clear();
+  pushEvent("player:released", state.selectedWorld.name);
+  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
 }
 
 async function leaveWorld() {
@@ -943,8 +1185,9 @@ async function leaveWorld() {
   state.joined = false;
   state.joinedAsGuest = false;
   state.pressedRuntimeKeys.clear();
+  state.pressedViewerKeys.clear();
   pushEvent("world:left", state.selectedWorld.name);
-  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, Boolean(state.session));
+  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
 }
 
 async function setReady() {
@@ -1166,6 +1409,24 @@ async function acquireSceneLock() {
       },
     });
     state.activeLockEntityKey = entityKey;
+    if (state.lockHeartbeatTimer) {
+      window.clearInterval(state.lockHeartbeatTimer);
+    }
+    state.lockHeartbeatTimer = window.setInterval(() => {
+      if (!state.activeLockEntityKey || !state.selectedWorld || !getSelectedScene()) {
+        return;
+      }
+      void apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/locks/heartbeat`, {
+        method: "POST",
+        body: {
+          creatorUsername: state.selectedWorld.creator.username,
+          sceneId: getSelectedScene().id,
+          entityKey: state.activeLockEntityKey,
+        },
+      }).catch(() => {
+        // best-effort
+      });
+    }, 15000);
     pushEvent("lock:acquired", entityKey);
   } catch (error) {
     pushEvent("lock:error", error.message);
@@ -1187,6 +1448,10 @@ async function releaseSceneLock() {
     });
   } catch (_error) {
     // ignore
+  }
+  if (state.lockHeartbeatTimer) {
+    window.clearInterval(state.lockHeartbeatTimer);
+    state.lockHeartbeatTimer = 0;
   }
   state.activeLockEntityKey = "";
 }
@@ -1237,6 +1502,14 @@ function bindEvents() {
   elements.exportWorld.addEventListener("click", () => {
     void exportWorld();
   });
+  elements.modeBuild.addEventListener("click", () => {
+    setMode("build");
+    renderSelectedWorld();
+  });
+  elements.modePlay.addEventListener("click", () => {
+    setMode("play");
+    renderSelectedWorld();
+  });
   elements.joinWorld.addEventListener("click", () => {
     void joinWorld();
   });
@@ -1269,6 +1542,9 @@ function bindEvents() {
   elements.startScene.addEventListener("click", () => {
     void startScene();
   });
+  elements.releasePlayer.addEventListener("click", () => {
+    void releasePlayer();
+  });
   elements.resetScene.addEventListener("click", () => {
     void resetScene();
   });
@@ -1288,12 +1564,19 @@ function bindEvents() {
       return;
     }
     const key = normalizeRuntimeKey(event);
-    if (!RUNTIME_INPUT_KEYS.has(key) || state.pressedRuntimeKeys.has(key)) {
+    if (!RUNTIME_INPUT_KEYS.has(key)) {
       return;
     }
     event.preventDefault();
-    state.pressedRuntimeKeys.add(key);
-    void sendRuntimeInput(key, "down");
+    if (getLocalParticipant()?.join_role === "player") {
+      if (state.pressedRuntimeKeys.has(key)) {
+        return;
+      }
+      state.pressedRuntimeKeys.add(key);
+      void sendRuntimeInput(key, "down");
+      return;
+    }
+    state.pressedViewerKeys.add(key);
   });
   window.addEventListener("keyup", (event) => {
     const key = normalizeRuntimeKey(event);
@@ -1301,12 +1584,17 @@ function bindEvents() {
       return;
     }
     event.preventDefault();
-    state.pressedRuntimeKeys.delete(key);
-    void sendRuntimeInput(key, "up");
+    if (getLocalParticipant()?.join_role === "player") {
+      state.pressedRuntimeKeys.delete(key);
+      void sendRuntimeInput(key, "up");
+      return;
+    }
+    state.pressedViewerKeys.delete(key);
   });
   window.addEventListener("blur", () => {
     const keys = [...state.pressedRuntimeKeys];
     state.pressedRuntimeKeys.clear();
+    state.pressedViewerKeys.clear();
     for (const key of keys) {
       void sendRuntimeInput(key, "up");
     }
@@ -1323,7 +1611,7 @@ async function handleLaunchRequest() {
     return;
   }
   state.launchHandled = true;
-  await openWorld(launch.worldId, launch.creatorUsername, Boolean(state.session));
+  await openWorld(launch.worldId, launch.creatorUsername, true);
   if (launch.autojoin) {
     try {
       await joinWorld();

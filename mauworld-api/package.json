@@ -11,6 +11,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.17.3",
     "@supabase/supabase-js": "^2.49.8",
     "express": "^5.1.0",
     "livekit-client": "^2.18.1",

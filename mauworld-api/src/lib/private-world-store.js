@@ -54,6 +54,125 @@ function lower(value) {
   return String(value ?? "").trim().toLowerCase();
 }
 
+function asNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function getMiniatureLongestSide(entry = {}) {
+  return Math.max(asNumber(entry.miniature_width, 0), asNumber(entry.miniature_length, 0), 1);
+}
+
+function getMiniatureCollisionRadius(entry = {}) {
+  return Math.max(getMiniatureLongestSide(entry) / 2, 1);
+}
+
+function getMiniatureSafetyMargin(left = {}, right = {}) {
+  return Math.max(2, 0.15 * Math.max(getMiniatureLongestSide(left), getMiniatureLongestSide(right)));
+}
+
+function buildMiniatureDistanceBands(entry = {}) {
+  const longestSide = getMiniatureLongestSide(entry);
+  const nearDistance = Math.max(54, Math.min(112, 46 + longestSide * 2.8));
+  const midDistance = Math.max(118, Math.min(250, nearDistance * 2.2));
+  return {
+    nearDistance,
+    midDistance,
+  };
+}
+
+function resolveMiniatureLodBand(entry = {}, viewerPosition = null) {
+  if (!viewerPosition) {
+    return "far";
+  }
+  const { nearDistance, midDistance } = buildMiniatureDistanceBands(entry);
+  const dx = asNumber(entry.anchor_position_x) - asNumber(viewerPosition.position_x);
+  const dy = asNumber(entry.anchor_position_y) - asNumber(viewerPosition.position_y);
+  const dz = asNumber(entry.anchor_position_z) - asNumber(viewerPosition.position_z);
+  const distance = Math.hypot(dx, dy, dz);
+  if (distance <= nearDistance) {
+    return "near";
+  }
+  if (distance <= midDistance) {
+    return "mid";
+  }
+  return "far";
+}
+
+async function loadViewerPresenceForSnapshot(store, worldSnapshotId, viewerSessionId) {
+  const snapshotId = String(worldSnapshotId ?? "").trim();
+  const sessionId = String(viewerSessionId ?? "").trim();
+  if (!snapshotId || !sessionId) {
+    return null;
+  }
+  return await maybeSingle(
+    store.serviceClient
+      .from("live_presence_sessions")
+      .select("*")
+      .eq("world_snapshot_id", snapshotId)
+      .eq("viewer_session_id", sessionId)
+      .gt("expires_at", nowIso())
+      .maybeSingle(),
+    "Could not load viewer presence for miniature routing",
+  );
+}
+
+async function findNearestPrivateWorldAnchor(store, currentWorld, requestedPosition = {}, miniature = {}, excludeWorldRowId = null) {
+  const worldSnapshotId = String(currentWorld?.worldSnapshot?.id ?? "").trim();
+  const cellSize = Math.max(16, Math.floor(asNumber(currentWorld?.settings?.world_cell_size, 64)));
+  const requested = {
+    x: asNumber(requestedPosition.x),
+    y: asNumber(requestedPosition.y),
+    z: asNumber(requestedPosition.z),
+  };
+  const activeInstances = await must(
+    store.serviceClient
+      .from("private_world_active_instances")
+      .select("*")
+      .eq("anchor_world_snapshot_id", worldSnapshotId),
+    "Could not load active private world anchors",
+  );
+  const blockers = activeInstances.filter((entry) => entry.world_id !== excludeWorldRowId);
+  const withinSearch = [];
+  for (let ring = 0; ring <= 6; ring += 1) {
+    for (let dx = -ring; dx <= ring; dx += 1) {
+      for (let dz = -ring; dz <= ring; dz += 1) {
+        if (ring > 0 && Math.max(Math.abs(dx), Math.abs(dz)) !== ring) {
+          continue;
+        }
+        withinSearch.push({
+          x: Number((requested.x + dx * cellSize).toFixed(4)),
+          y: requested.y,
+          z: Number((requested.z + dz * cellSize).toFixed(4)),
+        });
+      }
+    }
+  }
+  withinSearch.sort((left, right) => {
+    const leftDistance = Math.hypot(left.x - requested.x, left.z - requested.z);
+    const rightDistance = Math.hypot(right.x - requested.x, right.z - requested.z);
+    return leftDistance - rightDistance;
+  });
+
+  for (const candidate of withinSearch) {
+    const collides = blockers.some((entry) => {
+      const margin = getMiniatureSafetyMargin(miniature, entry);
+      const minDistance = getMiniatureCollisionRadius(miniature) + getMiniatureCollisionRadius(entry) + margin;
+      return Math.hypot(candidate.x - asNumber(entry.anchor_position_x), candidate.z - asNumber(entry.anchor_position_z)) < minDistance;
+    });
+    if (!collides) {
+      return {
+        x: candidate.x,
+        y: candidate.y,
+        z: candidate.z,
+        cellX: Math.floor(candidate.x / Math.max(1, cellSize)),
+        cellZ: Math.floor(candidate.z / Math.max(1, cellSize)),
+      };
+    }
+  }
+  return null;
+}
+
 function buildDisplayName(user = {}, fallbackUsername = "user") {
   const metadataName = String(
     user.user_metadata?.display_name
@@ -244,6 +363,27 @@ async function loadActiveInstance(store, worldRowId) {
   );
 }
 
+async function recompileWorldScenes(store, world) {
+  const prefabs = await loadWorldPrefabs(store, world.id);
+  const scenes = await loadWorldScenes(store, world.id);
+  for (const scene of scenes) {
+    await must(
+      store.serviceClient
+        .from("private_world_scenes")
+        .update({
+          compiled_doc: compileSceneDoc(scene.scene_doc, world, { prefabs }),
+          updated_at: nowIso(),
+        })
+        .eq("id", scene.id),
+      "Could not recompile private world scenes",
+    );
+  }
+  return {
+    prefabs,
+    scenes: await loadWorldScenes(store, world.id),
+  };
+}
+
 async function loadInstanceParticipants(store, instanceId) {
   if (!instanceId) {
     return [];
@@ -394,10 +534,11 @@ async function buildWorldDetail(store, { world, creator, requesterProfile = null
     collaboratorRole,
     requesterProfileId: requesterProfile?.id ?? "",
   }, world);
-  const scenes = permissions.can_edit
+  const shouldLoadContent = permissions.can_edit || includeContent === true;
+  const scenes = shouldLoadContent
     ? await loadWorldScenes(store, world.id)
     : [];
-  const prefabs = permissions.can_edit
+  const prefabs = shouldLoadContent
     ? await loadWorldPrefabs(store, world.id)
     : [];
   const sceneMap = new Map(scenes.map((row) => [row.id, row]));
@@ -532,6 +673,17 @@ function pickDefaultPlayerEntity(sceneDoc = {}, participants = []) {
     .map((entry) => entry.id);
   const occupied = new Set(participants.map((row) => row.player_entity_id).filter(Boolean));
   return candidateIds.find((id) => !occupied.has(id)) ?? null;
+}
+
+function findParticipantActor(participants = [], { profile = null, guestSessionId = "" } = {}) {
+  if (profile?.id) {
+    return participants.find((row) => row.profile_id === profile.id) ?? null;
+  }
+  const sessionId = String(guestSessionId ?? "").trim();
+  if (!sessionId) {
+    return null;
+  }
+  return participants.find((row) => row.guest_session_id === sessionId) ?? null;
 }
 
 export function installPrivateWorldStore(MauworldStore) {
@@ -787,11 +939,12 @@ export function installPrivateWorldStore(MauworldStore) {
           "Could not load private world scene",
         )
       : null;
+    const prefabs = await loadWorldPrefabs(this, world.id);
     const sceneDoc = normalizeSceneDoc(input.sceneDoc ?? input.scene_doc ?? createDefaultSceneDoc());
     const payload = {
       name: sanitizeWorldText(input.name ?? existing?.name ?? "Scene", "scene name", 80),
       scene_doc: sceneDoc,
-      compiled_doc: compileSceneDoc(sceneDoc, world),
+      compiled_doc: compileSceneDoc(sceneDoc, world, { prefabs }),
       version: (existing?.version ?? 0) + 1,
       is_default: input.isDefault === true || existing?.is_default === true,
       updated_at: nowIso(),
@@ -859,7 +1012,7 @@ export function installPrivateWorldStore(MauworldStore) {
 
   MauworldStore.prototype.savePrivateWorldPrefab = async function savePrivateWorldPrefab(profile, input = {}) {
     const { world, creator } = await requireWorldEditor(this, profile, input.worldId, input.creatorUsername);
-    const prefabDoc = cloneJson(input.prefab_doc ?? input.prefabDoc ?? {});
+    const prefabDoc = normalizeSceneDoc(input.prefab_doc ?? input.prefabDoc ?? {});
     const name = sanitizeWorldText(input.name ?? "Prefab", "prefab name", 80);
     const existing = input.prefabId
       ? await maybeSingle(
@@ -905,6 +1058,7 @@ export function installPrivateWorldStore(MauworldStore) {
       creator_username: creator.username,
       prefab_id: prefab.id,
     });
+    await recompileWorldScenes(this, world);
     await syncRuntimeForWorld(this, world, creator);
     return {
       prefab: serializePrefab(prefab),
@@ -1014,6 +1168,7 @@ export function installPrivateWorldStore(MauworldStore) {
         exportedBy: profile,
         defaultSceneName: defaultScene?.name ?? null,
         prefabs: prefabs.map((row) => ({
+          id: row.id,
           name: row.name,
           prefab_doc: cloneJson(row.prefab_doc),
         })),
@@ -1073,30 +1228,9 @@ export function installPrivateWorldStore(MauworldStore) {
       "Could not create imported-world owner row",
     );
 
-    let defaultSceneId = null;
-    for (const [index, sceneEntry] of parsed.scenes.entries()) {
-      const scene = await must(
-        this.serviceClient
-          .from("private_world_scenes")
-          .insert({
-            world_id: world.id,
-            name: sceneEntry.name,
-            scene_doc: sceneEntry.scene_doc,
-            compiled_doc: compileSceneDoc(sceneEntry.scene_doc, world),
-            version: 1,
-            is_default: sceneEntry.name === parsed.world.default_scene_name || index === 0,
-          })
-          .select("*")
-          .single(),
-        "Could not import private world scene",
-      );
-      if (!defaultSceneId && scene.is_default) {
-        defaultSceneId = scene.id;
-      }
-    }
-
+    const prefabIdMap = new Map();
     for (const prefabEntry of parsed.prefabs) {
-      await must(
+      const createdPrefab = await must(
         this.serviceClient
           .from("private_world_prefabs")
           .insert({
@@ -1104,9 +1238,43 @@ export function installPrivateWorldStore(MauworldStore) {
             name: prefabEntry.name,
             prefab_doc: prefabEntry.prefab_doc,
             created_by_profile_id: profile.id,
-          }),
-        "Could not import private world prefab",
+          })
+          .select("*")
+          .single(),
+          "Could not import private world prefab",
       );
+      const insertedPrefab = Array.isArray(createdPrefab) ? createdPrefab[0] : createdPrefab;
+      if (prefabEntry.id && insertedPrefab?.id) {
+        prefabIdMap.set(prefabEntry.id, insertedPrefab.id);
+      }
+    }
+
+    let defaultSceneId = null;
+    const importedPrefabs = await loadWorldPrefabs(this, world.id);
+    for (const [index, sceneEntry] of parsed.scenes.entries()) {
+      const sceneDoc = cloneJson(sceneEntry.scene_doc);
+      sceneDoc.prefab_instances = (sceneDoc.prefab_instances ?? []).map((entry) => ({
+        ...entry,
+        prefab_id: prefabIdMap.get(entry.prefab_id) ?? entry.prefab_id,
+      }));
+      const scene = await must(
+        this.serviceClient
+          .from("private_world_scenes")
+          .insert({
+            world_id: world.id,
+            name: sceneEntry.name,
+            scene_doc: sceneDoc,
+            compiled_doc: compileSceneDoc(sceneDoc, world, { prefabs: importedPrefabs }),
+            version: 1,
+            is_default: sceneEntry.name === parsed.world.default_scene_name || index === 0,
+          })
+          .select("*")
+          .single(),
+          "Could not import private world scene",
+        );
+      if (!defaultSceneId && scene.is_default) {
+        defaultSceneId = scene.id;
+      }
     }
 
     const updatedWorld = await must(
@@ -1162,6 +1330,18 @@ export function installPrivateWorldStore(MauworldStore) {
       const currentWorld = await this.ensureCurrentWorldContext();
       const anchorSnapshotId = String(input.publicWorldSnapshotId ?? currentWorld.worldSnapshot.id).trim() || currentWorld.worldSnapshot.id;
       const miniature = computeMiniatureDimensions(world);
+      const anchor = await findNearestPrivateWorldAnchor(this, currentWorld, {
+        x: Number(input.position_x ?? 0) || 0,
+        y: Number(input.position_y ?? 0) || 0,
+        z: Number(input.position_z ?? 0) || 0,
+      }, {
+        miniature_width: miniature.width,
+        miniature_length: miniature.length,
+        miniature_height: miniature.height,
+      }, world.id);
+      if (!anchor) {
+        throw new HttpError(409, "Could not find enough public-world space to anchor this private world");
+      }
       instance = await must(
         this.serviceClient
           .from("private_world_active_instances")
@@ -1170,11 +1350,11 @@ export function installPrivateWorldStore(MauworldStore) {
             active_scene_id: world.default_scene_id,
             status: "active",
             anchor_world_snapshot_id: anchorSnapshotId,
-            anchor_position_x: Number(input.position_x ?? 0) || 0,
-            anchor_position_y: Number(input.position_y ?? 0) || 0,
-            anchor_position_z: Number(input.position_z ?? 0) || 0,
-            anchor_cell_x: Math.floor((Number(input.position_x ?? 0) || 0) / Math.max(1, currentWorld.settings.world_cell_size)),
-            anchor_cell_z: Math.floor((Number(input.position_z ?? 0) || 0) / Math.max(1, currentWorld.settings.world_cell_size)),
+            anchor_position_x: anchor.x,
+            anchor_position_y: anchor.y,
+            anchor_position_z: anchor.z,
+            anchor_cell_x: anchor.cellX,
+            anchor_cell_z: anchor.cellZ,
             miniature_width: miniature.width,
             miniature_length: miniature.length,
             miniature_height: miniature.height,
@@ -1315,7 +1495,7 @@ export function installPrivateWorldStore(MauworldStore) {
       world,
       creator,
       requesterProfile,
-      includeContent: requesterProfile ? worldDetail.world.permissions.can_edit : false,
+      includeContent: true,
       allowGuest: !requesterProfile,
     });
     return {
@@ -1374,6 +1554,140 @@ export function installPrivateWorldStore(MauworldStore) {
     return {
       removed: true,
       active: true,
+    };
+  };
+
+  MauworldStore.prototype.occupyPrivateWorldParticipant = async function occupyPrivateWorldParticipant(input = {}) {
+    const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
+    const profile = input.profile ?? null;
+    if (!profile) {
+      throw new HttpError(401, "Authentication required to possess a player");
+    }
+    const instance = await loadActiveInstance(this, world.id);
+    if (!instance) {
+      throw new HttpError(404, "Private world is not active");
+    }
+    const participants = await loadInstanceParticipants(this, instance.id);
+    const participant = findParticipantActor(participants, { profile });
+    if (!participant) {
+      throw new HttpError(403, "Join the private world before possessing a player");
+    }
+    const runtimeSnapshot = this.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
+      ?? await syncRuntimeForWorld(this, world, creator);
+    const requestedPlayerId = String(input.playerEntityId ?? "").trim();
+    const playerEntry = runtimeSnapshot?.players?.find((entry) => entry.id === requestedPlayerId)
+      ?? null;
+    if (!playerEntry) {
+      throw new HttpError(404, "Player entity not found in the active scene");
+    }
+    if (playerEntry.occupied_by_username && participant.player_entity_id !== requestedPlayerId) {
+      throw new HttpError(409, "That player entity is already occupied");
+    }
+
+    const updatedParticipant = await must(
+      this.serviceClient
+        .from("private_world_participants")
+        .update({
+          join_role: "player",
+          player_entity_id: requestedPlayerId,
+          visible_to_others: true,
+          updated_at: nowIso(),
+          last_seen_at: nowIso(),
+        })
+        .eq("id", participant.id)
+        .select("*")
+        .single(),
+      "Could not occupy private world player",
+    );
+    const existingReadyState = await maybeSingle(
+      this.serviceClient
+        .from("private_world_ready_states")
+        .select("*")
+        .eq("instance_id", instance.id)
+        .eq("participant_id", participant.id)
+        .maybeSingle(),
+      "Could not load player ready state",
+    );
+    if (existingReadyState) {
+      await must(
+        this.serviceClient
+          .from("private_world_ready_states")
+          .update({ ready: false, updated_at: nowIso() })
+          .eq("participant_id", participant.id),
+        "Could not reset player ready state",
+      );
+    } else {
+      await must(
+        this.serviceClient
+          .from("private_world_ready_states")
+          .insert({
+            instance_id: instance.id,
+            participant_id: participant.id,
+            ready: false,
+          }),
+        "Could not create player ready state",
+      );
+    }
+
+    emitPrivateWorldEvent(this, {
+      type: "participant:occupied",
+      world_id: world.world_id,
+      creator_username: creator.username,
+      instance_id: instance.id,
+      participant_id: updatedParticipant.id,
+      player_entity_id: requestedPlayerId,
+    });
+    await syncRuntimeForWorld(this, world, creator);
+    return {
+      occupied: true,
+      player_entity_id: requestedPlayerId,
+    };
+  };
+
+  MauworldStore.prototype.releasePrivateWorldParticipant = async function releasePrivateWorldParticipant(input = {}) {
+    const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
+    const profile = input.profile ?? null;
+    if (!profile) {
+      throw new HttpError(401, "Authentication required to release a player");
+    }
+    const instance = await loadActiveInstance(this, world.id);
+    if (!instance) {
+      throw new HttpError(404, "Private world is not active");
+    }
+    const participants = await loadInstanceParticipants(this, instance.id);
+    const participant = findParticipantActor(participants, { profile });
+    if (!participant || participant.join_role !== "player") {
+      throw new HttpError(409, "You are not currently possessing a player");
+    }
+    await must(
+      this.serviceClient
+        .from("private_world_participants")
+        .update({
+          join_role: "viewer",
+          player_entity_id: null,
+          updated_at: nowIso(),
+          last_seen_at: nowIso(),
+        })
+        .eq("id", participant.id),
+      "Could not release private world player",
+    );
+    await must(
+      this.serviceClient
+        .from("private_world_ready_states")
+        .delete()
+        .eq("participant_id", participant.id),
+      "Could not clear player ready state",
+    );
+    emitPrivateWorldEvent(this, {
+      type: "participant:released",
+      world_id: world.world_id,
+      creator_username: creator.username,
+      instance_id: instance.id,
+      participant_id: participant.id,
+    });
+    await syncRuntimeForWorld(this, world, creator);
+    return {
+      released: true,
     };
   };
 
@@ -1578,6 +1892,60 @@ export function installPrivateWorldStore(MauworldStore) {
     };
   };
 
+  MauworldStore.prototype.heartbeatPrivateWorldEntityLock = async function heartbeatPrivateWorldEntityLock(profile, input = {}) {
+    const { world, creator } = await requireWorldEditor(this, profile, input.worldId, input.creatorUsername);
+    const sceneId = String(input.sceneId ?? "").trim();
+    const entityKey = String(input.entityKey ?? "").trim();
+    const expiresAt = new Date(Date.now() + PRIVATE_WORLD_LIMITS.lockTtlSeconds * 1000).toISOString();
+    const lock = await maybeSingle(
+      this.serviceClient
+        .from("private_world_entity_locks")
+        .select("*")
+        .eq("world_id", world.id)
+        .eq("scene_id", sceneId)
+        .eq("entity_key", entityKey)
+        .eq("profile_id", profile.id)
+        .maybeSingle(),
+      "Could not load entity lock",
+    );
+    if (!lock) {
+      throw new HttpError(404, "No active lock found for that entity");
+    }
+    const updated = await must(
+      this.serviceClient
+        .from("private_world_entity_locks")
+        .update({
+          expires_at: expiresAt,
+          updated_at: nowIso(),
+        })
+        .eq("world_id", world.id)
+        .eq("scene_id", sceneId)
+        .eq("entity_key", entityKey)
+        .eq("profile_id", profile.id)
+        .select("*")
+        .single(),
+      "Could not extend entity lock",
+    );
+    emitPrivateWorldEvent(this, {
+      type: "lock:updated",
+      world_id: world.world_id,
+      creator_username: creator.username,
+      scene_id: sceneId,
+      entity_key: entityKey,
+    });
+    return {
+      lock: {
+        scene_id: updated.scene_id,
+        entity_key: updated.entity_key,
+        expires_at: updated.expires_at,
+        profile: {
+          username: profile.username,
+          display_name: profile.display_name,
+        },
+      },
+    };
+  };
+
   MauworldStore.prototype.releasePrivateWorldEntityLock = async function releasePrivateWorldEntityLock(profile, input = {}) {
     const { world, creator } = await requireWorldEditor(this, profile, input.worldId, input.creatorUsername);
     const sceneId = String(input.sceneId ?? "").trim();
@@ -1609,6 +1977,7 @@ export function installPrivateWorldStore(MauworldStore) {
     if (!worldSnapshotId) {
       return [];
     }
+    const viewerPresence = await loadViewerPresenceForSnapshot(this, worldSnapshotId, input.viewerSessionId);
     const rows = await must(
       this.serviceClient
         .from("private_world_active_instances")
@@ -1618,8 +1987,11 @@ export function installPrivateWorldStore(MauworldStore) {
         .lte("anchor_cell_x", input.cellXMax)
         .gte("anchor_cell_z", input.cellZMin)
         .lte("anchor_cell_z", input.cellZMax),
-      "Could not load private world miniatures",
+        "Could not load private world miniatures",
     );
+    if (rows.length === 0) {
+      return [];
+    }
     const worldsById = new Map(
       (await must(
         this.serviceClient.from("private_worlds").select("*").in("id", rows.map((row) => row.world_id)),
@@ -1642,6 +2014,49 @@ export function installPrivateWorldStore(MauworldStore) {
       }
       const creator = creatorProfiles.get(world.creator_profile_id);
       const participants = await loadInstanceParticipants(this, row.id);
+      const runtimeSnapshot = creator
+        ? (
+            this.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
+            ?? null
+          )
+        : null;
+      const lodBand = resolveMiniatureLodBand(row, viewerPresence);
+      const compiledMiniature = cloneJson(scene.compiled_doc?.miniature ?? {});
+      const liveVisiblePlayers = participants
+        .filter((entry) => entry.visible_to_others !== false && entry.player_entity_id)
+        .map((entry) => ({
+          player_entity_id: entry.player_entity_id,
+          username: entry.profile?.username ?? null,
+          position: cloneJson(
+            runtimeSnapshot?.players?.find((candidate) => candidate.id === entry.player_entity_id)?.position
+            ?? compiledMiniature.players?.find((candidate) => candidate.id === entry.player_entity_id)?.position
+            ?? null,
+          ),
+        }))
+        .filter((entry) => entry.position);
+      const miniaturePayload = lodBand === "near"
+        ? {
+            static_voxels: (compiledMiniature.static_voxels ?? []).slice(0, 120),
+            screens: (compiledMiniature.screens ?? []).slice(0, 16),
+            players: [],
+          }
+        : lodBand === "mid"
+          ? {
+              static_voxels: (compiledMiniature.static_voxels ?? []).slice(0, 120).map((entry) => ({
+                ...entry,
+                material: {
+                  ...(entry.material ?? {}),
+                  color: "#8c94a1",
+                },
+              })),
+              screens: [],
+              players: [],
+            }
+          : {
+              static_voxels: [],
+              screens: [],
+              players: [],
+            };
       miniatures.push({
         id: row.id,
         world_id: world.world_id,
@@ -1655,19 +2070,12 @@ export function installPrivateWorldStore(MauworldStore) {
         miniature_width: row.miniature_width,
         miniature_length: row.miniature_length,
         miniature_height: row.miniature_height,
+        lod_band: lodBand,
         compiled: {
-          miniature: cloneJson(scene.compiled_doc?.miniature ?? {}),
+          miniature: miniaturePayload,
           stats: cloneJson(scene.compiled_doc?.stats ?? {}),
         },
-        visible_players: participants
-          .filter((entry) => entry.visible_to_others !== false && entry.player_entity_id)
-          .map((entry) => ({
-            player_entity_id: entry.player_entity_id,
-            username: entry.profile?.username ?? null,
-            position: cloneJson(
-              scene.compiled_doc?.miniature?.players?.find((candidate) => candidate.id === entry.player_entity_id)?.position ?? null,
-            ),
-          })),
+        visible_players: lodBand === "near" ? liveVisiblePlayers : [],
       });
     }
     return miniatures;

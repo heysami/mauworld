@@ -76,6 +76,11 @@ function clampInteger(value, fallback, min, max) {
   return Math.round(clampNumber(value, fallback, min, max));
 }
 
+function mustFinite(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
 function slugToken(value) {
   return String(value ?? "")
     .toLowerCase()
@@ -356,6 +361,22 @@ function sanitizePrefabEntry(entry = {}, index = 0) {
   };
 }
 
+function sanitizePrefabInstanceEntry(entry = {}, index = 0) {
+  const overrides = typeof entry.overrides === "object" && entry.overrides ? entry.overrides : {};
+  return {
+    id: ensureEntityId("prefabinst", entry.id || `prefab-instance-${index + 1}`),
+    prefab_id: String(entry.prefab_id ?? entry.prefabId ?? "").trim() || null,
+    label: String(entry.label ?? `Prefab Instance ${index + 1}`).trim().slice(0, 80) || `Prefab Instance ${index + 1}`,
+    position: sanitizeVector3(entry.position, { x: 0, y: 0, z: 0 }),
+    rotation: sanitizeEuler3(entry.rotation),
+    scale: sanitizeScale3(entry.scale, { x: 1, y: 1, z: 1 }),
+    overrides: {
+      material: overrides.material ? sanitizeMaterial(overrides.material) : null,
+      visible: typeof overrides.visible === "boolean" ? overrides.visible : null,
+    },
+  };
+}
+
 function sanitizeParticleEntry(entry = {}, index = 0) {
   return {
     id: ensureEntityId("particle", entry.id || `particle-${index + 1}`),
@@ -403,6 +424,367 @@ function buildRuleDsl(rules = []) {
     .join("\n");
 }
 
+function multiplyScale3(left = {}, right = {}) {
+  return {
+    x: Number((mustFinite(left.x, 1) * mustFinite(right.x, 1)).toFixed(4)),
+    y: Number((mustFinite(left.y, 1) * mustFinite(right.y, 1)).toFixed(4)),
+    z: Number((mustFinite(left.z, 1) * mustFinite(right.z, 1)).toFixed(4)),
+  };
+}
+
+function addEuler3(left = {}, right = {}) {
+  return sanitizeEuler3({
+    x: mustFinite(left.x, 0) + mustFinite(right.x, 0),
+    y: mustFinite(left.y, 0) + mustFinite(right.y, 0),
+    z: mustFinite(left.z, 0) + mustFinite(right.z, 0),
+  });
+}
+
+function rotatePointByEuler(point = {}, rotation = {}) {
+  let x = mustFinite(point.x, 0);
+  let y = mustFinite(point.y, 0);
+  let z = mustFinite(point.z, 0);
+  const rx = mustFinite(rotation.x, 0);
+  const ry = mustFinite(rotation.y, 0);
+  const rz = mustFinite(rotation.z, 0);
+
+  const cosX = Math.cos(rx);
+  const sinX = Math.sin(rx);
+  const cosY = Math.cos(ry);
+  const sinY = Math.sin(ry);
+  const cosZ = Math.cos(rz);
+  const sinZ = Math.sin(rz);
+
+  let nextY = y * cosX - z * sinX;
+  let nextZ = y * sinX + z * cosX;
+  y = nextY;
+  z = nextZ;
+
+  let nextX = x * cosY + z * sinY;
+  nextZ = -x * sinY + z * cosY;
+  x = nextX;
+  z = nextZ;
+
+  nextX = x * cosZ - y * sinZ;
+  nextY = x * sinZ + y * cosZ;
+  x = nextX;
+  y = nextY;
+
+  return {
+    x: Number(x.toFixed(4)),
+    y: Number(y.toFixed(4)),
+    z: Number(z.toFixed(4)),
+  };
+}
+
+function transformPosition(position = {}, instance = {}) {
+  const scaled = {
+    x: mustFinite(position.x, 0) * mustFinite(instance.scale?.x, 1),
+    y: mustFinite(position.y, 0) * mustFinite(instance.scale?.y, 1),
+    z: mustFinite(position.z, 0) * mustFinite(instance.scale?.z, 1),
+  };
+  const rotated = rotatePointByEuler(scaled, instance.rotation);
+  return sanitizeVector3({
+    x: rotated.x + mustFinite(instance.position?.x, 0),
+    y: rotated.y + mustFinite(instance.position?.y, 0),
+    z: rotated.z + mustFinite(instance.position?.z, 0),
+  });
+}
+
+function tokenizeDslSegment(value) {
+  return String(value ?? "")
+    .match(/"[^"]*"|'[^']*'|\S+/g)
+    ?.map((token) => token.replace(/^['"]|['"]$/g, "")) ?? [];
+}
+
+function parseDslVector(token) {
+  const match = String(token ?? "").match(/^([a-z]+)\(([-0-9.]+),([-0-9.]+),([-0-9.]+)\)$/i);
+  if (!match) {
+    return null;
+  }
+  return {
+    kind: match[1].toLowerCase(),
+    value: sanitizeVector3({
+      x: Number(match[2]),
+      y: Number(match[3]),
+      z: Number(match[4]),
+    }),
+  };
+}
+
+export function compilePrivateWorldScriptDsl(input, options = {}) {
+  const source = String(input ?? "").trim();
+  if (!source) {
+    return {
+      rules: [],
+      errors: [],
+    };
+  }
+
+  const rules = [];
+  const errors = [];
+  const aliasMap = options.entityAliases instanceof Map ? options.entityAliases : new Map();
+  const lines = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("#") && !line.startsWith("//"));
+
+  for (const [index, line] of lines.entries()) {
+    const [rawTrigger, rawAction] = line.split(/\s*->\s*/);
+    if (!rawTrigger || !rawAction) {
+      errors.push({ line: index + 1, message: "Expected `trigger -> action`" });
+      continue;
+    }
+    const triggerTokens = tokenizeDslSegment(rawTrigger);
+    const actionTokens = tokenizeDslSegment(rawAction);
+    const trigger = String(triggerTokens.shift() ?? "").trim().toLowerCase();
+    const action = String(actionTokens.shift() ?? "").trim().toLowerCase();
+    if (!ALLOWED_RULE_TRIGGERS.has(trigger)) {
+      errors.push({ line: index + 1, message: `Unsupported trigger: ${trigger || "(empty)"}` });
+      continue;
+    }
+    if (!ALLOWED_RULE_ACTIONS.has(action)) {
+      errors.push({ line: index + 1, message: `Unsupported action: ${action || "(empty)"}` });
+      continue;
+    }
+
+    const rule = {
+      id: ensureEntityId("rule", `dsl-${index + 1}`),
+      trigger,
+      action,
+      source_id: null,
+      target_id: null,
+      key: null,
+      delay_ms: 0,
+      payload: {},
+    };
+
+    for (let tokenIndex = 0; tokenIndex < triggerTokens.length; tokenIndex += 1) {
+      const token = triggerTokens[tokenIndex];
+      const next = triggerTokens[tokenIndex + 1];
+      if (token === "from" && next) {
+        rule.source_id = resolveEntityAlias(aliasMap, next);
+        tokenIndex += 1;
+      } else if (token === "key" && next) {
+        rule.key = String(next).trim().toLowerCase();
+        tokenIndex += 1;
+      } else if (token === "after" && next) {
+        const match = String(next).match(/^([-0-9.]+)(ms|s)?$/i);
+        if (match) {
+          const value = Number(match[1]);
+          const unit = String(match[2] ?? "ms").toLowerCase();
+          rule.delay_ms = clampInteger(unit === "s" ? value * 1000 : value, 0, 0, 600000);
+          tokenIndex += 1;
+        }
+      }
+    }
+
+    const freeTextTokens = [];
+    for (let tokenIndex = 0; tokenIndex < actionTokens.length; tokenIndex += 1) {
+      const token = actionTokens[tokenIndex];
+      const next = actionTokens[tokenIndex + 1];
+      const vector = parseDslVector(token);
+      if (vector?.kind === "force") {
+        rule.payload.force = vector.value;
+        continue;
+      }
+      if (vector?.kind === "position") {
+        rule.payload.position = vector.value;
+        continue;
+      }
+      if (token === "to" && next) {
+        rule.target_id = resolveEntityAlias(aliasMap, next);
+        tokenIndex += 1;
+      } else if (token === "scene" && next) {
+        rule.payload.scene_id = next;
+        tokenIndex += 1;
+      } else if (token === "target" && next) {
+        rule.payload.target_id = resolveEntityAlias(aliasMap, next);
+        tokenIndex += 1;
+      } else if (token === "particle" && next) {
+        rule.payload.particle_id = resolveEntityAlias(aliasMap, next);
+        tokenIndex += 1;
+      } else if (token === "text" && next) {
+        rule.payload.text_id = resolveEntityAlias(aliasMap, next);
+        tokenIndex += 1;
+      } else if (token === "value" && next) {
+        rule.payload.value = next;
+        tokenIndex += 1;
+      } else if (token === "visible" && next) {
+        rule.payload.visible = next === "true";
+        tokenIndex += 1;
+      } else if (token === "enabled" && next) {
+        rule.payload.enabled = next === "true";
+        tokenIndex += 1;
+      } else if (token === "force" && actionTokens.length >= tokenIndex + 4) {
+        rule.payload.force = sanitizeVector3({
+          x: Number(actionTokens[tokenIndex + 1]),
+          y: Number(actionTokens[tokenIndex + 2]),
+          z: Number(actionTokens[tokenIndex + 3]),
+        });
+        tokenIndex += 3;
+      } else if (token === "position" && actionTokens.length >= tokenIndex + 4) {
+        rule.payload.position = sanitizeVector3({
+          x: Number(actionTokens[tokenIndex + 1]),
+          y: Number(actionTokens[tokenIndex + 2]),
+          z: Number(actionTokens[tokenIndex + 3]),
+        });
+        tokenIndex += 3;
+      } else {
+        freeTextTokens.push(token);
+      }
+    }
+
+    if (action === "set_text" && !rule.payload.value && freeTextTokens.length > 0) {
+      rule.payload.value = freeTextTokens.join(" ").slice(0, 160);
+    }
+    rules.push(rule);
+  }
+
+  return {
+    rules,
+    errors,
+  };
+}
+
+function transformPrefabEntity(entity = {}, instance = {}) {
+  return {
+    ...entity,
+    position: transformPosition(entity.position, instance),
+    rotation: addEuler3(entity.rotation, instance.rotation),
+    scale: entity.scale ? multiplyScale3(entity.scale, instance.scale) : entity.scale,
+  };
+}
+
+function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}) {
+  const doc = normalizeSceneDoc(prefabDoc);
+  const aliasMap = new Map();
+  const prefix = `${instance.id}__`;
+  const remapId = (id) => `${prefix}${id}`;
+  const registerId = (id) => {
+    const nextId = remapId(id);
+    rememberEntityAlias(aliasMap, id, nextId);
+    return nextId;
+  };
+  const applyCommonOverrides = (entity) => ({
+    ...entity,
+    material: instance.overrides?.material
+      ? { ...entity.material, ...instance.overrides.material }
+      : entity.material,
+    visible: instance.overrides?.visible == null ? entity.visible : instance.overrides.visible,
+  });
+  const voxels = doc.voxels.map((entry) => applyCommonOverrides({
+    ...transformPrefabEntity(entry, instance),
+    id: registerId(entry.id),
+    group_id: instance.id,
+  }));
+  const primitives = doc.primitives.map((entry) => applyCommonOverrides({
+    ...transformPrefabEntity(entry, instance),
+    id: registerId(entry.id),
+    group_id: instance.id,
+  }));
+  const screens = doc.screens.map((entry) => applyCommonOverrides({
+    ...transformPrefabEntity(entry, instance),
+    id: registerId(entry.id),
+    group_id: instance.id,
+  }));
+  const players = doc.players.map((entry) => ({
+    ...transformPrefabEntity(entry, instance),
+    id: registerId(entry.id),
+  }));
+  const texts = doc.texts.map((entry) => applyCommonOverrides({
+    ...transformPrefabEntity(entry, instance),
+    id: registerId(entry.id),
+    group_id: instance.id,
+  }));
+  const trigger_zones = doc.trigger_zones.map((entry) => ({
+    ...transformPrefabEntity(entry, instance),
+    id: registerId(entry.id),
+  }));
+  const particles = doc.particles.map((entry) => ({
+    ...entry,
+    id: registerId(entry.id),
+    target_id: resolveEntityAlias(aliasMap, entry.target_id),
+  }));
+  const rules = doc.rules.map((entry) => {
+    const payload = cloneJson(entry.payload ?? {});
+    if (payload.target_id || payload.targetId) {
+      payload.target_id = resolveEntityAlias(aliasMap, payload.target_id ?? payload.targetId);
+      delete payload.targetId;
+    }
+    if (payload.particle_id || payload.particleId) {
+      payload.particle_id = resolveEntityAlias(aliasMap, payload.particle_id ?? payload.particleId);
+      delete payload.particleId;
+    }
+    if (payload.text_id || payload.textId) {
+      payload.text_id = resolveEntityAlias(aliasMap, payload.text_id ?? payload.textId);
+      delete payload.textId;
+    }
+    return {
+      ...entry,
+      id: registerId(entry.id),
+      source_id: resolveEntityAlias(aliasMap, entry.source_id),
+      target_id: resolveEntityAlias(aliasMap, entry.target_id),
+      payload,
+    };
+  });
+
+  return {
+    voxels,
+    primitives,
+    screens,
+    players,
+    texts,
+    trigger_zones,
+    particles,
+    rules,
+  };
+}
+
+function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = []) {
+  const doc = normalizeSceneDoc(sceneDoc);
+  const prefabsById = new Map(
+    (Array.isArray(prefabs) ? prefabs : [])
+      .filter((entry) => entry?.id)
+      .map((entry) => [String(entry.id), entry]),
+  );
+  const flattened = {
+    settings: cloneJson(doc.settings),
+    voxels: cloneJson(doc.voxels),
+    primitives: cloneJson(doc.primitives),
+    screens: cloneJson(doc.screens),
+    players: cloneJson(doc.players),
+    texts: cloneJson(doc.texts),
+    trigger_zones: cloneJson(doc.trigger_zones),
+    prefabs: cloneJson(doc.prefabs),
+    prefab_instances: cloneJson(doc.prefab_instances ?? []),
+    particles: cloneJson(doc.particles),
+    rules: cloneJson(doc.rules),
+    script_dsl: doc.script_dsl,
+  };
+
+  for (const instance of doc.prefab_instances ?? []) {
+    if (!instance.prefab_id) {
+      continue;
+    }
+    const prefab = prefabsById.get(instance.prefab_id) ?? null;
+    if (!prefab?.prefab_doc) {
+      continue;
+    }
+    const instanced = instantiatePrefabSceneDoc(prefab.prefab_doc, instance);
+    flattened.voxels.push(...instanced.voxels);
+    flattened.primitives.push(...instanced.primitives);
+    flattened.screens.push(...instanced.screens);
+    flattened.players.push(...instanced.players);
+    flattened.texts.push(...instanced.texts);
+    flattened.trigger_zones.push(...instanced.trigger_zones);
+    flattened.particles.push(...instanced.particles);
+    flattened.rules.push(...instanced.rules);
+  }
+  return flattened;
+}
+
 export function createDefaultSceneDoc() {
   return {
     settings: {
@@ -426,6 +808,7 @@ export function createDefaultSceneDoc() {
     texts: [],
     trigger_zones: [],
     prefabs: [],
+    prefab_instances: [],
     particles: [],
     rules: [],
     script_dsl: "",
@@ -475,6 +858,9 @@ export function normalizeSceneDoc(input = {}) {
       entity_ids: Array.from(new Set((value.entity_ids ?? []).map((entityId) => resolveEntityAlias(entityAliases, entityId)).filter(Boolean))),
     };
   });
+  const prefabInstances = (Array.isArray(source.prefab_instances ?? source.prefabInstances) ? (source.prefab_instances ?? source.prefabInstances) : [])
+    .slice(0, 256)
+    .map((entry, index) => sanitizePrefabInstanceEntry(entry, index));
   const particles = (Array.isArray(source.particles) ? source.particles : []).slice(0, 256).map((entry, index) => {
     const value = sanitizeParticleEntry(entry, index);
     return {
@@ -523,27 +909,46 @@ export function normalizeSceneDoc(input = {}) {
     texts,
     trigger_zones: triggerZones,
     prefabs,
+    prefab_instances: prefabInstances,
     particles,
     rules,
     script_dsl: scriptDsl,
   };
 }
 
-export function compileSceneDoc(sceneDoc = {}, world = {}) {
+export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
   const doc = normalizeSceneDoc(sceneDoc);
-  const solidVoxelCount = doc.voxels.length;
-  const dynamicObjectCount = doc.primitives.filter((entry) => entry.rigid_mode === "rigid").length;
+  const resolvedDoc = flattenSceneWithPrefabInstances(doc, options.prefabs ?? []);
+  const structuredRules = cloneJson(resolvedDoc.rules);
+  const dsl = compilePrivateWorldScriptDsl(doc.script_dsl, {
+    entityAliases: new Map(
+      [
+        ...resolvedDoc.voxels,
+        ...resolvedDoc.primitives,
+        ...resolvedDoc.screens,
+        ...resolvedDoc.players,
+        ...resolvedDoc.texts,
+        ...resolvedDoc.trigger_zones,
+        ...resolvedDoc.particles,
+      ].map((entry) => [entry.id, entry.id]),
+    ),
+  });
+  resolvedDoc.rules = dsl.rules.length > 0 ? dsl.rules : resolvedDoc.rules;
+  const solidVoxelCount = resolvedDoc.voxels.length;
+  const dynamicObjectCount = resolvedDoc.primitives.filter((entry) => entry.rigid_mode === "rigid").length;
   return {
     stats: {
       solid_voxel_count: solidVoxelCount,
-      primitive_count: doc.primitives.length,
+      primitive_count: resolvedDoc.primitives.length,
       dynamic_object_count: dynamicObjectCount,
-      screen_count: doc.screens.length,
-      player_count: doc.players.length,
-      text_count: doc.texts.length,
-      trigger_zone_count: doc.trigger_zones.length,
+      screen_count: resolvedDoc.screens.length,
+      player_count: resolvedDoc.players.length,
+      text_count: resolvedDoc.texts.length,
+      trigger_zone_count: resolvedDoc.trigger_zones.length,
       prefab_count: doc.prefabs.length,
-      rule_count: doc.rules.length,
+      prefab_instance_count: resolvedDoc.prefab_instances?.length ?? 0,
+      rule_count: resolvedDoc.rules.length,
+      dsl_rule_count: dsl.rules.length,
     },
     world: {
       world_type: world.world_type ?? null,
@@ -552,14 +957,14 @@ export function compileSceneDoc(sceneDoc = {}, world = {}) {
       height: Number(world.height ?? 0) || 0,
     },
     collision: {
-      static_solids: doc.voxels.map((entry) => ({
+      static_solids: resolvedDoc.voxels.map((entry) => ({
         id: entry.id,
         position: entry.position,
         scale: entry.scale,
       })),
     },
     runtime: {
-      players: doc.players.map((entry) => ({
+      players: resolvedDoc.players.map((entry) => ({
         id: entry.id,
         position: entry.position,
         rotation: entry.rotation,
@@ -567,7 +972,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}) {
         camera_mode: entry.camera_mode,
         body_mode: entry.body_mode,
       })),
-      dynamic_objects: doc.primitives.map((entry) => ({
+      dynamic_objects: resolvedDoc.primitives.map((entry) => ({
         id: entry.id,
         position: entry.position,
         rotation: entry.rotation,
@@ -575,24 +980,31 @@ export function compileSceneDoc(sceneDoc = {}, world = {}) {
         angular_velocity: { x: 0, y: 0, z: 0 },
         physics: entry.physics,
         rigid_mode: entry.rigid_mode,
+        material: entry.material,
       })),
-      trigger_zones: doc.trigger_zones,
-      rules: doc.rules,
-      particles: doc.particles,
+      trigger_zones: resolvedDoc.trigger_zones,
+      rules: resolvedDoc.rules,
+      structured_rules: structuredRules,
+      dsl_rules: dsl.rules,
+      dsl_errors: dsl.errors,
+      particles: resolvedDoc.particles,
+      resolved_scene_doc: resolvedDoc,
     },
     miniature: {
-      static_voxels: doc.voxels.map((entry) => ({
+      static_voxels: resolvedDoc.voxels.map((entry) => ({
         id: entry.id,
         position: entry.position,
         scale: entry.scale,
         material: entry.material,
       })),
-      screens: doc.screens.map((entry) => ({
+      screens: resolvedDoc.screens.map((entry) => ({
         id: entry.id,
         position: entry.position,
         scale: entry.scale,
+        html: entry.html,
+        html_hash: entry.html_hash,
       })),
-      players: doc.players.map((entry) => ({
+      players: resolvedDoc.players.map((entry) => ({
         id: entry.id,
         position: entry.position,
       })),
@@ -664,8 +1076,9 @@ export function validatePrivateWorldExportPackage(input = {}) {
   const about = sanitizeWorldText(world.about ?? "Imported Mauworld package", "world about", 240);
   const prefabs = Array.isArray(input.prefabs)
     ? input.prefabs.slice(0, 256).map((entry, index) => ({
+        id: String(entry?.id ?? `pkg_prefab_${index + 1}`).trim(),
         name: sanitizeWorldText(entry?.name ?? `Prefab ${index + 1}`, "prefab name", 80),
-        prefab_doc: cloneJson(entry?.prefab_doc ?? entry?.prefabDoc ?? {}),
+        prefab_doc: normalizeSceneDoc(entry?.prefab_doc ?? entry?.prefabDoc ?? {}),
       }))
     : [];
   const rawScenes = Array.isArray(input.scenes) ? input.scenes.slice(0, 64) : [];

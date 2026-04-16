@@ -166,6 +166,10 @@
                 <p class="pw-selected-subtitle" data-selected-subtitle>Pick a world or resolve one by id and creator.</p>
               </div>
               <div class="pw-inline-actions">
+                <div class="pw-mode-toggle" role="tablist" aria-label="Private world mode">
+                  <button type="button" class="is-muted" data-mode-build aria-pressed="false">Build</button>
+                  <button type="button" class="is-muted" data-mode-play aria-pressed="true">Play</button>
+                </div>
                 <button type="button" class="is-muted" data-export-world disabled>Export</button>
                 <button type="button" class="is-muted" data-join-world disabled>Join</button>
                 <button type="button" class="is-muted" data-leave-world disabled>Leave</button>
@@ -175,7 +179,7 @@
             <div class="pw-world-meta" data-world-meta></div>
 
             <div class="pw-grid-main">
-              <section class="pw-section">
+              <section class="pw-section" data-build-panel>
                 <div class="pw-section__header">
                   <h3>Scenes</h3>
                   <div class="pw-inline-actions">
@@ -215,7 +219,10 @@
 
               <section class="pw-section">
                 <div class="pw-section__header">
-                  <h3>Preview</h3>
+                  <div>
+                    <h3>Preview</h3>
+                    <p class="pw-preview-hint">Viewer first. Click a player in Play to possess it.</p>
+                  </div>
                 </div>
                 <div class="pw-preview">
                   <canvas data-preview-canvas></canvas>
@@ -223,6 +230,7 @@
                 <div class="pw-runtime-actions">
                   <button type="button" class="is-muted" data-ready-toggle disabled>Ready Up</button>
                   <button type="button" class="is-muted" data-start-scene disabled>Start Scene</button>
+                  <button type="button" class="is-muted" data-release-player disabled>Release Player</button>
                   <button type="button" class="is-muted" data-reset-scene disabled>Reset Scene</button>
                 </div>
                 <div class="pw-runtime-status" data-runtime-status></div>

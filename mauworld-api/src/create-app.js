@@ -223,6 +223,7 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       cell_x_max: req.query.cell_x_max,
       cell_z_min: req.query.cell_z_min,
       cell_z_max: req.query.cell_z_max,
+      viewerSessionId: req.query.viewerSessionId,
     });
     jsonOk(res, payload);
   }));
@@ -500,6 +501,27 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     jsonOk(res, payload);
   }));
 
+  app.post("/api/private/worlds/:worldId/participants/occupy", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.occupyPrivateWorldParticipant({
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      profile,
+      playerEntityId: requireString(req.body?.playerEntityId, "playerEntityId"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/participants/release", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.releasePrivateWorldParticipant({
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      profile,
+    });
+    jsonOk(res, payload);
+  }));
+
   app.post("/api/private/worlds/:worldId/ready", asyncRoute(async (req, res) => {
     const { profile } = await requireUser(req, store);
     const payload = await store.setPrivateWorldReadyState(profile, {
@@ -553,6 +575,17 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
   app.post("/api/private/worlds/:worldId/locks/release", asyncRoute(async (req, res) => {
     const { profile } = await requireUser(req, store);
     const payload = await store.releasePrivateWorldEntityLock(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      sceneId: requireString(req.body?.sceneId, "sceneId"),
+      entityKey: requireString(req.body?.entityKey, "entityKey"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/:worldId/locks/heartbeat", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.heartbeatPrivateWorldEntityLock(profile, {
       worldId: requireString(req.params.worldId, "worldId"),
       creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
       sceneId: requireString(req.body?.sceneId, "sceneId"),

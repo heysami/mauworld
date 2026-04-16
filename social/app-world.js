@@ -2,6 +2,7 @@ import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { createBubbleTexture, createWorldVisitorSystem, updateMascotMotion } from "./world-visitors.js";
 import { createBrowserMediaController } from "./world-browser-media.js";
 import { createWorldRealtimeClient } from "./world-realtime.js";
+import { renderScreenHtmlTexture } from "./screen-texture.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 
@@ -4485,16 +4486,14 @@ function buildPrivateWorldMiniatureObject(entry) {
   }
 
   for (const screen of (entry.compiled?.miniature?.screens ?? []).slice(0, 16)) {
-    const screenMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 0.08),
-      new THREE.MeshStandardMaterial({
+    const screenMaterial = new THREE.MeshStandardMaterial({
         color: "#f8fbff",
         emissive: "#5f7ca0",
         emissiveIntensity: 0.22,
         roughness: 0.42,
         metalness: 0.08,
-      }),
-    );
+      });
+    const screenMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.08), screenMaterial);
     const screenScale = screen.scale ?? { x: 4, y: 2.25, z: 0.2 };
     screenMesh.position.copy(mapPoint(screen.position));
     screenMesh.scale.set(
@@ -4503,6 +4502,19 @@ function buildPrivateWorldMiniatureObject(entry) {
       Math.max(0.05, (Number(screenScale.z ?? 0.2) || 0.2) * scale),
     );
     detailGroup.add(screenMesh);
+    void renderScreenHtmlTexture(THREE, screen, {
+      width: 768,
+      height: 432,
+    }).then((texture) => {
+      if (!texture || !screenMesh.parent) {
+        return;
+      }
+      screenMaterial.map = texture;
+      screenMaterial.emissiveIntensity = 0.06;
+      screenMaterial.needsUpdate = true;
+    }).catch(() => {
+      // keep emissive placeholder if html rasterization is not ready
+    });
   }
 
   for (const player of entry.visible_players ?? []) {
@@ -4542,6 +4554,7 @@ function buildPrivateWorldMiniatureObject(entry) {
     playerDots,
     nearDistance,
     midDistance,
+    serverLodBand: entry.lod_band || "near",
     phase: Math.random() * Math.PI * 2,
     basePlate,
   };
@@ -4585,10 +4598,12 @@ function updatePrivateWorldMiniatures(elapsedSeconds) {
     const distance = sceneState.camera.position.distanceTo(entry.group.position);
     const isNear = distance <= entry.nearDistance;
     const isMid = distance > entry.nearDistance && distance <= entry.midDistance;
-    entry.label.visible = isNear || isMid;
-    entry.silhouetteGroup.visible = isMid;
-    entry.detailGroup.visible = isNear;
-    entry.playerDots.visible = isNear;
+    const allowNear = entry.serverLodBand === "near";
+    const allowMid = entry.serverLodBand === "near" || entry.serverLodBand === "mid";
+    entry.label.visible = isNear || isMid || entry.serverLodBand !== "far";
+    entry.silhouetteGroup.visible = allowMid && (isMid || (entry.serverLodBand === "mid" && isNear));
+    entry.detailGroup.visible = allowNear && isNear;
+    entry.playerDots.visible = allowNear && isNear;
     entry.dome.material.opacity = isNear ? 0.12 : isMid ? 0.18 : 0.24;
     entry.basePlate.material.opacity = isNear ? 0.28 : 0.22;
     const pulse = 1 + Math.sin(elapsedSeconds * 0.8 + entry.phase) * 0.018;
@@ -6848,7 +6863,10 @@ async function loadStreamForPosition(position, force = false) {
 
   state.streamLoading = true;
   try {
-    const payload = await fetchJson(WORLD_API.stream, nextWindow);
+    const payload = await fetchJson(WORLD_API.stream, {
+      ...nextWindow,
+      viewerSessionId: state.viewerSessionId,
+    });
     state.activeCellWindow = nextWindow;
     mergeStreamIntoCache(payload);
     mergeLivePresenceRows(payload.presence ?? []);
@@ -7617,6 +7635,7 @@ async function sendPresence() {
       heading_y: Number(inputState.yaw.toFixed(4)),
       movement_state: movementState,
     });
+    void loadStream(true);
   } catch (_error) {
     // Presence is best-effort.
   }

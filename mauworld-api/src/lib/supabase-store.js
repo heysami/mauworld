@@ -3329,6 +3329,7 @@ export class MauworldStore {
       typeof this.listPrivateWorldMiniaturesForSnapshot === "function"
         ? this.listPrivateWorldMiniaturesForSnapshot({
             worldSnapshotId: worldSnapshot.id,
+            viewerSessionId: input.viewerSessionId,
             cellXMin,
             cellXMax,
             cellZMin,

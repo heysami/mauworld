@@ -128,6 +128,18 @@ body.private-worlds-body {
 .pw-inline-actions {
   grid-auto-flow: column;
   justify-content: start;
+  align-items: center;
+}
+
+.pw-mode-toggle {
+  display: inline-grid;
+  grid-auto-flow: column;
+  gap: 6px;
+}
+
+.pw-mode-toggle button.is-active {
+  background: #243b64;
+  color: #ffffff;
 }
 
 .pw-panel label,
@@ -192,6 +204,10 @@ body.private-worlds-body {
   cursor: not-allowed;
 }
 
+body.private-worlds-body.is-play-mode [data-build-panel] {
+  opacity: 0.56;
+}
+
 .pw-status {
   min-height: 18px;
   margin: 0;
@@ -247,6 +263,12 @@ body.private-worlds-body {
 
 .pw-selected-subtitle {
   margin-top: 4px;
+}
+
+.pw-preview-hint {
+  margin: 4px 0 0;
+  color: #54647d;
+  font-size: 13px;
 }
 
 .pw-world-meta {
@@ -359,6 +381,10 @@ body.private-worlds-body {
   }
 
   .pw-inline-actions {
+    grid-auto-flow: row;
+  }
+
+  .pw-mode-toggle {
     grid-auto-flow: row;
   }
 }

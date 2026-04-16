@@ -86,9 +86,19 @@ async function callOpenAiResponses(options = {}) {
   };
 }
 
+const AI_PROVIDER_REGISTRY = {
+  openai: {
+    name: "openai",
+    async generate(options = {}) {
+      return await callOpenAiResponses(options);
+    },
+  },
+};
+
 export async function generatePrivateWorldAiArtifact(options = {}) {
   const provider = String(options.provider ?? "openai").trim().toLowerCase();
-  if (provider !== "openai") {
+  const providerAdapter = AI_PROVIDER_REGISTRY[provider] ?? null;
+  if (!providerAdapter) {
     throw new HttpError(400, `Unsupported AI provider: ${provider}`);
   }
   const artifactType = String(options.artifactType ?? "").trim().toLowerCase();
@@ -101,7 +111,7 @@ export async function generatePrivateWorldAiArtifact(options = {}) {
   if (!prompt) {
     throw new HttpError(400, "Unsupported AI artifact type");
   }
-  return await callOpenAiResponses({
+  return await providerAdapter.generate({
     apiKey: options.apiKey,
     model: options.model,
     prompt,

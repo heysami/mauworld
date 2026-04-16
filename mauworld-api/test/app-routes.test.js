@@ -62,11 +62,12 @@ function createStubStore() {
         queueLag: { pendingCount: 0, processingCount: 0, estimatedDelayMs: 0 },
       };
     },
-    async streamCurrentWorld() {
+    async streamCurrentWorld(input = {}) {
       return {
         worldSnapshotId: "world_123",
         organizationVersionId: "org_123",
         cellRange: { cellXMin: -1, cellXMax: 1, cellZMin: -1, cellZMax: 1 },
+        requestedViewerSessionId: input.viewerSessionId ?? "",
         pillars: [],
         tags: [],
         postInstances: [],
@@ -127,6 +128,26 @@ function createStubStore() {
       return {
         accepted: true,
         player_entity_id: payload.key === "w" ? "player_one" : "player_two",
+      };
+    },
+    async occupyPrivateWorldParticipant(_input) {
+      return {
+        occupied: true,
+        player_entity_id: "player_one",
+      };
+    },
+    async releasePrivateWorldParticipant() {
+      return {
+        released: true,
+      };
+    },
+    async heartbeatPrivateWorldEntityLock() {
+      return {
+        lock: {
+          scene_id: "scene_123",
+          entity_key: "scene-json:scene_123",
+          expires_at: "2099-01-01T00:00:00.000Z",
+        },
       };
     },
   };
@@ -279,6 +300,27 @@ test("public world meta endpoint exposes the current snapshot contract", async (
   assert.equal(response.body.worldSnapshotId, "world_123");
 });
 
+test("public world stream forwards viewerSessionId for server-side miniature routing", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .get("/api/public/world/current/stream")
+    .query({
+      cell_x_min: -1,
+      cell_x_max: 1,
+      cell_z_min: -1,
+      cell_z_max: 1,
+      viewerSessionId: "viewer_123",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.requestedViewerSessionId, "viewer_123");
+});
+
 test("public world presence endpoint upserts viewer sessions", async () => {
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
@@ -408,4 +450,62 @@ test("private world runtime input endpoint accepts player controls", async () =>
   assert.equal(response.body.ok, true);
   assert.equal(response.body.accepted, true);
   assert.equal(response.body.player_entity_id, "player_one");
+});
+
+test("private world occupy endpoint claims a player slot explicitly", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/private/worlds/mw_origin123/participants/occupy")
+    .set("Authorization", "Bearer token")
+    .send({
+      creatorUsername: "maker",
+      playerEntityId: "player_one",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.occupied, true);
+  assert.equal(response.body.player_entity_id, "player_one");
+});
+
+test("private world release endpoint returns the user to viewer mode", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/private/worlds/mw_origin123/participants/release")
+    .set("Authorization", "Bearer token")
+    .send({
+      creatorUsername: "maker",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.released, true);
+});
+
+test("private world lock heartbeat endpoint renews a held lock", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/private/worlds/mw_origin123/locks/heartbeat")
+    .set("Authorization", "Bearer token")
+    .send({
+      creatorUsername: "maker",
+      sceneId: "scene_123",
+      entityKey: "scene-json:scene_123",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.lock.scene_id, "scene_123");
 });

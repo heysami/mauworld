@@ -1,5 +1,8 @@
+import * as RAPIER from "@dimforge/rapier3d-compat/rapier.es.js";
 import { HttpError } from "./http.js";
 import { normalizeSceneDoc } from "./private-worlds.js";
+
+await RAPIER.init({});
 
 const DEFAULT_TICK_MS = 50;
 const DEFAULT_BROADCAST_MS = 250;
@@ -7,9 +10,12 @@ const PLAYER_MOVE_SPEED = 11.5;
 const PLAYER_SPRINT_SPEED = 17.5;
 const PLAYER_ACCELERATION = 26;
 const PLAYER_JUMP_VELOCITY = 7.8;
-const PLAYER_DRAG = 5.5;
-const DYNAMIC_DRAG = 1.8;
+const PLAYER_LINEAR_DAMPING = 6.5;
+const PLAYER_ANGULAR_DAMPING = 10;
+const DYNAMIC_LINEAR_DAMPING = 1.8;
+const DYNAMIC_ANGULAR_DAMPING = 3.6;
 const MAX_DELTA_SECONDS = 0.08;
+const FLOOR_HALF_EXTENT = 4096;
 
 function nowIso() {
   return new Date().toISOString();
@@ -35,21 +41,6 @@ function vec3(input = {}, fallback = { x: 0, y: 0, z: 0 }) {
   };
 }
 
-function addVector(target, delta, scale = 1) {
-  target.x += delta.x * scale;
-  target.y += delta.y * scale;
-  target.z += delta.z * scale;
-  return target;
-}
-
-function multiplyVector(source, scale) {
-  return {
-    x: source.x * scale,
-    y: source.y * scale,
-    z: source.z * scale,
-  };
-}
-
 function vectorLength2(x, z) {
   return Math.hypot(x, z);
 }
@@ -62,36 +53,6 @@ function normalizePlanarVector(x, z) {
   return {
     x: x / length,
     z: z / length,
-  };
-}
-
-function applyDrag(value, drag, deltaSeconds) {
-  const damping = Math.max(0, 1 - drag * deltaSeconds);
-  return value * damping;
-}
-
-function buildAabb(position, halfExtents) {
-  return {
-    minX: position.x - halfExtents.x,
-    maxX: position.x + halfExtents.x,
-    minY: position.y - halfExtents.y,
-    maxY: position.y + halfExtents.y,
-    minZ: position.z - halfExtents.z,
-    maxZ: position.z + halfExtents.z,
-  };
-}
-
-function getOverlap(aabb, solid) {
-  const overlapX = Math.min(aabb.maxX, solid.maxX) - Math.max(aabb.minX, solid.minX);
-  const overlapY = Math.min(aabb.maxY, solid.maxY) - Math.max(aabb.minY, solid.minY);
-  const overlapZ = Math.min(aabb.maxZ, solid.maxZ) - Math.max(aabb.minZ, solid.minZ);
-  if (overlapX <= 0 || overlapY <= 0 || overlapZ <= 0) {
-    return null;
-  }
-  return {
-    x: overlapX,
-    y: overlapY,
-    z: overlapZ,
   };
 }
 
@@ -145,22 +106,360 @@ function parseRuleSceneTarget(rule = {}) {
   return String(rule.target_id ?? "").trim() || null;
 }
 
-function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", runtimeState = {}, tick = 0, elapsedMs = 0 } = {}) {
-  const sceneDoc = normalizeSceneDoc(sceneRow?.scene_doc ?? {});
-  const staticSolids = (sceneDoc.voxels ?? []).map((entry) => {
+function toRapierVector(input = {}) {
+  return {
+    x: mustFinite(input.x, 0),
+    y: mustFinite(input.y, 0),
+    z: mustFinite(input.z, 0),
+  };
+}
+
+function eulerToQuaternion(input = {}) {
+  const x = mustFinite(input.x, 0);
+  const y = mustFinite(input.y, 0);
+  const z = mustFinite(input.z, 0);
+  const c1 = Math.cos(x / 2);
+  const c2 = Math.cos(y / 2);
+  const c3 = Math.cos(z / 2);
+  const s1 = Math.sin(x / 2);
+  const s2 = Math.sin(y / 2);
+  const s3 = Math.sin(z / 2);
+  return {
+    x: s1 * c2 * c3 + c1 * s2 * s3,
+    y: c1 * s2 * c3 - s1 * c2 * s3,
+    z: c1 * c2 * s3 + s1 * s2 * c3,
+    w: c1 * c2 * c3 - s1 * s2 * s3,
+  };
+}
+
+function toRapierRotation(input = {}) {
+  const quaternion = eulerToQuaternion(input);
+  return new RAPIER.Quaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+}
+
+function quaternionToEuler(input = {}) {
+  const x = mustFinite(input.x, 0);
+  const y = mustFinite(input.y, 0);
+  const z = mustFinite(input.z, 0);
+  const w = mustFinite(input.w, 1);
+  const sqx = x * x;
+  const sqy = y * y;
+  const sqz = z * z;
+  const sqw = w * w;
+
+  const rotationX = Math.atan2(2 * (x * w - y * z), (sqw - sqx - sqy + sqz));
+  const rotationY = Math.asin(clampNumber(2 * (x * z + y * w), -1, 1));
+  const rotationZ = Math.atan2(2 * (z * w - x * y), (sqw + sqx - sqy - sqz));
+
+  return {
+    x: Number(rotationX.toFixed(6)),
+    y: Number(rotationY.toFixed(6)),
+    z: Number(rotationZ.toFixed(6)),
+  };
+}
+
+function buildSceneRules(sceneRow = {}, sceneDoc = {}) {
+  const compiledRuntime = sceneRow?.compiled_doc?.runtime ?? {};
+  if (Array.isArray(compiledRuntime.rules) && compiledRuntime.rules.length > 0) {
+    return cloneJson(compiledRuntime.rules);
+  }
+  if (Array.isArray(compiledRuntime.dsl_rules) && compiledRuntime.dsl_rules.length > 0) {
+    return cloneJson(compiledRuntime.dsl_rules);
+  }
+  return cloneJson(sceneDoc.rules ?? []);
+}
+
+function buildPrimitiveColliderDesc(entry = {}) {
+  const half = getBodyHalfExtents({ kind: "dynamic_object", scale: entry.scale });
+  if (entry.shape === "sphere") {
+    return RAPIER.ColliderDesc.ball(Math.max(0.08, Math.max(half.x, half.y, half.z)));
+  }
+  if (entry.shape === "cylinder") {
+    return RAPIER.ColliderDesc.cylinder(Math.max(0.08, half.y), Math.max(0.08, Math.max(half.x, half.z)));
+  }
+  if (entry.shape === "cone") {
+    return RAPIER.ColliderDesc.cone(Math.max(0.08, half.y), Math.max(0.08, Math.max(half.x, half.z)));
+  }
+  if (entry.shape === "plane") {
+    return RAPIER.ColliderDesc.cuboid(Math.max(0.1, half.x), 0.05, Math.max(0.1, half.z));
+  }
+  return RAPIER.ColliderDesc.cuboid(Math.max(0.1, half.x), Math.max(0.1, half.y), Math.max(0.1, half.z));
+}
+
+function buildPlayerColliderDesc(entry = {}) {
+  const half = getBodyHalfExtents({ kind: "player", scale: entry.scale });
+  const radius = Math.max(0.18, Math.min(half.x, half.z));
+  const halfHeight = Math.max(0.1, half.y - radius);
+  return RAPIER.ColliderDesc.capsule(halfHeight, radius);
+}
+
+function destroyPhysicsState(physics = null) {
+  if (!physics) {
+    return;
+  }
+  try {
+    physics.eventQueue?.free?.();
+  } catch (_error) {
+    // ignore
+  }
+  try {
+    physics.world?.free?.();
+  } catch (_error) {
+    // ignore
+  }
+}
+
+function createPrimitiveBody(runtime, entry) {
+  const gravityScale = mustFinite(entry.physics?.gravity_scale, entry.rigid_mode === "ghost" ? 0 : 1);
+  const friction = clampNumber(mustFinite(entry.physics?.friction, 0.7), 0, 5);
+  const restitution = clampNumber(mustFinite(entry.physics?.restitution, 0.18), 0, 1.25);
+  const mass = Math.max(0.05, mustFinite(entry.physics?.mass, 1));
+  const desc = (entry.rigid_mode === "ghost" ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.dynamic())
+    .setTranslation(entry.position.x, entry.position.y, entry.position.z)
+    .setRotation(toRapierRotation(entry.rotation))
+    .setGravityScale(gravityScale)
+    .setLinearDamping(DYNAMIC_LINEAR_DAMPING + friction)
+    .setAngularDamping(DYNAMIC_ANGULAR_DAMPING)
+    .setAdditionalMass(mass)
+    .setCanSleep(true)
+    .setCcdEnabled(true);
+  const body = runtime.physics.world.createRigidBody(desc);
+  const colliderDesc = buildPrimitiveColliderDesc(entry)
+    .setFriction(friction)
+    .setRestitution(restitution)
+    .setMass(mass)
+    .setSensor(entry.rigid_mode === "ghost");
+  const collider = runtime.physics.world.createCollider(colliderDesc, body);
+  runtime.physics.objectBodies.set(entry.id, body);
+  runtime.physics.objectColliders.set(entry.id, collider);
+  return { body, collider };
+}
+
+function createPlayerBody(runtime, entry) {
+  const gravityScale = entry.body_mode === "ghost" ? 0 : 1;
+  const desc = (entry.body_mode === "ghost" ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.fixed())
+    .setTranslation(entry.position.x, entry.position.y, entry.position.z)
+    .setRotation(toRapierRotation(entry.rotation))
+    .setGravityScale(gravityScale)
+    .setLinearDamping(PLAYER_LINEAR_DAMPING)
+    .setAngularDamping(PLAYER_ANGULAR_DAMPING)
+    .setCanSleep(false)
+    .setCcdEnabled(true)
+    .enabledRotations(false, true, false);
+  const body = runtime.physics.world.createRigidBody(desc);
+  const colliderDesc = buildPlayerColliderDesc(entry)
+    .setFriction(0.8)
+    .setRestitution(0.04)
+    .setSensor(entry.body_mode === "ghost");
+  const collider = runtime.physics.world.createCollider(colliderDesc, body);
+  runtime.physics.playerBodies.set(entry.id, body);
+  runtime.physics.playerColliders.set(entry.id, collider);
+  return { body, collider };
+}
+
+function initializeRapierRuntime(runtime) {
+  const world = new RAPIER.World(toRapierVector(runtime.gravity));
+  const physics = {
+    world,
+    eventQueue: new RAPIER.EventQueue(true),
+    playerBodies: new Map(),
+    playerColliders: new Map(),
+    objectBodies: new Map(),
+    objectColliders: new Map(),
+  };
+  runtime.physics = physics;
+
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(FLOOR_HALF_EXTENT, 0.05, FLOOR_HALF_EXTENT)
+      .setTranslation(0, -0.05, 0)
+      .setFriction(1)
+      .setRestitution(0),
+  );
+
+  for (const voxel of runtime.sceneDoc.voxels ?? []) {
     const half = {
+      x: Math.max(0.1, mustFinite(voxel.scale?.x, 1) / 2),
+      y: Math.max(0.1, mustFinite(voxel.scale?.y, 1) / 2),
+      z: Math.max(0.1, mustFinite(voxel.scale?.z, 1) / 2),
+    };
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
+        .setTranslation(voxel.position.x, voxel.position.y, voxel.position.z)
+        .setFriction(1)
+        .setRestitution(0),
+    );
+  }
+
+  for (const primitive of runtime.dynamicObjects) {
+    createPrimitiveBody(runtime, primitive);
+  }
+
+  for (const player of runtime.players) {
+    createPlayerBody(runtime, player);
+  }
+}
+
+function syncEntryFromRapierBody(entry, body) {
+  if (!body) {
+    return;
+  }
+  entry.position = vec3(body.translation(), entry.position);
+  entry.rotation = quaternionToEuler(body.rotation());
+  entry.velocity = vec3(body.linvel(), entry.velocity);
+}
+
+function syncRapierOccupancy(simulation) {
+  const physics = simulation.physics;
+  if (!physics) {
+    return;
+  }
+  for (const player of simulation.players) {
+    const body = physics.playerBodies.get(player.id);
+    if (!body) {
+      continue;
+    }
+    if (player.body_mode === "ghost") {
+      body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+      body.setGravityScale(0, true);
+      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      continue;
+    }
+    const nextType = player.occupied_by_profile_id ? RAPIER.RigidBodyType.Dynamic : RAPIER.RigidBodyType.Fixed;
+    body.setBodyType(nextType, true);
+    body.setGravityScale(1, true);
+    body.setEnabledRotations(false, true, false, true);
+    if (!player.occupied_by_profile_id) {
+      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      body.sleep();
+    } else {
+      body.wakeUp();
+    }
+  }
+}
+
+function updatePlayerLookDirection(player, desired, fallbackVelocity = null) {
+  const velocity = fallbackVelocity ?? player.velocity;
+  const dirX = Math.abs(desired.x) > 0.001 ? desired.x : mustFinite(velocity?.x, 0);
+  const dirZ = Math.abs(desired.z) > 0.001 ? desired.z : mustFinite(velocity?.z, 0);
+  if (Math.abs(dirX) <= 0.001 && Math.abs(dirZ) <= 0.001) {
+    return;
+  }
+  player.rotation.y = Number(Math.atan2(dirX, dirZ).toFixed(6));
+}
+
+function raycastPlayerGround(runtime, player) {
+  const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
+  const collider = runtime.physics?.playerColliders?.get(player.id) ?? null;
+  if (!body || !collider) {
+    return false;
+  }
+  const half = getBodyHalfExtents(player);
+  const origin = body.translation();
+  const ray = new RAPIER.Ray(origin, { x: 0, y: -1, z: 0 });
+  const hit = runtime.physics.world.castRay(ray, half.y + 0.16, true, undefined, undefined, collider, body);
+  return Boolean(hit && hit.timeOfImpact <= half.y + 0.08);
+}
+
+function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
+  const physics = runtime.physics;
+  const body = physics?.playerBodies?.get(player.id) ?? null;
+  if (!body) {
+    return;
+  }
+
+  const pressed = player.pressedKeys;
+  const left = pressed.has("a") || pressed.has("arrowleft");
+  const right = pressed.has("d") || pressed.has("arrowright");
+  const forward = pressed.has("w") || pressed.has("arrowup");
+  const backward = pressed.has("s") || pressed.has("arrowdown");
+  const sprint = pressed.has("shift");
+  const jumpEdge = inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
+  const desired = normalizePlanarVector(
+    Number(right) - Number(left),
+    Number(backward) - Number(forward),
+  );
+  updatePlayerLookDirection(player, desired);
+
+  if (player.body_mode === "ghost") {
+    const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
+    const nextPosition = {
+      x: player.position.x + desired.x * speed * deltaSeconds,
+      y: player.position.y,
+      z: player.position.z + desired.z * speed * deltaSeconds,
+    };
+    player.velocity = {
+      x: desired.x * speed,
+      y: 0,
+      z: desired.z * speed,
+    };
+    body.setNextKinematicTranslation(nextPosition);
+    body.setTranslation(nextPosition, true);
+    body.setRotation(toRapierRotation(player.rotation), true);
+    return;
+  }
+
+  const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
+  const currentVelocity = vec3(body.linvel(), player.velocity);
+  const targetVelocityX = desired.x * speed;
+  const targetVelocityZ = desired.z * speed;
+  const blend = clampNumber(PLAYER_ACCELERATION * deltaSeconds, 0, 1);
+  const nextVelocity = {
+    x: currentVelocity.x + (targetVelocityX - currentVelocity.x) * blend,
+    y: currentVelocity.y,
+    z: currentVelocity.z + (targetVelocityZ - currentVelocity.z) * blend,
+  };
+  player.onGround = raycastPlayerGround(runtime, player);
+  if (jumpEdge && player.onGround) {
+    nextVelocity.y = PLAYER_JUMP_VELOCITY;
+    player.onGround = false;
+  }
+  body.setLinvel(nextVelocity, true);
+  body.setRotation(toRapierRotation(player.rotation), true);
+}
+
+function refreshTriggerOccupancy(runtime) {
+  const activeBodies = [
+    ...runtime.players.filter((entry) => entry.occupied_by_profile_id),
+    ...runtime.dynamicObjects.filter((entry) => entry.visibility !== false),
+  ];
+
+  for (const zone of runtime.triggerZones) {
+    const previous = new Set(zone.currentOccupants);
+    const next = new Set();
+
+    for (const entry of activeBodies) {
+      if (isPointInsideZone(entry.position, zone)) {
+        next.add(entry.id);
+      }
+    }
+
+    for (const entryId of next) {
+      if (!previous.has(entryId)) {
+        executeMatchingRules(runtime, "zone_enter", (rule) => !rule.source_id || rule.source_id === zone.id);
+      }
+    }
+    for (const entryId of previous) {
+      if (!next.has(entryId)) {
+        executeMatchingRules(runtime, "zone_exit", (rule) => !rule.source_id || rule.source_id === zone.id);
+      }
+    }
+
+    zone.currentOccupants = next;
+  }
+}
+
+function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", runtimeState = {}, tick = 0, elapsedMs = 0 } = {}) {
+  const resolvedSceneDoc = sceneRow?.compiled_doc?.runtime?.resolved_scene_doc ?? sceneRow?.scene_doc ?? {};
+  const sceneDoc = normalizeSceneDoc(resolvedSceneDoc);
+  const staticSolids = (sceneDoc.voxels ?? []).map((entry) => ({
+    id: entry.id,
+    position: vec3(entry.position),
+    halfExtents: {
       x: Math.max(0.1, mustFinite(entry.scale?.x, 1) / 2),
       y: Math.max(0.1, mustFinite(entry.scale?.y, 1) / 2),
       z: Math.max(0.1, mustFinite(entry.scale?.z, 1) / 2),
-    };
-    const position = vec3(entry.position);
-    return {
-      id: entry.id,
-      position,
-      halfExtents: half,
-      ...buildAabb(position, half),
-    };
-  });
+    },
+  }));
   const players = (sceneDoc.players ?? []).map((entry) => ({
     kind: "player",
     id: entry.id,
@@ -196,6 +495,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     physics: cloneJson(entry.physics ?? {}),
     visibility: true,
     material_override: null,
+    material: cloneJson(entry.material ?? {}),
   }));
   const triggerZones = (sceneDoc.trigger_zones ?? []).map((entry) => ({
     id: entry.id,
@@ -219,11 +519,12 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     id: entry.id,
     value: entry.value,
   }]));
-  return {
+  const runtime = {
     sceneRowId: sceneRow?.id ?? null,
     sceneName: sceneRow?.name ?? "Scene",
     sceneUpdatedAt: sceneRow?.updated_at ?? sceneRow?.created_at ?? null,
     sceneDoc,
+    rules: buildSceneRules(sceneRow, sceneDoc),
     gravity: vec3(sceneDoc.settings?.gravity, { x: 0, y: -9.8, z: 0 }),
     startOnReady: sceneDoc.settings?.start_on_ready !== false,
     sceneStarted,
@@ -238,14 +539,15 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     triggerZones,
     ruleState: {
       firedRuleIds: new Set(),
-      keyRuleFrames: new Set(),
-      zoneStateByZoneId: new Map(),
     },
     particleState,
     textState,
     recentEvents: [],
     commandQueue: [],
+    physics: null,
   };
+  initializeRapierRuntime(runtime);
+  return runtime;
 }
 
 function syncParticipantOccupancy(simulation, participants = []) {
@@ -266,6 +568,8 @@ function syncParticipantOccupancy(simulation, participants = []) {
       player.ready = false;
     }
   }
+
+  syncRapierOccupancy(simulation);
 }
 
 export function createPrivateWorldSimulationState(input = {}) {
@@ -296,104 +600,6 @@ export function createPrivateWorldSimulationState(input = {}) {
   return simulation;
 }
 
-function applyAxisCollisions(body, staticSolids, axis) {
-  const half = getBodyHalfExtents(body);
-  const aabb = buildAabb(body.position, half);
-  let collided = false;
-  for (const solid of staticSolids) {
-    const overlap = getOverlap(aabb, solid);
-    if (!overlap) {
-      continue;
-    }
-    collided = true;
-    if (axis === "x") {
-      body.position.x += body.position.x >= solid.position.x ? overlap.x : -overlap.x;
-      body.velocity.x = 0;
-    } else if (axis === "y") {
-      body.position.y += body.position.y >= solid.position.y ? overlap.y : -overlap.y;
-      if (body.position.y >= solid.position.y && body.velocity.y <= 0) {
-        body.onGround = true;
-      }
-      body.velocity.y = body.velocity.y > 0 ? 0 : Math.max(0, -body.velocity.y * mustFinite(body.physics?.restitution, 0.12));
-    } else if (axis === "z") {
-      body.position.z += body.position.z >= solid.position.z ? overlap.z : -overlap.z;
-      body.velocity.z = 0;
-    }
-  }
-  return collided;
-}
-
-function resolveWorldFloor(body) {
-  const half = getBodyHalfExtents(body);
-  if (body.position.y - half.y < 0) {
-    body.position.y = half.y;
-    if (body.velocity.y <= 0) {
-      body.onGround = true;
-    }
-    body.velocity.y = body.velocity.y > 0 ? body.velocity.y : Math.max(0, -body.velocity.y * mustFinite(body.physics?.restitution, 0.12));
-  }
-}
-
-function simulateBody(body, simulation, deltaSeconds) {
-  const gravityScale = mustFinite(body.physics?.gravity_scale, body.kind === "player" ? 1 : 1);
-  const drag = body.kind === "player"
-    ? PLAYER_DRAG + mustFinite(body.physics?.friction, 0.72)
-    : DYNAMIC_DRAG + mustFinite(body.physics?.friction, 0.72);
-  body.onGround = false;
-
-  if (body.kind !== "player" || body.body_mode !== "ghost") {
-    body.velocity.x += simulation.gravity.x * gravityScale * deltaSeconds;
-    body.velocity.y += simulation.gravity.y * gravityScale * deltaSeconds;
-    body.velocity.z += simulation.gravity.z * gravityScale * deltaSeconds;
-  }
-
-  body.position.x += body.velocity.x * deltaSeconds;
-  applyAxisCollisions(body, simulation.staticSolids, "x");
-
-  body.position.y += body.velocity.y * deltaSeconds;
-  applyAxisCollisions(body, simulation.staticSolids, "y");
-  resolveWorldFloor(body);
-
-  body.position.z += body.velocity.z * deltaSeconds;
-  applyAxisCollisions(body, simulation.staticSolids, "z");
-
-  body.velocity.x = applyDrag(body.velocity.x, drag, deltaSeconds);
-  body.velocity.z = applyDrag(body.velocity.z, drag, deltaSeconds);
-  if (body.onGround) {
-    body.velocity.y = Math.max(-0.01, body.velocity.y);
-  }
-}
-
-function applyPlayerInput(player, inputEdges = [], deltaSeconds) {
-  const pressed = player.pressedKeys;
-  const left = pressed.has("a") || pressed.has("arrowleft");
-  const right = pressed.has("d") || pressed.has("arrowright");
-  const forward = pressed.has("w") || pressed.has("arrowup");
-  const backward = pressed.has("s") || pressed.has("arrowdown");
-  const sprint = pressed.has("shift");
-  const jumpEdge = inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
-
-  const desired = normalizePlanarVector(
-    Number(right) - Number(left),
-    Number(backward) - Number(forward),
-  );
-  const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
-  player.velocity.x += desired.x * PLAYER_ACCELERATION * deltaSeconds;
-  player.velocity.z += desired.z * PLAYER_ACCELERATION * deltaSeconds;
-
-  const planarSpeed = vectorLength2(player.velocity.x, player.velocity.z);
-  if (planarSpeed > speed) {
-    const normalized = normalizePlanarVector(player.velocity.x, player.velocity.z);
-    player.velocity.x = normalized.x * speed;
-    player.velocity.z = normalized.z * speed;
-  }
-
-  if (jumpEdge && player.onGround) {
-    player.velocity.y = PLAYER_JUMP_VELOCITY;
-    player.onGround = false;
-  }
-}
-
 function executeRuleAction(simulation, rule, context = {}) {
   const markRuleFired = () => {
     if (context.oneShot === true) {
@@ -405,7 +611,17 @@ function executeRuleAction(simulation, rule, context = {}) {
     const target = findTargetBody(simulation, targetId);
     if (target) {
       const force = vec3(rule.payload?.force, { x: 0, y: 0, z: 0 });
-      addVector(target.velocity, force);
+      const body = simulation.physics?.playerBodies?.get(target.id)
+        ?? simulation.physics?.objectBodies?.get(target.id)
+        ?? null;
+      if (body && typeof body.applyImpulse === "function") {
+        body.applyImpulse(force, true);
+      }
+      target.velocity = {
+        x: mustFinite(target.velocity?.x, 0) + force.x,
+        y: mustFinite(target.velocity?.y, 0) + force.y,
+        z: mustFinite(target.velocity?.z, 0) + force.z,
+      };
       pushRuntimeEvent(simulation, {
         type: "apply_force",
         rule_id: rule.id,
@@ -420,8 +636,15 @@ function executeRuleAction(simulation, rule, context = {}) {
     const target = findTargetBody(simulation, targetId);
     if (target) {
       const nextPosition = vec3(rule.payload?.position, target.position);
+      const body = simulation.physics?.playerBodies?.get(target.id)
+        ?? simulation.physics?.objectBodies?.get(target.id)
+        ?? null;
       target.position = nextPosition;
       target.velocity = { x: 0, y: 0, z: 0 };
+      if (body) {
+        body.setTranslation(nextPosition, true);
+        body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      }
       pushRuntimeEvent(simulation, {
         type: "teleport",
         rule_id: rule.id,
@@ -528,11 +751,12 @@ function executeRuleAction(simulation, rule, context = {}) {
     markRuleFired();
     return;
   }
+
   markRuleFired();
 }
 
 function executeMatchingRules(simulation, trigger, predicate = () => true, context = {}) {
-  const matchingRules = (simulation.sceneDoc.rules ?? []).filter((rule) => rule.trigger === trigger && predicate(rule));
+  const matchingRules = (simulation.rules ?? []).filter((rule) => rule.trigger === trigger && predicate(rule));
   for (const rule of matchingRules) {
     executeRuleAction(simulation, rule, context);
   }
@@ -567,6 +791,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
 
   const occupiedPlayers = simulation.players.filter((entry) => entry.occupied_by_profile_id);
   const allPlayersReady = occupiedPlayers.length > 0 && occupiedPlayers.every((entry) => entry.ready === true);
+
   if (!simulation.sceneStarted && simulation.startOnReady && allPlayersReady) {
     simulation.sceneStarted = true;
     simulation.status = "started";
@@ -594,9 +819,11 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
   simulation.elapsedMs += deltaSeconds * 1000;
   simulation.tick += 1;
 
+  syncRapierOccupancy(simulation);
+
   for (const player of occupiedPlayers) {
     const inputEdges = inputEdgesByPlayerId.get(player.id) ?? [];
-    applyPlayerInput(player, inputEdges, deltaSeconds);
+    applyPlayerMovement(player, inputEdges, deltaSeconds, simulation);
     for (const edge of inputEdges) {
       if (edge.state !== "down") {
         continue;
@@ -612,47 +839,24 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
     }
   }
 
-  for (const player of occupiedPlayers) {
-    if (player.body_mode === "ghost") {
-      continue;
+  if (simulation.physics?.world) {
+    simulation.physics.world.gravity = toRapierVector(simulation.gravity);
+    simulation.physics.world.timestep = deltaSeconds;
+    simulation.physics.world.step(simulation.physics.eventQueue);
+
+    for (const player of simulation.players) {
+      syncEntryFromRapierBody(player, simulation.physics.playerBodies.get(player.id));
+      player.onGround = player.body_mode === "ghost" ? false : raycastPlayerGround(simulation, player);
     }
-    player.physics = {
-      gravity_scale: 1,
-      friction: 0.72,
-      restitution: 0.12,
-    };
-    simulateBody(player, simulation, deltaSeconds);
+
+    for (const object of simulation.dynamicObjects) {
+      syncEntryFromRapierBody(object, simulation.physics.objectBodies.get(object.id));
+    }
   }
 
-  for (const object of simulation.dynamicObjects) {
-    if (object.rigid_mode !== "rigid") {
-      continue;
-    }
-    simulateBody(object, simulation, deltaSeconds);
-  }
+  refreshTriggerOccupancy(simulation);
 
-  for (const zone of simulation.triggerZones) {
-    const previous = new Set(zone.currentOccupants);
-    const next = new Set();
-    for (const player of occupiedPlayers) {
-      if (isPointInsideZone(player.position, zone)) {
-        next.add(player.id);
-      }
-    }
-    for (const playerId of next) {
-      if (!previous.has(playerId)) {
-        executeMatchingRules(simulation, "zone_enter", (rule) => !rule.source_id || rule.source_id === zone.id);
-      }
-    }
-    for (const playerId of previous) {
-      if (!next.has(playerId)) {
-        executeMatchingRules(simulation, "zone_exit", (rule) => !rule.source_id || rule.source_id === zone.id);
-      }
-    }
-    zone.currentOccupants = next;
-  }
-
-  for (const rule of simulation.sceneDoc.rules ?? []) {
+  for (const rule of simulation.rules ?? []) {
     if (rule.trigger !== "timer") {
       continue;
     }
@@ -666,7 +870,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
   }
 
   if (allPlayersReady) {
-    for (const rule of simulation.sceneDoc.rules ?? []) {
+    for (const rule of simulation.rules ?? []) {
       if (rule.trigger !== "all_players_ready" || simulation.ruleState.firedRuleIds.has(rule.id)) {
         continue;
       }
@@ -699,6 +903,8 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       velocity: cloneJson(entry.velocity),
       camera_mode: entry.camera_mode,
       body_mode: entry.body_mode,
+      occupiable: entry.occupiable !== false,
+      occupied_by_profile_id: entry.occupied_by_profile_id,
       occupied_by_username: entry.occupied_by_username,
       occupied_by_display_name: entry.occupied_by_display_name,
       ready: entry.ready === true,
@@ -714,12 +920,13 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       velocity: cloneJson(entry.velocity),
       rigid_mode: entry.rigid_mode,
       visible: entry.visibility !== false,
+      material: cloneJson(entry.material),
       material_override: cloneJson(entry.material_override),
     })),
     trigger_zones: runtime.triggerZones.map((entry) => ({
       id: entry.id,
       label: entry.label,
-      occupant_player_ids: [...entry.currentOccupants],
+      occupant_ids: [...entry.currentOccupants],
     })),
     particles: Object.values(runtime.particleState).map((entry) => cloneJson(entry)),
     texts: Object.values(runtime.textState).map((entry) => cloneJson(entry)),
@@ -834,6 +1041,9 @@ export class PrivateWorldRuntime {
       clearInterval(this.interval);
       this.interval = null;
     }
+    for (const simulation of this.instancesById.values()) {
+      destroyPhysicsState(simulation.runtime?.physics);
+    }
     this.instancesById.clear();
     this.keysByWorldRef.clear();
   }
@@ -857,6 +1067,8 @@ export class PrivateWorldRuntime {
     if (!context.instance) {
       const staleInstanceId = this.keysByWorldRef.get(key);
       if (staleInstanceId) {
+        const staleSimulation = this.instancesById.get(staleInstanceId);
+        destroyPhysicsState(staleSimulation?.runtime?.physics);
         this.instancesById.delete(staleInstanceId);
       }
       this.keysByWorldRef.delete(key);
@@ -896,6 +1108,7 @@ export class PrivateWorldRuntime {
         simulation.runtime.sceneRowId !== activeScene.id
         || simulation.runtime.sceneUpdatedAt !== (activeScene.updated_at ?? activeScene.created_at ?? null)
       ) {
+        destroyPhysicsState(simulation.runtime.physics);
         simulation.runtime = seedSceneRuntime(activeScene, {
           sceneStarted: context.instance.status === "started" || runtimeState.scene_started === true,
           status: context.instance.status,
@@ -1032,6 +1245,7 @@ export class PrivateWorldRuntime {
           ready: entry.ready === true,
         },
       }));
+    destroyPhysicsState(simulation.runtime.physics);
     simulation.activeSceneId = sceneId;
     simulation.runtime = seedSceneRuntime(nextScene, {
       sceneStarted: true,
