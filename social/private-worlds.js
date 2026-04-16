@@ -3791,7 +3791,6 @@ function buildPreviewEnvironment(preview) {
   const environment = new THREE.Group();
   preview.scene.add(environment);
   preview.environment = environment;
-  preview.ground = null;
   preview.buildGrid = null;
   refreshPrivatePreviewEnvironment(preview);
 }
@@ -3833,19 +3832,6 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   preview.environmentKey = nextKey;
   clearPrivatePreviewEnvironment(preview);
 
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(bounds.width, bounds.length),
-    new THREE.MeshBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.ground),
-      transparent: true,
-      opacity: 1,
-      side: THREE.DoubleSide,
-    }),
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.04;
-  preview.environment.add(floor);
-
   const gridSize = Math.max(bounds.width, bounds.length);
   const gridDivisions = Math.max(8, Math.min(96, Math.round(gridSize)));
   const grid = new THREE.GridHelper(gridSize, gridDivisions, "#d8e9ff", "#edf5ff");
@@ -3857,8 +3843,6 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
     material.fog = false;
   }
   preview.environment.add(grid);
-
-  preview.ground = floor;
   preview.buildGrid = grid;
   syncPrivatePreviewEnvironmentState(preview);
 }
@@ -3867,7 +3851,8 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   if (!preview?.buildGrid) {
     return;
   }
-  preview.buildGrid.visible = state.mode === "build" && isEditor();
+  const buildMode = state.mode === "build" && isEditor();
+  preview.buildGrid.visible = buildMode;
 }
 
 function buildWorldBoundsPreview(world = state.selectedWorld) {
