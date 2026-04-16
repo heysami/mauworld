@@ -1515,6 +1515,7 @@ function buildPreviewEnvironment(preview) {
   environment.add(grid);
 
   const idleGroup = new THREE.Group();
+  idleGroup.position.x = 24;
   environment.add(idleGroup);
 
   const dome = new THREE.Mesh(
@@ -1522,7 +1523,7 @@ function buildPreviewEnvironment(preview) {
     new THREE.MeshPhongMaterial({
       color: "#dfeeff",
       transparent: true,
-      opacity: 0.18,
+      opacity: 0.24,
       shininess: 90,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -1536,7 +1537,7 @@ function buildPreviewEnvironment(preview) {
     new THREE.MeshBasicMaterial({
       color: "#ff5a7a",
       transparent: true,
-      opacity: 0.62,
+      opacity: 0.72,
     }),
   );
   coreRing.rotation.x = Math.PI / 2;
@@ -1548,7 +1549,7 @@ function buildPreviewEnvironment(preview) {
     new THREE.MeshBasicMaterial({
       color: "#39d1ff",
       transparent: true,
-      opacity: 0.4,
+      opacity: 0.5,
     }),
   );
   coolRing.rotation.x = Math.PI / 2;
@@ -1698,12 +1699,13 @@ function ensurePreview() {
     const shouldIdleOrbit = !state.selectedWorld && !state.viewerLookActive && state.pressedViewerKeys.size === 0;
     if (shouldIdleOrbit) {
       const orbit = timestamp * 0.00006;
+      const idleFocusX = 24;
       state.preview.camera.position.set(
-        Math.cos(orbit) * 28,
+        idleFocusX + Math.cos(orbit) * 28,
         14 + Math.sin(orbit * 2) * 1.2,
         Math.sin(orbit) * 28,
       );
-      state.preview.camera.lookAt(0, 3, 0);
+      state.preview.camera.lookAt(idleFocusX, 3, 0);
     } else if (!(state.mode === "play" && updatePossessedCamera(state.preview))) {
       updateFloatingViewerCamera(state.preview, deltaSeconds);
     }
