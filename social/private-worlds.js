@@ -1138,9 +1138,9 @@ function getViewerSpawnPosition(world = state.selectedWorld) {
   const width = Math.max(12, Number(world?.width ?? 40) || 40);
   const length = Math.max(12, Number(world?.length ?? 40) || 40);
   return new THREE.Vector3(
-    Math.max(-width * 0.12, -6),
+    clampNumber(-width * 0.06, -2, -4, 4),
     rig.spawnHeight,
-    Math.min(length * 0.26, 26),
+    clampNumber(length * 0.08, 0, -4, 8),
   );
 }
 
@@ -1208,7 +1208,7 @@ function clampViewerPositionToWorldBounds(position, world = state.selectedWorld)
 function resetViewerRig(world = state.selectedWorld) {
   const rig = getPrivateViewerRigConfig(world);
   privateInputState.yaw = 0;
-  privateInputState.pitch = 0.66;
+  privateInputState.pitch = world ? -0.34 : 0.66;
   privateInputState.sprintHoldSeconds = 0;
   privateInputState.pointerDown = false;
   privateInputState.pointerMoved = false;
@@ -1333,11 +1333,20 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
   );
   const cosPitch = Math.cos(privateInputState.pitch);
   const heightBias = Math.max(4.8, rig.spawnHeight * 0.46);
-  preview.camera.position.set(
+  const nextPosition = new THREE.Vector3(
     target.x + Math.sin(privateInputState.yaw) * cosPitch * radius,
     Math.max(2.8, target.y + heightBias - Math.sin(privateInputState.pitch) * radius),
     target.z + Math.cos(privateInputState.yaw) * cosPitch * radius,
   );
+  if (state.selectedWorld) {
+    const bounds = getPrivateWorldBounds();
+    const span = Math.max(bounds.width, bounds.length);
+    const margin = clampNumber(span * 0.08, 4, 2, 8);
+    nextPosition.x = clampNumber(nextPosition.x, nextPosition.x, bounds.minX - margin, bounds.maxX + margin);
+    nextPosition.z = clampNumber(nextPosition.z, nextPosition.z, bounds.minZ - margin, bounds.maxZ + margin);
+    nextPosition.y = clampNumber(nextPosition.y, nextPosition.y, Math.max(bounds.minY + 2.8, 2.8), bounds.maxY + 10);
+  }
+  preview.camera.position.copy(nextPosition);
   preview.camera.lookAt(target);
   state.viewerCameraPosition.copy(preview.camera.position);
 }
