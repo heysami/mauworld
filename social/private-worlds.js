@@ -3995,25 +3995,26 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   }
   const noWorld = !state.selectedWorld;
   const buildMode = state.mode === "build" && isEditor();
+  const showGridHint = preview.showGridHint === true;
   if (preview.ground) {
     preview.ground.visible = true;
   }
   if (preview.groundRim) {
     preview.groundRim.visible = true;
-    preview.groundRim.material.opacity = noWorld ? 0.46 : 0.28;
+    preview.groundRim.material.opacity = noWorld ? 0.46 : (showGridHint ? 0.38 : 0.28);
   }
-  preview.buildGrid.visible = buildMode || noWorld;
+  preview.buildGrid.visible = buildMode || noWorld || showGridHint;
   if (preview.buildGrid.material) {
     const materials = Array.isArray(preview.buildGrid.material)
       ? preview.buildGrid.material
       : [preview.buildGrid.material];
     for (const material of materials) {
-      material.opacity = noWorld ? 0.2 : (buildMode ? 0.32 : 0);
+      material.opacity = noWorld ? 0.2 : (showGridHint ? 0.18 : (buildMode ? 0.32 : 0));
     }
   }
   if (preview.buildFootprint) {
     preview.buildFootprint.visible = true;
-    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (buildMode ? 0.44 : 0.16);
+    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (showGridHint ? 0.28 : (buildMode ? 0.44 : 0.16));
   }
 }
 
@@ -4537,6 +4538,8 @@ function updatePreviewFromSelection() {
     || (sceneDoc.screens?.length ?? 0)
     || (sceneDoc.text3d?.length ?? 0),
   );
+  preview.showGridHint = !hasPlacedGeometry;
+  syncPrivatePreviewEnvironmentState(preview);
   const boundsPreview = (state.mode === "build" && isEditor()) || !hasPlacedGeometry
     ? buildWorldBoundsPreview(state.selectedWorld)
     : null;
