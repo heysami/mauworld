@@ -504,8 +504,10 @@ function serializeCollaborator(row) {
   };
 }
 
-function serializeVisibleParticipant(row) {
-  if (row.visible_to_others === false) {
+function serializeVisibleParticipant(row, { guestSessionId = "" } = {}) {
+  const requesterGuestSessionId = String(guestSessionId ?? "").trim();
+  const isLocalGuest = !row.profile_id && requesterGuestSessionId && row.guest_session_id === requesterGuestSessionId;
+  if (row.visible_to_others === false && !isLocalGuest) {
     return null;
   }
   return {
@@ -546,7 +548,14 @@ async function syncRuntimeForWorld(store, world, creator) {
   });
 }
 
-async function buildWorldDetail(store, { world, creator, requesterProfile = null, includeContent = false, allowGuest = false } = {}) {
+async function buildWorldDetail(store, {
+  world,
+  creator,
+  requesterProfile = null,
+  guestSessionId = "",
+  includeContent = false,
+  allowGuest = false,
+} = {}) {
   const collaborators = await loadWorldCollaborators(store, world.id);
   const collaboratorRole = requesterProfile
     ? collaborators.find((row) => row.profile_id === requesterProfile.id)?.role ?? null
@@ -639,7 +648,9 @@ async function buildWorldDetail(store, { world, creator, requesterProfile = null
               length: activeInstance.miniature_length,
               height: activeInstance.miniature_height,
             },
-            participants: activeParticipants.map(serializeVisibleParticipant).filter(Boolean),
+            participants: activeParticipants
+              .map((row) => serializeVisibleParticipant(row, { guestSessionId }))
+              .filter(Boolean),
             viewer_count: activeParticipants.length,
             visible_participant_count: activeParticipants.filter((row) => row.visible_to_others !== false).length,
             runtime: runtimeSnapshot,
@@ -984,6 +995,7 @@ export function installPrivateWorldStore(MauworldStore) {
       world,
       creator,
       requesterProfile: input.profile ?? null,
+      guestSessionId: input.guestSessionId ?? "",
       includeContent: input.includeContent === true,
       allowGuest: input.allowGuest === true,
     });
@@ -1492,6 +1504,7 @@ export function installPrivateWorldStore(MauworldStore) {
       world,
       creator,
       requesterProfile,
+      guestSessionId: input.guestSessionId ?? "",
       includeContent: requesterProfile ? false : false,
       allowGuest: !requesterProfile,
     });
@@ -1673,6 +1686,7 @@ export function installPrivateWorldStore(MauworldStore) {
       world,
       creator,
       requesterProfile,
+      guestSessionId,
       includeContent: true,
       allowGuest: !requesterProfile,
     });

@@ -4932,6 +4932,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
     search: {
       creatorUsername,
       includeContent: includeContent ? "true" : "false",
+      guestSessionId: state.session ? undefined : getGuestSessionId(),
     },
   });
   const nextWorldKey = payload.world ? `${payload.world.world_id}:${payload.world.creator.username}` : "";

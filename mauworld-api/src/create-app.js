@@ -378,6 +378,7 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       worldId: requireString(req.params.worldId, "worldId"),
       creatorUsername: requireString(req.query.creatorUsername, "creatorUsername"),
       profile: verified?.profile ?? null,
+      guestSessionId: req.query.guestSessionId,
       includeContent: req.query.includeContent === "true",
       allowGuest: !verified,
     });

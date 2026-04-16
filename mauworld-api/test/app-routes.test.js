@@ -475,6 +475,41 @@ test("private world export endpoint returns a forkable package attachment", asyn
   assert.match(String(response.headers["content-disposition"] || ""), /mw_origin123\.mauworld\.json/i);
 });
 
+test("private world detail forwards guest session ids for guest viewers", async () => {
+  let capturedInput = null;
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: {
+      ...createStubStore(),
+      async getPrivateWorldDetail(input) {
+        capturedInput = input;
+        return {
+          world: {
+            world_id: input.worldId,
+            creator: {
+              username: input.creatorUsername,
+            },
+          },
+        };
+      },
+    },
+  });
+
+  const response = await request(app)
+    .get("/api/private/worlds/mw_origin123")
+    .query({
+      creatorUsername: "maker",
+      guestSessionId: "guest_123",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(capturedInput.worldId, "mw_origin123");
+  assert.equal(capturedInput.creatorUsername, "maker");
+  assert.equal(capturedInput.guestSessionId, "guest_123");
+  assert.equal(capturedInput.allowGuest, true);
+});
+
 test("private world runtime input endpoint accepts player controls", async () => {
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
