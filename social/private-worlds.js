@@ -1115,6 +1115,9 @@ function setLauncherTab(tab) {
 }
 
 function getViewerSpawnPosition(world = state.selectedWorld) {
+  if (!world) {
+    return new THREE.Vector3(0, PRIVATE_CAMERA.minY, 0);
+  }
   const width = Math.max(12, Number(world?.width ?? 40) || 40);
   const length = Math.max(12, Number(world?.length ?? 40) || 40);
   return new THREE.Vector3(
@@ -1125,9 +1128,9 @@ function getViewerSpawnPosition(world = state.selectedWorld) {
 }
 
 function getPrivateWorldBounds(world = state.selectedWorld) {
-  const width = Math.max(4, Number(world?.width ?? 40) || 40);
-  const length = Math.max(4, Number(world?.length ?? 40) || 40);
-  const height = Math.max(2, Number(world?.height ?? 10) || 10);
+  const width = Math.max(4, Number(world?.width ?? (world ? 40 : 64)) || (world ? 40 : 64));
+  const length = Math.max(4, Number(world?.length ?? (world ? 40 : 64)) || (world ? 40 : 64));
+  const height = Math.max(2, Number(world?.height ?? (world ? 10 : 12)) || (world ? 10 : 12));
   return {
     width,
     length,
