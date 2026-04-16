@@ -30,6 +30,23 @@ body.private-worlds-body {
     #07101a;
 }
 
+.private-worlds-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 22% 22%, rgba(255, 255, 255, 0.22), transparent 26%),
+    linear-gradient(90deg, rgba(4, 10, 18, 0.56) 0%, rgba(4, 10, 18, 0.24) 48%, rgba(4, 10, 18, 0.12) 100%);
+  transition: opacity 220ms ease;
+}
+
+body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
+  opacity: 1;
+}
+
 .pw-canvas,
 .pw-atmosphere,
 .pw-grid-glow {
@@ -89,6 +106,11 @@ body.private-worlds-body {
   box-shadow: var(--pw-shadow);
 }
 
+body.private-worlds-body.is-launcher-open .pw-topbar {
+  right: auto;
+  width: min(860px, calc(100vw - 36px));
+}
+
 .pw-topbar__cluster {
   display: flex;
   align-items: center;
@@ -99,6 +121,11 @@ body.private-worlds-body {
 .pw-topbar__cluster--compact {
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+body.private-worlds-body.is-launcher-open .pw-topbar__cluster--compact,
+body.private-worlds-body:not(.has-world) .pw-topbar__cluster--compact {
+  display: none;
 }
 
 .pw-world-identity {
@@ -247,7 +274,7 @@ body.private-worlds-body {
 .pw-launcher {
   top: 92px;
   left: 18px;
-  width: min(760px, calc(100vw - 36px));
+  width: min(860px, calc(100vw - 36px));
   max-height: calc(100dvh - 110px);
   overflow: auto;
   transform: translate3d(-120%, 0, 0);
@@ -294,8 +321,20 @@ body.private-worlds-body.is-launcher-open .pw-launcher {
 
 .pw-launcher__grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(340px, 1.1fr);
+  gap: 16px;
+}
+
+.pw-launcher__grid > :nth-child(2) {
+  grid-row: span 2;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03)),
+    radial-gradient(circle at top right, rgba(57, 209, 255, 0.12), transparent 34%);
+  border-color: rgba(154, 188, 255, 0.28);
+}
+
+.pw-launcher__grid > :nth-child(2) .pw-panel__header h2 {
+  font-size: 1.14rem;
 }
 
 .pw-panel,
@@ -717,13 +756,19 @@ body.private-worlds-body.is-launcher-open .pw-scene-dock,
 body.private-worlds-body.is-launcher-open .pw-inspector,
 body.private-worlds-body.is-launcher-open .pw-scene-drawer,
 body.private-worlds-body.is-launcher-open .pw-world-menu {
-  opacity: 0.18;
+  opacity: 0;
+  visibility: hidden;
   pointer-events: none;
+  transform: translate3d(0, 12px, 0);
 }
 
 @media (max-width: 1120px) {
   .pw-launcher__grid {
     grid-template-columns: 1fr;
+  }
+
+  .pw-launcher__grid > :nth-child(2) {
+    grid-row: auto;
   }
 
   .pw-scene-drawer {
@@ -799,6 +844,10 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
   .pw-launcher {
     top: 84px;
     max-height: calc(100dvh - 94px);
+  }
+
+  body.private-worlds-body.is-launcher-open .pw-topbar {
+    width: calc(100vw - 20px);
   }
 
   .pw-toolbelt {

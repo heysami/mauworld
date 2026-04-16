@@ -1468,6 +1468,159 @@ function updatePossessedCamera(preview) {
   return true;
 }
 
+function buildPreviewEnvironment(preview) {
+  const environment = new THREE.Group();
+  preview.scene.add(environment);
+
+  const floor = new THREE.Mesh(
+    new THREE.CircleGeometry(168, 96),
+    new THREE.MeshStandardMaterial({
+      color: "#fbfdff",
+      roughness: 0.92,
+      metalness: 0.02,
+    }),
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -0.03;
+  environment.add(floor);
+
+  const floorHalo = new THREE.Mesh(
+    new THREE.RingGeometry(18, 44, 80),
+    new THREE.MeshBasicMaterial({
+      color: "#e8f3ff",
+      transparent: true,
+      opacity: 0.68,
+      side: THREE.DoubleSide,
+    }),
+  );
+  floorHalo.rotation.x = -Math.PI / 2;
+  floorHalo.position.y = 0.02;
+  environment.add(floorHalo);
+
+  const pad = new THREE.Mesh(
+    new THREE.CylinderGeometry(12, 14, 0.9, 56),
+    new THREE.MeshStandardMaterial({
+      color: "#ffffff",
+      roughness: 0.88,
+      metalness: 0.03,
+    }),
+  );
+  pad.position.set(0, -0.45, 0);
+  environment.add(pad);
+
+  const grid = new THREE.GridHelper(48, 24, "#9ab4d4", "#d4dfed");
+  grid.position.y = 0;
+  grid.material.opacity = 0.56;
+  grid.material.transparent = true;
+  environment.add(grid);
+
+  const idleGroup = new THREE.Group();
+  environment.add(idleGroup);
+
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(11.6, 36, 24, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshPhongMaterial({
+      color: "#dfeeff",
+      transparent: true,
+      opacity: 0.18,
+      shininess: 90,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  dome.scale.y = 0.68;
+  idleGroup.add(dome);
+
+  const coreRing = new THREE.Mesh(
+    new THREE.TorusGeometry(8.4, 0.12, 18, 64),
+    new THREE.MeshBasicMaterial({
+      color: "#ff5a7a",
+      transparent: true,
+      opacity: 0.62,
+    }),
+  );
+  coreRing.rotation.x = Math.PI / 2;
+  coreRing.position.y = 1.2;
+  idleGroup.add(coreRing);
+
+  const coolRing = new THREE.Mesh(
+    new THREE.TorusGeometry(9.8, 0.08, 18, 64),
+    new THREE.MeshBasicMaterial({
+      color: "#39d1ff",
+      transparent: true,
+      opacity: 0.4,
+    }),
+  );
+  coolRing.rotation.x = Math.PI / 2;
+  coolRing.position.y = 1.24;
+  idleGroup.add(coolRing);
+
+  const beaconPositions = [
+    { x: -8.5, z: 5.4, color: "#39d1ff", height: 5.2, scale: 1.2 },
+    { x: 0, z: -7.2, color: "#ff5a7a", height: 6.2, scale: 1.4 },
+    { x: 8.5, z: 5.4, color: "#90ec73", height: 4.8, scale: 1.12 },
+  ];
+  const idleBeacons = [];
+  for (const entry of beaconPositions) {
+    const beacon = new THREE.Group();
+    const column = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.72 * entry.scale, 0.9 * entry.scale, entry.height, 28),
+      new THREE.MeshStandardMaterial({
+        color: "#ffffff",
+        roughness: 0.74,
+        metalness: 0.06,
+        emissive: entry.color,
+        emissiveIntensity: 0.12,
+      }),
+    );
+    column.position.y = entry.height / 2;
+    const glow = new THREE.Mesh(
+      new THREE.SphereGeometry(0.95 * entry.scale, 18, 18),
+      new THREE.MeshBasicMaterial({
+        color: entry.color,
+        transparent: true,
+        opacity: 0.22,
+      }),
+    );
+    glow.position.y = entry.height + 0.6;
+    beacon.add(column);
+    beacon.add(glow);
+    beacon.position.set(entry.x, 0, entry.z);
+    idleGroup.add(beacon);
+    idleBeacons.push({ group: beacon, glow });
+  }
+
+  const particleGeometry = new THREE.BufferGeometry();
+  const particleCount = 220;
+  const particlePositions = new Float32Array(particleCount * 3);
+  for (let index = 0; index < particleCount; index += 1) {
+    const radius = 18 + Math.random() * 42;
+    const angle = Math.random() * Math.PI * 2;
+    particlePositions[index * 3] = Math.cos(angle) * radius;
+    particlePositions[index * 3 + 1] = 6 + Math.random() * 18;
+    particlePositions[index * 3 + 2] = Math.sin(angle) * radius;
+  }
+  particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+  const idleParticleField = new THREE.Points(
+    particleGeometry,
+    new THREE.PointsMaterial({
+      color: "#dcecff",
+      size: 0.16,
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+    }),
+  );
+  environment.add(idleParticleField);
+
+  preview.environment = environment;
+  preview.idleGroup = idleGroup;
+  preview.idleCoreRing = coreRing;
+  preview.idleCoolRing = coolRing;
+  preview.idleBeacons = idleBeacons;
+  preview.idleParticleField = idleParticleField;
+}
+
 function ensurePreview() {
   if (state.preview || !elements.previewCanvas) {
     return state.preview;
@@ -1480,22 +1633,23 @@ function ensurePreview() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(elements.previewCanvas.clientWidth || 640, 360, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.06;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#eef4fb");
+  scene.background = new THREE.Color("#f7fbff");
+  scene.fog = new THREE.Fog("#eef6ff", 44, 180);
 
   const camera = new THREE.PerspectiveCamera(48, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 5000);
-  camera.position.set(18, 18, 24);
-  camera.lookAt(0, 0, 0);
+  camera.position.set(22, 14, 28);
+  camera.lookAt(0, 3, 0);
 
-  const ambient = new THREE.AmbientLight("#ffffff", 1.2);
-  const light = new THREE.DirectionalLight("#ffffff", 1.4);
-  light.position.set(16, 24, 12);
-  scene.add(ambient, light);
-
-  const grid = new THREE.GridHelper(48, 24, "#9ab4d4", "#d4dfed");
-  grid.position.y = 0;
-  scene.add(grid);
+  const ambient = new THREE.HemisphereLight("#ffffff", "#bfd3eb", 1.45);
+  const sunLight = new THREE.DirectionalLight("#fff6de", 1.42);
+  sunLight.position.set(18, 26, 14);
+  const rimLight = new THREE.DirectionalLight("#9be9ff", 0.62);
+  rimLight.position.set(-18, 16, -10);
+  scene.add(ambient, sunLight, rimLight);
 
   state.preview = {
     renderer,
@@ -1508,6 +1662,7 @@ function ensurePreview() {
     effectSystems: [],
     lastFrameAt: performance.now(),
   };
+  buildPreviewEnvironment(state.preview);
   state.preview.scene.add(state.preview.root);
 
   const render = (timestamp = performance.now()) => {
@@ -1521,7 +1676,35 @@ function ensurePreview() {
     state.preview.camera.aspect = width / Math.max(1, height);
     state.preview.camera.updateProjectionMatrix();
     state.preview.renderer.setSize(width, height, false);
-    if (!(state.mode === "play" && updatePossessedCamera(state.preview))) {
+    if (state.preview.idleGroup) {
+      state.preview.idleGroup.rotation.y = timestamp * 0.00008;
+      state.preview.idleGroup.position.y = Math.sin(timestamp * 0.00055) * 0.14;
+    }
+    if (state.preview.idleCoreRing) {
+      state.preview.idleCoreRing.rotation.z += deltaSeconds * 0.18;
+    }
+    if (state.preview.idleCoolRing) {
+      state.preview.idleCoolRing.rotation.z -= deltaSeconds * 0.12;
+    }
+    if (state.preview.idleBeacons?.length) {
+      state.preview.idleBeacons.forEach((entry, index) => {
+        entry.group.position.y = Math.sin(timestamp * 0.001 + index * 1.4) * 0.22;
+        entry.glow.scale.setScalar(1 + Math.sin(timestamp * 0.0014 + index) * 0.06);
+      });
+    }
+    if (state.preview.idleParticleField) {
+      state.preview.idleParticleField.rotation.y += deltaSeconds * 0.01;
+    }
+    const shouldIdleOrbit = !state.selectedWorld && !state.viewerLookActive && state.pressedViewerKeys.size === 0;
+    if (shouldIdleOrbit) {
+      const orbit = timestamp * 0.00006;
+      state.preview.camera.position.set(
+        Math.cos(orbit) * 28,
+        14 + Math.sin(orbit * 2) * 1.2,
+        Math.sin(orbit) * 28,
+      );
+      state.preview.camera.lookAt(0, 3, 0);
+    } else if (!(state.mode === "play" && updatePossessedCamera(state.preview))) {
       updateFloatingViewerCamera(state.preview, deltaSeconds);
     }
     updatePreviewEffects(state.preview, timestamp / 1000);
@@ -1793,15 +1976,24 @@ function updatePreviewFromSelection() {
   if (!preview) {
     return;
   }
+  if (preview.idleGroup) {
+    preview.idleGroup.visible = !state.selectedWorld;
+  }
 
   let sceneDoc = null;
   try {
     sceneDoc = getRenderableSceneDoc();
   } catch (_error) {
+    preview.root.visible = false;
     return;
   }
   if (!sceneDoc) {
+    preview.root.visible = false;
     return;
+  }
+  preview.root.visible = true;
+  if (preview.idleGroup) {
+    preview.idleGroup.visible = false;
   }
 
   const addMesh = (geometry, material, position, rotation = { x: 0, y: 0, z: 0 }, scale = { x: 1, y: 1, z: 1 }, metadata = null) => {
