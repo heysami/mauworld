@@ -22,7 +22,7 @@ const PRIVATE_CAMERA = {
   wheelFactor: 0.045,
 };
 const PRIVATE_PLAYER_VIEW = {
-  lookHeight: 7.6,
+  lookHeight: 4.8,
   minRadius: 16,
   maxRadius: 110,
   defaultRadius: 28,
@@ -1145,9 +1145,9 @@ function getPrivateViewerRigConfig(world = state.selectedWorld) {
   const length = Math.max(4, Number(world?.length ?? (world ? 40 : 64)) || (world ? 40 : 64));
   const height = Math.max(2, Number(world?.height ?? (world ? 10 : 12)) || (world ? 10 : 12));
   const span = Math.max(width, length);
-  const minRadius = clampNumber(span * 0.12, 8, 6, 18);
-  const defaultRadius = clampNumber(span * 0.24, 12, minRadius + 2, 26);
-  const maxRadius = clampNumber(span * 0.48, 24, defaultRadius + 4, 54);
+  const minRadius = clampNumber(span * 0.14, 9, 7, 22);
+  const defaultRadius = clampNumber(span * 0.3, 14, minRadius + 3, 32);
+  const maxRadius = clampNumber(span * 0.56, 28, defaultRadius + 5, 62);
   const spawnHeight = clampNumber(height * 0.32, PRIVATE_CAMERA.minY + 0.8, PRIVATE_CAMERA.minY + 0.8, Math.max(PRIVATE_CAMERA.minY + 1.4, height * 0.7));
   return {
     width,
