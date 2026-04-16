@@ -115,6 +115,8 @@ const elements = {
   panelOpenAccess: document.querySelector("[data-private-open-access]"),
   panelChatComposer: document.querySelector("[data-private-chat-composer]"),
   panelChatInput: document.querySelector("[data-private-chat-input]"),
+  panelChatReactions: document.querySelector(".world-chat-reactions"),
+  panelChatEmpty: document.querySelector("[data-private-chat-empty]"),
   panelLiveSearchForm: document.querySelector("[data-private-live-search-form]"),
   panelLiveSearchInput: document.querySelector("[data-private-live-search-input]"),
   panelLiveStatus: document.querySelector("[data-private-live-status]"),
@@ -231,7 +233,7 @@ const state = {
   livePresence: new Map(),
   joinedAsGuest: false,
   joined: false,
-  launcherOpen: true,
+  launcherOpen: false,
   sceneDrawerOpen: false,
   worldMenuOpen: false,
   activeLockEntityKey: "",
@@ -1087,13 +1089,7 @@ function updatePrivatePresenceScene(deltaSeconds, elapsedSeconds) {
 }
 
 function getPreferredLauncherTab() {
-  if (!state.session) {
-    return "access";
-  }
-  if (state.selectedWorld) {
-    return "worlds";
-  }
-  if (state.worlds.length > 0) {
+  if (state.selectedWorld || state.worlds.length > 0) {
     return "worlds";
   }
   return "create";
@@ -3116,16 +3112,24 @@ function renderPrivateChat() {
   const localParticipant = getLocalParticipant();
   const canChat = Boolean(state.session && state.selectedWorld && localParticipant);
   elements.panelChatInput.disabled = !canChat;
+  const chatHint = !state.selectedWorld
+    ? "Open Worlds to create or enter a private world."
+    : !state.session
+      ? "Open Access to sign in, then enter this world."
+      : !localParticipant
+        ? "Enter this world to speak nearby."
+        : "";
+  if (elements.panelChatReactions) {
+    elements.panelChatReactions.hidden = !canChat;
+  }
+  if (elements.panelChatEmpty) {
+    elements.panelChatEmpty.hidden = canChat;
+    elements.panelChatEmpty.textContent = chatHint;
+  }
   for (const button of elements.panelChatReactionButtons ?? []) {
     button.disabled = !canChat;
   }
-  elements.panelChatInput.placeholder = !state.session
-    ? "Access opens sign in or account creation"
-    : !state.selectedWorld
-      ? "Open a world to chat"
-      : !localParticipant
-        ? "Enter the world to chat"
-        : "/ say something nearby and press Enter";
+  elements.panelChatInput.placeholder = canChat ? "/ say something nearby and press Enter" : chatHint;
 }
 
 function getPrivateBrowserSessionTitle(session = {}) {
@@ -3389,7 +3393,6 @@ function renderSelectedWorld() {
     state.builderSelection = null;
     state.sceneDrawerOpen = false;
     state.worldMenuOpen = false;
-    state.launcherOpen = true;
     state.launcherTab = getPreferredLauncherTab();
   }
   if (state.mode === "build" && !isEditor()) {
