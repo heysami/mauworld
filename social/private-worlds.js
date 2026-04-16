@@ -2542,6 +2542,8 @@ function setMode(mode) {
   if (nextMode === "play") {
     state.builderSelection = null;
     state.sceneDrawerOpen = false;
+  } else {
+    state.privatePanelTab = "build";
   }
   document.body.classList.toggle("is-play-mode", nextMode === "play");
   elements.modeBuild?.classList.toggle("is-active", nextMode === "build");
@@ -3794,6 +3796,7 @@ function buildPreviewEnvironment(preview) {
   preview.ground = null;
   preview.groundGlow = null;
   preview.buildGrid = null;
+  preview.buildFootprint = null;
   refreshPrivatePreviewEnvironment(preview);
 }
 
@@ -3862,19 +3865,32 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   preview.environment.add(ground);
 
   const gridSize = Math.max(bounds.width, bounds.length);
-  const gridDivisions = Math.max(8, Math.min(96, Math.round(gridSize)));
-  const grid = new THREE.GridHelper(gridSize, gridDivisions, "#d8e9ff", "#edf5ff");
+  const gridDivisions = Math.max(4, Math.round(gridSize));
+  const grid = new THREE.GridHelper(gridSize, gridDivisions, "#bfdcff", "#dbeaff");
   grid.position.y = 0;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
-    material.opacity = 0.18;
+    material.opacity = 0.32;
     material.transparent = true;
     material.depthWrite = false;
     material.fog = false;
   }
   preview.environment.add(grid);
+
+  const footprint = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(bounds.width, 0.04, bounds.length)),
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.outline),
+      transparent: true,
+      opacity: 0.44,
+      fog: false,
+    }),
+  );
+  footprint.position.y = 0.02;
+  preview.environment.add(footprint);
   preview.ground = ground;
   preview.groundGlow = groundGlow;
   preview.buildGrid = grid;
+  preview.buildFootprint = footprint;
   syncPrivatePreviewEnvironmentState(preview);
 }
 
@@ -3890,6 +3906,9 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
     preview.groundGlow.visible = true;
   }
   preview.buildGrid.visible = buildMode;
+  if (preview.buildFootprint) {
+    preview.buildFootprint.visible = buildMode;
+  }
 }
 
 function buildWorldBoundsPreview(world = state.selectedWorld) {
