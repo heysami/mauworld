@@ -34,6 +34,7 @@ class FakeQuery {
     this.singleRow = false;
     this.orderBy = null;
     this.orFilters = [];
+    this.limitCount = null;
   }
 
   select() {
@@ -97,6 +98,11 @@ class FakeQuery {
       column,
       ascending: options.ascending !== false,
     };
+    return this;
+  }
+
+  limit(count) {
+    this.limitCount = Number.isFinite(Number(count)) ? Math.max(0, Math.floor(Number(count))) : null;
     return this;
   }
 
@@ -165,6 +171,9 @@ class FakeQuery {
             ? (leftValue < rightValue ? -1 : 1)
             : (leftValue > rightValue ? -1 : 1);
         });
+      }
+      if (this.limitCount != null) {
+        rows = rows.slice(0, this.limitCount);
       }
       return {
         data: this.singleRow ? rows[0] ?? null : rows,
@@ -659,4 +668,109 @@ test("getPillarDetail loads posts from current pillar tags instead of pillar_id_
   assert.equal(result.posts.length, 1);
   assert.equal(result.posts[0].id, "post_1");
   assert.equal(result.posts[0].title, "Post for current pillar tags");
+});
+
+test("searchPublicPrivateWorlds only exposes worlds with fresh visible participants", async () => {
+  const now = Date.now();
+  const freshIso = new Date(now - 5_000).toISOString();
+  const staleIso = new Date(now - 120_000).toISOString();
+  const state = {
+    tables: {
+      private_world_active_instances: [
+        {
+          id: "instance_stale",
+          world_id: "world_row_stale",
+          status: "active",
+          active_scene_id: "scene_stale",
+          last_active_at: freshIso,
+        },
+        {
+          id: "instance_live",
+          world_id: "world_row_live",
+          status: "active",
+          active_scene_id: "scene_live",
+          last_active_at: freshIso,
+        },
+      ],
+      private_worlds: [
+        {
+          id: "world_row_stale",
+          world_id: "mw_stale",
+          creator_profile_id: "profile_creator",
+          world_type: "room",
+          template_size: "medium",
+          width: 40,
+          length: 20,
+          height: 10,
+          name: "Ghost Hall",
+          about: "Looks active but is empty",
+          search_text: "ghost hall",
+          updated_at: freshIso,
+        },
+        {
+          id: "world_row_live",
+          world_id: "mw_live",
+          creator_profile_id: "profile_creator",
+          world_type: "room",
+          template_size: "medium",
+          width: 40,
+          length: 20,
+          height: 10,
+          name: "Lantern Hall",
+          about: "Actually occupied",
+          search_text: "lantern hall",
+          updated_at: freshIso,
+        },
+      ],
+      user_profiles: [
+        {
+          id: "profile_creator",
+          username: "maker",
+          display_name: "Maker",
+        },
+        {
+          id: "profile_live",
+          username: "visitor",
+          display_name: "Visitor",
+        },
+      ],
+      private_world_participants: [
+        {
+          id: "participant_stale",
+          instance_id: "instance_stale",
+          profile_id: "profile_live",
+          visible_to_others: true,
+          last_seen_at: staleIso,
+        },
+        {
+          id: "participant_live",
+          instance_id: "instance_live",
+          profile_id: "profile_live",
+          visible_to_others: true,
+          last_seen_at: freshIso,
+        },
+        {
+          id: "participant_guest",
+          instance_id: "instance_live",
+          profile_id: null,
+          guest_session_id: "guest_123",
+          visible_to_others: false,
+          last_seen_at: freshIso,
+        },
+      ],
+    },
+    queryLog: [],
+  };
+
+  const fakeStore = {
+    serviceClient: createFakeServiceClient(state),
+  };
+
+  const result = await MauworldStore.prototype.searchPublicPrivateWorlds.call(fakeStore, {
+    worldType: "room",
+  });
+
+  assert.equal(result.worlds.length, 1);
+  assert.equal(result.worlds[0].world_id, "mw_live");
+  assert.equal(result.worlds[0].active_instance.viewer_count, 1);
 });

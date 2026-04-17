@@ -14,6 +14,8 @@ import {
   validatePrivateWorldExportPackage,
 } from "./private-worlds.js";
 
+const PRIVATE_WORLD_PARTICIPANT_STALE_MS = 30_000;
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -217,6 +219,19 @@ function isExpired(timestamp) {
   return !timestamp || new Date(timestamp).getTime() <= Date.now();
 }
 
+function isFreshPrivateWorldParticipant(row = {}, nowMs = Date.now()) {
+  const seenAt = new Date(row.last_seen_at ?? 0).getTime();
+  return Number.isFinite(seenAt) && seenAt > 0 && nowMs - seenAt <= PRIVATE_WORLD_PARTICIPANT_STALE_MS;
+}
+
+function filterFreshPrivateWorldParticipants(participants = [], options = {}) {
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const visibleOnly = options.visibleOnly === true;
+  return participants.filter((row) =>
+    isFreshPrivateWorldParticipant(row, nowMs)
+    && (!visibleOnly || row.visible_to_others !== false));
+}
+
 function createPermissionSummary({ collaboratorRole = null, requesterProfileId = "" } = {}, world = {}) {
   const isCreator = collaboratorRole === "creator" || String(world.creator_profile_id ?? "") === String(requesterProfileId ?? "");
   const canEdit = collaboratorRole === "creator" || collaboratorRole === "editor";
@@ -368,17 +383,24 @@ async function loadActiveInstancesForWorldIds(store, worldRowIds = []) {
   return new Map(rows.map((row) => [row.world_id, row]));
 }
 
-async function loadParticipantCountsForInstanceIds(store, instanceIds = []) {
+async function loadParticipantCountsForInstanceIds(store, instanceIds = [], options = {}) {
   const ids = dedupe(instanceIds);
   if (ids.length === 0) {
     return new Map();
   }
   const rows = await must(
-    store.serviceClient.from("private_world_participants").select("instance_id").in("instance_id", ids),
+    store.serviceClient
+      .from("private_world_participants")
+      .select("instance_id,last_seen_at,visible_to_others")
+      .in("instance_id", ids),
     "Could not load private world participant counts",
   );
+  const freshRows = filterFreshPrivateWorldParticipants(rows, {
+    nowMs: options.nowMs,
+    visibleOnly: options.visibleOnly === true,
+  });
   const counts = new Map();
-  for (const row of rows) {
+  for (const row of freshRows) {
     const key = row.instance_id;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
@@ -581,9 +603,11 @@ async function buildWorldDetail(store, {
     ? await loadWorldPrefabs(store, world.id)
     : [];
   const sceneMap = new Map(scenes.map((row) => [row.id, row]));
-  const activeParticipants = activeInstance
-    ? await loadInstanceParticipants(store, activeInstance.id)
-    : [];
+  const activeParticipants = filterFreshPrivateWorldParticipants(
+    activeInstance
+      ? await loadInstanceParticipants(store, activeInstance.id)
+      : [],
+  );
   const locks = permissions.can_edit && scenes.length > 0
     ? await loadWorldLocks(store, world.id, scenes[0].id)
     : [];
@@ -822,6 +846,7 @@ export function installPrivateWorldStore(MauworldStore) {
     const limit = clampLimit(input.limit, 18, 60);
     const query = lower(input.q);
     const worldType = lower(input.worldType);
+    const nowMs = Date.now();
     const activeRows = await must(
       this.serviceClient
         .from("private_world_active_instances")
@@ -840,17 +865,26 @@ export function installPrivateWorldStore(MauworldStore) {
       "Could not load searchable private worlds",
     );
     const worldById = new Map(worldRows.map((row) => [row.id, row]));
+    const participantCounts = await loadParticipantCountsForInstanceIds(
+      this,
+      activeRows.map((entry) => entry.id),
+      {
+        nowMs,
+        visibleOnly: true,
+      },
+    );
     const matchedRows = activeRows
       .map((activeInstance) => ({
         activeInstance,
         world: worldById.get(activeInstance.world_id) ?? null,
       }))
       .filter((entry) => entry.world)
+      .filter((entry) => entry.activeInstance.status === "active")
       .filter((entry) => !worldType || entry.world.world_type === worldType)
       .filter((entry) => !query || String(entry.world.search_text ?? "").includes(query))
+      .filter((entry) => (participantCounts.get(entry.activeInstance.id) ?? 0) > 0)
       .slice(0, limit);
     const creatorProfiles = await loadProfilesByIds(this, matchedRows.map((entry) => entry.world.creator_profile_id));
-    const participantCounts = await loadParticipantCountsForInstanceIds(this, matchedRows.map((entry) => entry.activeInstance.id));
     return {
       worlds: matchedRows.map(({ world: row, activeInstance }) => {
         const creator = creatorProfiles.get(row.creator_profile_id) ?? null;
@@ -1730,6 +1764,35 @@ export function installPrivateWorldStore(MauworldStore) {
     };
   };
 
+  MauworldStore.prototype.touchPrivateWorldParticipant = async function touchPrivateWorldParticipant(input = {}) {
+    const { world } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
+    const instance = await loadActiveInstance(this, world.id);
+    if (!instance) {
+      return { touched: false, active: false };
+    }
+    const guestSessionId = String(input.guestSessionId ?? "").trim();
+    let query = this.serviceClient
+      .from("private_world_participants")
+      .update({ last_seen_at: nowIso() })
+      .eq("instance_id", instance.id);
+    if (input.profile?.id) {
+      query = query.eq("profile_id", input.profile.id);
+    } else if (guestSessionId) {
+      query = query.eq("guest_session_id", guestSessionId);
+    } else {
+      return { touched: false, active: true };
+    }
+    const participant = await maybeSingle(
+      query.select("*").maybeSingle(),
+      "Could not update private world participant heartbeat",
+    );
+    return {
+      touched: Boolean(participant),
+      active: true,
+      participant_id: participant?.id ?? null,
+    };
+  };
+
   MauworldStore.prototype.leavePrivateWorld = async function leavePrivateWorld(input = {}) {
     const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
     const instance = await loadActiveInstance(this, world.id);
@@ -2217,6 +2280,7 @@ export function installPrivateWorldStore(MauworldStore) {
     if (!worldSnapshotId) {
       return [];
     }
+    const nowMs = Date.now();
     const viewerPresence = await loadViewerPresenceForSnapshot(this, worldSnapshotId, input.viewerSessionId);
     const rows = await must(
       this.serviceClient
@@ -2247,13 +2311,25 @@ export function installPrivateWorldStore(MauworldStore) {
     const creatorProfiles = await loadProfilesByIds(this, [...new Set([...worldsById.values()].map((row) => row.creator_profile_id))]);
     const miniatures = [];
     for (const row of rows) {
+      if (row.status !== "active") {
+        continue;
+      }
       const world = worldsById.get(row.world_id);
       const scene = scenesById.get(row.active_scene_id);
       if (!world || !scene) {
         continue;
       }
       const creator = creatorProfiles.get(world.creator_profile_id);
-      const participants = await loadInstanceParticipants(this, row.id);
+      const participants = filterFreshPrivateWorldParticipants(
+        await loadInstanceParticipants(this, row.id),
+        {
+          nowMs,
+          visibleOnly: true,
+        },
+      );
+      if (participants.length === 0) {
+        continue;
+      }
       const runtimeSnapshot = creator
         ? (
             this.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
@@ -2263,7 +2339,7 @@ export function installPrivateWorldStore(MauworldStore) {
       const lodBand = resolveMiniatureLodBand(row, viewerPresence);
       const compiledMiniature = cloneJson(scene.compiled_doc?.miniature ?? {});
       const liveVisiblePlayers = participants
-        .filter((entry) => entry.visible_to_others !== false && entry.player_entity_id)
+        .filter((entry) => entry.player_entity_id)
         .map((entry) => ({
           player_entity_id: entry.player_entity_id,
           username: entry.profile?.username ?? null,

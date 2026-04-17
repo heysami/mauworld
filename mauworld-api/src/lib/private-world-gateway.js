@@ -8,6 +8,7 @@ const PRIVATE_WORLD_CHAT_TTL_SECONDS = 8;
 const PRIVATE_WORLD_CHAT_DETAIL_RADIUS = 180;
 const PRIVATE_WORLD_BROWSER_RADIUS = 96;
 const PRIVATE_WORLD_MAX_RECIPIENTS = 20;
+const PRIVATE_WORLD_PARTICIPANT_HEARTBEAT_MS = 5_000;
 
 function buildBaseUrl(publicBaseUrl) {
   if (/^https?:\/\//i.test(publicBaseUrl)) {
@@ -138,6 +139,7 @@ export class PrivateWorldGateway {
         chatRateLimitState: {},
         browserModes: new Map(),
         messageQueue: Promise.resolve(),
+        lastParticipantHeartbeatAt: 0,
       };
       this.clients.add(client);
       socket.on("message", (buffer) => {
@@ -482,6 +484,23 @@ export class PrivateWorldGateway {
         });
       }
     }
+    const now = Date.now();
+    if (
+      typeof this.store?.touchPrivateWorldParticipant === "function"
+      && now - Number(client.lastParticipantHeartbeatAt ?? 0) >= PRIVATE_WORLD_PARTICIPANT_HEARTBEAT_MS
+    ) {
+      client.lastParticipantHeartbeatAt = now;
+      try {
+        await this.store.touchPrivateWorldParticipant({
+          worldId: client.worldId,
+          creatorUsername: client.creatorUsername,
+          profile: client.profile ?? null,
+          guestSessionId: client.guestSessionId ?? "",
+        });
+      } catch (_error) {
+        // Presence updates should stay realtime-first even if the DB heartbeat write fails.
+      }
+    }
     await this.rebalanceBrowserSessions(client.browserWorldKey);
   }
 
@@ -649,6 +668,18 @@ export class PrivateWorldGateway {
         type: "presence:remove",
         viewerSessionId: client.viewerSessionId,
       });
+    }
+    if (typeof this.store?.leavePrivateWorld === "function") {
+      try {
+        await this.store.leavePrivateWorld({
+          worldId: client.worldId,
+          creatorUsername: client.creatorUsername,
+          profile: client.profile ?? null,
+          guestSessionId: client.guestSessionId ?? "",
+        });
+      } catch (_error) {
+        // Disconnect cleanup is best-effort so a network drop does not cascade into another failure.
+      }
     }
   }
 

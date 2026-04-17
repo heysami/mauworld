@@ -40,13 +40,20 @@ function createClient(overrides = {}) {
   };
 }
 
-function createGateway() {
+function createGateway(storeOverrides = {}) {
   const gateway = new PrivateWorldGateway({
     config: {},
     store: {
       subscribePrivateWorldEvents() {
         return () => {};
       },
+      async touchPrivateWorldParticipant() {
+        return { touched: true };
+      },
+      async leavePrivateWorld() {
+        return { removed: true };
+      },
+      ...storeOverrides,
     },
   });
   gateway.browserManager.dispose = async () => {};
@@ -140,4 +147,55 @@ test("private world browser audience rebalances to nearby subscribers only", asy
     far.socket.sent.some((message) => message.type === "browser:unsubscribe" && message.sessionId === session.sessionId),
     true,
   );
+});
+
+test("private world presence updates refresh participant heartbeat in the store", async () => {
+  const touches = [];
+  const gateway = createGateway({
+    async touchPrivateWorldParticipant(payload) {
+      touches.push(payload);
+      return { touched: true };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  await gateway.handlePresenceUpdate(client, {
+    position_x: 4,
+    position_y: 1,
+    position_z: -2,
+    heading_y: 0.4,
+  });
+
+  assert.equal(touches.length, 1);
+  assert.equal(touches[0].worldId, "world_test");
+  assert.equal(touches[0].creatorUsername, "creator");
+  assert.equal(touches[0].profile.id, client.profile.id);
+});
+
+test("private world disconnect cleans up the participant in the store", async () => {
+  const leaves = [];
+  const gateway = createGateway({
+    async leavePrivateWorld(payload) {
+      leaves.push(payload);
+      return { removed: true };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  await gateway.handleDisconnect(client);
+
+  assert.equal(leaves.length, 1);
+  assert.equal(leaves[0].worldId, "world_test");
+  assert.equal(leaves[0].creatorUsername, "creator");
+  assert.equal(leaves[0].profile.id, client.profile.id);
 });
