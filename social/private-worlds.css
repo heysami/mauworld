@@ -678,6 +678,10 @@ body.private-worlds-body.is-build-scale:not(.has-placement-tool) .pw-canvas {
   cursor: nwse-resize;
 }
 
+body.private-worlds-body.is-build-rotate:not(.has-placement-tool) .pw-canvas {
+  cursor: alias;
+}
+
 body.private-worlds-body.is-build-multi:not(.has-placement-tool) .pw-canvas {
   cursor: copy;
 }

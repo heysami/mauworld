@@ -122,7 +122,8 @@ const BUILD_TRANSFORM_SHORTCUTS = new Map([
   ["q", "move"],
   ["e", "scale"],
   ["shift", "multi"],
-  ["r", "delete"],
+  ["r", "rotate"],
+  ["t", "delete"],
 ]);
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
@@ -541,7 +542,7 @@ function setPrivatePanelTab(tab, options = {}) {
 
 function updateShellState() {
   const activePlacementTool = getActivePlacementTool();
-  const buildTransformMode = getBuildTransformMode();
+  const buildTransformMode = getResolvedBuildTransformMode();
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
@@ -555,7 +556,7 @@ function updateShellState() {
     "has-selection",
     Boolean(hasBuilderSelection() && state.mode === "build" && isEditor()),
   );
-  for (const mode of ["move", "scale", "multi", "delete"]) {
+  for (const mode of ["move", "scale", "rotate", "multi", "delete"]) {
     document.body.classList.toggle(`is-build-${mode}`, buildTransformMode === mode);
   }
   for (const kind of ["voxel", "primitive", "player", "screen", "text", "trigger"]) {
@@ -2153,8 +2154,11 @@ function getBuildTransformMode() {
   if (!canUseBuildTransformShortcuts()) {
     return "";
   }
-  if (state.buildModifierKeys.has("r")) {
+  if (state.buildModifierKeys.has("t")) {
     return "delete";
+  }
+  if (state.buildModifierKeys.has("r")) {
+    return "rotate";
   }
   if (state.buildModifierKeys.has("e")) {
     return "scale";
@@ -2166,6 +2170,30 @@ function getBuildTransformMode() {
     return "multi";
   }
   return "";
+}
+
+function getResolvedBuildTransformMode(transformMode = getBuildTransformMode(), sceneDoc = null) {
+  if (!transformMode || (transformMode !== "scale" && transformMode !== "rotate")) {
+    return transformMode;
+  }
+  if (Array.isArray(sceneDoc)) {
+    return resolveBuildTransformModeForSelection(transformMode, sceneDoc);
+  }
+  try {
+    return resolveBuildTransformModeForSelection(transformMode, getSelectedEntities(sceneDoc ?? parseSceneTextarea()));
+  } catch (_error) {
+    return transformMode;
+  }
+}
+
+function resolveBuildTransformModeForSelection(transformMode = "", selectedEntities = []) {
+  if (!transformMode || (transformMode !== "scale" && transformMode !== "rotate")) {
+    return transformMode;
+  }
+  if (selectedEntities.length > 1 && !canGroupScaleRotateSelection(selectedEntities)) {
+    return "move";
+  }
+  return transformMode;
 }
 
 function getEntityCollection(key) {
@@ -4441,7 +4469,7 @@ function renderBuildSummary() {
     <div class="pw-world-meta__row">
       <strong>Controls</strong>
       <span>${state.mode === "build"
-        ? "Click to select. Hold Q to move, E to scale, Shift to grow a group, and R to delete."
+        ? "Click to select. Hold Q to move, E to scale, R to rotate, Shift to grow a group, and T to delete."
         : "WASD to move, hold Shift to sprint, Q/E to rise or drop, drag to look, wheel to zoom."}</span>
     </div>
   `;
@@ -4488,7 +4516,7 @@ function renderRuntimeStatus() {
     <div class="pw-world-meta__row">
       <strong>Controls</strong>
       <span>${state.mode === "build" && isEditor()
-        ? "Build mode: click to select, hold Q to move, E to scale, Shift to build a group, and R to delete."
+        ? "Build mode: click to select, hold Q to move, E to scale, R to rotate, Shift to build a group, and T to delete."
         : getLocalParticipant()?.join_role === "player"
           ? "WASD / Arrows to move, Space to jump, Release to return to viewer."
           : "Viewer mode by default. WASD to move, hold Shift to sprint, Q/E to rise or drop, drag to look, wheel to zoom, then click a player capsule to possess it."}</span>
@@ -4984,8 +5012,48 @@ function canScaleEntityKind(kind) {
     || kind === "prefab_instance";
 }
 
+function canRotateEntityKind(kind) {
+  return kind === "primitive"
+    || kind === "player"
+    || kind === "screen"
+    || kind === "text"
+    || kind === "prefab_instance";
+}
+
 function canAxisScaleEntity(selection) {
   return Boolean(selection && canScaleEntityKind(selection.kind) && typeof selection.entry?.scale === "object");
+}
+
+function canGroupScaleRotateSelection(selections = []) {
+  return Array.isArray(selections)
+    && selections.length > 1
+    && selections.every((selection) => canScaleEntityKind(selection.kind) && canRotateEntityKind(selection.kind));
+}
+
+function canScaleSelection(selections = []) {
+  if (!Array.isArray(selections) || !selections.length) {
+    return false;
+  }
+  if (selections.length === 1) {
+    return canScaleEntityKind(selections[0].kind);
+  }
+  return canGroupScaleRotateSelection(selections);
+}
+
+function canRotateSelection(selections = []) {
+  if (!Array.isArray(selections) || !selections.length) {
+    return false;
+  }
+  if (selections.length === 1) {
+    return canRotateEntityKind(selections[0].kind);
+  }
+  return canGroupScaleRotateSelection(selections);
+}
+
+function canAxisScaleSelection(selections = []) {
+  return Array.isArray(selections)
+    && selections.length > 0
+    && selections.every((selection) => canAxisScaleEntity(selection));
 }
 
 function getOverlayBoundsForRefs(preview, refs = []) {
@@ -5058,6 +5126,27 @@ function getTransformHandleSpecs(box) {
     { axis: "y", direction: 1, key: "y:1", position: new THREE.Vector3(center.x, box.max.y, center.z) },
     { axis: "z", direction: -1, key: "z:-1", position: new THREE.Vector3(center.x, center.y, box.min.z) },
     { axis: "z", direction: 1, key: "z:1", position: new THREE.Vector3(center.x, center.y, box.max.z) },
+  ];
+}
+
+function getRotateHandleSpecs(box) {
+  if (!box) {
+    return [];
+  }
+  const center = box.getCenter(new THREE.Vector3());
+  return [
+    { axis: "x", key: "rx:-1:-1", position: new THREE.Vector3(center.x, box.min.y, box.min.z) },
+    { axis: "x", key: "rx:-1:1", position: new THREE.Vector3(center.x, box.min.y, box.max.z) },
+    { axis: "x", key: "rx:1:-1", position: new THREE.Vector3(center.x, box.max.y, box.min.z) },
+    { axis: "x", key: "rx:1:1", position: new THREE.Vector3(center.x, box.max.y, box.max.z) },
+    { axis: "y", key: "ry:-1:-1", position: new THREE.Vector3(box.min.x, center.y, box.min.z) },
+    { axis: "y", key: "ry:-1:1", position: new THREE.Vector3(box.min.x, center.y, box.max.z) },
+    { axis: "y", key: "ry:1:-1", position: new THREE.Vector3(box.max.x, center.y, box.min.z) },
+    { axis: "y", key: "ry:1:1", position: new THREE.Vector3(box.max.x, center.y, box.max.z) },
+    { axis: "z", key: "rz:-1:-1", position: new THREE.Vector3(box.min.x, box.min.y, center.z) },
+    { axis: "z", key: "rz:-1:1", position: new THREE.Vector3(box.min.x, box.max.y, center.z) },
+    { axis: "z", key: "rz:1:-1", position: new THREE.Vector3(box.max.x, box.min.y, center.z) },
+    { axis: "z", key: "rz:1:1", position: new THREE.Vector3(box.max.x, box.max.y, center.z) },
   ];
 }
 
@@ -5151,7 +5240,9 @@ function refreshBuildHoverFromPointer(pointerSource) {
       return null;
     }
   }
-  const transformMode = getBuildTransformMode();
+  const transformMode = sceneDoc
+    ? getResolvedBuildTransformMode(getBuildTransformMode(), sceneDoc)
+    : getBuildTransformMode();
   const transformHandleHit = transformMode ? getTransformHandleHit(pointerSource) : null;
   state.buildHover = {
     context,
@@ -5333,8 +5424,74 @@ function buildTransformHandles(preview, box, hoveredHandleKey = "") {
     );
     pickMesh.position.copy(handlePosition);
     pickMesh.userData.privateWorldTransformHandle = {
+      type: "translate-scale",
       axis: handle.axis,
       direction: handle.direction,
+      key: handle.key,
+    };
+    preview.buildOverlay.add(pickMesh);
+    preview.transformPickables.push(pickMesh);
+  }
+}
+
+function buildRotateHandles(preview, box, hoveredHandleKey = "") {
+  if (!preview?.buildOverlay || !box) {
+    return;
+  }
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxSize = Math.max(size.x, size.y, size.z);
+  const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
+  const handleLength = clampNumber(maxSize * 0.3, 1.6, 1.05, 3.8);
+  const pickThickness = Math.max(handleThickness * 2.8, 1.9);
+  const pickLength = Math.max(handleLength * 1.35, 2.4);
+  const handleOffset = Math.max(0.18, handleThickness * 0.4);
+  const buildDimensions = (axis, longSide, shortSide) => ({
+    x: axis === "x" ? longSide : shortSide,
+    y: axis === "y" ? longSide : shortSide,
+    z: axis === "z" ? longSide : shortSide,
+  });
+  for (const handle of getRotateHandleSpecs(box)) {
+    const isHovered = handle.key === hoveredHandleKey;
+    const outward = handle.position.clone().sub(center);
+    if (outward.lengthSq() < 0.0001) {
+      outward.copy(getBuildDragAxisVector(handle.axis));
+    } else {
+      outward.normalize();
+    }
+    const handlePosition = handle.position.clone().addScaledVector(outward, handleOffset);
+    const visibleDimensions = buildDimensions(handle.axis, handleLength, handleThickness);
+    const pickDimensions = buildDimensions(handle.axis, pickLength, pickThickness);
+
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(visibleDimensions.x, visibleDimensions.y, visibleDimensions.z),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(getTransformHandleColor(handle.axis)),
+        transparent: true,
+        opacity: isHovered ? 1 : 0.86,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    mesh.position.copy(handlePosition);
+    mesh.scale.setScalar(isHovered ? 1.16 : 1);
+    preview.buildOverlay.add(mesh);
+
+    const pickMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(pickDimensions.x, pickDimensions.y, pickDimensions.z),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color("#ffffff"),
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        depthTest: false,
+        fog: false,
+      }),
+    );
+    pickMesh.position.copy(handlePosition);
+    pickMesh.userData.privateWorldTransformHandle = {
+      type: "rotate",
+      axis: handle.axis,
       key: handle.key,
     };
     preview.buildOverlay.add(pickMesh);
@@ -5349,12 +5506,23 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   const buildMode = canUsePlacementTools();
   const hover = buildMode ? state.buildHover : null;
   const activeTool = buildMode ? getActivePlacementTool() : "";
-  const transformMode = buildMode ? getBuildTransformMode() : "";
+  const requestedTransformMode = buildMode ? getBuildTransformMode() : "";
   const gridCell = hover?.gridCell ?? null;
   const placement = hover?.placement ?? null;
   const hoveredEntityRef = hover?.entityRef ?? null;
   const hoveredHandleKey = hover?.transformHandle?.key ?? "";
   const selectionRefs = buildMode ? getBuilderSelectionRefs() : [];
+  let selectedEntities = [];
+  if (selectionRefs.length) {
+    try {
+      selectedEntities = getSelectedEntities(parseSceneTextarea());
+    } catch (_error) {
+      selectedEntities = [];
+    }
+  }
+  const transformMode = buildMode
+    ? getResolvedBuildTransformMode(requestedTransformMode, selectedEntities)
+    : "";
   const selectionBounds = selectionRefs.length ? getOverlayBoundsForRefs(preview, selectionRefs) : null;
   const overlayKey = [
     buildMode ? "build" : "idle",
@@ -5425,25 +5593,21 @@ function syncBuildPlacementOverlay(preview = state.preview) {
       opacity: 0.88,
       padding: 0.12,
     });
-  } else if ((transformMode === "move" || transformMode === "scale") && hoveredEntityRef && !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id)) {
+  } else if ((transformMode === "move" || transformMode === "scale" || transformMode === "rotate") && hoveredEntityRef && !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id)) {
     drawSelectionOutline([hoveredEntityRef], {
-      color: transformMode === "scale" ? "#7fe46a" : "#7fc9ff",
+      color: transformMode === "scale" ? "#7fe46a" : transformMode === "rotate" ? "#ffb15a" : "#7fc9ff",
       opacity: 0.5,
       padding: 0.1,
     });
   }
   if ((transformMode === "move" || transformMode === "multi") && groupBounds) {
     buildTransformHandles(preview, groupBounds, hoveredHandleKey);
-  } else if (transformMode === "scale" && selectionRefs.length === 1) {
-    let selectedEntity = null;
-    try {
-      selectedEntity = findEntityByRef(parseSceneTextarea(), selectionRefs[0]);
-    } catch (_error) {
-      selectedEntity = null;
-    }
-    if (canAxisScaleEntity(selectedEntity) && groupBounds) {
+  } else if (transformMode === "scale" && groupBounds && canScaleSelection(selectedEntities)) {
+    if (canAxisScaleSelection(selectedEntities)) {
       buildTransformHandles(preview, groupBounds, hoveredHandleKey);
     }
+  } else if (transformMode === "rotate" && groupBounds && canRotateSelection(selectedEntities)) {
+    buildRotateHandles(preview, groupBounds, hoveredHandleKey);
   }
   preview.buildOverlayKey = overlayKey;
 }
@@ -5521,6 +5685,92 @@ function getBuildScaleMinimum(kind, axis = "x") {
     return 0.2;
   }
   return 0.1;
+}
+
+function setEntityPositionValue(selection, entry, axis, value) {
+  entry.position = entry.position || { x: 0, y: 0, z: 0 };
+  entry.position[axis] = snapBuildValue(value, getBuildMoveStep(selection.kind));
+}
+
+function applyPositionScaleAroundPivot(selection, entry, factors, pivot) {
+  if (!pivot) {
+    return;
+  }
+  const startPosition = selection.startPosition ?? { x: 0, y: 0, z: 0 };
+  entry.position = entry.position || { x: 0, y: 0, z: 0 };
+  for (const axis of ["x", "y", "z"]) {
+    const axisFactor = Number(factors?.[axis] ?? 1) || 1;
+    const pivotValue = Number(pivot[axis] ?? 0) || 0;
+    const nextValue = pivotValue + ((Number(startPosition[axis] ?? 0) || 0) - pivotValue) * axisFactor;
+    setEntityPositionValue(selection, entry, axis, nextValue);
+  }
+}
+
+function applyGroupUniformScaleToEntity(selection, entry, factor, pivot) {
+  applyUniformScaleToEntity(selection, entry, factor);
+  applyPositionScaleAroundPivot(selection, entry, { x: factor, y: factor, z: factor }, pivot);
+}
+
+function applyGroupAxisScaleToEntity(selection, entry, axis, factor, pivot) {
+  if (typeof selection.startScale !== "object" || !pivot) {
+    return;
+  }
+  entry.scale = entry.scale || { x: 1, y: 1, z: 1 };
+  for (const currentAxis of ["x", "y", "z"]) {
+    const baseValue = Number(selection.startScale?.[currentAxis] ?? entry.scale?.[currentAxis] ?? 1) || 1;
+    entry.scale[currentAxis] = currentAxis === axis
+      ? clampNumber(
+        snapBuildValue(baseValue * factor, getBuildScaleStep(selection.kind)),
+        baseValue,
+        getBuildScaleMinimum(selection.kind, currentAxis),
+        128,
+      )
+      : baseValue;
+  }
+  applyPositionScaleAroundPivot(selection, entry, {
+    x: axis === "x" ? factor : 1,
+    y: axis === "y" ? factor : 1,
+    z: axis === "z" ? factor : 1,
+  }, pivot);
+}
+
+function getSignedAngleAroundAxis(startVector, currentVector, axisVector) {
+  const start = startVector.clone().projectOnPlane(axisVector);
+  const current = currentVector.clone().projectOnPlane(axisVector);
+  if (start.lengthSq() < 0.0001 || current.lengthSq() < 0.0001) {
+    return 0;
+  }
+  start.normalize();
+  current.normalize();
+  const cross = new THREE.Vector3().crossVectors(start, current);
+  return Math.atan2(cross.dot(axisVector), start.dot(current));
+}
+
+function applyRotationToEntity(selection, entry, axis, angle, pivot) {
+  if (!canRotateEntityKind(selection.kind) || !pivot) {
+    return;
+  }
+  const axisVector = getBuildDragAxisVector(axis);
+  const startPosition = selection.startPosition ?? { x: 0, y: 0, z: 0 };
+  const nextPosition = new THREE.Vector3(
+    Number(startPosition.x ?? 0) || 0,
+    Number(startPosition.y ?? 0) || 0,
+    Number(startPosition.z ?? 0) || 0,
+  ).sub(pivot).applyAxisAngle(axisVector, angle).add(pivot);
+  for (const currentAxis of ["x", "y", "z"]) {
+    setEntityPositionValue(selection, entry, currentAxis, nextPosition[currentAxis]);
+  }
+  entry.rotation = entry.rotation || { x: 0, y: 0, z: 0 };
+  const startRotation = selection.startRotation ?? { x: 0, y: 0, z: 0 };
+  entry.rotation.x = Number(startRotation.x ?? 0) || 0;
+  entry.rotation.y = Number(startRotation.y ?? 0) || 0;
+  entry.rotation.z = Number(startRotation.z ?? 0) || 0;
+  entry.rotation[axis] = roundPrivateValue(clampNumber(
+    (Number(startRotation[axis] ?? 0) || 0) + angle,
+    Number(startRotation[axis] ?? 0) || 0,
+    -Math.PI * 16,
+    Math.PI * 16,
+  ));
 }
 
 function applyFreeMoveToEntity(selection, entry, delta) {
@@ -5619,35 +5869,51 @@ function applyAxisScaleToEntity(selection, entry, axis, direction, amount) {
 }
 
 function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
-  const transformMode = getBuildTransformMode();
-  if (!transformMode || transformMode === "delete") {
+  const requestedTransformMode = getBuildTransformMode();
+  if (!requestedTransformMode || requestedTransformMode === "delete") {
     return false;
   }
   const hoveredEntityRef = state.buildHover?.entityRef ?? getEntityRefFromHit(hit);
   const hoveredHandle = state.buildHover?.transformHandle ?? null;
-  if (transformMode === "multi" && hoveredEntityRef && !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id) && !hoveredHandle) {
-    return false;
-  }
-  if ((transformMode === "move" || transformMode === "scale") && hoveredEntityRef && !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id)) {
-    setBuilderSelection(hoveredEntityRef.kind, hoveredEntityRef.id);
-  }
   let sceneDoc = null;
   try {
     sceneDoc = parseSceneTextarea();
   } catch (_error) {
     return false;
   }
-  const selectedEntities = getSelectedEntities(sceneDoc);
+  let selectedEntities = getSelectedEntities(sceneDoc);
+  const transformMode = resolveBuildTransformModeForSelection(requestedTransformMode, selectedEntities);
+  if (transformMode === "multi" && hoveredEntityRef && !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id) && !hoveredHandle) {
+    return false;
+  }
+  if (
+    requestedTransformMode === transformMode
+    && (transformMode === "move" || transformMode === "scale" || transformMode === "rotate")
+    && hoveredEntityRef
+    && !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id)
+  ) {
+    setBuilderSelection(hoveredEntityRef.kind, hoveredEntityRef.id);
+    try {
+      sceneDoc = parseSceneTextarea();
+      selectedEntities = getSelectedEntities(sceneDoc);
+    } catch (_error) {
+      return false;
+    }
+  }
   if (!selectedEntities.length) {
     return false;
   }
-  if (transformMode === "scale" && (selectedEntities.length !== 1 || !canScaleEntityKind(selectedEntities[0].kind))) {
+  if (transformMode === "scale" && !canScaleSelection(selectedEntities)) {
+    return false;
+  }
+  if (transformMode === "rotate" && !canRotateSelection(selectedEntities)) {
     return false;
   }
   const selectionBounds = getOverlayBoundsForRefs(state.preview, getBuilderSelectionRefs());
   if (!selectionBounds) {
     return false;
   }
+  const pivot = selectionBounds.getCenter(new THREE.Vector3());
   let plane = null;
   let startPoint = null;
   let axis = null;
@@ -5655,22 +5921,39 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
   let dragType = transformMode === "scale" ? "scale-uniform" : "move-plane";
   if (hoveredHandle) {
     axis = hoveredHandle.axis;
-    direction = hoveredHandle.direction;
-    plane = getBuildDragAxisPlane(axis, selectionBounds.getCenter(new THREE.Vector3()));
-    startPoint = getBuildDragPoint(event, plane);
-    if (!startPoint) {
-      return false;
+    if (transformMode === "rotate") {
+      if (hoveredHandle.type !== "rotate") {
+        return false;
+      }
+      plane = new THREE.Plane().setFromNormalAndCoplanarPoint(getBuildDragAxisVector(axis), pivot);
+      startPoint = getBuildDragPoint(event, plane);
+      if (!startPoint) {
+        return false;
+      }
+      dragType = "rotate-axis";
+    } else {
+      if (hoveredHandle.type === "rotate") {
+        return false;
+      }
+      direction = hoveredHandle.direction;
+      plane = getBuildDragAxisPlane(axis, pivot);
+      startPoint = getBuildDragPoint(event, plane);
+      if (!startPoint) {
+        return false;
+      }
+      dragType = transformMode === "scale" ? "scale-axis" : "move-axis";
     }
-    dragType = transformMode === "scale" ? "scale-axis" : "move-axis";
   } else if (transformMode === "scale") {
-    if (!hoveredEntityRef || !isSameEntityRef(hoveredEntityRef, { kind: selectedEntities[0].kind, id: selectedEntities[0].entry.id })) {
+    if (!hoveredEntityRef || !selectedEntities.some((selection) => isSameEntityRef(hoveredEntityRef, { kind: selection.kind, id: selection.entry.id }))) {
       return false;
     }
+  } else if (transformMode === "rotate") {
+    return false;
   } else {
     if (!hoveredEntityRef || !canMoveEntityKind(hoveredEntityRef.kind)) {
       return false;
     }
-    const planeY = selectionBounds.getCenter(new THREE.Vector3()).y;
+    const planeY = pivot.y;
     plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
     startPoint = getBuildDragPoint(event, plane);
     if (!startPoint) {
@@ -5683,13 +5966,19 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
     plane,
     axis,
     direction,
+    pivot: { x: pivot.x, y: pivot.y, z: pivot.z },
     startPoint: startPoint?.clone?.() ?? null,
+    startVector: dragType === "rotate-axis"
+      ? startPoint.clone().sub(pivot)
+      : null,
+    startBoundsSize: selectionBounds.getSize(new THREE.Vector3()),
     startClientX: event.clientX,
     startClientY: event.clientY,
     selection: selectedEntities.map((selection) => ({
       ref: { kind: selection.kind, id: selection.entry.id },
       kind: selection.kind,
       startPosition: deepClone(selection.entry.position ?? { x: 0, y: 0, z: 0 }),
+      startRotation: deepClone(selection.entry.rotation ?? { x: 0, y: 0, z: 0 }),
       startScale: typeof selection.entry.scale === "number"
         ? Number(selection.entry.scale)
         : deepClone(selection.entry.scale ?? { x: 1, y: 1, z: 1 }),
@@ -5705,7 +5994,13 @@ function updateBuildDrag(event) {
   }
   let amount = 0;
   let factor = 1;
-  if (state.buildDrag.type === "move-plane" || state.buildDrag.type === "move-axis" || state.buildDrag.type === "scale-axis") {
+  let angle = 0;
+  if (
+    state.buildDrag.type === "move-plane"
+    || state.buildDrag.type === "move-axis"
+    || state.buildDrag.type === "scale-axis"
+    || state.buildDrag.type === "rotate-axis"
+  ) {
     const point = getBuildDragPoint(event, state.buildDrag.plane);
     if (!point || !state.buildDrag.startPoint) {
       return false;
@@ -5715,6 +6010,19 @@ function updateBuildDrag(event) {
       amount = 0;
       state.buildDrag.delta = delta;
       state.buildDrag.moved = state.buildDrag.moved || delta.lengthSq() > 0.0004;
+    } else if (state.buildDrag.type === "rotate-axis") {
+      const pivot = new THREE.Vector3(
+        Number(state.buildDrag.pivot?.x ?? 0) || 0,
+        Number(state.buildDrag.pivot?.y ?? 0) || 0,
+        Number(state.buildDrag.pivot?.z ?? 0) || 0,
+      );
+      const startVector = state.buildDrag.startVector?.clone?.() ?? null;
+      const currentVector = point.clone().sub(pivot);
+      if (!startVector) {
+        return false;
+      }
+      angle = getSignedAngleAroundAxis(startVector, currentVector, getBuildDragAxisVector(state.buildDrag.axis));
+      state.buildDrag.moved = state.buildDrag.moved || Math.abs(angle) > 0.01;
     } else {
       amount = delta.dot(getBuildDragAxisVector(state.buildDrag.axis));
       state.buildDrag.moved = state.buildDrag.moved || Math.abs(amount) > 0.02;
@@ -5726,6 +6034,19 @@ function updateBuildDrag(event) {
   }
   void acquireSceneLock();
   mutateSceneDoc((sceneDoc) => {
+    const selectionCount = state.buildDrag?.selection?.length ?? 0;
+    const isGroupSelection = selectionCount > 1;
+    const pivot = state.buildDrag?.pivot
+      ? new THREE.Vector3(state.buildDrag.pivot.x, state.buildDrag.pivot.y, state.buildDrag.pivot.z)
+      : null;
+    const axisFactor = state.buildDrag?.type === "scale-axis"
+      ? clampNumber(
+        1 + (amount * (state.buildDrag.direction || 1)) / Math.max(0.2, Number(state.buildDrag.startBoundsSize?.[state.buildDrag.axis] ?? 1) || 1),
+        1,
+        0.2,
+        24,
+      )
+      : 1;
     for (const selection of state.buildDrag?.selection ?? []) {
       const current = findEntityByRef(sceneDoc, selection.ref);
       if (!current?.entry) {
@@ -5736,9 +6057,19 @@ function updateBuildDrag(event) {
       } else if (state.buildDrag.type === "move-axis") {
         applyAxisMoveToEntity(selection, current.entry, state.buildDrag.axis, amount);
       } else if (state.buildDrag.type === "scale-axis") {
-        applyAxisScaleToEntity(selection, current.entry, state.buildDrag.axis, state.buildDrag.direction, amount);
+        if (isGroupSelection) {
+          applyGroupAxisScaleToEntity(selection, current.entry, state.buildDrag.axis, axisFactor, pivot);
+        } else {
+          applyAxisScaleToEntity(selection, current.entry, state.buildDrag.axis, state.buildDrag.direction, amount);
+        }
       } else if (state.buildDrag.type === "scale-uniform") {
-        applyUniformScaleToEntity(selection, current.entry, factor);
+        if (isGroupSelection) {
+          applyGroupUniformScaleToEntity(selection, current.entry, factor, pivot);
+        } else {
+          applyUniformScaleToEntity(selection, current.entry, factor);
+        }
+      } else if (state.buildDrag.type === "rotate-axis") {
+        applyRotationToEntity(selection, current.entry, state.buildDrag.axis, angle, pivot);
       }
     }
   });
