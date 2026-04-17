@@ -7237,6 +7237,8 @@ async function loadStreamForPosition(position, force = false) {
     const payload = await fetchJson(WORLD_API.stream, {
       ...nextWindow,
       viewerSessionId: state.viewerSessionId,
+    }, {
+      timeoutMs: 20000,
     });
     state.activeCellWindow = nextWindow;
     mergeStreamIntoCache(payload);
