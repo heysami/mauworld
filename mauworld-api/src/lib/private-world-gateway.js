@@ -1,8 +1,13 @@
 import { WebSocket, WebSocketServer } from "ws";
 import { BrowserSessionManager } from "./browser-session-manager.js";
-import { checkChatRateLimit, sanitizeChatText } from "./realtime-state.js";
+import { checkChatRateLimit, sanitizeChatText, selectNearestRecipients } from "./realtime-state.js";
 
 const PRIVATE_WORLD_REALTIME_PATH = "/api/ws/private/worlds";
+const PRIVATE_WORLD_CHAT_MAX_CHARS = 160;
+const PRIVATE_WORLD_CHAT_TTL_SECONDS = 8;
+const PRIVATE_WORLD_CHAT_DETAIL_RADIUS = 180;
+const PRIVATE_WORLD_BROWSER_RADIUS = 96;
+const PRIVATE_WORLD_MAX_RECIPIENTS = 20;
 
 function buildBaseUrl(publicBaseUrl) {
   if (/^https?:\/\//i.test(publicBaseUrl)) {
@@ -29,6 +34,20 @@ function sendJson(client, payload) {
 
 function buildPrivateBrowserWorldKey(worldId, creatorUsername) {
   return `private:${String(worldId ?? "").trim()}:${String(creatorUsername ?? "").trim().toLowerCase()}`;
+}
+
+function positionFromPrivateClient(client) {
+  if (client?.position) {
+    return client.position;
+  }
+  if (!client?.presence) {
+    return null;
+  }
+  return {
+    x: Number(client.presence.position_x ?? 0) || 0,
+    y: Number(client.presence.position_y ?? 0) || 0,
+    z: Number(client.presence.position_z ?? 0) || 0,
+  };
 }
 
 export class PrivateWorldGateway {
@@ -115,7 +134,9 @@ export class PrivateWorldGateway {
         viewerSessionId: auth?.profile?.id ? `profile:${auth.profile.id}` : (guestSessionId || `guest:${Math.random().toString(36).slice(2, 10)}`),
         displayName: auth?.profile?.display_name || auth?.profile?.username || "guest viewer",
         presence: null,
+        position: null,
         chatRateLimitState: {},
+        browserModes: new Map(),
         messageQueue: Promise.resolve(),
       };
       this.clients.add(client);
@@ -134,7 +155,7 @@ export class PrivateWorldGateway {
         world: detail.world,
       });
       this.sendExistingPresence(client);
-      await this.syncBrowserAudience(client.browserWorldKey);
+      await this.rebalanceBrowserSessions(client.browserWorldKey);
       this.sendExistingBrowserSessions(client);
     } catch (error) {
       socket.close(1008, error.message || "not allowed");
@@ -196,6 +217,14 @@ export class PrivateWorldGateway {
     return [...this.clients].filter((client) => client.browserWorldKey === browserWorldKey);
   }
 
+  findBrowserClient(browserWorldKey, viewerSessionId) {
+    const target = String(viewerSessionId ?? "").trim();
+    if (!target) {
+      return null;
+    }
+    return this.getBrowserWorldClients(browserWorldKey).find((client) => client.viewerSessionId === target) ?? null;
+  }
+
   broadcastToWorld(worldId, creatorUsername, payload) {
     for (const client of this.getWorldClients(worldId, creatorUsername)) {
       sendJson(client, payload);
@@ -236,8 +265,10 @@ export class PrivateWorldGateway {
         type: "browser:session",
         session,
       });
+      const deliveryMode = rawSession.subscribers?.has(client.viewerSessionId) ? "full" : "placeholder";
+      client.browserModes.set(session.sessionId, deliveryMode);
       sendJson(client, {
-        type: "browser:subscribe",
+        type: deliveryMode === "full" ? "browser:subscribe" : "browser:unsubscribe",
         sessionId: session.sessionId,
         hostSessionId: session.hostSessionId,
         viewerCount: session.viewerCount,
@@ -246,14 +277,96 @@ export class PrivateWorldGateway {
     }
   }
 
-  async syncBrowserAudience(browserWorldKey) {
+  async rebalanceBrowserSessions(browserWorldKey) {
     const worldClients = this.getBrowserWorldClients(browserWorldKey);
-    const subscribers = new Set(worldClients.map((entry) => entry.viewerSessionId));
     for (const session of this.browserManager.listSessionsForWorld(browserWorldKey)) {
-      session.subscribers = new Set(subscribers);
-      session.viewerCount = Math.max(0, subscribers.size - 1);
-      session.maxViewers = 20;
-      await this.broadcastBrowserSession(session, { rebroadcastSubscribe: false });
+      const hostClient = this.findBrowserClient(browserWorldKey, session.hostSessionId);
+      if (!hostClient) {
+        await this.browserManager.stopSession(session.id ?? session.sessionId);
+        continue;
+      }
+      const fullRecipients = new Set(
+        selectNearestRecipients({
+          senderSessionId: hostClient.viewerSessionId,
+          senderPosition: positionFromPrivateClient(hostClient),
+          candidates: worldClients.map((entry) => ({
+            viewerSessionId: entry.viewerSessionId,
+            position: positionFromPrivateClient(entry),
+          })),
+          radius: PRIVATE_WORLD_BROWSER_RADIUS,
+          maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+        }),
+      );
+      fullRecipients.add(hostClient.viewerSessionId);
+      const previousRecipients = new Set(session.subscribers ?? []);
+      session.subscribers = fullRecipients;
+      const recipientsChanged =
+        previousRecipients.size !== fullRecipients.size
+        || [...fullRecipients].some((viewerSessionId) => !previousRecipients.has(viewerSessionId));
+      const nextViewerCount = Math.max(0, fullRecipients.size - 1);
+      const nextMaxViewers = PRIVATE_WORLD_MAX_RECIPIENTS;
+      const countsChanged =
+        Number(session.viewerCount ?? -1) !== nextViewerCount
+        || Number(session.maxViewers ?? -1) !== nextMaxViewers;
+      session.viewerCount = nextViewerCount;
+      session.maxViewers = nextMaxViewers;
+
+      for (const viewerSessionId of fullRecipients) {
+        if (previousRecipients.has(viewerSessionId)) {
+          continue;
+        }
+        const client = this.findBrowserClient(browserWorldKey, viewerSessionId);
+        if (!client) {
+          continue;
+        }
+        client.browserModes.set(session.id ?? session.sessionId, "full");
+        sendJson(client, {
+          type: "browser:subscribe",
+          sessionId: session.id ?? session.sessionId,
+          hostSessionId: session.hostSessionId,
+          viewerCount: session.viewerCount,
+          maxViewers: session.maxViewers,
+        });
+      }
+
+      for (const viewerSessionId of previousRecipients) {
+        if (fullRecipients.has(viewerSessionId)) {
+          continue;
+        }
+        const client = this.findBrowserClient(browserWorldKey, viewerSessionId);
+        if (!client) {
+          continue;
+        }
+        client.browserModes.set(session.id ?? session.sessionId, "placeholder");
+        sendJson(client, {
+          type: "browser:unsubscribe",
+          sessionId: session.id ?? session.sessionId,
+          hostSessionId: session.hostSessionId,
+          viewerCount: session.viewerCount,
+          maxViewers: session.maxViewers,
+        });
+      }
+
+      for (const client of worldClients) {
+        if (fullRecipients.has(client.viewerSessionId)) {
+          client.browserModes.set(session.id ?? session.sessionId, "full");
+          continue;
+        }
+        if (client.browserModes.get(session.id ?? session.sessionId) !== "placeholder") {
+          client.browserModes.set(session.id ?? session.sessionId, "placeholder");
+          sendJson(client, {
+            type: "browser:unsubscribe",
+            sessionId: session.id ?? session.sessionId,
+            hostSessionId: session.hostSessionId,
+            viewerCount: session.viewerCount,
+            maxViewers: session.maxViewers,
+          });
+        }
+      }
+
+      if (recipientsChanged || countsChanged) {
+        await this.broadcastBrowserSession(session, { rebalance: false });
+      }
     }
   }
 
@@ -265,7 +378,7 @@ export class PrivateWorldGateway {
       });
       return;
     }
-    const text = sanitizeChatText(message.text, 160);
+    const text = sanitizeChatText(message.text, PRIVATE_WORLD_CHAT_MAX_CHARS);
     if (!text) {
       return;
     }
@@ -281,13 +394,33 @@ export class PrivateWorldGateway {
       });
       return;
     }
-    this.broadcastToWorld(client.worldId, client.creatorUsername, {
-      type: "chat:event",
-      actorSessionId: client.viewerSessionId,
-      displayName: client.displayName,
-      text,
-      createdAt: new Date().toISOString(),
-    });
+    const worldClients = this.getWorldClients(client.worldId, client.creatorUsername);
+    const fullRecipients = new Set(
+      selectNearestRecipients({
+        senderSessionId: client.viewerSessionId,
+        senderPosition: positionFromPrivateClient(client),
+        candidates: worldClients.map((entry) => ({
+          viewerSessionId: entry.viewerSessionId,
+          position: positionFromPrivateClient(entry),
+        })),
+        radius: PRIVATE_WORLD_CHAT_DETAIL_RADIUS,
+        maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+      }),
+    );
+    fullRecipients.add(client.viewerSessionId);
+    const expiresAt = new Date(Date.now() + PRIVATE_WORLD_CHAT_TTL_SECONDS * 1000).toISOString();
+
+    for (const entry of worldClients) {
+      sendJson(entry, {
+        type: "chat:event",
+        actorSessionId: client.viewerSessionId,
+        displayName: client.displayName,
+        mode: fullRecipients.has(entry.viewerSessionId) ? "full" : "placeholder",
+        text: fullRecipients.has(entry.viewerSessionId) ? text : "...",
+        createdAt: new Date().toISOString(),
+        expiresAt,
+      });
+    }
   }
 
   buildPresencePayload(client) {
@@ -321,10 +454,7 @@ export class PrivateWorldGateway {
     });
   }
 
-  handlePresenceUpdate(client, message) {
-    if (!client?.profile) {
-      return;
-    }
+  async handlePresenceUpdate(client, message) {
     const positionX = Number(message.position_x);
     const positionY = Number(message.position_y);
     const positionZ = Number(message.position_z);
@@ -338,14 +468,21 @@ export class PrivateWorldGateway {
       position_z: positionZ,
       heading_y: Number.isFinite(headingY) ? headingY : 0,
     };
-    const presence = this.buildPresencePayload(client);
-    if (!presence) {
-      return;
+    client.position = {
+      x: positionX,
+      y: positionY,
+      z: positionZ,
+    };
+    if (client.profile) {
+      const presence = this.buildPresencePayload(client);
+      if (presence) {
+        this.broadcastToWorld(client.worldId, client.creatorUsername, {
+          type: "presence:update",
+          presence,
+        });
+      }
     }
-    this.broadcastToWorld(client.worldId, client.creatorUsername, {
-      type: "presence:update",
-      presence,
-    });
+    await this.rebalanceBrowserSessions(client.browserWorldKey);
   }
 
   async handleBrowserStart(client, message) {
@@ -368,12 +505,6 @@ export class PrivateWorldGateway {
         aspectRatio: message.aspectRatio,
         displaySurface: message.displaySurface,
       });
-      const internal = this.browserManager.getSession(session.sessionId);
-      if (internal) {
-        internal.subscribers = new Set(this.getBrowserWorldClients(client.browserWorldKey).map((entry) => entry.viewerSessionId));
-        internal.viewerCount = Math.max(0, internal.subscribers.size - 1);
-        internal.maxViewers = 20;
-      }
       await this.broadcastBrowserSession(session);
     } catch (error) {
       sendJson(client, {
@@ -441,14 +572,8 @@ export class PrivateWorldGateway {
       type: "browser:session",
       session,
     });
-    if (options.rebroadcastSubscribe !== false) {
-      this.broadcastToBrowserWorld(browserWorldKey, {
-        type: "browser:subscribe",
-        sessionId: session.sessionId,
-        hostSessionId: session.hostSessionId,
-        viewerCount: session.viewerCount,
-        maxViewers: session.maxViewers,
-      });
+    if (options.rebalance !== false) {
+      await this.rebalanceBrowserSessions(browserWorldKey);
     }
   }
 
@@ -489,6 +614,9 @@ export class PrivateWorldGateway {
       sessionId: payload.sessionId,
       hostSessionId: payload.hostSessionId,
     });
+    for (const client of this.getBrowserWorldClients(browserWorldKey)) {
+      client.browserModes?.delete?.(payload.sessionId);
+    }
   }
 
   notifyBrowserError(payload) {
@@ -514,7 +642,7 @@ export class PrivateWorldGateway {
     if (browserSession) {
       await this.browserManager.stopSession(browserSession.id ?? browserSession.sessionId);
     } else {
-      await this.syncBrowserAudience(client.browserWorldKey);
+      await this.rebalanceBrowserSessions(client.browserWorldKey);
     }
     if (client.profile) {
       this.broadcastToWorld(client.worldId, client.creatorUsername, {

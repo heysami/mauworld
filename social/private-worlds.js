@@ -64,7 +64,7 @@ const PRIVATE_SPRINT = {
   rampSeconds: 10,
   decaySeconds: 10,
 };
-const PRIVATE_OVERHEAD_SCALE = 0.25;
+const PRIVATE_OVERHEAD_SCALE = 1;
 const PRIVATE_CHAT_MAX_ENTRIES = 28;
 const PRIVATE_CHAT_BUBBLE_BASE_WIDTH = 18 * PRIVATE_OVERHEAD_SCALE;
 const PRIVATE_CHAT_BUBBLE_BASE_HEIGHT = 12 * PRIVATE_OVERHEAD_SCALE;
@@ -96,6 +96,8 @@ const PRIVATE_WORLD_STYLE = {
 let privateToonGradientTexture = null;
 const privateBillboardParentQuaternion = new THREE.Quaternion();
 const privateBillboardCameraQuaternion = new THREE.Quaternion();
+const privateChatGhostWorldPosition = new THREE.Vector3();
+const privateChatGhostWorldScale = new THREE.Vector3();
 
 const elements = {
   launcher: document.querySelector("[data-launcher]"),
@@ -686,6 +688,55 @@ function createPrivateActorBubbleState(color, options = {}) {
   };
 }
 
+function removePrivateChatBubbleGhost(preview, entry) {
+  if (!preview?.animatedChatBubbleGhosts || !entry?.mesh) {
+    return;
+  }
+  if (entry.mesh.parent) {
+    entry.mesh.parent.remove(entry.mesh);
+  }
+  entry.mesh.geometry?.dispose?.();
+  entry.mesh.material?.map?.dispose?.();
+  entry.mesh.material?.dispose?.();
+  const index = preview.animatedChatBubbleGhosts.indexOf(entry);
+  if (index >= 0) {
+    preview.animatedChatBubbleGhosts.splice(index, 1);
+  }
+}
+
+function spawnPrivateChatBubbleGhost(actorEntry, texture, preview = state.preview) {
+  if (!preview?.chatBubbleGhosts || !actorEntry?.bubble?.mesh || !texture || actorEntry.bubble.opacity <= 0.04) {
+    texture?.dispose?.();
+    return;
+  }
+  actorEntry.bubble.mesh.updateWorldMatrix(true, false);
+  actorEntry.bubble.mesh.getWorldPosition(privateChatGhostWorldPosition);
+  actorEntry.bubble.mesh.getWorldScale(privateChatGhostWorldScale);
+  const baseWidth = Number(actorEntry.bubble.baseWidth) || PRIVATE_CHAT_BUBBLE_BASE_WIDTH;
+  const baseHeight = Number(actorEntry.bubble.baseHeight) || PRIVATE_CHAT_BUBBLE_BASE_HEIGHT;
+  const mesh = createPrivateBillboard(texture, baseWidth, baseHeight, {
+    opacity: actorEntry.bubble.mesh.material.opacity,
+    fog: false,
+    depthTest: false,
+    renderOrder: 10,
+  });
+  mesh.position.copy(privateChatGhostWorldPosition);
+  mesh.scale.copy(privateChatGhostWorldScale);
+  preview.chatBubbleGhosts.add(mesh);
+  preview.animatedChatBubbleGhosts.push({
+    mesh,
+    opacity: actorEntry.bubble.mesh.material.opacity,
+    lifetime: 1.55 + Math.random() * 0.35,
+    age: 0,
+    drift: new THREE.Vector3(
+      (Math.random() - 0.5) * 0.32,
+      2.6 + Math.random() * 0.8,
+      (Math.random() - 0.5) * 0.14,
+    ),
+    scaleBase: privateChatGhostWorldScale.clone(),
+  });
+}
+
 function orientPrivateBillboardToCamera(mesh, camera) {
   if (!mesh || !camera) {
     return;
@@ -749,6 +800,7 @@ function applyPrivateChatBubbleToActor(actorEntry, chatEvent) {
   const bubbleText = emojiOnly ? "" : text;
   const bubbleKey = `${chatEvent.mode}:${text}:${accent}`;
   if (actorEntry.bubble.currentKey !== bubbleKey) {
+    const previousKey = actorEntry.bubble.currentKey;
     const previousMap = actorEntry.bubble.mesh.material.map;
     const nextTexture = createBubbleTexture(symbol, {
       accent,
@@ -763,7 +815,13 @@ function applyPrivateChatBubbleToActor(actorEntry, chatEvent) {
     const nextSize = getPrivateChatBubbleTargetSize(nextTexture, actorEntry.bubble);
     actorEntry.bubble.targetWidth = nextSize.width;
     actorEntry.bubble.targetHeight = nextSize.height;
-    previousMap?.dispose?.();
+    if (previousMap) {
+      if (previousKey && !previousKey.startsWith("placeholder:")) {
+        spawnPrivateChatBubbleGhost(actorEntry, previousMap);
+      } else {
+        previousMap.dispose?.();
+      }
+    }
     actorEntry.bubble.currentKey = bubbleKey;
   }
   actorEntry.bubble.mesh.visible = true;
@@ -862,7 +920,7 @@ function buildPrivatePresenceObject(entry) {
     Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
     Number(entry.position_z ?? 0) || 0,
   );
-  const bubble = createPrivateActorBubbleState(primary, { anchorY: 15.2 * (0.4 / 0.92) });
+  const bubble = createPrivateActorBubbleState(primary);
   figure.group.add(bubble.mesh);
   return {
     id: presenceId,
@@ -944,6 +1002,52 @@ function getPrivateBrowserPlaceholderBadge(session = {}) {
     return "";
   }
   return "FULL";
+}
+
+function computePrivateRemoteBrowserAudioVolume(session) {
+  if (!session || session.hostSessionId === getPrivateViewerSessionId() || session.deliveryMode !== "full") {
+    return 0;
+  }
+  const hostPosition = getPrivateBrowserHostPosition(session.hostSessionId);
+  if (!hostPosition) {
+    return 0;
+  }
+  const listenerPosition = getPrivatePresencePosition();
+  const planarDistance = Math.hypot(
+    listenerPosition.x - hostPosition.x,
+    listenerPosition.z - hostPosition.z,
+  );
+  const maxDistance = Math.max(16, PRIVATE_BROWSER_RADIUS);
+  const fullVolumeDistance = Math.min(8, Math.max(5, maxDistance * 0.08));
+  if (planarDistance <= fullVolumeDistance) {
+    return 1;
+  }
+  if (planarDistance >= maxDistance) {
+    return 0;
+  }
+  const t = clampNumber(
+    (planarDistance - fullVolumeDistance) / Math.max(1, maxDistance - fullVolumeDistance),
+    0,
+    0,
+    1,
+  );
+  const gain = Math.pow(1 - t, 3.5);
+  return gain < 0.02 ? 0 : gain;
+}
+
+function updatePrivateRemoteBrowserAudioMix() {
+  if (!state.browserMediaController) {
+    return;
+  }
+  for (const session of state.browserSessions.values()) {
+    if (session.hostSessionId === getPrivateViewerSessionId()) {
+      continue;
+    }
+    state.browserMediaController.setRemoteAudioVolume({
+      sessionId: session.sessionId,
+      volume: computePrivateRemoteBrowserAudioVolume(session),
+    });
+  }
 }
 
 function getPrivateBrowserPlaceholderTextureKey(session = {}) {
@@ -1272,13 +1376,33 @@ function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
     const showingLiveMedia = isPrivateShareBubbleShowingLiveMedia(entry);
     entry.targetPosition.copy(hostPosition);
     entry.targetPosition.y += showingLiveMedia
-      ? PRIVATE_BROWSER_LIVE_OFFSET_Y + Math.sin(elapsedSeconds * 1.3) * 0.35
-      : PRIVATE_BROWSER_PLACEHOLDER_OFFSET_Y + Math.sin(elapsedSeconds * 1.1) * 0.09;
+      ? PRIVATE_BROWSER_LIVE_OFFSET_Y + Math.sin(elapsedSeconds * 1.3) * 0.7
+      : PRIVATE_BROWSER_PLACEHOLDER_OFFSET_Y + Math.sin(elapsedSeconds * 1.1) * 0.18;
     entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
     entry.group.visible = true;
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);
     entry.frame.quaternion.copy(preview.camera.quaternion);
+  }
+}
+
+function updatePrivateChatBubbleGhosts(preview, deltaSeconds, camera = preview?.camera) {
+  if (!preview?.animatedChatBubbleGhosts?.length) {
+    return;
+  }
+  for (let index = preview.animatedChatBubbleGhosts.length - 1; index >= 0; index -= 1) {
+    const entry = preview.animatedChatBubbleGhosts[index];
+    entry.age += deltaSeconds;
+    const life = clampNumber(entry.age / entry.lifetime, 0, 0, 1);
+    entry.mesh.position.addScaledVector(entry.drift, deltaSeconds);
+    entry.mesh.scale.copy(entry.scaleBase).multiplyScalar(1 + life * 0.18);
+    entry.mesh.material.opacity = entry.opacity * Math.pow(1 - life, 1.6);
+    if (camera) {
+      orientPrivateBillboardToCamera(entry.mesh, camera);
+    }
+    if (life >= 1) {
+      removePrivateChatBubbleGhost(preview, entry);
+    }
   }
 }
 
@@ -1848,7 +1972,7 @@ function getPrivatePresencePosition() {
 }
 
 function sendPrivatePresence(force = false) {
-  if (!state.session || !state.joined || !getLocalParticipant()) {
+  if (!state.joined || !getLocalParticipant()) {
     return false;
   }
   const now = performance.now();
@@ -4141,7 +4265,6 @@ function ensureViewerAvatar(preview) {
     bubbleAccent: PRIVATE_WORLD_STYLE.accents[0],
     bubble: createPrivateActorBubbleState(PRIVATE_WORLD_STYLE.accents[0], {
       persistent: true,
-      anchorY: 15.2 * (0.46 / 0.92),
     }),
   };
   avatar.group.add(avatar.bubble.mesh);
@@ -4511,12 +4634,14 @@ function ensurePreview() {
     root: new THREE.Group(),
     actors: new THREE.Group(),
     presence: new THREE.Group(),
+    chatBubbleGhosts: new THREE.Group(),
     browserShares: new THREE.Group(),
     trails: new THREE.Group(),
     raycaster: new THREE.Raycaster(),
     entityPickables: [],
     entityMeshes: new Map(),
     effectSystems: [],
+    animatedChatBubbleGhosts: [],
     trailPuffs: [],
     presenceEntries: new Map(),
     browserShareEntries: new Map(),
@@ -4526,6 +4651,7 @@ function ensurePreview() {
   state.preview.scene.add(state.preview.root);
   state.preview.scene.add(state.preview.actors);
   state.preview.scene.add(state.preview.presence);
+  state.preview.scene.add(state.preview.chatBubbleGhosts);
   state.preview.scene.add(state.preview.browserShares);
   state.preview.scene.add(state.preview.trails);
   ensureViewerAvatar(state.preview);
@@ -4557,6 +4683,8 @@ function ensurePreview() {
     pruneExpiredPrivateChatEvents();
     updatePrivatePresenceScene(deltaSeconds, timestamp / 1000);
     updatePrivateShareBubbles(deltaSeconds, timestamp / 1000);
+    updatePrivateRemoteBrowserAudioMix();
+    updatePrivateChatBubbleGhosts(state.preview, deltaSeconds, state.preview.camera);
     updatePreviewEffects(state.preview, timestamp / 1000);
     updateViewerTrailPuffs(state.preview, deltaSeconds);
     state.preview.renderer.render(state.preview.scene, state.preview.camera);
@@ -4669,6 +4797,9 @@ function clearPreviewRoot() {
   preview.entityPickables = [];
   preview.entityMeshes.clear();
   disposePreviewEffects(preview);
+  for (const entry of [...(preview.animatedChatBubbleGhosts ?? [])]) {
+    removePrivateChatBubbleGhost(preview, entry);
+  }
   for (const child of [...preview.root.children]) {
     preview.root.remove(child);
     child.traverse((node) => {
