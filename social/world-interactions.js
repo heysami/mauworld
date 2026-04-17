@@ -131,6 +131,9 @@ export function createChatComposerController(options = {}) {
         input.blur();
       }
     };
+    if (typeof queueMicrotask === "function") {
+      queueMicrotask(retryBlur);
+    }
     if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
       window.requestAnimationFrame(retryBlur);
       return;
@@ -195,11 +198,13 @@ export function createChatComposerController(options = {}) {
     }
     if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
+      event.stopPropagation?.();
       submit({ keepFocus: event.shiftKey === true });
       return true;
     }
     if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation?.();
       close(true);
       return true;
     }
@@ -218,14 +223,33 @@ export function createChatFeature(options = {}) {
   const controller = createChatComposerController(options);
 
   function bind() {
+    let suppressNextSubmit = false;
+    const clearSubmitSuppression = () => {
+      suppressNextSubmit = false;
+    };
     options.input?.addEventListener("input", () => {
       options.onAfterInputChange?.(String(options.input?.value ?? ""));
     });
     options.input?.addEventListener("keydown", (event) => {
-      controller.handleKeydown(event);
+      const handled = controller.handleKeydown(event);
+      if (!handled) {
+        return;
+      }
+      suppressNextSubmit = true;
+      if (typeof queueMicrotask === "function") {
+        queueMicrotask(clearSubmitSuppression);
+        return;
+      }
+      if (typeof setTimeout === "function") {
+        setTimeout(clearSubmitSuppression, 0);
+      }
     });
     options.form?.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (suppressNextSubmit) {
+        suppressNextSubmit = false;
+        return;
+      }
       controller.submit();
     });
     for (const button of options.reactionButtons ?? []) {
@@ -305,7 +329,7 @@ export function createChatBubbleRenderer(options = {}) {
       opacity: actorEntry.bubble.mesh.material.opacity,
       fog: false,
       depthTest: false,
-      renderOrder: 10,
+      renderOrder: Number(options.ghostRenderOrder) || 10.5,
     });
     if (!mesh) {
       texture?.dispose?.();

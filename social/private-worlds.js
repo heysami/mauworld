@@ -460,8 +460,12 @@ function getPrivateBrowserWorldKey(world = state.selectedWorld) {
   return `private:${world.world_id}:${String(world.creator.username).trim().toLowerCase()}`;
 }
 
+function normalizePrivatePanelTab(tab) {
+  return PRIVATE_PANEL_TABS.has(tab) ? tab : "chat";
+}
+
 function setPrivatePanelTab(tab, options = {}) {
-  const nextTab = PRIVATE_PANEL_TABS.has(tab) ? tab : "build";
+  const nextTab = normalizePrivatePanelTab(tab);
   const syncMode = options.syncMode !== false;
   state.privatePanelTab = nextTab;
   if (syncMode && nextTab === "build" && state.mode !== "build" && isEditor()) {
@@ -2028,6 +2032,25 @@ const privateChatFeature = createChatFeature({
   },
 });
 
+function openPrivateChatComposer() {
+  if (!elements.panelChatInput) {
+    return;
+  }
+  setPrivatePanelTab("chat");
+  if (elements.panelChatInput.disabled) {
+    return;
+  }
+  elements.panelChatInput.focus();
+  elements.panelChatInput.select();
+}
+
+function isEditablePrivateTarget(target) {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
 function isLiveKitBrowserTransport(frameTransport) {
   return String(frameTransport ?? "").startsWith("livekit");
 }
@@ -3082,16 +3105,18 @@ function getRenderableSceneDoc() {
   return parseSceneTextarea();
 }
 
-function setMode(mode) {
+function setMode(mode, options = {}) {
   const nextMode = mode === "build" && isEditor() ? "build" : "play";
+  const syncPanelTab = options.syncPanelTab !== false;
+  const previousMode = state.mode;
   state.mode = nextMode;
   if (nextMode === "play") {
     state.builderSelection = null;
     state.sceneDrawerOpen = false;
-    if (state.privatePanelTab === "build") {
+    if (syncPanelTab && state.privatePanelTab === "build") {
       state.privatePanelTab = "chat";
     }
-  } else {
+  } else if (syncPanelTab && previousMode !== "build") {
     state.privatePanelTab = "build";
   }
   document.body.classList.toggle("is-play-mode", nextMode === "play");
@@ -3932,6 +3957,11 @@ function renderSelectedWorld() {
   state.joined = Boolean(localParticipant);
   state.joinedAsGuest = !state.session && localParticipant?.join_role === "guest";
   const joinedAsPlayer = localParticipant?.join_role === "player";
+  if (!hasWorld || (state.privatePanelTab === "build" && !canEdit)) {
+    state.privatePanelTab = "chat";
+  } else {
+    state.privatePanelTab = normalizePrivatePanelTab(state.privatePanelTab);
+  }
   renderSessionSummary();
   for (const button of elements.privatePanelTabButtons ?? []) {
     const tab = button.getAttribute("data-private-panel-tab") || "";
@@ -4025,7 +4055,7 @@ function renderSelectedWorld() {
     elements.placePrefab.disabled = !hasWorld || !canEdit || state.mode !== "build" || !state.selectedPrefabId;
   }
 
-  setMode(state.mode);
+  setMode(state.mode, { syncPanelTab: false });
   updateShellState();
   updatePreviewFromSelection();
   renderPrivateChat();
@@ -5617,6 +5647,7 @@ async function joinWorld() {
   state.joinedAsGuest = !state.session;
   state.selectedWorld = payload.world;
   renderSelectedWorld();
+  setPrivatePanelTab("chat");
   pushEvent("world:joined", `${payload.world.name}`);
 }
 
@@ -6534,6 +6565,18 @@ function bindEvents() {
   });
   elements.generateScript.addEventListener("click", () => {
     void generateAi("script");
+  });
+  window.addEventListener("keydown", (event) => {
+    if (
+      event.key === "/"
+      && !event.ctrlKey
+      && !event.metaKey
+      && !event.altKey
+      && !isEditablePrivateTarget(event.target)
+    ) {
+      event.preventDefault();
+      openPrivateChatComposer();
+    }
   });
   window.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
