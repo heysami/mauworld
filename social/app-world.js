@@ -4099,6 +4099,8 @@ const CHAT_BUBBLE_BASE_HEIGHT = 12;
 const CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 820;
 const CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 620;
 const CHAT_BUBBLE_MAX_LINES = 8;
+const CHAT_BUBBLE_MIN_WIDTH = 6.2;
+const CHAT_BUBBLE_MIN_HEIGHT = 4.9;
 
 function createActorBubbleState(color, options = {}) {
   const baseWidth = CHAT_BUBBLE_BASE_WIDTH;
