@@ -99,6 +99,7 @@ const PRIVATE_BROWSER_PLACEHOLDER_AUDIO_WIDTH = 7.8 * PRIVATE_OVERHEAD_SCALE;
 const PRIVATE_BROWSER_PLACEHOLDER_VIDEO_WIDTH = 8.6 * PRIVATE_OVERHEAD_SCALE;
 const PRIVATE_BROWSER_LIVE_OFFSET_Y = 18 * PRIVATE_OVERHEAD_SCALE;
 const PRIVATE_BROWSER_PLACEHOLDER_OFFSET_Y = 15.4 * PRIVATE_OVERHEAD_SCALE;
+const PRIVATE_LOCAL_PREVIEW_SESSION_ID = "__private_local_preview__";
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
   fog: "#f4fbff",
@@ -1360,18 +1361,56 @@ function ensurePrivateShareBubbleEntry(session = {}) {
   return entry;
 }
 
+function getPrivateLocalPreviewBubbleSession() {
+  const localPreviewShare = state.localBrowserShare?.hasVideo
+    ? state.localBrowserShare
+    : state.pendingBrowserShare?.hasVideo
+      ? state.pendingBrowserShare
+      : null;
+  if (!localPreviewShare || !elements.panelBrowserVideo?.srcObject) {
+    return null;
+  }
+  const realSessionId = String(state.localBrowserSessionId ?? "").trim();
+  if (realSessionId && state.browserSessions.has(realSessionId)) {
+    return null;
+  }
+  return {
+    sessionId: realSessionId || PRIVATE_LOCAL_PREVIEW_SESSION_ID,
+    hostSessionId: getPrivateViewerSessionId(),
+    title: String(localPreviewShare.title ?? "").trim() || "Live share",
+    shareKind: localPreviewShare.shareKind || "screen",
+    hasVideo: true,
+    hasAudio: localPreviewShare.hasAudio === true,
+    aspectRatio: Number(localPreviewShare.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO,
+    sessionMode: "display-share",
+    frameTransport: "local-preview",
+    deliveryMode: "full",
+    _syntheticLocalPreview: true,
+  };
+}
+
+function getPrivateShareBubbleSessions() {
+  const sessions = [...state.browserSessions.values()];
+  const localPreviewSession = getPrivateLocalPreviewBubbleSession();
+  if (localPreviewSession) {
+    sessions.push(localPreviewSession);
+  }
+  return sessions;
+}
+
 function reconcilePrivateShareBubbles() {
   const preview = state.preview;
   if (!preview?.browserShareEntries) {
     return;
   }
-  const activeIds = new Set([...state.browserSessions.keys()]);
+  const bubbleSessions = getPrivateShareBubbleSessions();
+  const activeIds = new Set(bubbleSessions.map((session) => String(session.sessionId ?? "").trim()).filter(Boolean));
   for (const sessionId of [...preview.browserShareEntries.keys()]) {
     if (!activeIds.has(sessionId)) {
       removePrivateShareBubbleEntry(sessionId);
     }
   }
-  for (const session of state.browserSessions.values()) {
+  for (const session of bubbleSessions) {
     const entry = ensurePrivateShareBubbleEntry(session);
     if (!entry) {
       continue;
@@ -1401,7 +1440,7 @@ function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
   if (!preview?.browserShareEntries?.size || !preview?.camera) {
     return;
   }
-  for (const session of state.browserSessions.values()) {
+  for (const session of getPrivateShareBubbleSessions()) {
     const entry = ensurePrivateShareBubbleEntry(session);
     if (!entry) {
       continue;
