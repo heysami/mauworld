@@ -954,9 +954,52 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
   if (!normalized) {
     return null;
   }
+  const getPlayerAnchorPosition = (playerEntityId = "") => {
+    const playerId = String(playerEntityId ?? "").trim();
+    if (!playerId) {
+      return null;
+    }
+    const renderedPosition = state.preview?.entityMeshes?.get(playerId)?.position ?? null;
+    if (renderedPosition) {
+      return renderedPosition;
+    }
+    const runtimePlayer = state.runtimeSnapshot?.players?.find((entry) => entry.id === playerId) ?? null;
+    if (!runtimePlayer?.position) {
+      return null;
+    }
+    return new THREE.Vector3(
+      Number(runtimePlayer.position.x ?? 0) || 0,
+      Number(runtimePlayer.position.y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
+      Number(runtimePlayer.position.z ?? 0) || 0,
+    );
+  };
+  const participants = state.selectedWorld?.active_instance?.participants ?? [];
+  const getParticipantByViewerSessionId = (viewerSessionId = "") => {
+    const sessionId = String(viewerSessionId ?? "").trim();
+    if (!sessionId) {
+      return null;
+    }
+    if (sessionId.startsWith("profile:")) {
+      const profileId = sessionId.slice("profile:".length).trim();
+      return participants.find((entry) => String(entry.profile?.id ?? entry.profile_id ?? "").trim() === profileId) ?? null;
+    }
+    return participants.find(
+      (entry) => String(entry.guest_session_id ?? entry.guestSessionId ?? "").trim() === sessionId,
+    ) ?? null;
+  };
   if (normalized === getPrivateViewerSessionId()) {
+    const localParticipant = getLocalParticipant();
+    const occupiedPlayerPosition = getPlayerAnchorPosition(localParticipant?.player_entity_id);
+    if (occupiedPlayerPosition) {
+      return occupiedPlayerPosition;
+    }
+    const localPresencePosition = getPrivatePresencePosition();
     return state.preview?.viewerAvatar?.group?.position
-      ?? new THREE.Vector3(state.viewerPosition.x, state.viewerPosition.y, state.viewerPosition.z);
+      ?? new THREE.Vector3(localPresencePosition.x, localPresencePosition.y, localPresencePosition.z);
+  }
+  const occupiedPlayerPosition = getPlayerAnchorPosition(getParticipantByViewerSessionId(normalized)?.player_entity_id);
+  if (occupiedPlayerPosition) {
+    return occupiedPlayerPosition;
   }
   const renderedPosition = state.preview?.presenceEntries?.get(normalized)?.group?.position ?? null;
   if (renderedPosition) {
