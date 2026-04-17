@@ -13,13 +13,13 @@ const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "ar
 const LAUNCHER_TABS = new Set(["create", "worlds", "access", "import"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
 const PRIVATE_CAMERA = {
-  minY: 2.5,
+  minY: 8,
   maxY: 360,
   lookMin: -1.1,
   lookMax: 1.1,
   movementSpeed: 48,
   verticalSpeed: 34,
-  wheelFactor: 0.045,
+  wheelFactor: 0.14,
 };
 const PRIVATE_PLAYER_VIEW = {
   lookHeight: 7.6,
@@ -1559,22 +1559,16 @@ function getPrivateViewerRigConfig(world = state.selectedWorld) {
   const width = Math.max(4, Number(world?.width ?? (world ? 40 : 64)) || (world ? 40 : 64));
   const length = Math.max(4, Number(world?.length ?? (world ? 40 : 64)) || (world ? 40 : 64));
   const height = Math.max(2, Number(world?.height ?? (world ? 10 : 12)) || (world ? 10 : 12));
-  const span = Math.max(width, length);
-  const minRadius = clampNumber(span * 0.22, 16, 12, 28);
-  const defaultRadius = clampNumber(span * 0.38, 24, minRadius + 4, 42);
-  const maxRadius = clampNumber(span * 0.72, 52, defaultRadius + 8, 84);
+  const minRadius = PRIVATE_PLAYER_VIEW.minRadius;
+  const defaultRadius = PRIVATE_PLAYER_VIEW.defaultRadius;
+  const maxRadius = PRIVATE_PLAYER_VIEW.maxRadius;
   const spawnHeight = clampNumber(
-    Math.max(height * 0.5, 8),
-    8,
-    8,
-    Math.max(12, Math.min(24, height * 0.78 + 4)),
-  );
-  const lookHeight = clampNumber(
-    Math.max(height * 0.72, PRIVATE_PLAYER_VIEW.lookHeight),
-    PRIVATE_PLAYER_VIEW.lookHeight,
+    PRIVATE_CAMERA.minY,
+    PRIVATE_CAMERA.minY,
     6,
-    Math.max(PRIVATE_PLAYER_VIEW.lookHeight + 1.4, height + 4),
+    Math.max(PRIVATE_CAMERA.minY, height + 6),
   );
+  const lookHeight = PRIVATE_PLAYER_VIEW.lookHeight;
   return {
     width,
     length,
@@ -1743,10 +1737,9 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
     rig.maxRadius,
   );
   const cosPitch = Math.cos(privateInputState.pitch);
-  const heightBias = Math.max(4.8, rig.spawnHeight * 0.46);
   const nextPosition = new THREE.Vector3(
     target.x + Math.sin(privateInputState.yaw) * cosPitch * radius,
-    Math.max(2.8, target.y + heightBias - Math.sin(privateInputState.pitch) * radius),
+    target.y - Math.sin(privateInputState.pitch) * radius,
     target.z + Math.cos(privateInputState.yaw) * cosPitch * radius,
   );
   if (state.selectedWorld) {
@@ -1755,7 +1748,7 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
     const margin = clampNumber(span * 0.08, 4, 2, 8);
     nextPosition.x = clampNumber(nextPosition.x, nextPosition.x, bounds.minX - margin, bounds.maxX + margin);
     nextPosition.z = clampNumber(nextPosition.z, nextPosition.z, bounds.minZ - margin, bounds.maxZ + margin);
-    nextPosition.y = clampNumber(nextPosition.y, nextPosition.y, Math.max(bounds.minY + 2.8, 2.8), bounds.maxY + 10);
+    nextPosition.y = clampNumber(nextPosition.y, nextPosition.y, rig.minY, rig.maxY);
   }
   preview.camera.position.copy(nextPosition);
   preview.camera.lookAt(target);
