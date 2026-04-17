@@ -323,7 +323,6 @@ const state = {
   viewerSuppressClickAt: 0,
   buildDrag: null,
   buildHover: null,
-  buildPlacementStroke: null,
   previewPointer: {
     clientX: 0,
     clientY: 0,
@@ -532,7 +531,7 @@ function setPrivatePanelTab(tab, options = {}) {
 }
 
 function updateShellState() {
-  const activePlacementTool = state.buildPlacementStroke?.toolKind || getActivePlacementTool();
+  const activePlacementTool = getActivePlacementTool();
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
@@ -1999,7 +1998,6 @@ function clearPlacementTool(options = {}) {
   } else {
     state.placementShortcutTool = "";
     state.placementTool = "";
-    state.buildPlacementStroke = null;
   }
   if (state.previewPointer.inside && canUsePlacementTools()) {
     refreshBuildHoverFromStoredPointer();
@@ -4803,7 +4801,7 @@ function refreshBuildHoverFromPointer(pointerSource) {
     syncBuildPlacementOverlay();
     return null;
   }
-  const toolKind = state.buildPlacementStroke?.toolKind || getActivePlacementTool();
+  const toolKind = getActivePlacementTool();
   let sceneDoc = null;
   if (toolKind) {
     try {
@@ -4956,7 +4954,7 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   }
   const buildMode = canUsePlacementTools();
   const hover = buildMode ? state.buildHover : null;
-  const activeTool = buildMode ? (state.buildPlacementStroke?.toolKind || getActivePlacementTool()) : "";
+  const activeTool = buildMode ? getActivePlacementTool() : "";
   const gridCell = hover?.gridCell ?? null;
   const placement = hover?.placement ?? null;
   const overlayKey = [
@@ -5244,108 +5242,6 @@ function placeActiveTool(placement = state.buildHover?.placement, toolKind = get
     refreshBuildHoverFromStoredPointer();
   }
   return placed;
-}
-
-function canPaintPlacementStep(fromPlacement, toPlacement) {
-  if (!fromPlacement?.position || !toPlacement?.position || fromPlacement.kind !== toPlacement.kind) {
-    return false;
-  }
-  const deltaX = Math.abs((toPlacement.position.x ?? 0) - (fromPlacement.position.x ?? 0));
-  const deltaY = Math.abs((toPlacement.position.y ?? 0) - (fromPlacement.position.y ?? 0));
-  const deltaZ = Math.abs((toPlacement.position.z ?? 0) - (fromPlacement.position.z ?? 0));
-  if (deltaX < 0.0001 && deltaY < 0.0001 && deltaZ < 0.0001) {
-    return false;
-  }
-  return (
-    deltaX <= PRIVATE_WORLD_BLOCK_UNIT + 0.001
-    && deltaY <= PRIVATE_WORLD_BLOCK_UNIT + 0.001
-    && deltaZ <= PRIVATE_WORLD_BLOCK_UNIT + 0.001
-  );
-}
-
-function beginBuildPlacementStroke(pointerSource, toolKind = getActivePlacementTool()) {
-  if (!toolKind || !canUsePlacementTools()) {
-    return false;
-  }
-  const hover = refreshBuildHoverFromPointer(pointerSource);
-  state.buildPlacementStroke = {
-    pointerId: Number(pointerSource?.pointerId ?? state.previewPointer.pointerId) || 0,
-    toolKind,
-    initialPlacement: hover?.placement ? deepClone(hover.placement) : null,
-    lastPlacedPlacement: null,
-    placedCount: 0,
-  };
-  return true;
-}
-
-function updateBuildPlacementStroke(pointerSource) {
-  if (!state.buildPlacementStroke) {
-    return false;
-  }
-  const hover = refreshBuildHoverFromPointer(pointerSource);
-  const currentPlacement = hover?.placement ?? null;
-  if (!currentPlacement?.valid || currentPlacement.kind !== state.buildPlacementStroke.toolKind) {
-    return true;
-  }
-  if (
-    state.buildPlacementStroke.placedCount === 0
-    && state.buildPlacementStroke.initialPlacement
-    && state.buildPlacementStroke.initialPlacement.key !== currentPlacement.key
-    && canPaintPlacementStep(state.buildPlacementStroke.initialPlacement, currentPlacement)
-  ) {
-    if (placeActiveTool(state.buildPlacementStroke.initialPlacement, state.buildPlacementStroke.toolKind)) {
-      state.buildPlacementStroke.lastPlacedPlacement = deepClone(state.buildPlacementStroke.initialPlacement);
-      state.buildPlacementStroke.placedCount += 1;
-    }
-  }
-  const lastPlacedPlacement = state.buildPlacementStroke.lastPlacedPlacement;
-  if (
-    lastPlacedPlacement
-    && lastPlacedPlacement.key !== currentPlacement.key
-    && canPaintPlacementStep(lastPlacedPlacement, currentPlacement)
-  ) {
-    if (placeActiveTool(currentPlacement, state.buildPlacementStroke.toolKind)) {
-      state.buildPlacementStroke.lastPlacedPlacement = deepClone(currentPlacement);
-      state.buildPlacementStroke.placedCount += 1;
-    }
-  }
-  return true;
-}
-
-function endBuildPlacementStroke(pointerId = 0) {
-  if (!state.buildPlacementStroke || (pointerId && state.buildPlacementStroke.pointerId && state.buildPlacementStroke.pointerId !== pointerId)) {
-    return false;
-  }
-  const stroke = state.buildPlacementStroke;
-  state.buildPlacementStroke = null;
-  if (stroke.placedCount > 0) {
-    state.viewerSuppressClickAt = performance.now();
-    return true;
-  }
-  const placement = state.buildHover?.placement ?? stroke.initialPlacement;
-  const placed = placeActiveTool(placement, stroke.toolKind);
-  if (placed) {
-    state.viewerSuppressClickAt = performance.now();
-  }
-  return placed;
-}
-
-function maybeTakeOverPlacementWhilePointerDown() {
-  if (!canUsePlacementTools() || !privateInputState.pointerDown || state.buildPlacementStroke || state.buildDrag) {
-    return false;
-  }
-  const toolKind = getActivePlacementTool();
-  if (!toolKind || !state.previewPointer.inside) {
-    return false;
-  }
-  privateInputState.pointerDown = false;
-  privateInputState.pointerMoved = false;
-  privateInputState.dragDistance = 0;
-  return beginBuildPlacementStroke({
-    clientX: state.previewPointer.clientX,
-    clientY: state.previewPointer.clientY,
-    pointerId: privateInputState.pointerId || state.previewPointer.pointerId,
-  }, toolKind);
 }
 
 function adjustSelectedEntityByWheel(event) {
@@ -5878,8 +5774,7 @@ function ensurePreview() {
     state.previewPointer.inside = true;
     refreshBuildHoverFromPointer(event);
     if (state.mode === "build" && isEditor()) {
-      if (getActivePlacementTool() && beginBuildPlacementStroke(event)) {
-        elements.previewCanvas.setPointerCapture(event.pointerId);
+      if (getActivePlacementTool()) {
         return;
       }
       if (beginBuildDrag(event)) {
@@ -5905,11 +5800,6 @@ function ensurePreview() {
     state.previewPointer.inside = true;
     if (state.mode === "build" && isEditor()) {
       refreshBuildHoverFromPointer(event);
-    }
-    if (state.buildPlacementStroke && state.buildPlacementStroke.pointerId === event.pointerId) {
-      event.preventDefault();
-      updateBuildPlacementStroke(event);
-      return;
     }
     if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
       event.preventDefault();
@@ -5940,11 +5830,6 @@ function ensurePreview() {
     state.previewPointer.pointerId = event.pointerId;
     state.previewPointer.inside = true;
     refreshBuildHoverFromPointer(event);
-    if (state.buildPlacementStroke && state.buildPlacementStroke.pointerId === event.pointerId) {
-      endBuildPlacementStroke(event.pointerId);
-      elements.previewCanvas.releasePointerCapture?.(event.pointerId);
-      return;
-    }
     if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
       endBuildDrag(event.pointerId);
       elements.previewCanvas.releasePointerCapture?.(event.pointerId);
@@ -5959,7 +5844,6 @@ function ensurePreview() {
     state.previewPointer.inside = false;
     state.buildHover = null;
     syncBuildPlacementOverlay();
-    state.buildPlacementStroke = null;
     endBuildDrag(event.pointerId);
     privateInputState.pointerDown = false;
     privateInputState.pointerMoved = false;
@@ -5967,7 +5851,7 @@ function ensurePreview() {
     elements.previewCanvas.releasePointerCapture?.(event.pointerId);
   });
   elements.previewCanvas.addEventListener("pointerleave", () => {
-    if (privateInputState.pointerDown || state.buildPlacementStroke) {
+    if (privateInputState.pointerDown) {
       return;
     }
     state.previewPointer.inside = false;
@@ -5996,6 +5880,8 @@ function ensurePreview() {
       return;
     }
     if (state.mode === "build" && getActivePlacementTool()) {
+      refreshBuildHoverFromPointer(event);
+      placeActiveTool();
       return;
     }
     const hit = raycastPreviewPointer(event);
@@ -6668,7 +6554,6 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.selectedSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
   state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
   state.builderSelection = null;
-  state.buildPlacementStroke = null;
   state.buildHover = null;
   state.launcherOpen = false;
   state.sceneDrawerOpen = false;
@@ -7798,7 +7683,6 @@ function bindEvents() {
       return;
     }
     setPlacementTool(toolKind, { temporary: true });
-    maybeTakeOverPlacementWhilePointerDown();
   });
   window.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
@@ -7853,7 +7737,6 @@ function bindEvents() {
     privateInputState.pointerMoved = false;
     privateInputState.dragDistance = 0;
     state.viewerSuppressClickAt = 0;
-    state.buildPlacementStroke = null;
     state.previewPointer.inside = false;
     state.buildHover = null;
     clearPlacementTool({ temporaryOnly: true });
