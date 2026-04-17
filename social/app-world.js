@@ -1,6 +1,16 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { createBubbleTexture, createWorldVisitorSystem, updateMascotMotion } from "./world-visitors.js";
 import { createBrowserMediaController } from "./world-browser-media.js";
+import {
+  createChatBubbleRenderer,
+  createChatFeature,
+  createNearbyDisplayShareFeature,
+  getBrowserShareKindLabel,
+  getDisplayShareLaunchState,
+  getLocalDisplaySharePresentation,
+  normalizeBrowserShareKind,
+  sanitizeBrowserShareTitle,
+} from "./world-interactions.js";
 import { createWorldRealtimeClient } from "./world-realtime.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 
@@ -1470,100 +1480,6 @@ function bindBrowserPanelVideoMetrics(sessionId, element) {
   update();
 }
 
-function normalizeBrowserShareKind(rawKind, fallback = "screen") {
-  const value = String(rawKind ?? "").trim().toLowerCase();
-  if (value === "browser" || value === "screen" || value === "camera" || value === "audio") {
-    return value;
-  }
-  return fallback;
-}
-
-function sanitizeBrowserShareTitle(rawTitle, fallback = "") {
-  const cleaned = String(rawTitle ?? "")
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 96);
-  return cleaned || fallback;
-}
-
-function getDisplayShareLabel(videoTrack) {
-  const settings = videoTrack?.getSettings?.() ?? {};
-  const displaySurface = String(settings.displaySurface ?? "").trim().toLowerCase();
-  if (displaySurface === "browser") {
-    return "Shared tab";
-  }
-  if (displaySurface === "window") {
-    return "Shared window";
-  }
-  return "Shared screen";
-}
-
-function getDefaultBrowserShareTitle(shareKind, videoTrack = null) {
-  const kind = normalizeBrowserShareKind(shareKind, "screen");
-  if (kind === "camera") {
-    return "Live video";
-  }
-  if (kind === "audio") {
-    return "Live voice";
-  }
-  return getDisplayShareLabel(videoTrack);
-}
-
-function getBrowserShareKindLabel(shareKind) {
-  const kind = normalizeBrowserShareKind(shareKind, "screen");
-  if (kind === "camera") {
-    return "Video";
-  }
-  if (kind === "audio") {
-    return "Voice";
-  }
-  if (kind === "browser") {
-    return "Browser";
-  }
-  return "Screen";
-}
-
-function getSelectedBrowserShareMode() {
-  return normalizeBrowserShareKind(state.browserShareMode, "screen");
-}
-
-function setSelectedBrowserShareMode(mode) {
-  state.browserShareMode = normalizeBrowserShareKind(mode, "screen");
-  for (const button of elements.browserShareModes) {
-    const active = button?.getAttribute("data-world-browser-share-mode") === state.browserShareMode;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", active ? "true" : "false");
-  }
-}
-
-function getRequestedBrowserShareTitle(fallback = "") {
-  return sanitizeBrowserShareTitle(elements.browserShareTitle?.value ?? "", fallback);
-}
-
-function getLocalBrowserShareDraft(localSession = getLocalBrowserSession()) {
-  const draftMode = getSelectedBrowserShareMode();
-  const draftModeLabel = getBrowserShareKindLabel(draftMode);
-  const draftTitle = sanitizeBrowserShareTitle(elements.browserShareTitle?.value ?? "", "");
-  const liveKind = localSession ? getBrowserSessionShareKind(localSession) : "";
-  const liveKindLabel = localSession ? getBrowserShareKindLabel(liveKind) : "";
-  const liveTitle = sanitizeBrowserShareTitle(localSession?.title ?? "", "");
-  const isDisplayShare = Boolean(localSession && localSession.sessionMode === "display-share");
-  const modeDiff = Boolean(isDisplayShare && draftMode !== liveKind);
-  const titleDiff = Boolean(isDisplayShare && draftTitle && draftTitle !== liveTitle);
-  return {
-    draftMode,
-    draftModeLabel,
-    draftTitle,
-    liveKind,
-    liveKindLabel,
-    liveTitle,
-    modeDiff,
-    titleDiff,
-    canUpdateTitleOnly: Boolean(isDisplayShare && !modeDiff && titleDiff && !state.pendingBrowserShare),
-  };
-}
-
 function updateBrowserPanelSummary(summary = {}) {
   if (elements.browserSummaryBadge) {
     elements.browserSummaryBadge.textContent = summary.badge || "Idle";
@@ -1575,50 +1491,6 @@ function updateBrowserPanelSummary(summary = {}) {
   if (elements.browserSummaryHint) {
     elements.browserSummaryHint.textContent = summary.hint || "";
   }
-}
-
-function createLocalBrowserShare(stream, options = {}) {
-  const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
-  const audioTrack = stream?.getAudioTracks?.()[0] ?? null;
-  const shareKind = normalizeBrowserShareKind(options.shareKind, "screen");
-  const settings = videoTrack?.getSettings?.() ?? {};
-  const fallbackWidth = shareKind === "audio" ? 540 : getInteractionConfig().browserViewportWidth;
-  const fallbackHeight = shareKind === "audio" ? 432 : getInteractionConfig().browserViewportHeight;
-  const width = Math.max(1, Math.floor(Number(settings.width) || fallbackWidth));
-  const height = Math.max(1, Math.floor(Number(settings.height) || fallbackHeight));
-  const share = {
-    stream,
-    videoTrack,
-    audioTrack,
-    observedTrack: videoTrack ?? audioTrack ?? null,
-    shareKind,
-    title: sanitizeBrowserShareTitle(options.title, getDefaultBrowserShareTitle(shareKind, videoTrack)),
-    displaySurface: String(options.displaySurface ?? settings.displaySurface ?? "").trim().toLowerCase(),
-    aspectRatio: Number(options.aspectRatio) > 0
-      ? Number(options.aspectRatio)
-      : width / Math.max(1, height),
-    hasVideo: options.hasVideo === true || (options.hasVideo !== false && Boolean(videoTrack)),
-    hasAudio: options.hasAudio === true || (options.hasAudio !== false && Boolean(audioTrack)),
-    endedHandler: null,
-  };
-  share.endedHandler = () => {
-    if (state.pendingBrowserShare?.stream === share.stream) {
-      clearPendingBrowserShare();
-      updateBrowserPanel();
-      return;
-    }
-    if (state.localBrowserShare?.stream !== share.stream) {
-      return;
-    }
-    const sessionId = state.localBrowserShare?.sessionId || "";
-    clearLocalBrowserShare({ stopTracks: false, sessionId });
-    if (sessionId) {
-      state.realtimeClient?.stopBrowser(sessionId);
-    }
-    updateBrowserPanel();
-  };
-  share.observedTrack?.addEventListener?.("ended", share.endedHandler, { once: true });
-  return share;
 }
 
 function releaseBrowserDisplayShare(share, { stopTracks = false } = {}) {
@@ -1678,6 +1550,70 @@ function getBrowserShareMissingAudioMessage(share) {
   return "";
 }
 
+const browserShareFeature = createNearbyDisplayShareFeature({
+  modeButtons: elements.browserShareModes,
+  modeAttribute: "data-world-browser-share-mode",
+  titleInput: elements.browserShareTitle,
+  launchButton: elements.browserLaunch,
+  getMode: () => state.browserShareMode,
+  setMode(mode) {
+    state.browserShareMode = mode;
+  },
+  onModeChanged() {
+    updateBrowserPanel();
+  },
+  getTitleInputValue: () => elements.browserShareTitle?.value ?? "",
+  getSessionShareKind: getBrowserSessionShareKind,
+  getPendingShare: () => state.pendingBrowserShare,
+  getLocalSession: getLocalBrowserSession,
+  getLocalShare: () => state.localBrowserShare,
+  clearPendingShare: clearPendingBrowserShare,
+  clearLocalShare: clearLocalBrowserShare,
+  getFallbackSize(shareKind) {
+    const interaction = getInteractionConfig();
+    return shareKind === "audio"
+      ? { width: 540, height: 432 }
+      : {
+          width: interaction.browserViewportWidth,
+          height: interaction.browserViewportHeight,
+        };
+  },
+  stopLiveShare(sessionId) {
+    state.realtimeClient?.stopBrowser(sessionId);
+  },
+  startLiveShare(payload) {
+    return state.realtimeClient?.startBrowser(payload) === true;
+  },
+  beginShare: startLocalNearbyShare,
+  patchSession(sessionId, sessionPatch) {
+    state.browserSessions.set(sessionId, sessionPatch);
+  },
+  getDisplaySurface: () => state.localBrowserShare?.displaySurface || "",
+  setStatus: setBrowserStatus,
+  updateView: updateBrowserPanel,
+  updatingStatusText: "Updating live share title...",
+  canLaunch: () => Boolean(state.realtimeClient?.isConnected()),
+  onCannotLaunch() {
+    showToast("Realtime share is offline.");
+  },
+  onUnsupported(message) {
+    showToast(message);
+  },
+  onError(message, error) {
+    showToast(error?.message || message);
+  },
+  unsupportedMessages: {
+    screen: "This browser does not support tab sharing.",
+    camera: "This browser does not support camera sharing.",
+    audio: "This browser does not support voice sharing.",
+  },
+  failureMessages: {
+    screen: "Could not start screen sharing.",
+    camera: "Could not start video sharing.",
+    audio: "Could not start voice sharing.",
+  },
+});
+
 function attachLocalBrowserShare(sessionId, share) {
   if (!share || !sessionId || !state.meta?.worldSnapshotId) {
     return;
@@ -1687,7 +1623,7 @@ function attachLocalBrowserShare(sessionId, share) {
     ...share,
     sessionId,
   };
-  setSelectedBrowserShareMode(share.shareKind);
+  browserShareFeature.setSelectedMode(share.shareKind);
   if (elements.browserShareTitle) {
     elements.browserShareTitle.value = share.title || "";
   }
@@ -4204,155 +4140,46 @@ function createActorBubbleState(color, options = {}) {
   };
 }
 
+const publicChatBubbleRenderer = createChatBubbleRenderer({
+  baseWidth: CHAT_BUBBLE_BASE_WIDTH,
+  baseHeight: CHAT_BUBBLE_BASE_HEIGHT,
+  minWidth: CHAT_BUBBLE_MIN_WIDTH,
+  minHeight: CHAT_BUBBLE_MIN_HEIGHT,
+  maxTextureWidth: CHAT_BUBBLE_TEXTURE_MAX_WIDTH,
+  maxTextureHeight: CHAT_BUBBLE_TEXTURE_MAX_HEIGHT,
+  maxLines: CHAT_BUBBLE_MAX_LINES,
+  stroke: WORLD_STYLE.outline,
+  getDefaultAccent: () => WORLD_STYLE.accents[1],
+  createTexture: createBubbleTexture,
+  createBillboard,
+  getGhostState: () => ({
+    root: sceneState.chatBubbleGhosts,
+    entries: sceneState.animatedChatBubbleGhosts,
+  }),
+  beforeRemoveGhost(mesh) {
+    unregisterBillboard(mesh);
+  },
+  disposeMaterial,
+  isEmojiOnly: isEmojiOnlyChatText,
+  clampSize(value, fallback, min, max) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return fallback;
+    }
+    return clamp(numeric, min, max);
+  },
+});
+
 function removeChatBubbleGhost(entry) {
-  if (!entry?.mesh) {
-    return;
-  }
-  unregisterBillboard(entry.mesh);
-  if (entry.mesh.parent) {
-    entry.mesh.parent.remove(entry.mesh);
-  }
-  if (entry.mesh.geometry) {
-    entry.mesh.geometry.dispose();
-  }
-  disposeMaterial(entry.mesh.material);
-  const index = sceneState.animatedChatBubbleGhosts.indexOf(entry);
-  if (index >= 0) {
-    sceneState.animatedChatBubbleGhosts.splice(index, 1);
-  }
-}
-
-function spawnChatBubbleGhost(actorEntry, texture) {
-  if (!actorEntry?.bubble?.mesh || !texture || actorEntry.bubble.opacity <= 0.04) {
-    texture?.dispose?.();
-    return;
-  }
-  actorEntry.bubble.mesh.updateWorldMatrix(true, false);
-  const worldPosition = new THREE.Vector3();
-  const worldScale = new THREE.Vector3();
-  actorEntry.bubble.mesh.getWorldPosition(worldPosition);
-  actorEntry.bubble.mesh.getWorldScale(worldScale);
-  const baseWidth = Number(actorEntry.bubble.baseWidth) || CHAT_BUBBLE_BASE_WIDTH;
-  const baseHeight = Number(actorEntry.bubble.baseHeight) || CHAT_BUBBLE_BASE_HEIGHT;
-  const mesh = createBillboard(texture, baseWidth, baseHeight, {
-    opacity: actorEntry.bubble.mesh.material.opacity,
-    fog: false,
-    depthTest: false,
-    renderOrder: 10,
-  });
-  mesh.position.copy(worldPosition);
-  mesh.scale.copy(worldScale);
-  sceneState.chatBubbleGhosts.add(mesh);
-  sceneState.animatedChatBubbleGhosts.push({
-    mesh,
-    opacity: actorEntry.bubble.mesh.material.opacity,
-    lifetime: 1.55 + Math.random() * 0.35,
-    age: 0,
-    drift: new THREE.Vector3(
-      (Math.random() - 0.5) * 0.32,
-      2.6 + Math.random() * 0.8,
-      (Math.random() - 0.5) * 0.14,
-    ),
-    scaleBase: worldScale.clone(),
-  });
-}
-
-function setActorBubbleTargetSize(actorEntry, width, height) {
-  if (!actorEntry?.bubble) {
-    return;
-  }
-  actorEntry.bubble.targetWidth = width;
-  actorEntry.bubble.targetHeight = height;
-}
-
-function getChatBubbleTargetSize(texture, bubble) {
-  const baseWidth = Number(bubble?.baseWidth) || 14.2;
-  const baseHeight = Number(bubble?.baseHeight) || 9.2;
-  const layout = texture?.userData?.bubbleLayout ?? null;
-  if (!layout?.hasText) {
-    return { width: baseWidth, height: baseHeight };
-  }
-  const maxTextureWidth = Math.max(1, Number(layout.maxWidth) || Number(layout.width) || CHAT_BUBBLE_TEXTURE_MAX_WIDTH);
-  const maxTextureHeight = Math.max(1, Number(layout.maxHeight) || Number(layout.height) || CHAT_BUBBLE_TEXTURE_MAX_HEIGHT);
-  const width = clamp(baseWidth * ((Number(layout.width) || maxTextureWidth) / maxTextureWidth), 6.2, baseWidth);
-  const height = clamp(baseHeight * ((Number(layout.height) || maxTextureHeight) / maxTextureHeight), 4.9, baseHeight);
-  return { width, height };
+  publicChatBubbleRenderer.removeGhost(entry);
 }
 
 function applyChatBubbleToActor(actorEntry, chatEvent) {
-  if (!actorEntry?.bubble) {
-    return;
-  }
-  if (!chatEvent || Date.parse(chatEvent.expiresAt ?? 0) <= Date.now()) {
-    actorEntry.bubble.targetOpacity = 0;
-    return;
-  }
-  const accent = actorEntry.bubbleAccent ?? WORLD_STYLE.accents[1];
-  const text = String(chatEvent.text ?? "").trim();
-  const emojiOnly = chatEvent.mode !== "placeholder" && isEmojiOnlyChatText(text);
-  const symbol = chatEvent.mode === "placeholder" ? "..." : emojiOnly ? text : "💬";
-  const bubbleText = emojiOnly ? "" : text;
-  const bubbleKey = `${chatEvent.mode}:${text}:${accent}`;
-  if (actorEntry.bubble.currentKey !== bubbleKey) {
-    const previousKey = actorEntry.bubble.currentKey;
-    const previousMap = actorEntry.bubble.mesh.material.map;
-    const nextTexture = createBubbleTexture(symbol, {
-      accent,
-      stroke: WORLD_STYLE.outline,
-      text: bubbleText,
-      width: bubbleText ? CHAT_BUBBLE_TEXTURE_MAX_WIDTH : undefined,
-      height: bubbleText ? CHAT_BUBBLE_TEXTURE_MAX_HEIGHT : undefined,
-      maxLines: bubbleText ? CHAT_BUBBLE_MAX_LINES : undefined,
-    });
-    actorEntry.bubble.mesh.material.map = nextTexture;
-    const nextSize = getChatBubbleTargetSize(nextTexture, actorEntry.bubble);
-    setActorBubbleTargetSize(actorEntry, nextSize.width, nextSize.height);
-    if (previousMap) {
-      if (previousKey && !previousKey.startsWith("placeholder:")) {
-        spawnChatBubbleGhost(actorEntry, previousMap);
-      } else {
-        previousMap.dispose();
-      }
-    }
-    actorEntry.bubble.currentKey = bubbleKey;
-  }
-  actorEntry.bubble.mesh.visible = true;
-  actorEntry.bubble.targetOpacity = 1;
-  actorEntry.bubble.duration = Math.max(0.5, (Date.parse(chatEvent.expiresAt) - Date.now()) / 1000);
-  actorEntry.bubble.elapsed = 0;
-  actorEntry.bubble.highEnergy = chatEvent.mode !== "placeholder";
-  actorEntry.bubble.bounceCount = actorEntry.bubble.highEnergy ? 2 : 0;
+  publicChatBubbleRenderer.apply(actorEntry, chatEvent);
 }
 
 function updateActorBubble(actorEntry, deltaSeconds) {
-  if (!actorEntry?.bubble) {
-    return;
-  }
-  actorEntry.bubble.width += (actorEntry.bubble.targetWidth - actorEntry.bubble.width) * (1 - Math.exp(-deltaSeconds * 12));
-  actorEntry.bubble.height += (actorEntry.bubble.targetHeight - actorEntry.bubble.height) * (1 - Math.exp(-deltaSeconds * 12));
-  actorEntry.bubble.opacity += (actorEntry.bubble.targetOpacity - actorEntry.bubble.opacity) * (1 - Math.exp(-deltaSeconds * 10));
-  if (Math.abs(actorEntry.bubble.opacity - actorEntry.bubble.targetOpacity) < 0.004) {
-    actorEntry.bubble.opacity = actorEntry.bubble.targetOpacity;
-  }
-  if (actorEntry.bubble.targetOpacity > 0) {
-    actorEntry.bubble.elapsed += deltaSeconds;
-    if (actorEntry.bubble.elapsed >= actorEntry.bubble.duration) {
-      actorEntry.bubble.targetOpacity = 0;
-    }
-  }
-  const bounce =
-    actorEntry.bubble.highEnergy && actorEntry.bubble.duration > 0
-      ? Math.abs(Math.sin((actorEntry.bubble.elapsed / actorEntry.bubble.duration) * Math.PI * actorEntry.bubble.bounceCount)) * 0.9
-      : 0;
-  actorEntry.bubble.mesh.visible = actorEntry.bubble.opacity > 0.01 && actorEntry.group.visible !== false;
-  actorEntry.bubble.mesh.position.y = actorEntry.bubble.anchorY + bounce;
-  const pulse = 0.92 + actorEntry.bubble.opacity * 0.08;
-  actorEntry.bubble.mesh.scale.set(
-    (actorEntry.bubble.width / actorEntry.bubble.baseWidth) * pulse,
-    (actorEntry.bubble.height / actorEntry.bubble.baseHeight) * pulse,
-    1,
-  );
-  actorEntry.bubble.mesh.material.opacity = actorEntry.bubble.opacity * (actorEntry.opacity ?? 1);
+  publicChatBubbleRenderer.update(actorEntry, deltaSeconds);
 }
 
 function removePresenceObject(presenceId) {
@@ -7354,50 +7181,34 @@ function openChatComposer() {
   updateChatCounter();
 }
 
+const chatFeature = createChatFeature({
+  input: elements.chatInput,
+  form: elements.chatComposer,
+  reactionButtons: elements.chatReactionButtons,
+  reactionAttribute: "data-world-chat-reaction",
+  onAfterInputChange: updateChatCounter,
+  onSubmit(text) {
+    if (!state.realtimeClient?.sendChat(text)) {
+      showToast("Realtime chat is offline.");
+      return false;
+    }
+    return true;
+  },
+  onBeforeReaction() {
+    setWorldPanelTab("chat");
+  },
+});
+
 function closeChatComposer(clearValue = false, options = {}) {
-  if (!elements.chatInput) {
-    return;
-  }
-  if (clearValue) {
-    elements.chatInput.value = "";
-  }
-  updateChatCounter();
-  if (options.keepFocus === true) {
-    elements.chatInput.focus();
-    return;
-  }
-  if (document.activeElement === elements.chatInput) {
-    elements.chatInput.blur();
-  }
+  chatFeature.close(clearValue, options);
 }
 
 function submitChatComposer(options = {}) {
-  const text = String(elements.chatInput?.value ?? "").trim();
-  if (!text) {
-    closeChatComposer(true, { keepFocus: options.keepFocus === true });
-    return false;
-  }
-  if (!state.realtimeClient?.sendChat(text)) {
-    showToast("Realtime chat is offline.");
-    return false;
-  }
-  closeChatComposer(true, { keepFocus: options.keepFocus === true });
-  return true;
+  return chatFeature.submit(options);
 }
 
 function sendChatReaction(reaction) {
-  const text = String(reaction ?? "").trim();
-  if (!text) {
-    return false;
-  }
-  if (!state.realtimeClient?.sendChat(text)) {
-    showToast("Realtime chat is offline.");
-    return false;
-  }
-  if (document.activeElement === elements.chatInput) {
-    elements.chatInput.blur();
-  }
-  return true;
+  return chatFeature.sendReaction(reaction);
 }
 
 function isEditableTarget(target) {
@@ -7591,7 +7402,7 @@ function updateBrowserPanel() {
     state.browserPanelRemoteSessionId = "";
   }
   const localSession = getLocalBrowserSession();
-  const draft = getLocalBrowserShareDraft(localSession);
+  const draft = browserShareFeature.getDraft(localSession);
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
     : state.localBrowserShare?.hasVideo
@@ -7682,46 +7493,17 @@ function updateBrowserPanel() {
       hint: "Press Share to go live nearby.",
     });
   } else if (localSession.sessionMode === "display-share") {
-    const shareKind = getBrowserSessionShareKind(localSession);
-    if (state.localBrowserShare?.sessionId === localSession.sessionId) {
-      if (shareKind === "audio") {
-        setBrowserStatus(`Sharing ${localSession.title || "live voice"} with nearby visitors.`);
-      } else if (shareKind === "camera") {
-        const audioLabel = state.localBrowserShare?.hasAudio ? " with voice" : "";
-        setBrowserStatus(`Sharing ${localSession.title || "live video"}${audioLabel} with nearby visitors.`);
-      } else {
-        const audioLabel = state.localBrowserShare?.hasAudio ? " with sound" : "";
-        setBrowserStatus(`Sharing ${localSession.title || "screen"}${audioLabel} with nearby visitors.`);
-      }
-    } else if (shareKind === "camera") {
-      setBrowserStatus("Allow camera and microphone access to go live.");
-    } else if (shareKind === "audio") {
-      setBrowserStatus("Allow microphone access to go live.");
-    } else {
-      setBrowserStatus("Share a tab or window to start the nearby stream.");
-    }
-    let hint = "Change the type, then press Share again to replace the live share.";
-    let summaryState = "live";
-    if (draft.canUpdateTitleOnly) {
-      hint = `Press Update Title to rename the live ${draft.liveKindLabel.toLowerCase()} to "${draft.draftTitle}".`;
-      summaryState = "draft";
-    } else if (draft.modeDiff) {
-      hint = draft.draftTitle
-        ? `Press Switch to replace the live ${draft.liveKindLabel.toLowerCase()} with ${draft.draftModeLabel.toLowerCase()} "${draft.draftTitle}".`
-        : `Press Switch to replace the live ${draft.liveKindLabel.toLowerCase()} with ${draft.draftModeLabel.toLowerCase()}.`;
-      summaryState = "draft";
-    } else if (draft.titleDiff) {
-      hint = `Press Update Title to rename the live ${draft.liveKindLabel.toLowerCase()} to "${draft.draftTitle}".`;
-      summaryState = "draft";
-    } else if (!draft.draftTitle) {
-      hint = "The title field is only a draft until you press Share or Update Title.";
-    }
-    updateBrowserPanelSummary({
-      state: summaryState,
-      badge: summaryState === "draft" ? "Draft" : "Live",
-      current: `${draft.liveKindLabel} live${draft.liveTitle ? ` - ${draft.liveTitle}` : ""}`,
-      hint,
+    const presentation = getLocalDisplaySharePresentation({
+      localSession,
+      localShare: state.localBrowserShare,
+      draft,
+      audienceLabel: "nearby visitors",
+      screenPrompt: "Share a tab or window to start the nearby stream.",
     });
+    if (presentation) {
+      setBrowserStatus(presentation.status);
+      updateBrowserPanelSummary(presentation);
+    }
   } else if (isLiveKitBrowserTransport(localSession.frameTransport) && state.browserMediaTransport === "livekit") {
     setBrowserStatus(`Streaming ${localSession.url || "browser"} over WebRTC to nearby visitors.`);
     updateBrowserPanelSummary({
@@ -7744,25 +7526,14 @@ function updateBrowserPanel() {
     elements.browserStop.disabled = !localSession;
   }
   if (elements.browserLaunch) {
-    if (!state.realtimeConnected) {
-      elements.browserLaunch.textContent = "Share";
-      elements.browserLaunch.disabled = true;
-    } else if (state.pendingBrowserShare) {
-      elements.browserLaunch.textContent = "Starting...";
-      elements.browserLaunch.disabled = true;
-    } else if (localSession?.sessionMode === "display-share" && draft.canUpdateTitleOnly) {
-      elements.browserLaunch.textContent = "Update Title";
-      elements.browserLaunch.disabled = false;
-    } else if (localSession?.sessionMode === "display-share" && draft.modeDiff) {
-      elements.browserLaunch.textContent = `Switch to ${draft.draftModeLabel}`;
-      elements.browserLaunch.disabled = false;
-    } else if (localSession?.sessionMode === "display-share") {
-      elements.browserLaunch.textContent = "Share Again";
-      elements.browserLaunch.disabled = false;
-    } else {
-      elements.browserLaunch.textContent = "Share";
-      elements.browserLaunch.disabled = false;
-    }
+    const launchState = getDisplayShareLaunchState({
+      canShare: state.realtimeConnected,
+      pending: Boolean(state.pendingBrowserShare),
+      localSession,
+      draft,
+    });
+    elements.browserLaunch.textContent = launchState.label;
+    elements.browserLaunch.disabled = launchState.disabled;
   }
   if (elements.browserExpand) {
     elements.browserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
@@ -8943,144 +8714,8 @@ async function startLocalNearbyShare(share) {
   return true;
 }
 
-function updateLiveBrowserShareTitle(localSession = getLocalBrowserSession()) {
-  if (!localSession || localSession.sessionMode !== "display-share" || !state.realtimeClient?.isConnected()) {
-    return false;
-  }
-  const draft = getLocalBrowserShareDraft(localSession);
-  if (!draft.canUpdateTitleOnly) {
-    return false;
-  }
-  const started = state.realtimeClient.startBrowser({
-    mode: "display-share",
-    title: draft.draftTitle,
-    shareKind: draft.liveKind,
-    hasVideo: localSession.hasVideo !== false,
-    hasAudio: localSession.hasAudio === true,
-    aspectRatio: localSession.aspectRatio,
-    displaySurface: state.localBrowserShare?.displaySurface || "",
-  });
-  if (!started) {
-    return false;
-  }
-  state.browserSessions.set(localSession.sessionId, {
-    ...localSession,
-    title: draft.draftTitle,
-  });
-  setBrowserStatus("Updating live share title...");
-  updateBrowserPanel();
-  return true;
-}
-
-async function launchScreenShare() {
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    showToast("This browser does not support tab sharing.");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        frameRate: { ideal: 24, max: 30 },
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 },
-      },
-      audio: true,
-    });
-    const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
-    const share = createLocalBrowserShare(stream, {
-      shareKind: "screen",
-      title: getRequestedBrowserShareTitle(getDefaultBrowserShareTitle("screen", videoTrack)),
-    });
-    await startLocalNearbyShare(share);
-  } catch (error) {
-    if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") {
-      showToast(error?.message || "Could not start screen sharing.");
-    }
-  }
-}
-
-async function launchCameraShare() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    showToast("This browser does not support camera sharing.");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        frameRate: { ideal: 24, max: 30 },
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 },
-        facingMode: "user",
-      },
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    const share = createLocalBrowserShare(stream, {
-      shareKind: "camera",
-      title: getRequestedBrowserShareTitle(getDefaultBrowserShareTitle("camera")),
-    });
-    await startLocalNearbyShare(share);
-  } catch (error) {
-    if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") {
-      showToast(error?.message || "Could not start video sharing.");
-    }
-  }
-}
-
-async function launchVoiceShare() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    showToast("This browser does not support voice sharing.");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false,
-    });
-    const share = createLocalBrowserShare(stream, {
-      shareKind: "audio",
-      title: getRequestedBrowserShareTitle(getDefaultBrowserShareTitle("audio")),
-      aspectRatio: 1.2,
-      hasVideo: false,
-      hasAudio: true,
-    });
-    await startLocalNearbyShare(share);
-  } catch (error) {
-    if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") {
-      showToast(error?.message || "Could not start voice sharing.");
-    }
-  }
-}
-
-async function launchSharedBrowser() {
-  if (!state.realtimeClient?.isConnected()) {
-    showToast("Realtime share is offline.");
-    return;
-  }
-  if (updateLiveBrowserShareTitle()) {
-    return;
-  }
-  const shareMode = getSelectedBrowserShareMode();
-  if (shareMode === "camera") {
-    await launchCameraShare();
-    return;
-  }
-  if (shareMode === "audio") {
-    await launchVoiceShare();
-    return;
-  }
-  await launchScreenShare();
-}
-
 function registerInput() {
-  setSelectedBrowserShareMode(state.browserShareMode);
+  browserShareFeature.setSelectedMode(state.browserShareMode);
   window.addEventListener("resize", resizeScene);
   elements.privateLaunch?.addEventListener("click", (event) => {
     event.preventDefault();
@@ -9255,29 +8890,7 @@ function registerInput() {
     launchPrivateWorld({ worldId, creatorUsername });
   });
 
-  elements.chatInput?.addEventListener("input", updateChatCounter);
-  elements.chatInput?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey) {
-      event.preventDefault();
-      submitChatComposer({ keepFocus: event.shiftKey === true });
-      return;
-    }
-    if (event.key !== "Escape") {
-      return;
-    }
-    event.preventDefault();
-    closeChatComposer(true);
-  });
-  elements.chatComposer?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    submitChatComposer();
-  });
-  for (const button of elements.chatReactionButtons) {
-    button.addEventListener("click", () => {
-      setWorldPanelTab("chat");
-      sendChatReaction(button.getAttribute("data-world-chat-reaction") || button.textContent);
-    });
-  }
+  chatFeature.bind();
 
   elements.browserExpand?.addEventListener("click", () => {
     setBrowserOverlayOpen(!state.browserOverlayOpen);
@@ -9285,21 +8898,7 @@ function registerInput() {
       focusBrowserStage();
     }
   });
-  elements.browserShareTitle?.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") {
-      return;
-    }
-    event.preventDefault();
-    void launchSharedBrowser();
-  });
-  for (const button of elements.browserShareModes) {
-    button.addEventListener("click", () => {
-      setSelectedBrowserShareMode(button.getAttribute("data-world-browser-share-mode"));
-    });
-  }
-  elements.browserLaunch?.addEventListener("click", () => {
-    void launchSharedBrowser();
-  });
+  browserShareFeature.bind();
   elements.browserStop?.addEventListener("click", () => {
     const sessionId = getActiveBrowserSessionId();
     if (sessionId) {

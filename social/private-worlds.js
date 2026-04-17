@@ -3,6 +3,16 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { createPatternedMaterial } from "./private-world-materials.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 import { createBrowserMediaController } from "./world-browser-media.js";
+import {
+  createChatBubbleRenderer,
+  createChatFeature,
+  createNearbyDisplayShareFeature,
+  getBrowserShareKindLabel,
+  getDisplayShareLaunchState,
+  getLocalDisplaySharePresentation,
+  normalizeBrowserShareKind,
+  sanitizeBrowserShareTitle,
+} from "./world-interactions.js";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 
 const { mauworldApiUrl } = window.MauworldSocial;
@@ -96,8 +106,6 @@ const PRIVATE_WORLD_STYLE = {
 let privateToonGradientTexture = null;
 const privateBillboardParentQuaternion = new THREE.Quaternion();
 const privateBillboardCameraQuaternion = new THREE.Quaternion();
-const privateChatGhostWorldPosition = new THREE.Vector3();
-const privateChatGhostWorldScale = new THREE.Vector3();
 
 const elements = {
   launcher: document.querySelector("[data-launcher]"),
@@ -761,55 +769,6 @@ function createPrivateActorBubbleState(color, options = {}) {
   };
 }
 
-function removePrivateChatBubbleGhost(preview, entry) {
-  if (!preview?.animatedChatBubbleGhosts || !entry?.mesh) {
-    return;
-  }
-  if (entry.mesh.parent) {
-    entry.mesh.parent.remove(entry.mesh);
-  }
-  entry.mesh.geometry?.dispose?.();
-  entry.mesh.material?.map?.dispose?.();
-  entry.mesh.material?.dispose?.();
-  const index = preview.animatedChatBubbleGhosts.indexOf(entry);
-  if (index >= 0) {
-    preview.animatedChatBubbleGhosts.splice(index, 1);
-  }
-}
-
-function spawnPrivateChatBubbleGhost(actorEntry, texture, preview = state.preview) {
-  if (!preview?.chatBubbleGhosts || !actorEntry?.bubble?.mesh || !texture || actorEntry.bubble.opacity <= 0.04) {
-    texture?.dispose?.();
-    return;
-  }
-  actorEntry.bubble.mesh.updateWorldMatrix(true, false);
-  actorEntry.bubble.mesh.getWorldPosition(privateChatGhostWorldPosition);
-  actorEntry.bubble.mesh.getWorldScale(privateChatGhostWorldScale);
-  const baseWidth = Number(actorEntry.bubble.baseWidth) || PRIVATE_CHAT_BUBBLE_BASE_WIDTH;
-  const baseHeight = Number(actorEntry.bubble.baseHeight) || PRIVATE_CHAT_BUBBLE_BASE_HEIGHT;
-  const mesh = createPrivateBillboard(texture, baseWidth, baseHeight, {
-    opacity: actorEntry.bubble.mesh.material.opacity,
-    fog: false,
-    depthTest: false,
-    renderOrder: 10,
-  });
-  mesh.position.copy(privateChatGhostWorldPosition);
-  mesh.scale.copy(privateChatGhostWorldScale);
-  preview.chatBubbleGhosts.add(mesh);
-  preview.animatedChatBubbleGhosts.push({
-    mesh,
-    opacity: actorEntry.bubble.mesh.material.opacity,
-    lifetime: 1.55 + Math.random() * 0.35,
-    age: 0,
-    drift: new THREE.Vector3(
-      (Math.random() - 0.5) * 0.32,
-      2.6 + Math.random() * 0.8,
-      (Math.random() - 0.5) * 0.14,
-    ),
-    scaleBase: privateChatGhostWorldScale.clone(),
-  });
-}
-
 function orientPrivateBillboardToCamera(mesh, camera) {
   if (!mesh || !camera) {
     return;
@@ -827,116 +786,50 @@ function orientPrivateBillboardToCamera(mesh, camera) {
   mesh.quaternion.copy(privateBillboardParentQuaternion.multiply(privateBillboardCameraQuaternion));
 }
 
-function getPrivateChatBubbleTargetSize(texture, bubble) {
-  const baseWidth = Number(bubble?.baseWidth) || PRIVATE_CHAT_BUBBLE_BASE_WIDTH;
-  const baseHeight = Number(bubble?.baseHeight) || PRIVATE_CHAT_BUBBLE_BASE_HEIGHT;
-  const layout = texture?.userData?.bubbleLayout ?? null;
-  if (!layout?.hasText) {
-    return { width: baseWidth, height: baseHeight };
+const privateChatBubbleRenderer = createChatBubbleRenderer({
+  baseWidth: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
+  baseHeight: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
+  minWidth: PRIVATE_CHAT_BUBBLE_MIN_WIDTH,
+  minHeight: PRIVATE_CHAT_BUBBLE_MIN_HEIGHT,
+  maxTextureWidth: PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH,
+  maxTextureHeight: PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT,
+  maxLines: PRIVATE_CHAT_BUBBLE_MAX_LINES,
+  stroke: PRIVATE_WORLD_STYLE.outline,
+  getDefaultAccent: () => PRIVATE_WORLD_STYLE.accents[1],
+  createTexture: createBubbleTexture,
+  createBillboard: createPrivateBillboard,
+  getGhostState: () => ({
+    root: state.preview?.chatBubbleGhosts ?? null,
+    entries: state.preview?.animatedChatBubbleGhosts ?? null,
+  }),
+  isEmojiOnly: isEmojiOnlyPrivateChatText,
+  clampSize: clampNumber,
+  orientToCamera: orientPrivateBillboardToCamera,
+});
+
+function removePrivateChatBubbleGhost(preview, entry) {
+  const activePreview = preview ?? state.preview;
+  if (!activePreview?.animatedChatBubbleGhosts || !entry?.mesh) {
+    return;
   }
-  const maxTextureWidth = Math.max(
-    1,
-    Number(layout.maxWidth) || Number(layout.width) || PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH,
-  );
-  const maxTextureHeight = Math.max(
-    1,
-    Number(layout.maxHeight) || Number(layout.height) || PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT,
-  );
-  return {
-    width: clampNumber(
-      baseWidth * ((Number(layout.width) || maxTextureWidth) / maxTextureWidth),
-      baseWidth,
-      PRIVATE_CHAT_BUBBLE_MIN_WIDTH,
-      baseWidth,
-    ),
-    height: clampNumber(
-      baseHeight * ((Number(layout.height) || maxTextureHeight) / maxTextureHeight),
-      baseHeight,
-      PRIVATE_CHAT_BUBBLE_MIN_HEIGHT,
-      baseHeight,
-    ),
-  };
+  if (entry.mesh.parent) {
+    entry.mesh.parent.remove(entry.mesh);
+  }
+  entry.mesh.geometry?.dispose?.();
+  entry.mesh.material?.map?.dispose?.();
+  entry.mesh.material?.dispose?.();
+  const index = activePreview.animatedChatBubbleGhosts.indexOf(entry);
+  if (index >= 0) {
+    activePreview.animatedChatBubbleGhosts.splice(index, 1);
+  }
 }
 
 function applyPrivateChatBubbleToActor(actorEntry, chatEvent) {
-  if (!actorEntry?.bubble) {
-    return;
-  }
-  if (!chatEvent || Date.parse(chatEvent.expiresAt ?? 0) <= Date.now()) {
-    actorEntry.bubble.targetOpacity = 0;
-    return;
-  }
-  const accent = actorEntry.bubbleAccent ?? PRIVATE_WORLD_STYLE.accents[1];
-  const text = String(chatEvent.text ?? "").trim();
-  const emojiOnly = chatEvent.mode !== "placeholder" && isEmojiOnlyPrivateChatText(text);
-  const symbol = chatEvent.mode === "placeholder" ? "..." : emojiOnly ? text : "💬";
-  const bubbleText = emojiOnly ? "" : text;
-  const bubbleKey = `${chatEvent.mode}:${text}:${accent}`;
-  if (actorEntry.bubble.currentKey !== bubbleKey) {
-    const previousKey = actorEntry.bubble.currentKey;
-    const previousMap = actorEntry.bubble.mesh.material.map;
-    const nextTexture = createBubbleTexture(symbol, {
-      accent,
-      stroke: PRIVATE_WORLD_STYLE.outline,
-      text: bubbleText,
-      width: bubbleText ? PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH : undefined,
-      height: bubbleText ? PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT : undefined,
-      maxLines: bubbleText ? PRIVATE_CHAT_BUBBLE_MAX_LINES : undefined,
-    });
-    actorEntry.bubble.mesh.material.map = nextTexture;
-    actorEntry.bubble.mesh.material.needsUpdate = true;
-    const nextSize = getPrivateChatBubbleTargetSize(nextTexture, actorEntry.bubble);
-    actorEntry.bubble.targetWidth = nextSize.width;
-    actorEntry.bubble.targetHeight = nextSize.height;
-    if (previousMap) {
-      if (previousKey && !previousKey.startsWith("placeholder:")) {
-        spawnPrivateChatBubbleGhost(actorEntry, previousMap);
-      } else {
-        previousMap.dispose?.();
-      }
-    }
-    actorEntry.bubble.currentKey = bubbleKey;
-  }
-  actorEntry.bubble.mesh.visible = true;
-  actorEntry.bubble.targetOpacity = 1;
-  actorEntry.bubble.duration = Math.max(0.5, (Date.parse(chatEvent.expiresAt) - Date.now()) / 1000);
-  actorEntry.bubble.elapsed = 0;
-  actorEntry.bubble.highEnergy = chatEvent.mode !== "placeholder";
-  actorEntry.bubble.bounceCount = actorEntry.bubble.highEnergy ? 2 : 0;
+  privateChatBubbleRenderer.apply(actorEntry, chatEvent);
 }
 
 function updatePrivateActorBubble(actorEntry, deltaSeconds, camera = state.preview?.camera) {
-  if (!actorEntry?.bubble?.mesh) {
-    return;
-  }
-  actorEntry.bubble.width += (actorEntry.bubble.targetWidth - actorEntry.bubble.width) * (1 - Math.exp(-deltaSeconds * 12));
-  actorEntry.bubble.height += (actorEntry.bubble.targetHeight - actorEntry.bubble.height) * (1 - Math.exp(-deltaSeconds * 12));
-  actorEntry.bubble.opacity += (actorEntry.bubble.targetOpacity - actorEntry.bubble.opacity) * (1 - Math.exp(-deltaSeconds * 10));
-  if (Math.abs(actorEntry.bubble.opacity - actorEntry.bubble.targetOpacity) < 0.004) {
-    actorEntry.bubble.opacity = actorEntry.bubble.targetOpacity;
-  }
-  if (actorEntry.bubble.targetOpacity > 0) {
-    actorEntry.bubble.elapsed += deltaSeconds;
-    if (actorEntry.bubble.elapsed >= actorEntry.bubble.duration) {
-      actorEntry.bubble.targetOpacity = 0;
-    }
-  }
-  const bounce =
-    actorEntry.bubble.highEnergy && actorEntry.bubble.duration > 0
-      ? Math.abs(Math.sin((actorEntry.bubble.elapsed / actorEntry.bubble.duration) * Math.PI * actorEntry.bubble.bounceCount)) * 0.9
-      : 0;
-  actorEntry.bubble.mesh.visible = actorEntry.bubble.opacity > 0.01 && actorEntry.group.visible !== false;
-  actorEntry.bubble.mesh.position.y = actorEntry.bubble.anchorY + bounce;
-  const pulse = 0.92 + actorEntry.bubble.opacity * 0.08;
-  actorEntry.bubble.mesh.scale.set(
-    (actorEntry.bubble.width / actorEntry.bubble.baseWidth) * pulse,
-    (actorEntry.bubble.height / actorEntry.bubble.baseHeight) * pulse,
-    1,
-  );
-  actorEntry.bubble.mesh.material.opacity = actorEntry.bubble.opacity * (actorEntry.opacity ?? 1);
-  if (camera) {
-    orientPrivateBillboardToCamera(actorEntry.bubble.mesh, camera);
-  }
+  privateChatBubbleRenderer.update(actorEntry, deltaSeconds, { camera });
 }
 
 function pruneExpiredPrivateChatEvents() {
@@ -2108,56 +2001,22 @@ function sendPrivateChat(text) {
   return sent;
 }
 
-function sanitizeBrowserShareTitle(rawTitle, fallback = "") {
-  const cleaned = String(rawTitle ?? "")
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 96);
-  return cleaned || fallback;
-}
-
-function normalizeBrowserShareKind(rawKind, fallback = "screen") {
-  const value = String(rawKind ?? "").trim().toLowerCase();
-  if (value === "screen" || value === "camera" || value === "audio") {
-    return value;
-  }
-  return fallback;
-}
-
-function getDisplayShareLabel(videoTrack) {
-  const settings = videoTrack?.getSettings?.() ?? {};
-  const displaySurface = String(settings.displaySurface ?? "").trim().toLowerCase();
-  if (displaySurface === "browser") {
-    return "Shared tab";
-  }
-  if (displaySurface === "window") {
-    return "Shared window";
-  }
-  return "Shared screen";
-}
-
-function getDefaultBrowserShareTitle(shareKind, videoTrack = null) {
-  const kind = normalizeBrowserShareKind(shareKind, "screen");
-  if (kind === "camera") {
-    return "Live video";
-  }
-  if (kind === "audio") {
-    return "Live voice";
-  }
-  return getDisplayShareLabel(videoTrack);
-}
-
-function getBrowserShareKindLabel(shareKind) {
-  const kind = normalizeBrowserShareKind(shareKind, "screen");
-  if (kind === "camera") {
-    return "Video";
-  }
-  if (kind === "audio") {
-    return "Voice";
-  }
-  return "Screen";
-}
+const privateChatFeature = createChatFeature({
+  input: elements.panelChatInput,
+  form: elements.panelChatComposer,
+  reactionButtons: elements.panelChatReactionButtons,
+  reactionAttribute: "data-private-chat-reaction",
+  onAfterInputChange: () => {
+    renderPrivateChat();
+  },
+  onSubmit: sendPrivateChat,
+  onSubmitFailed: () => {
+    renderPrivateChat();
+  },
+  onReactionFailed: () => {
+    renderPrivateChat();
+  },
+});
 
 function isLiveKitBrowserTransport(frameTransport) {
   return String(frameTransport ?? "").startsWith("livekit");
@@ -2252,68 +2111,8 @@ function setPrivateBrowserOverlayOpen(open) {
   }
 }
 
-function getSelectedPrivateBrowserShareMode() {
-  return normalizeBrowserShareKind(state.browserShareMode, "screen");
-}
-
-function setSelectedPrivateBrowserShareMode(mode) {
-  state.browserShareMode = normalizeBrowserShareKind(mode, "screen");
-  for (const button of elements.panelBrowserShareModes ?? []) {
-    const active = button.getAttribute("data-private-browser-share-mode") === state.browserShareMode;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", active ? "true" : "false");
-  }
-}
-
-function getRequestedPrivateBrowserShareTitle(fallback = "") {
-  return sanitizeBrowserShareTitle(elements.panelBrowserShareTitle?.value ?? "", fallback);
-}
-
 function getLocalPrivateBrowserSession() {
   return state.localBrowserSessionId ? state.browserSessions.get(state.localBrowserSessionId) ?? null : null;
-}
-
-function createLocalPrivateBrowserShare(stream, options = {}) {
-  const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
-  const audioTrack = stream?.getAudioTracks?.()[0] ?? null;
-  const shareKind = normalizeBrowserShareKind(options.shareKind, "screen");
-  const settings = videoTrack?.getSettings?.() ?? {};
-  const share = {
-    stream,
-    videoTrack,
-    audioTrack,
-    observedTrack: videoTrack ?? audioTrack ?? null,
-    shareKind,
-    title: sanitizeBrowserShareTitle(options.title, getDefaultBrowserShareTitle(shareKind, videoTrack)),
-    displaySurface: String(options.displaySurface ?? settings.displaySurface ?? "").trim().toLowerCase(),
-    aspectRatio: Number(options.aspectRatio) > 0
-      ? Number(options.aspectRatio)
-      : Math.max(0.3, Number(settings.width) || 16) / Math.max(1, Number(settings.height) || 9),
-    hasVideo: options.hasVideo === true || (options.hasVideo !== false && Boolean(videoTrack)),
-    hasAudio: options.hasAudio === true || (options.hasAudio !== false && Boolean(audioTrack)),
-    endedHandler: null,
-  };
-  share.endedHandler = () => {
-    if (state.pendingBrowserShare?.stream === share.stream) {
-      clearPendingPrivateBrowserShare({ stopTracks: false });
-      updatePrivateBrowserPanel();
-      return;
-    }
-    if (state.localBrowserShare?.stream !== share.stream) {
-      return;
-    }
-    const sessionId = state.localBrowserShare?.sessionId || "";
-    clearLocalPrivateBrowserShare({ stopTracks: false, sessionId });
-    if (sessionId) {
-      sendWorldSocketMessage({
-        type: "browser:stop",
-        sessionId,
-      });
-    }
-    updatePrivateBrowserPanel();
-  };
-  share.observedTrack?.addEventListener?.("ended", share.endedHandler, { once: true });
-  return share;
 }
 
 function releasePrivateBrowserShare(share, { stopTracks = false } = {}) {
@@ -2352,6 +2151,73 @@ function clearLocalPrivateBrowserShare({ stopTracks = false, sessionId = "" } = 
     clearPrivateShareBubbleVideo(activeShare.sessionId);
   }
 }
+
+const privateBrowserShareFeature = createNearbyDisplayShareFeature({
+  modeButtons: elements.panelBrowserShareModes,
+  modeAttribute: "data-private-browser-share-mode",
+  titleInput: elements.panelBrowserShareTitle,
+  launchButton: elements.panelBrowserLaunch,
+  getMode: () => state.browserShareMode,
+  setMode(mode) {
+    state.browserShareMode = mode;
+  },
+  onModeChanged() {
+    updatePrivateBrowserPanel();
+  },
+  getTitleInputValue: () => elements.panelBrowserShareTitle?.value ?? "",
+  getSessionShareKind: getPrivateBrowserSessionShareKind,
+  getPendingShare: () => state.pendingBrowserShare,
+  getLocalSession: getLocalPrivateBrowserSession,
+  getLocalShare: () => state.localBrowserShare,
+  clearPendingShare: clearPendingPrivateBrowserShare,
+  clearLocalShare: clearLocalPrivateBrowserShare,
+  getFallbackSize: () => ({ width: 16, height: 9 }),
+  stopLiveShare(sessionId) {
+    sendWorldSocketMessage({
+      type: "browser:stop",
+      sessionId,
+    });
+  },
+  startLiveShare(payload) {
+    return sendWorldSocketMessage({
+      type: "browser:start",
+      ...payload,
+    });
+  },
+  beginShare: startLocalPrivateNearbyShare,
+  patchSession(sessionId, sessionPatch) {
+    state.browserSessions.set(sessionId, sessionPatch);
+  },
+  getDisplaySurface: () => state.localBrowserShare?.displaySurface || "",
+  setStatus: setPrivateBrowserStatus,
+  updateView: updatePrivateBrowserPanel,
+  updatingStatusText: "Updating live share title...",
+  canLaunch: () => Boolean(
+    state.session
+    && state.selectedWorld
+    && getLocalParticipant()
+    && state.browserMediaState.enabled !== false
+  ),
+  onCannotLaunch() {
+    updatePrivateBrowserPanel();
+  },
+  onUnsupported(message) {
+    setPrivateBrowserStatus(message);
+  },
+  onError(message, error) {
+    setPrivateBrowserStatus(error?.message || message);
+  },
+  unsupportedMessages: {
+    screen: "This browser does not support screen sharing.",
+    camera: "This browser does not support camera sharing.",
+    audio: "This browser does not support voice sharing.",
+  },
+  failureMessages: {
+    screen: "Could not start screen sharing.",
+    camera: "Could not start video sharing.",
+    audio: "Could not start voice sharing.",
+  },
+});
 
 function startLocalPrivateNearbyShare(share) {
   if (!state.session || !state.selectedWorld || !getLocalParticipant()) {
@@ -2493,7 +2359,7 @@ function attachLocalPrivateBrowserShare(sessionId, share) {
     ...share,
     sessionId,
   };
-  setSelectedPrivateBrowserShareMode(share.shareKind);
+  privateBrowserShareFeature.setSelectedMode(share.shareKind);
   setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
   if (elements.panelBrowserShareTitle) {
     elements.panelBrowserShareTitle.value = share.title || "";
@@ -2660,115 +2526,11 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
   renderPrivateLiveSharesList();
 }
 
-async function launchPrivateScreenShare() {
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    setPrivateBrowserStatus("This browser does not support screen sharing.");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        frameRate: { ideal: 24, max: 30 },
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 },
-      },
-      audio: true,
-    });
-    const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
-    const share = createLocalPrivateBrowserShare(stream, {
-      shareKind: "screen",
-      title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("screen", videoTrack)),
-    });
-    startLocalPrivateNearbyShare(share);
-  } catch (error) {
-    if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
-      setPrivateBrowserStatus(error?.message || "Could not start screen sharing.");
-    }
-  }
-}
-
-async function launchPrivateCameraShare() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setPrivateBrowserStatus("This browser does not support camera sharing.");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        frameRate: { ideal: 24, max: 30 },
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 },
-        facingMode: "user",
-      },
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    const share = createLocalPrivateBrowserShare(stream, {
-      shareKind: "camera",
-      title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("camera")),
-    });
-    startLocalPrivateNearbyShare(share);
-  } catch (error) {
-    if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
-      setPrivateBrowserStatus(error?.message || "Could not start video sharing.");
-    }
-  }
-}
-
-async function launchPrivateVoiceShare() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setPrivateBrowserStatus("This browser does not support voice sharing.");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false,
-    });
-    const share = createLocalPrivateBrowserShare(stream, {
-      shareKind: "audio",
-      title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("audio")),
-      hasVideo: false,
-      hasAudio: true,
-      aspectRatio: 1.2,
-    });
-    startLocalPrivateNearbyShare(share);
-  } catch (error) {
-    if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
-      setPrivateBrowserStatus(error?.message || "Could not start voice sharing.");
-    }
-  }
-}
-
-async function launchPrivateShare() {
-  const localParticipant = getLocalParticipant();
-  if (!state.session || !state.selectedWorld || !localParticipant) {
-    updatePrivateBrowserPanel();
-    return;
-  }
-  const shareMode = getSelectedPrivateBrowserShareMode();
-  if (shareMode === "camera") {
-    await launchPrivateCameraShare();
-    return;
-  }
-  if (shareMode === "audio") {
-    await launchPrivateVoiceShare();
-    return;
-  }
-  await launchPrivateScreenShare();
-}
-
 function updatePrivateBrowserPanel() {
   const world = state.selectedWorld;
   const localParticipant = getLocalParticipant();
   const localSession = getLocalPrivateBrowserSession();
+  const draft = privateBrowserShareFeature.getDraft(localSession);
   if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
     state.browserPanelRemoteSessionId = "";
   }
@@ -2800,13 +2562,19 @@ function updatePrivateBrowserPanel() {
     && state.browserMediaState.remoteAudioSessionId === remoteSession.sessionId,
   );
 
-  setSelectedPrivateBrowserShareMode(state.browserShareMode);
+  privateBrowserShareFeature.setSelectedMode(state.browserShareMode);
   if (elements.panelBrowserShareTitle) {
     elements.panelBrowserShareTitle.disabled = !canShare;
   }
   if (elements.panelBrowserLaunch) {
-    elements.panelBrowserLaunch.disabled = !canShare || Boolean(state.pendingBrowserShare);
-    elements.panelBrowserLaunch.textContent = state.pendingBrowserShare ? "Starting..." : (localSession ? "Share Again" : "Share");
+    const launchState = getDisplayShareLaunchState({
+      canShare,
+      pending: Boolean(state.pendingBrowserShare),
+      localSession,
+      draft,
+    });
+    elements.panelBrowserLaunch.disabled = launchState.disabled;
+    elements.panelBrowserLaunch.textContent = launchState.label;
   }
   if (elements.panelBrowserStop) {
     elements.panelBrowserStop.disabled = !localSession;
@@ -2832,15 +2600,6 @@ function updatePrivateBrowserPanel() {
       hint: state.pendingBrowserShare.title
         ? `"${state.pendingBrowserShare.title}" will go live after the permission prompt finishes.`
         : "Finish the permission prompt to go live.",
-    });
-  } else if (localSession) {
-    const shareKind = getBrowserShareKindLabel(localSession.shareKind || "screen");
-    setPrivateBrowserStatus(`${shareKind} is live nearby.`);
-    updatePrivateBrowserSummary({
-      state: "live",
-      badge: "Live",
-      current: `${shareKind} live${localSession.title ? ` - ${localSession.title}` : ""}`,
-      hint: "Change the type, then press Share again to replace the live share.",
     });
   } else if (remoteSession) {
     const shareKind = getBrowserShareKindLabel(remoteSession.shareKind || "screen");
@@ -2883,14 +2642,24 @@ function updatePrivateBrowserPanel() {
       current: "Live share unavailable",
       hint: "Live media is not available on this server right now.",
     });
+  } else if (localSession?.sessionMode === "display-share") {
+    const presentation = getLocalDisplaySharePresentation({
+      localSession,
+      localShare: state.localBrowserShare,
+      draft,
+      audienceLabel: "this private world",
+      screenPrompt: "Share a tab or window to start the live stream.",
+    });
+    if (presentation) {
+      setPrivateBrowserStatus(presentation.status);
+      updatePrivateBrowserSummary(presentation);
+    }
   } else {
-    const draftKind = getBrowserShareKindLabel(getSelectedPrivateBrowserShareMode());
-    const draftTitle = sanitizeBrowserShareTitle(elements.panelBrowserShareTitle?.value ?? "", "");
     setPrivateBrowserStatus("Share a screen, video, or voice nearby.");
     updatePrivateBrowserSummary({
       state: "idle",
       badge: "Idle",
-      current: draftTitle ? `Ready: ${draftKind} "${draftTitle}"` : `Ready: ${draftKind}`,
+      current: draft.draftTitle ? `Ready: ${draft.draftModeLabel} "${draft.draftTitle}"` : `Ready: ${draft.draftModeLabel}`,
       hint: "Pick a type, add a title if you want, then press Share.",
     });
   }
@@ -5716,7 +5485,7 @@ async function joinWorld() {
     method: "POST",
     body: {
       creatorUsername: state.selectedWorld.creator.username,
-      guestSessionId: state.session ? undefined : getGuestSessionId(),
+      guestSessionId: getGuestSessionId(),
       displayName: getPrivateDisplayName(),
       joinRole: state.session ? "viewer" : "guest",
       publicWorldSnapshotId: anchor.publicWorldSnapshotId,
@@ -6332,25 +6101,7 @@ function bindEvents() {
     setLauncherTab("access");
     setLauncherOpen(true);
   });
-  elements.panelChatComposer?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (!sendPrivateChat(elements.panelChatInput?.value || "")) {
-      renderPrivateChat();
-    }
-  });
-  elements.panelChatInput?.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      elements.panelChatInput?.blur();
-    }
-  });
-  for (const button of elements.panelChatReactionButtons ?? []) {
-    button.addEventListener("click", () => {
-      if (!sendPrivateChat(button.getAttribute("data-private-chat-reaction") || button.textContent || "")) {
-        renderPrivateChat();
-      }
-    });
-  }
+  privateChatFeature.bind();
   elements.panelLiveSearchInput?.addEventListener("input", () => {
     state.liveShareQuery = String(elements.panelLiveSearchInput?.value ?? "");
     renderPrivateLiveSharesList();
@@ -6395,22 +6146,7 @@ function bindEvents() {
   elements.panelBrowserBackdrop?.addEventListener("click", () => {
     setPrivateBrowserOverlayOpen(false);
   });
-  elements.panelBrowserShareTitle?.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") {
-      return;
-    }
-    event.preventDefault();
-    void launchPrivateShare();
-  });
-  for (const button of elements.panelBrowserShareModes ?? []) {
-    button.addEventListener("click", () => {
-      setSelectedPrivateBrowserShareMode(button.getAttribute("data-private-browser-share-mode") || "screen");
-      updatePrivateBrowserPanel();
-    });
-  }
-  elements.panelBrowserLaunch?.addEventListener("click", () => {
-    void launchPrivateShare();
-  });
+  privateBrowserShareFeature.bind();
   elements.panelBrowserStop?.addEventListener("click", () => {
     const sessionId = getLocalPrivateBrowserSession()?.sessionId || "";
     if (!sessionId) {
@@ -6767,6 +6503,27 @@ async function handleLaunchRequest(options = {}) {
     }
   }
   if (launch.autojoin) {
+    if (!state.session) {
+      const localParticipant = getLocalParticipant(state.selectedWorld);
+      const activeInstance = state.selectedWorld?.active_instance ?? null;
+      const maxViewers = Math.max(0, Number(state.selectedWorld?.max_viewers ?? 0) || 0);
+      const viewerCount = Math.max(
+        0,
+        Number(activeInstance?.viewer_count ?? activeInstance?.participants?.length ?? 0) || 0,
+      );
+      if (!activeInstance) {
+        setLauncherTab("access");
+        setLauncherOpen(true);
+        setStatus("Sign in to start this private world.");
+        pushEvent("launcher", "Sign in to start this private world");
+        return;
+      }
+      if (!localParticipant && maxViewers > 0 && viewerCount >= maxViewers) {
+        setStatus("This private world is full");
+        pushEvent("launcher", "This private world is full");
+        return;
+      }
+    }
     try {
       await joinWorld();
       pushEvent("launcher", "Joined from public world");
@@ -6788,7 +6545,7 @@ async function init() {
   ensurePreview();
   setLauncherTab(getPreferredLauncherTab());
   setMode(state.mode);
-  setSelectedPrivateBrowserShareMode(state.browserShareMode);
+  privateBrowserShareFeature.setSelectedMode(state.browserShareMode);
   updateShellState();
   await fetchAuthConfig();
   await refreshAuthState();

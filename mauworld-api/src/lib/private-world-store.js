@@ -1589,12 +1589,16 @@ export function installPrivateWorldStore(MauworldStore) {
       });
     }
 
+    const requestedGuestSessionId = String(input.guestSessionId ?? "").trim();
     const guestSessionId = !requesterProfile
-      ? String(input.guestSessionId ?? "").trim() || `guest_${Date.now().toString(36)}`
+      ? requestedGuestSessionId || `guest_${Date.now().toString(36)}`
       : null;
     const participants = await loadInstanceParticipants(this, instance.id);
     const existingParticipant = requesterProfile
-      ? participants.find((row) => row.profile_id === requesterProfile.id)
+      ? (
+          participants.find((row) => row.profile_id === requesterProfile.id)
+          ?? (requestedGuestSessionId ? participants.find((row) => row.guest_session_id === requestedGuestSessionId) : null)
+        )
       : participants.find((row) => row.guest_session_id === guestSessionId);
     if (!existingParticipant && participants.length >= world.max_viewers) {
       throw new HttpError(409, "This private world is full");
@@ -1622,11 +1626,18 @@ export function installPrivateWorldStore(MauworldStore) {
       last_seen_at: nowIso(),
       updated_at: nowIso(),
     };
+    const participantUpdatePayload = requesterProfile
+      ? {
+          ...participantPayload,
+          profile_id: requesterProfile.id,
+          guest_session_id: null,
+        }
+      : participantPayload;
     const participant = existingParticipant
       ? await must(
           this.serviceClient
             .from("private_world_participants")
-            .update(participantPayload)
+            .update(participantUpdatePayload)
             .eq("id", existingParticipant.id)
             .select("*")
             .single(),
