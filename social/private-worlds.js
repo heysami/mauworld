@@ -328,6 +328,7 @@ const state = {
   trailAccumulator: 0,
   lastPresenceSentAt: 0,
   viewerSuppressClickAt: 0,
+  buildSuppressedClick: null,
   buildModifierKeys: new Set(),
   buildDrag: null,
   buildHover: null,
@@ -1786,6 +1787,7 @@ function resetViewerRig(world = state.selectedWorld) {
   state.cameraRadius = rig.defaultRadius;
   state.trailAccumulator = 0;
   state.viewerSuppressClickAt = 0;
+  state.buildSuppressedClick = null;
   state.viewerPosition.copy(getViewerSpawnPosition(world));
   state.viewerCameraPosition.set(
     state.viewerPosition.x,
@@ -3361,6 +3363,7 @@ async function runRefreshAuthState() {
     privateInputState.pointerMoved = false;
     privateInputState.dragDistance = 0;
     state.viewerSuppressClickAt = 0;
+    state.buildSuppressedClick = null;
     resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
     renderProfile();
     renderWorldList();
@@ -3642,6 +3645,7 @@ function setMode(mode, options = {}) {
   if (nextMode === "play") {
     state.buildModifierKeys.clear();
     endBuildDrag();
+    state.buildSuppressedClick = null;
     clearPlacementTool();
     writeBuilderSelection([]);
     state.sceneDrawerOpen = false;
@@ -5100,6 +5104,29 @@ function getOverlayBoundsSignature(box) {
   ].map((value) => roundPrivateValue(value, 3)).join(":");
 }
 
+function recordBuildSuppressedClick(event) {
+  state.buildSuppressedClick = {
+    at: performance.now(),
+    clientX: Number(event?.clientX ?? 0) || 0,
+    clientY: Number(event?.clientY ?? 0) || 0,
+  };
+}
+
+function shouldSuppressBuildClick(event) {
+  const pending = state.buildSuppressedClick;
+  if (!pending) {
+    return false;
+  }
+  state.buildSuppressedClick = null;
+  const elapsed = performance.now() - pending.at;
+  if (elapsed > 240) {
+    return false;
+  }
+  const deltaX = (Number(event?.clientX ?? 0) || 0) - pending.clientX;
+  const deltaY = (Number(event?.clientY ?? 0) || 0) - pending.clientY;
+  return Math.hypot(deltaX, deltaY) <= 12;
+}
+
 function refreshBuildHoverFromPointer(pointerSource) {
   if (!canUsePlacementTools() || !state.previewPointer.inside) {
     state.buildHover = null;
@@ -5272,28 +5299,46 @@ function buildTransformHandles(preview, box, hoveredHandleKey = "") {
     return;
   }
   const size = box.getSize(new THREE.Vector3());
-  const handleSize = clampNumber(Math.max(size.x, size.y, size.z) * 0.08, 0.7, 0.28, 1.4);
+  const handleSize = clampNumber(Math.max(size.x, size.y, size.z) * 0.12, 1.1, 0.6, 2.4);
+  const pickSize = Math.max(handleSize * 2.4, 1.6);
+  const handleOffset = Math.max(0.24, handleSize * 0.58);
   for (const handle of getTransformHandleSpecs(box)) {
     const isHovered = handle.key === hoveredHandleKey;
+    const axisVector = getBuildDragAxisVector(handle.axis);
+    const handlePosition = handle.position.clone().addScaledVector(axisVector, handle.direction * handleOffset);
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(handleSize, handleSize, handleSize),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(getTransformHandleColor(handle.axis)),
         transparent: true,
-        opacity: isHovered ? 0.92 : 0.78,
+        opacity: isHovered ? 1 : 0.82,
         depthWrite: false,
         fog: false,
       }),
     );
-    mesh.position.copy(handle.position);
-    mesh.scale.setScalar(isHovered ? 1.14 : 1);
-    mesh.userData.privateWorldTransformHandle = {
+    mesh.position.copy(handlePosition);
+    mesh.scale.setScalar(isHovered ? 1.22 : 1);
+    preview.buildOverlay.add(mesh);
+
+    const pickMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(pickSize, pickSize, pickSize),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color("#ffffff"),
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        depthTest: false,
+        fog: false,
+      }),
+    );
+    pickMesh.position.copy(handlePosition);
+    pickMesh.userData.privateWorldTransformHandle = {
       axis: handle.axis,
       direction: handle.direction,
       key: handle.key,
     };
-    preview.buildOverlay.add(mesh);
-    preview.transformPickables.push(mesh);
+    preview.buildOverlay.add(pickMesh);
+    preview.transformPickables.push(pickMesh);
   }
 }
 
@@ -5700,12 +5745,12 @@ function updateBuildDrag(event) {
   return true;
 }
 
-function endBuildDrag(pointerId = 0) {
+function endBuildDrag(pointerId = 0, pointerEvent = null) {
   if (!state.buildDrag || (pointerId && state.buildDrag.pointerId !== pointerId)) {
     return;
   }
-  if (state.buildDrag.moved) {
-    state.viewerSuppressClickAt = performance.now();
+  if (state.buildDrag.moved && pointerEvent) {
+    recordBuildSuppressedClick(pointerEvent);
   }
   state.buildDrag = null;
 }
@@ -6437,7 +6482,7 @@ function ensurePreview() {
     state.previewPointer.inside = true;
     refreshBuildHoverFromPointer(event);
     if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
-      endBuildDrag(event.pointerId);
+      endBuildDrag(event.pointerId, event);
       elements.previewCanvas.releasePointerCapture?.(event.pointerId);
       return;
     }
@@ -6482,6 +6527,9 @@ function ensurePreview() {
     syncPrivateCameraToFollowTarget(state.preview);
   }, { passive: false });
   elements.previewCanvas.addEventListener("click", (event) => {
+    if (state.mode === "build" && shouldSuppressBuildClick(event)) {
+      return;
+    }
     if (state.viewerSuppressClickAt && performance.now() - state.viewerSuppressClickAt < 240) {
       return;
     }
@@ -6498,18 +6546,25 @@ function ensurePreview() {
         if (entityRef) {
           deleteEntityRef(entityRef);
           refreshBuildHoverFromStoredPointer();
+        } else if (hasBuilderSelection()) {
+          setBuilderSelection("", "");
         }
         return;
       }
       if (transformMode === "multi") {
         if (entityRef) {
           setBuilderSelection(entityRef.kind, entityRef.id, { append: true });
+        } else if (hasBuilderSelection()) {
+          setBuilderSelection("", "");
         }
         return;
       }
       if (entityRef) {
         setBuilderSelection(entityRef.kind, entityRef.id);
         return;
+      }
+      if (hasBuilderSelection()) {
+        setBuilderSelection("", "");
       }
       return;
     }
@@ -7185,6 +7240,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   writeBuilderSelection([]);
   state.buildModifierKeys.clear();
   endBuildDrag();
+  state.buildSuppressedClick = null;
   state.buildHover = null;
   state.launcherOpen = false;
   state.sceneDrawerOpen = false;
@@ -7476,6 +7532,7 @@ async function leaveWorld() {
   privateInputState.pointerMoved = false;
   privateInputState.dragDistance = 0;
   state.viewerSuppressClickAt = 0;
+  state.buildSuppressedClick = null;
   pushEvent("world:left", state.selectedWorld.name);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
 }
@@ -8434,6 +8491,7 @@ function bindEvents() {
     privateInputState.pointerMoved = false;
     privateInputState.dragDistance = 0;
     state.viewerSuppressClickAt = 0;
+    state.buildSuppressedClick = null;
     state.previewPointer.inside = false;
     state.buildHover = null;
     endBuildDrag();
