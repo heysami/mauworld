@@ -727,7 +727,8 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
 }
 
 .pw-script-editor__meta,
-.pw-script-ai__hint {
+.pw-script-ai__hint,
+.pw-screen-ai__hint {
   color: var(--pw-muted);
   font-size: 0.78rem;
   line-height: 1.45;

@@ -304,6 +304,7 @@ const state = {
   prefabPlacementId: "",
   scriptFunctionQuery: "",
   sceneDrafts: new Map(),
+  screenAiPromptDrafts: new Map(),
   sceneEditorSceneId: "",
   placementTool: "",
   placementShortcutTool: "",
@@ -3854,6 +3855,22 @@ function buildScriptFunctionSummary(entry = {}) {
   };
 }
 
+function getScreenAiPrompt(screenId = "") {
+  const normalizedScreenId = String(screenId ?? "").trim();
+  if (!normalizedScreenId) {
+    return "";
+  }
+  return String(state.screenAiPromptDrafts.get(normalizedScreenId) ?? "");
+}
+
+function setScreenAiPrompt(screenId = "", value = "") {
+  const normalizedScreenId = String(screenId ?? "").trim();
+  if (!normalizedScreenId) {
+    return;
+  }
+  state.screenAiPromptDrafts.set(normalizedScreenId, String(value ?? ""));
+}
+
 function ensureSelectedScriptFunction(functions = getSceneScriptFunctions()) {
   const normalizedFunctions = Array.isArray(functions) ? functions : [];
   if (!normalizedFunctions.length) {
@@ -4690,6 +4707,8 @@ function renderEntityInspector(sceneDoc, selected = null) {
   }
 
   if (kind === "screen") {
+    const aiDisabled = !state.selectedWorld || !state.session || !isEditor() || state.mode !== "build";
+    const screenPrompt = getScreenAiPrompt(entry.id);
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Static HTML and CSS only. No custom JavaScript or remote resources. Width and height changes now reflow the HTML to match the new viewport instead of just stretching it.</p>
       ${buildMaterialEditor(entry.material)}
@@ -4700,6 +4719,14 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <span>Screen HTML</span>
         <textarea rows="10" data-entity-field="html" data-value-type="text" spellcheck="false">${htmlEscape(entry.html || "")}</textarea>
       </label>
+      <label class="pw-screen-ai">
+        <span>Generate HTML prompt</span>
+        <textarea rows="3" data-screen-ai-prompt="${htmlEscape(entry.id)}" spellcheck="false" placeholder="Design a clean scoreboard, menu, instructions panel, or whatever this screen should show." ${aiDisabled ? "disabled" : ""}>${htmlEscape(screenPrompt)}</textarea>
+      </label>
+      <div class="pw-inline-actions">
+        <button type="button" data-screen-ai-generate="${htmlEscape(entry.id)}" ${aiDisabled ? "disabled" : ""}>Generate HTML</button>
+      </div>
+      <p class="pw-screen-ai__hint">Uses the provider, model, and API key from AI Builder, then writes the result into this screen.</p>
     `;
     return;
   }
@@ -8665,6 +8692,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
     state.previewPointer.inside = false;
     clearPlacementTool();
     state.sceneDrafts.clear();
+    state.screenAiPromptDrafts.clear();
     state.sceneEditorSceneId = "";
     state.scriptFunctionQuery = "";
     state.privateChatEntries = [];
@@ -9495,6 +9523,45 @@ async function generateSceneLogicFunction() {
   focusSelectedScriptFunctionBody();
 }
 
+async function generateSelectedScreenHtml(screenId = "") {
+  if (!state.selectedWorld || !isEditor() || state.mode !== "build") {
+    return;
+  }
+  const normalizedScreenId = String(screenId ?? "").trim();
+  const selected = getSelectedEntity(parseSceneTextarea());
+  if (!selected?.entry || selected.kind !== "screen" || selected.entry.id !== normalizedScreenId) {
+    setStatus("Select the screen you want to generate HTML for first.");
+    return;
+  }
+  const prompt = getScreenAiPrompt(normalizedScreenId).trim();
+  if (!prompt) {
+    setStatus("Add a short prompt for this screen first.");
+    elements.entityEditor.querySelector("[data-screen-ai-prompt]")?.focus?.();
+    return;
+  }
+  const viewport = getScreenTextureRenderSize(selected.entry);
+  const objective = [
+    prompt,
+    `This should fit a Mauworld screen with an approximate viewport of ${viewport.width} by ${viewport.height}.`,
+    selected.entry.html ? `Current HTML to replace or improve: ${String(selected.entry.html).slice(0, 600)}` : "",
+  ].filter(Boolean).join(" ");
+  const generatedHtml = await generateAi("html", {
+    objective,
+    outputTarget: elements.aiOutput,
+  });
+  if (!generatedHtml) {
+    setStatus("The AI returned empty screen HTML.");
+    return;
+  }
+  mutateSceneDoc((sceneDoc) => {
+    const current = getSelectedEntity(sceneDoc);
+    if (!current?.entry || current.kind !== "screen" || current.entry.id !== normalizedScreenId) {
+      return;
+    }
+    current.entry.html = generatedHtml;
+  });
+}
+
 async function acquireSceneLock() {
   if (!isEditor() || !state.selectedWorld || !getSelectedScene()) {
     return;
@@ -9949,6 +10016,11 @@ function bindEvents() {
     );
   });
   elements.entityEditor.addEventListener("input", (event) => {
+    const screenPromptField = event.target.closest("[data-screen-ai-prompt]");
+    if (screenPromptField) {
+      setScreenAiPrompt(screenPromptField.getAttribute("data-screen-ai-prompt"), screenPromptField.value);
+      return;
+    }
     const field = event.target.closest("[data-entity-field]");
     if (!field) {
       return;
@@ -9972,6 +10044,13 @@ function bindEvents() {
     );
   });
   elements.entityEditor.addEventListener("click", (event) => {
+    const screenGenerateButton = event.target.closest("[data-screen-ai-generate]");
+    if (screenGenerateButton) {
+      void generateSelectedScreenHtml(screenGenerateButton.getAttribute("data-screen-ai-generate")).catch((error) => {
+        setStatus(error.message);
+      });
+      return;
+    }
     const groupButton = event.target.closest("[data-group-selection]");
     if (groupButton) {
       groupSelectedEntities();
