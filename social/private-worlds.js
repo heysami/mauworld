@@ -1981,6 +1981,16 @@ function getLaunchRequest() {
   };
 }
 
+function selectedWorldMatchesLaunchRequest(launch = getLaunchRequest(), world = state.selectedWorld) {
+  if (!launch?.worldId || !launch?.creatorUsername || !world?.world_id || !world?.creator?.username) {
+    return false;
+  }
+  return (
+    String(world.world_id).trim() === String(launch.worldId).trim()
+    && String(world.creator.username).trim().toLowerCase() === String(launch.creatorUsername).trim().toLowerCase()
+  );
+}
+
 function normalizeRuntimeKey(event) {
   const key = String(event.key ?? "").trim().toLowerCase();
   if (key === " ") {
@@ -2338,6 +2348,42 @@ function clearLocalPrivateBrowserShare({ stopTracks = false, sessionId = "" } = 
   releasePrivateBrowserShare(activeShare, { stopTracks });
   state.localBrowserShare = null;
   setLocalPrivateBrowserPreviewStream(null);
+  if (activeShare.sessionId) {
+    clearPrivateShareBubbleVideo(activeShare.sessionId);
+  }
+}
+
+function startLocalPrivateNearbyShare(share) {
+  if (!state.session || !state.selectedWorld || !getLocalParticipant()) {
+    updatePrivateBrowserPanel();
+    return false;
+  }
+  if (!share) {
+    return false;
+  }
+  state.browserPanelRemoteSessionId = "";
+  clearPendingPrivateBrowserShare({ stopTracks: true });
+  state.pendingBrowserShare = share;
+  setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
+  setPrivateBrowserStatus("Starting nearby share...");
+  const sent = sendWorldSocketMessage({
+    type: "browser:start",
+    mode: "display-share",
+    title: share.title,
+    shareKind: share.shareKind,
+    hasVideo: share.hasVideo,
+    hasAudio: share.hasAudio,
+    aspectRatio: share.aspectRatio,
+    displaySurface: share.displaySurface,
+  });
+  if (!sent) {
+    clearPendingPrivateBrowserShare({ stopTracks: true });
+    setPrivateBrowserStatus("Live share is offline right now.");
+    updatePrivateBrowserPanel();
+    return false;
+  }
+  updatePrivateBrowserPanel();
+  return true;
 }
 
 async function fetchPrivateBrowserMediaToken({ canPublish = false } = {}) {
@@ -2451,6 +2497,11 @@ function attachLocalPrivateBrowserShare(sessionId, share) {
   setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
   if (elements.panelBrowserShareTitle) {
     elements.panelBrowserShareTitle.value = share.title || "";
+  }
+  if (share.hasVideo && elements.panelBrowserVideo) {
+    setPrivateShareBubbleVideo(sessionId, elements.panelBrowserVideo);
+  } else {
+    clearPrivateShareBubbleVideo(sessionId);
   }
   void getPrivateBrowserMediaController().publishStream({
     sessionId,
@@ -2628,24 +2679,7 @@ async function launchPrivateScreenShare() {
       shareKind: "screen",
       title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("screen", videoTrack)),
     });
-    state.pendingBrowserShare = share;
-    setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
-    updatePrivateBrowserPanel();
-    const sent = sendWorldSocketMessage({
-      type: "browser:start",
-      mode: "display-share",
-      title: share.title,
-      shareKind: share.shareKind,
-      hasVideo: share.hasVideo,
-      hasAudio: share.hasAudio,
-      aspectRatio: share.aspectRatio,
-      displaySurface: share.displaySurface,
-    });
-    if (!sent) {
-      clearPendingPrivateBrowserShare({ stopTracks: true });
-      setPrivateBrowserStatus("Live share is offline right now.");
-      updatePrivateBrowserPanel();
-    }
+    startLocalPrivateNearbyShare(share);
   } catch (error) {
     if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
       setPrivateBrowserStatus(error?.message || "Could not start screen sharing.");
@@ -2676,24 +2710,7 @@ async function launchPrivateCameraShare() {
       shareKind: "camera",
       title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("camera")),
     });
-    state.pendingBrowserShare = share;
-    setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
-    updatePrivateBrowserPanel();
-    const sent = sendWorldSocketMessage({
-      type: "browser:start",
-      mode: "display-share",
-      title: share.title,
-      shareKind: share.shareKind,
-      hasVideo: share.hasVideo,
-      hasAudio: share.hasAudio,
-      aspectRatio: share.aspectRatio,
-      displaySurface: share.displaySurface,
-    });
-    if (!sent) {
-      clearPendingPrivateBrowserShare({ stopTracks: true });
-      setPrivateBrowserStatus("Live share is offline right now.");
-      updatePrivateBrowserPanel();
-    }
+    startLocalPrivateNearbyShare(share);
   } catch (error) {
     if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
       setPrivateBrowserStatus(error?.message || "Could not start video sharing.");
@@ -2722,24 +2739,7 @@ async function launchPrivateVoiceShare() {
       hasAudio: true,
       aspectRatio: 1.2,
     });
-    state.pendingBrowserShare = share;
-    setLocalPrivateBrowserPreviewStream(null);
-    updatePrivateBrowserPanel();
-    const sent = sendWorldSocketMessage({
-      type: "browser:start",
-      mode: "display-share",
-      title: share.title,
-      shareKind: share.shareKind,
-      hasVideo: share.hasVideo,
-      hasAudio: share.hasAudio,
-      aspectRatio: share.aspectRatio,
-      displaySurface: share.displaySurface,
-    });
-    if (!sent) {
-      clearPendingPrivateBrowserShare({ stopTracks: true });
-      setPrivateBrowserStatus("Live share is offline right now.");
-      updatePrivateBrowserPanel();
-    }
+    startLocalPrivateNearbyShare(share);
   } catch (error) {
     if (error?.name !== "AbortError" && error?.name !== "NotAllowedError") {
       setPrivateBrowserStatus(error?.message || "Could not start voice sharing.");
@@ -3003,7 +3003,17 @@ async function refreshAuthState() {
     renderProfile();
     renderSessionSummary();
     await loadWorlds();
-    if (state.selectedWorld?.world_id && state.selectedWorld?.creator?.username) {
+    const launch = getLaunchRequest();
+    const launchParticipant = getLocalParticipant(state.selectedWorld);
+    const shouldReplayLaunch =
+      Boolean(launch.worldId && launch.creatorUsername)
+      && (
+        !selectedWorldMatchesLaunchRequest(launch)
+        || (launch.autojoin && (!launchParticipant || launchParticipant.join_role === "guest"))
+      );
+    if (shouldReplayLaunch) {
+      await handleLaunchRequest({ force: true });
+    } else if (state.selectedWorld?.world_id && state.selectedWorld?.creator?.username) {
       await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
     }
     if (!state.selectedWorld) {
@@ -6730,8 +6740,8 @@ function bindEvents() {
   attachQuickAddButtons();
 }
 
-async function handleLaunchRequest() {
-  if (state.launchHandled) {
+async function handleLaunchRequest(options = {}) {
+  if (state.launchHandled && options.force !== true) {
     return;
   }
   const launch = getLaunchRequest();
