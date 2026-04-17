@@ -314,7 +314,7 @@ export function createChatBubbleRenderer(options = {}) {
 
   function spawnGhost(actorEntry, texture) {
     const ghostState = options.getGhostState?.() ?? null;
-    if (!ghostState?.root || !ghostState?.entries || !actorEntry?.bubble?.mesh || !texture || actorEntry.bubble.opacity <= 0.04) {
+    if (!ghostState?.root || !ghostState?.entries || !actorEntry?.bubble?.mesh || !texture || actorEntry.bubble.opacity <= 0.01) {
       texture?.dispose?.();
       return;
     }
@@ -335,7 +335,13 @@ export function createChatBubbleRenderer(options = {}) {
       texture?.dispose?.();
       return;
     }
+    const initialOffset = new THREE.Vector3(
+      (Math.random() - 0.5) * Math.max(0.8, baseWidth * 0.08),
+      Math.max(1.1, baseHeight * 0.16),
+      (Math.random() - 0.5) * Math.max(0.22, baseWidth * 0.024),
+    );
     mesh.position.copy(worldPosition);
+    mesh.position.add(initialOffset);
     mesh.scale.copy(worldScale);
     ghostState.root.add(mesh);
     ghostState.entries.push({
@@ -344,9 +350,9 @@ export function createChatBubbleRenderer(options = {}) {
       lifetime: 1.55 + Math.random() * 0.35,
       age: 0,
       drift: new THREE.Vector3(
-        (Math.random() - 0.5) * 0.32,
-        2.6 + Math.random() * 0.8,
-        (Math.random() - 0.5) * 0.14,
+        initialOffset.x * 0.34,
+        3 + Math.random() * 0.9,
+        initialOffset.z * 0.36,
       ),
       scaleBase: worldScale.clone(),
     });
