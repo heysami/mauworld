@@ -64,16 +64,23 @@ const PRIVATE_SPRINT = {
   rampSeconds: 10,
   decaySeconds: 10,
 };
+const PRIVATE_OVERHEAD_SCALE = 0.5;
 const PRIVATE_CHAT_MAX_ENTRIES = 28;
-const PRIVATE_CHAT_BUBBLE_BASE_WIDTH = 18;
-const PRIVATE_CHAT_BUBBLE_BASE_HEIGHT = 12;
+const PRIVATE_CHAT_BUBBLE_BASE_WIDTH = 18 * PRIVATE_OVERHEAD_SCALE;
+const PRIVATE_CHAT_BUBBLE_BASE_HEIGHT = 12 * PRIVATE_OVERHEAD_SCALE;
 const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 820;
 const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 620;
 const PRIVATE_CHAT_BUBBLE_MAX_LINES = 8;
+const PRIVATE_CHAT_BUBBLE_MIN_WIDTH = 6.2 * PRIVATE_OVERHEAD_SCALE;
+const PRIVATE_CHAT_BUBBLE_MIN_HEIGHT = 4.9 * PRIVATE_OVERHEAD_SCALE;
 const PRIVATE_BROWSER_RADIUS = 96;
 const PRIVATE_BROWSER_ASPECT_RATIO = 16 / 9;
-const PRIVATE_BROWSER_SCREEN_WIDTH = 20;
+const PRIVATE_BROWSER_SCREEN_WIDTH = 20 * PRIVATE_OVERHEAD_SCALE;
 const PRIVATE_BROWSER_PLACEHOLDER_ASPECT_RATIO = 384 / 280;
+const PRIVATE_BROWSER_PLACEHOLDER_AUDIO_WIDTH = 7.8 * PRIVATE_OVERHEAD_SCALE;
+const PRIVATE_BROWSER_PLACEHOLDER_VIDEO_WIDTH = 8.6 * PRIVATE_OVERHEAD_SCALE;
+const PRIVATE_BROWSER_LIVE_OFFSET_Y = 18 * PRIVATE_OVERHEAD_SCALE;
+const PRIVATE_BROWSER_PLACEHOLDER_OFFSET_Y = 15.4 * PRIVATE_OVERHEAD_SCALE;
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
   fog: "#f4fbff",
@@ -696,13 +703,13 @@ function getPrivateChatBubbleTargetSize(texture, bubble) {
     width: clampNumber(
       baseWidth * ((Number(layout.width) || maxTextureWidth) / maxTextureWidth),
       baseWidth,
-      6.2,
+      PRIVATE_CHAT_BUBBLE_MIN_WIDTH,
       baseWidth,
     ),
     height: clampNumber(
       baseHeight * ((Number(layout.height) || maxTextureHeight) / maxTextureHeight),
       baseHeight,
-      4.9,
+      PRIVATE_CHAT_BUBBLE_MIN_HEIGHT,
       baseHeight,
     ),
   };
@@ -1020,7 +1027,9 @@ function updatePrivateShareBubblePresentation(entry) {
   const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO;
   const baseWidth = PRIVATE_BROWSER_SCREEN_WIDTH;
   const baseHeight = baseWidth / Math.max(0.1, aspectRatio);
-  const bubbleWidth = shareKind === "audio" ? 7.8 : 8.6;
+  const bubbleWidth = shareKind === "audio"
+    ? PRIVATE_BROWSER_PLACEHOLDER_AUDIO_WIDTH
+    : PRIVATE_BROWSER_PLACEHOLDER_VIDEO_WIDTH;
   const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_PLACEHOLDER_ASPECT_RATIO;
   const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
   const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
@@ -1244,8 +1253,8 @@ function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
     const showingLiveMedia = isPrivateShareBubbleShowingLiveMedia(entry);
     entry.targetPosition.copy(hostPosition);
     entry.targetPosition.y += showingLiveMedia
-      ? 18 + Math.sin(elapsedSeconds * 1.3) * 0.7
-      : 15.4 + Math.sin(elapsedSeconds * 1.1) * 0.18;
+      ? PRIVATE_BROWSER_LIVE_OFFSET_Y + Math.sin(elapsedSeconds * 1.3) * 0.35
+      : PRIVATE_BROWSER_PLACEHOLDER_OFFSET_Y + Math.sin(elapsedSeconds * 1.1) * 0.09;
     entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
     entry.group.visible = true;
     entry.group.position.copy(entry.position);
