@@ -269,6 +269,10 @@ const state = {
   browserPanelRemoteSessionId: "",
   browserOverlayOpen: false,
   browserMediaState: createEmptyPrivateBrowserMediaState(),
+  browserMediaCanvas: null,
+  browserMediaCanvasContext: null,
+  browserMediaImage: null,
+  browserMediaPendingFrameId: 0,
   worldSocketKey: "",
   viewerPosition: new THREE.Vector3(0, PRIVATE_CAMERA.minY, 10),
   viewerCameraPosition: new THREE.Vector3(8, PRIVATE_CAMERA.minY + 6, 20),
@@ -318,6 +322,74 @@ function getPrivateViewerSessionId() {
 
 function getPrivateDisplayName() {
   return state.profile?.display_name || state.profile?.username || "guest viewer";
+}
+
+function getPrivateBrowserMediaCanvas() {
+  if (!state.browserMediaCanvas) {
+    state.browserMediaCanvas = document.createElement("canvas");
+    state.browserMediaCanvas.width = 960;
+    state.browserMediaCanvas.height = 540;
+    state.browserMediaCanvasContext = state.browserMediaCanvas.getContext("2d");
+    state.browserMediaImage = new Image();
+  }
+  if (state.browserMediaCanvas.width !== 960 || state.browserMediaCanvas.height !== 540) {
+    state.browserMediaCanvas.width = 960;
+    state.browserMediaCanvas.height = 540;
+  }
+  return state.browserMediaCanvas;
+}
+
+function drawPrivateBrowserMediaFrame(frame = {}) {
+  if (!frame?.dataUrl) {
+    return;
+  }
+  const nextFrameId = Math.max(0, Math.floor(Number(frame.frameId) || 0));
+  if (nextFrameId < state.browserMediaPendingFrameId) {
+    return;
+  }
+  state.browserMediaPendingFrameId = nextFrameId;
+  const canvas = getPrivateBrowserMediaCanvas();
+  const context = state.browserMediaCanvasContext;
+  const image = state.browserMediaImage;
+  if (!canvas || !context || !image) {
+    return;
+  }
+  image.onload = () => {
+    if (nextFrameId < state.browserMediaPendingFrameId) {
+      return;
+    }
+    const sourceWidth = image.naturalWidth || frame.width || canvas.width;
+    const sourceHeight = image.naturalHeight || frame.height || canvas.height;
+    const scale = Math.min(canvas.width / Math.max(1, sourceWidth), canvas.height / Math.max(1, sourceHeight));
+    const drawWidth = Math.max(1, sourceWidth * scale);
+    const drawHeight = Math.max(1, sourceHeight * scale);
+    const offsetX = (canvas.width - drawWidth) / 2;
+    const offsetY = (canvas.height - drawHeight) / 2;
+    context.fillStyle = "#02050f";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+  };
+  image.src = frame.dataUrl;
+}
+
+function publishLocalPrivateBrowserMedia(sessionId) {
+  const session = state.browserSessions.get(sessionId);
+  const worldSnapshotId = getPrivateBrowserWorldKey();
+  if (
+    !session
+    || session.hostSessionId !== getPrivateViewerSessionId()
+    || session.frameTransport !== "livekit-canvas"
+    || !worldSnapshotId
+  ) {
+    return;
+  }
+  void getPrivateBrowserMediaController().publishCanvas({
+    sessionId,
+    canvas: getPrivateBrowserMediaCanvas(),
+    fps: 24,
+    viewerSessionId: getPrivateViewerSessionId(),
+    worldSnapshotId,
+  });
 }
 
 function getPrivateBrowserWorldKey(world = state.selectedWorld) {
@@ -1742,14 +1814,6 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
     target.y - Math.sin(privateInputState.pitch) * radius,
     target.z + Math.cos(privateInputState.yaw) * cosPitch * radius,
   );
-  if (state.selectedWorld) {
-    const bounds = getPrivateWorldBounds();
-    const span = Math.max(bounds.width, bounds.length);
-    const margin = clampNumber(span * 0.08, 4, 2, 8);
-    nextPosition.x = clampNumber(nextPosition.x, nextPosition.x, bounds.minX - margin, bounds.maxX + margin);
-    nextPosition.z = clampNumber(nextPosition.z, nextPosition.z, bounds.minZ - margin, bounds.maxZ + margin);
-    nextPosition.y = clampNumber(nextPosition.y, nextPosition.y, rig.minY, rig.maxY);
-  }
   preview.camera.position.copy(nextPosition);
   preview.camera.lookAt(target);
   state.viewerCameraPosition.copy(preview.camera.position);
@@ -2439,11 +2503,6 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
       state.pendingBrowserShare = null;
       attachLocalPrivateBrowserShare(next.sessionId, pendingShare);
     }
-  } else if (next.deliveryMode === "full") {
-    state.browserPanelRemoteSessionId = next.sessionId;
-    syncPrivateBrowserMediaSubscription(next.sessionId, true);
-  } else if (next.deliveryMode === "placeholder") {
-    syncPrivateBrowserMediaSubscription(next.sessionId, false);
   }
 
   reconcilePrivateShareBubbles();
@@ -2480,6 +2539,10 @@ function handlePrivateBrowserFrame(payload = {}) {
     url: payload.url ?? existing.url,
   };
   state.browserSessions.set(sessionId, next);
+  if (sessionId === state.localBrowserSessionId) {
+    drawPrivateBrowserMediaFrame(payload);
+    publishLocalPrivateBrowserMedia(sessionId);
+  }
   updatePrivateShareBubbleFrame(sessionId, payload);
   updatePrivateBrowserPanel();
 }
