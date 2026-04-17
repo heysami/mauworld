@@ -570,8 +570,9 @@ function createBaseToolPresetEntry(kind) {
   if (kind === "voxel") {
     return {
       scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
-      material: { color: "#85b84f", texture_preset: "grass" },
+      material: { color: "#85b84f", texture_preset: "grass", emissive_intensity: 0 },
       shape_preset: "cube",
+      invisible: false,
     };
   }
   if (kind === "primitive") {
@@ -579,11 +580,12 @@ function createBaseToolPresetEntry(kind) {
       shape: "box",
       scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
       rotation: { x: 0, y: 0, z: 0 },
-      material: { color: "#d3d8e2", texture_preset: "stone" },
+      material: { color: "#d3d8e2", texture_preset: "stone", emissive_intensity: 0 },
       rigid_mode: "rigid",
       physics: { gravity_scale: 1, restitution: 0.2, friction: 0.7, mass: 1 },
       particle_effect: "",
       trail_effect: "",
+      invisible: false,
       group_id: "",
     };
   }
@@ -5007,7 +5009,17 @@ function buildEntitySummary(kind, entry = {}) {
   if (kind === "text") {
     return `${describeVector3(entry.position)} · scale ${Number(entry.scale ?? 1).toFixed(1)}`;
   }
-  return `${describeVector3(entry.position)}${entry.material?.texture_preset ? ` · ${entry.material.texture_preset}` : ""}`;
+  const details = [];
+  if (entry.material?.texture_preset) {
+    details.push(entry.material.texture_preset);
+  }
+  if ((Number(entry.material?.emissive_intensity) || 0) > 0) {
+    details.push(`light ${roundPrivateValue(entry.material.emissive_intensity, 1)}`);
+  }
+  if (entry.invisible === true) {
+    details.push("hidden in play");
+  }
+  return `${describeVector3(entry.position)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
 }
 
 function renderSceneBuilder() {
@@ -5092,24 +5104,36 @@ function buildVectorFields(label, basePath, value = {}) {
   `;
 }
 
-function buildMaterialEditor(material = {}) {
+function buildMaterialEditor(material = {}, options = {}) {
+  const fieldPrefix = String(options.pathPrefix ?? "material.");
+  const allowEmission = options.allowEmission === true;
   return `
     <div class="pw-inspector-grid pw-inspector-grid--2">
       <div>
         <label>
           <span>Color</span>
-          <input type="color" data-entity-field="material.color" data-value-type="color" value="${htmlEscape(material.color || "#c8d0d8")}" />
+          <input type="color" data-entity-field="${htmlEscape(`${fieldPrefix}color`)}" data-value-type="color" value="${htmlEscape(material.color || "#c8d0d8")}" />
         </label>
       </div>
       <div>
         <label>
           <span>Pattern</span>
-          <select data-entity-field="material.texture_preset" data-value-type="text">
+          <select data-entity-field="${htmlEscape(`${fieldPrefix}texture_preset`)}" data-value-type="text">
             ${buildOptions(MATERIAL_PRESET_OPTIONS, material.texture_preset || "none")}
           </select>
         </label>
       </div>
     </div>
+    ${allowEmission ? `
+      <div class="pw-inspector-grid pw-inspector-grid--2">
+        <div>
+          <label>
+            <span>Light Emission</span>
+            <input type="number" min="0" max="8" step="0.1" data-entity-field="${htmlEscape(`${fieldPrefix}emissive_intensity`)}" data-value-type="number" value="${htmlEscape(material.emissive_intensity ?? 0)}" />
+          </label>
+        </div>
+      </div>
+    ` : ""}
   `;
 }
 
@@ -5131,11 +5155,25 @@ function buildTargetOptions(sceneDoc, selectedValue = "") {
 function buildToolPresetSummary(kind, entry = {}) {
   if (kind === "voxel") {
     const scale = getPrivateVoxelScale(entry.scale);
-    return `${entry.shape_preset || "cube"} · ${entry.material?.texture_preset || "none"} · ${roundPrivateValue(scale.x, 1)} x ${roundPrivateValue(scale.y, 1)} x ${roundPrivateValue(scale.z, 1)}`;
+    const extra = [];
+    if ((Number(entry.material?.emissive_intensity) || 0) > 0) {
+      extra.push(`light ${roundPrivateValue(entry.material.emissive_intensity, 1)}`);
+    }
+    if (entry.invisible === true) {
+      extra.push("hidden in play");
+    }
+    return [entry.shape_preset || "cube", entry.material?.texture_preset || "none", `${roundPrivateValue(scale.x, 1)} x ${roundPrivateValue(scale.y, 1)} x ${roundPrivateValue(scale.z, 1)}`, ...extra].join(" · ");
   }
   if (kind === "primitive") {
     const scale = entry.scale ?? { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT };
-    return `${entry.shape || "box"} · ${entry.rigid_mode || "rigid"} · ${roundPrivateValue(scale.x ?? 1, 1)} x ${roundPrivateValue(scale.y ?? 1, 1)} x ${roundPrivateValue(scale.z ?? 1, 1)}`;
+    const extra = [];
+    if ((Number(entry.material?.emissive_intensity) || 0) > 0) {
+      extra.push(`light ${roundPrivateValue(entry.material.emissive_intensity, 1)}`);
+    }
+    if (entry.invisible === true) {
+      extra.push("hidden in play");
+    }
+    return [entry.shape || "box", entry.rigid_mode || "rigid", `${roundPrivateValue(scale.x ?? 1, 1)} x ${roundPrivateValue(scale.y ?? 1, 1)} x ${roundPrivateValue(scale.z ?? 1, 1)}`, ...extra].join(" · ");
   }
   if (kind === "player") {
     return `${entry.camera_mode || "third_person"} · ${entry.body_mode || "rigid"} · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
@@ -5459,8 +5497,8 @@ function renderEntityInspector(sceneDoc, selected = null) {
 
   if (kind === "voxel") {
     elements.entityEditor.innerHTML = `
-      <p class="pw-inspector-note">Solid static voxel. Pattern presets render directly in the preview.</p>
-      ${buildMaterialEditor(entry.material)}
+      <p class="pw-inspector-note">Solid static voxel. Pattern presets render directly in the preview. Invisible voxels stay translucent in Build mode so you can still grab and edit them.</p>
+      ${buildMaterialEditor(entry.material, { allowEmission: true })}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
       <div class="pw-inspector-grid pw-inspector-grid--2">
@@ -5477,13 +5515,17 @@ function renderEntityInspector(sceneDoc, selected = null) {
           </label>
         </div>
       </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible === true ? "checked" : ""} />
+        <span>Invisible in play</span>
+      </div>
     `;
     return;
   }
 
   if (kind === "primitive") {
     elements.entityEditor.innerHTML = `
-      <p class="pw-inspector-note">Physics objects can collide, stack, bounce, and carry particles or trails.</p>
+      <p class="pw-inspector-note">Physics objects can collide, stack, bounce, and carry particles or trails. Invisible objects stay translucent in Build mode so their light and transform are still easy to edit.</p>
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
           <label>
@@ -5498,7 +5540,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
           </label>
         </div>
       </div>
-      ${buildMaterialEditor(entry.material)}
+      ${buildMaterialEditor(entry.material, { allowEmission: true })}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
@@ -5535,6 +5577,10 @@ function renderEntityInspector(sceneDoc, selected = null) {
             <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" placeholder="optional group name" />
           </label>
         </div>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible === true ? "checked" : ""} />
+        <span>Invisible in play</span>
       </div>
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
@@ -5721,7 +5767,10 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <input type="checkbox" data-entity-field="overrides.visible" data-value-type="checkbox" ${entry.overrides?.visible !== false ? "checked" : ""} />
         <span>Visible</span>
       </div>
-      ${buildMaterialEditor(entry.overrides?.material ?? { color: "#c8d0d8", texture_preset: "none" }).replaceAll("material.", "overrides.material.")}
+      ${buildMaterialEditor(entry.overrides?.material ?? { color: "#c8d0d8", texture_preset: "none", emissive_intensity: 0 }, {
+        pathPrefix: "overrides.material.",
+        allowEmission: true,
+      })}
     `;
   }
 }
@@ -8699,11 +8748,75 @@ function makeMaterial(material = {}, scale = { x: 1, y: 1, z: 1 }, { selected = 
     repeatX: Math.max(1, Number(scale?.x ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
     repeatY: Math.max(1, Number(scale?.z ?? scale?.y ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
   });
+  const baseEmissiveIntensity = Math.max(0, Number(material?.emissive_intensity ?? material?.emissiveIntensity ?? 0) || 0);
   if (selected) {
-    built.emissive = new THREE.Color("#355f9b");
-    built.emissiveIntensity = 0.22;
+    if (baseEmissiveIntensity <= 0) {
+      built.emissive = new THREE.Color("#355f9b");
+    }
+    built.emissiveIntensity = Number((baseEmissiveIntensity + 0.22).toFixed(4));
   }
   return built;
+}
+
+function getObjectMaterials(object) {
+  if (!object?.material) {
+    return [];
+  }
+  return Array.isArray(object.material) ? object.material : [object.material];
+}
+
+function applyRenderableVisibility(object, {
+  invisibleInPlay = false,
+  runtimeVisible = true,
+  buildGhostOpacity = 0.36,
+} = {}) {
+  const materials = getObjectMaterials(object);
+  const shouldGhost = invisibleInPlay === true && state.mode === "build" && isEditor();
+  const shouldHideVisual = runtimeVisible === false || (invisibleInPlay === true && state.mode === "play");
+  object.userData.privateWorldRenderVisible = !shouldHideVisual || shouldGhost;
+  for (const material of materials) {
+    if (!material) {
+      continue;
+    }
+    if (material.userData.__pwBaseOpacity == null) {
+      material.userData.__pwBaseOpacity = Number(material.opacity ?? 1);
+      material.userData.__pwBaseTransparent = material.transparent === true;
+      material.userData.__pwBaseDepthWrite = material.depthWrite !== false;
+    }
+    const baseOpacity = Number(material.userData.__pwBaseOpacity ?? 1) || 1;
+    const nextOpacity = shouldHideVisual
+      ? 0
+      : shouldGhost
+        ? Math.min(baseOpacity, buildGhostOpacity)
+        : baseOpacity;
+    material.opacity = nextOpacity;
+    material.transparent = shouldGhost || shouldHideVisual || material.userData.__pwBaseTransparent === true;
+    material.depthWrite = shouldHideVisual ? false : material.userData.__pwBaseDepthWrite !== false;
+    material.needsUpdate = true;
+  }
+}
+
+function attachEmissionLight(object, material = {}, scale = { x: 1, y: 1, z: 1 }, { runtimeVisible = true } = {}) {
+  const emissiveIntensity = Math.max(0, Number(material?.emissive_intensity ?? material?.emissiveIntensity ?? 0) || 0);
+  if (!object || emissiveIntensity <= 0) {
+    return null;
+  }
+  const maxExtent = Math.max(
+    1,
+    Number(scale?.x ?? 1) || 1,
+    Number(scale?.y ?? 1) || 1,
+    Number(scale?.z ?? 1) || 1,
+  );
+  const light = new THREE.PointLight(
+    material?.color || "#ffffff",
+    Number((emissiveIntensity * 1.8).toFixed(4)),
+    Number((maxExtent * 6 + emissiveIntensity * 8).toFixed(4)),
+    1.8,
+  );
+  light.position.set(0, 0, 0);
+  light.visible = runtimeVisible !== false;
+  object.add(light);
+  return light;
 }
 
 function addTextBillboard(preview, value, position, options = {}) {
@@ -8920,7 +9033,7 @@ function updatePreviewEffects(preview, elapsedSeconds) {
       y: Math.max(0.1, Number(effect.scale?.y ?? 1) || 1),
       z: Math.max(0.1, Number(effect.scale?.z ?? 1) || 1),
     };
-    const anchorVisible = !effect.anchorId || Boolean(anchor && anchor.visible !== false);
+    const anchorVisible = !effect.anchorId || Boolean(anchor && anchor.userData?.privateWorldRenderVisible !== false);
     effect.object.visible = anchorVisible;
     effect.object.position.copy(worldPosition).add(offset);
     effect.object.rotation.set(
@@ -9061,7 +9174,7 @@ function updatePreviewFromSelection() {
 
     for (const [index, voxel] of (prefabDoc.voxels ?? []).entries()) {
       renderedAny = true;
-      addPrefabMesh(
+      const mesh = addPrefabMesh(
         parent,
         new THREE.BoxGeometry(1, 1, 1),
         makeMaterial(getMergedMaterial(voxel.material), voxel.scale, { selected }),
@@ -9070,6 +9183,10 @@ function updatePreviewFromSelection() {
         voxel.scale || { x: 1, y: 1, z: 1 },
         metadata ?? { id: voxel.id || `prefab_voxel_${index}`, kind: "voxel" },
       );
+      applyRenderableVisibility(mesh, {
+        invisibleInPlay: voxel.invisible === true,
+      });
+      attachEmissionLight(mesh, getMergedMaterial(voxel.material), voxel.scale || { x: 1, y: 1, z: 1 });
     }
 
     for (const [index, primitive] of (prefabDoc.primitives ?? []).entries()) {
@@ -9083,8 +9200,12 @@ function updatePreviewFromSelection() {
         primitive.scale || { x: 1, y: 1, z: 1 },
         metadata ?? { id: primitive.id || `prefab_primitive_${index}`, kind: "primitive" },
       );
+      applyRenderableVisibility(mesh, {
+        invisibleInPlay: primitive.invisible === true,
+      });
+      attachEmissionLight(mesh, getMergedMaterial(primitive.material), primitive.scale || { x: 1, y: 1, z: 1 });
       if (selected && mesh.material?.emissiveIntensity !== undefined) {
-        mesh.material.emissiveIntensity = 0.3;
+        mesh.material.emissiveIntensity = Math.max(Number(mesh.material.emissiveIntensity || 0), 0.3);
       }
     }
 
@@ -9235,7 +9356,7 @@ function updatePreviewFromSelection() {
   }
 
   for (const [index, voxel] of (sceneDoc.voxels ?? []).entries()) {
-    addMesh(
+    const mesh = addMesh(
       new THREE.BoxGeometry(1, 1, 1),
       makeMaterial(voxel.material, voxel.scale, {
         selected: isSelected("voxel", voxel.id),
@@ -9245,6 +9366,10 @@ function updatePreviewFromSelection() {
       voxel.scale || { x: 1, y: 1, z: 1 },
       { id: voxel.id || `voxel_${index}`, kind: "voxel" },
     );
+    applyRenderableVisibility(mesh, {
+      invisibleInPlay: voxel.invisible === true,
+    });
+    attachEmissionLight(mesh, voxel.material, voxel.scale || { x: 1, y: 1, z: 1 });
   }
 
   for (const primitive of sceneDoc.primitives ?? []) {
@@ -9275,6 +9400,20 @@ function updatePreviewFromSelection() {
       primitive.scale || { x: 1, y: 1, z: 1 },
       { id: primitive.id, kind: "primitive" },
     );
+    applyRenderableVisibility(mesh, {
+      invisibleInPlay: primitive.invisible === true,
+      runtimeVisible: runtimePrimitive?.visible !== false,
+    });
+    attachEmissionLight(
+      mesh,
+      runtimePrimitive?.material_override
+        ? { ...primitive.material, ...runtimePrimitive.material_override }
+        : primitive.material,
+      primitive.scale || { x: 1, y: 1, z: 1 },
+      {
+        runtimeVisible: runtimePrimitive?.visible !== false,
+      },
+    );
     if (primitive.particle_effect) {
       particleEffects.push(createParticleSystem(preview, primitive.id, primitive.particle_effect, primitive.material?.color || "#ffb16a"));
     }
@@ -9282,7 +9421,7 @@ function updatePreviewFromSelection() {
       particleEffects.push(createTrailSystem(preview, primitive.id, primitive.trail_effect, primitive.material?.color || "#ffcf84"));
     }
     if (isSelected("primitive", primitive.id)) {
-      mesh.material.emissiveIntensity = 0.3;
+      mesh.material.emissiveIntensity = Math.max(Number(mesh.material.emissiveIntensity || 0), 0.3);
     }
   }
 
@@ -9435,13 +9574,24 @@ function updatePreviewFromSelection() {
     if ((sceneDoc.primitives ?? []).some((entry) => entry.id === objectId)) {
       continue;
     }
-    addMesh(
+    const mesh = addMesh(
       new THREE.BoxGeometry(1, 1, 1),
       makeMaterial(runtimePrimitive?.material_override ?? { color: "#edf2f8", texture_preset: "none" }),
       runtimePrimitive.position || { x: 0, y: 1, z: 0 },
       runtimePrimitive.rotation || { x: 0, y: 0, z: 0 },
       { x: 1, y: 1, z: 1 },
       { id: objectId, kind: "primitive" },
+    );
+    applyRenderableVisibility(mesh, {
+      runtimeVisible: runtimePrimitive?.visible !== false,
+    });
+    attachEmissionLight(
+      mesh,
+      runtimePrimitive?.material_override ?? runtimePrimitive?.material ?? { color: "#edf2f8", texture_preset: "none" },
+      { x: 1, y: 1, z: 1 },
+      {
+        runtimeVisible: runtimePrimitive?.visible !== false,
+      },
     );
   }
 
@@ -10154,7 +10304,9 @@ function updateSelectedEntityField(path, rawValue, valueType = "text", options =
     let value = rawValue;
     if (valueType === "number") {
       const currentValue = Number(path.split(".").reduce((cursor, key) => cursor?.[key], selected.entry) ?? 0) || 0;
-      value = clampNumber(rawValue, currentValue, -4096, 4096);
+      value = path.endsWith("emissive_intensity")
+        ? clampNumber(rawValue, currentValue, 0, 8)
+        : clampNumber(rawValue, currentValue, -4096, 4096);
     } else if (valueType === "checkbox") {
       value = rawValue === true;
     } else if (valueType === "color") {

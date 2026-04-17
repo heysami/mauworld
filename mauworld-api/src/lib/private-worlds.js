@@ -252,6 +252,7 @@ function sanitizeMaterial(input = {}, fallbackColor = "#c8d0d8") {
   return {
     color: sanitizeColor(input.color, fallbackColor),
     texture_preset: sanitizeTexturePreset(input.texture_preset ?? input.texturePreset, "none"),
+    emissive_intensity: Number(clampNumber(input.emissive_intensity ?? input.emissiveIntensity, 0, 0, 8).toFixed(4)),
   };
 }
 
@@ -262,6 +263,7 @@ function sanitizeVoxelEntry(entry = {}, index = 0) {
     scale: sanitizeScale3(entry.scale, { x: 1, y: 1, z: 1 }),
     material: sanitizeMaterial(entry.material, "#c0c4ca"),
     shape_preset: String(entry.shape_preset ?? entry.shapePreset ?? "cube").trim().toLowerCase() || "cube",
+    invisible: entry.invisible === true,
     solid: true,
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
   };
@@ -280,6 +282,7 @@ function sanitizePrimitiveEntry(entry = {}, index = 0) {
     rigid_mode: String(entry.rigid_mode ?? entry.rigidMode ?? (entry.rigid === false ? "ghost" : "rigid")).trim().toLowerCase() === "ghost"
       ? "ghost"
       : "rigid",
+    invisible: entry.invisible === true,
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
     particle_effect: String(entry.particle_effect ?? entry.particleEffect ?? "").trim() || null,
     trail_effect: String(entry.trail_effect ?? entry.trailEffect ?? "").trim() || null,

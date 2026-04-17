@@ -106,6 +106,36 @@ test("normalizeSceneDoc preserves scene atmosphere settings with safe defaults",
   assert.equal(fallbackScene.settings.ambient_light, "even");
 });
 
+test("normalizeSceneDoc keeps emissive material settings and invisible play-state for voxels and objects", () => {
+  const scene = normalizeSceneDoc({
+    voxels: [
+      {
+        id: "glow block",
+        invisible: true,
+        material: {
+          color: "#88cc44",
+          emissive_intensity: 3.2,
+        },
+      },
+    ],
+    primitives: [
+      {
+        id: "hidden lamp",
+        invisible: true,
+        material: {
+          color: "#ffcc88",
+          emissive_intensity: 2.4,
+        },
+      },
+    ],
+  });
+
+  assert.equal(scene.voxels[0].invisible, true);
+  assert.equal(scene.voxels[0].material.emissive_intensity, 3.2);
+  assert.equal(scene.primitives[0].invisible, true);
+  assert.equal(scene.primitives[0].material.emissive_intensity, 2.4);
+});
+
 test("normalizeSceneDoc remaps raw entity references onto normalized ids", () => {
   const scene = normalizeSceneDoc({
     primitives: [

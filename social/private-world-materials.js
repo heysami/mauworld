@@ -201,6 +201,7 @@ function buildTexture(THREE, preset, color, repeatX, repeatY) {
 export function createPatternedMaterial(THREE, material = {}, options = {}) {
   const color = normalizeHex(material.color, "#c8d0d8");
   const preset = String(material.texture_preset ?? material.texturePreset ?? "none").trim().toLowerCase() || "none";
+  const emissiveIntensity = clamp(Number(material.emissive_intensity ?? material.emissiveIntensity) || 0, 0, 8);
   const repeatX = Number(options.repeatX ?? 1) || 1;
   const repeatY = Number(options.repeatY ?? 1) || 1;
   const transparent = preset === "glass";
@@ -210,6 +211,8 @@ export function createPatternedMaterial(THREE, material = {}, options = {}) {
     map,
     roughness: preset === "metal" ? 0.34 : (preset === "glass" ? 0.12 : 0.76),
     metalness: preset === "metal" ? 0.68 : (preset === "glass" ? 0.08 : 0.06),
+    emissive: emissiveIntensity > 0 ? color : "#000000",
+    emissiveIntensity,
     transparent,
     opacity: transparent ? 0.72 : 1,
   });
