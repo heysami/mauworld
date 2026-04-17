@@ -33,7 +33,7 @@ const { mauworldApiUrl } = window.MauworldSocial;
 const AI_KEY_STORAGE_KEY = "mauworldPrivateWorldAiKey";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
-const LAUNCHER_TABS = new Set(["create", "worlds", "access", "import"]);
+const LAUNCHER_TABS = new Set(["worlds", "access"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
 const PRIVATE_CAMERA = {
   minY: 0,
@@ -152,8 +152,13 @@ const elements = {
   selectionClear: document.querySelector("[data-selection-clear]"),
   authForm: document.querySelector("[data-auth-form]"),
   authStatus: document.querySelector("[data-auth-status]"),
+  accessHeading: document.querySelector("[data-access-heading]"),
+  accessNote: document.querySelector("[data-access-note]"),
   profileForm: document.querySelector("[data-profile-form]"),
+  accountActions: document.querySelector("[data-account-actions]"),
+  accountSignout: document.querySelector("[data-account-signout]"),
   createWorldForm: document.querySelector("[data-create-world-form]"),
+  createWorldDialog: document.querySelector("[data-create-world-dialog]"),
   refreshPublicWorlds: document.querySelector("[data-refresh-public-worlds]"),
   publicWorldSearch: document.querySelector("[data-public-world-search]"),
   publicWorldType: document.querySelector("[data-public-world-type]"),
@@ -263,8 +268,9 @@ const elements = {
   addRule: document.querySelector("[data-add-rule]"),
 };
 
-elements.launcherTabButtons = [...document.querySelectorAll("[data-launcher-tab]")];
 elements.launcherSections = [...document.querySelectorAll("[data-launcher-section]")];
+elements.openCreateWorldButtons = [...document.querySelectorAll("[data-open-create-world]")];
+elements.closeCreateWorldButtons = [...document.querySelectorAll("[data-close-create-world]")];
 elements.privatePanelTabButtons = [...document.querySelectorAll("[data-private-panel-tab]")];
 elements.privatePanelViews = [...document.querySelectorAll("[data-private-panel-view]")];
 elements.panelChatReactionButtons = [...document.querySelectorAll("[data-private-chat-reaction]")];
@@ -316,11 +322,12 @@ const state = {
   joinedAsGuest: false,
   joined: false,
   launcherOpen: false,
+  createWorldDialogOpen: false,
   sceneDrawerOpen: false,
   activeLockEntityKey: "",
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
-  launcherTab: "create",
+  launcherTab: "access",
   privatePanelTab: "chat",
   mode: "play",
   lockHeartbeatTimer: 0,
@@ -562,8 +569,11 @@ function updateShellState() {
   const activePlacementTool = getActivePlacementTool();
   const activePrefabPlacementId = getActivePrefabPlacementId();
   const buildTransformMode = getResolvedBuildTransformMode();
+  const authGated = !state.session;
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
+  document.body.classList.toggle("is-auth-gated", authGated);
+  document.body.classList.toggle("is-create-world-dialog-open", state.createWorldDialogOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
   document.body.classList.toggle("is-signed-in", Boolean(state.session));
   document.body.classList.toggle(
@@ -597,18 +607,36 @@ function updateShellState() {
   if (elements.prefabSearch) {
     elements.prefabSearch.disabled = !state.selectedWorld;
   }
+  if (elements.launcherClose) {
+    elements.launcherClose.hidden = authGated;
+  }
+  if (elements.createWorldDialog) {
+    elements.createWorldDialog.hidden = !(state.createWorldDialogOpen && state.launcherTab === "worlds" && state.session);
+  }
   setLauncherTab(state.launcherTab);
   setPrivatePanelTab(state.privatePanelTab, { syncMode: false });
 }
 
 function setLauncherOpen(open) {
-  state.launcherOpen = open === true;
+  state.launcherOpen = !state.session ? true : open === true;
   if (state.launcherOpen) {
     state.sceneDrawerOpen = false;
     writeBuilderSelection([]);
     if (!LAUNCHER_TABS.has(state.launcherTab)) {
       state.launcherTab = getPreferredLauncherTab();
     }
+  } else {
+    state.createWorldDialogOpen = false;
+  }
+  updateShellState();
+}
+
+function setCreateWorldDialogOpen(open) {
+  state.createWorldDialogOpen = open === true && state.session && state.launcherTab === "worlds";
+  if (state.createWorldDialogOpen) {
+    state.launcherOpen = true;
+    state.sceneDrawerOpen = false;
+    writeBuilderSelection([]);
   }
   updateShellState();
 }
@@ -1707,19 +1735,14 @@ function updatePrivatePresenceScene(deltaSeconds, elapsedSeconds) {
 }
 
 function getPreferredLauncherTab() {
-  if (state.selectedWorld || state.worlds.length > 0) {
-    return "worlds";
-  }
-  return "create";
+  return state.session ? "worlds" : "access";
 }
 
 function setLauncherTab(tab) {
   const nextTab = LAUNCHER_TABS.has(tab) ? tab : getPreferredLauncherTab();
   state.launcherTab = nextTab;
-  for (const button of elements.launcherTabButtons ?? []) {
-    const active = button.getAttribute("data-launcher-tab") === nextTab;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", String(active));
+  if (nextTab !== "worlds" || !state.session) {
+    state.createWorldDialogOpen = false;
   }
   for (const section of elements.launcherSections ?? []) {
     const active = section.getAttribute("data-launcher-section") === nextTab;
@@ -3501,6 +3524,7 @@ async function fetchAuthConfig() {
 
 async function runRefreshAuthState() {
   renderSessionSummary();
+  renderAccessSection();
   if (!state.session) {
     await releaseSceneLock();
     state.profile = null;
@@ -3523,6 +3547,7 @@ async function runRefreshAuthState() {
     renderWorldList();
     renderSelectedWorld();
     setLauncherTab("access");
+    setLauncherOpen(true);
     disconnectWorldSocket();
     return;
   }
@@ -3530,6 +3555,7 @@ async function runRefreshAuthState() {
     const payload = await apiFetch("/private/profile");
     state.profile = payload.profile;
     renderProfile();
+    renderAccessSection();
     renderSessionSummary();
     await loadWorlds();
     const launch = getLaunchRequest();
@@ -3545,6 +3571,9 @@ async function runRefreshAuthState() {
       await handleLaunchRequest({ force: true });
     } else if (!hasLaunchRequest && state.selectedWorld?.world_id && state.selectedWorld?.creator?.username) {
       await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+    }
+    if (state.launcherTab === "access") {
+      setLauncherTab("worlds");
     }
     if (!state.selectedWorld) {
       setLauncherTab(getPreferredLauncherTab());
@@ -3571,7 +3600,7 @@ async function refreshAuthState() {
 }
 
 function renderProfile() {
-  if (!state.profile) {
+  if (!state.session || !state.profile) {
     elements.profileForm.hidden = true;
     return;
   }
@@ -3580,28 +3609,43 @@ function renderProfile() {
   elements.profileForm.elements.displayName.value = state.profile.display_name || "";
 }
 
+function renderAccessSection() {
+  const signedIn = Boolean(state.session);
+  if (elements.accessHeading) {
+    elements.accessHeading.textContent = signedIn ? "Account" : "Sign in";
+  }
+  if (elements.accessNote) {
+    elements.accessNote.textContent = signedIn
+      ? "Edit your profile here, or sign out when you are done."
+      : "There is no shared demo login here. Use your own email and password, or create an account first.";
+  }
+  if (elements.authForm) {
+    elements.authForm.hidden = signedIn;
+  }
+  if (!signedIn && elements.profileForm) {
+    elements.profileForm.hidden = true;
+  }
+  if (elements.accountActions) {
+    elements.accountActions.hidden = !signedIn;
+  }
+}
+
 function renderSessionSummary() {
   if (!elements.panelSessionLabel || !elements.panelOpenAccess) {
     return;
   }
-  const localParticipant = getLocalParticipant();
   if (state.session && state.profile) {
-    elements.panelSessionLabel.textContent = `Signed in as @${state.profile.username || "user"}. Access opens profile and sign out.`;
-    elements.panelOpenAccess.textContent = "Profile";
+    elements.panelSessionLabel.textContent = `Signed in as @${state.profile.username || "user"}.`;
+    elements.panelOpenAccess.textContent = "Account";
     return;
   }
   if (state.session) {
-    elements.panelSessionLabel.textContent = "Signed in. Access opens profile and sign out.";
-    elements.panelOpenAccess.textContent = "Profile";
+    elements.panelSessionLabel.textContent = "Signed in.";
+    elements.panelOpenAccess.textContent = "Account";
     return;
   }
-  if (localParticipant?.join_role === "guest") {
-    elements.panelSessionLabel.textContent = "Viewing as guest. Access opens sign in or account creation.";
-    elements.panelOpenAccess.textContent = "Access";
-    return;
-  }
-  elements.panelSessionLabel.textContent = "Signed out. Access opens sign in or account creation.";
-  elements.panelOpenAccess.textContent = "Access";
+  elements.panelSessionLabel.textContent = "Sign in to open your private worlds.";
+  elements.panelOpenAccess.textContent = "Sign In";
 }
 
 async function loadWorlds() {
@@ -3655,7 +3699,7 @@ function renderWorldList() {
     return;
   }
   if (!state.worlds.length) {
-    elements.worldList.innerHTML = '<div class="pw-world-card"><p>No private worlds yet.</p></div>';
+    elements.worldList.innerHTML = '<div class="pw-world-card"><p>No private worlds yet. Create or import one to get started.</p></div>';
     return;
   }
   elements.worldList.innerHTML = state.worlds.map((world) => `
@@ -5021,9 +5065,7 @@ function renderPrivateChat() {
   const chatHint = !state.selectedWorld
     ? "Open Worlds to create or enter a private world."
     : !state.session
-      ? localParticipant
-        ? "Viewing as guest. Sign in to chat, edit, or take a player."
-        : "Enter as guest to look around, or sign in for chat and editing."
+      ? "Sign in to open this private world."
       : !localParticipant
         ? "Enter this world to speak nearby."
         : "";
@@ -8840,6 +8882,7 @@ async function handleCreateWorld(event) {
   event.preventDefault();
   if (!state.session) {
     setLauncherTab("access");
+    setLauncherOpen(true);
     setStatus("Sign in first.");
     return;
   }
@@ -8866,6 +8909,7 @@ async function handleCreateWorld(event) {
     setStatus(error.message);
   }
   elements.createWorldForm.reset();
+  setCreateWorldDialogOpen(false);
 }
 
 async function saveCurrentScene(options = {}) {
@@ -8981,6 +9025,8 @@ async function forkSelectedWorld() {
 async function importPackage(event) {
   event.preventDefault();
   if (!state.session) {
+    setLauncherTab("access");
+    setLauncherOpen(true);
     setStatus("Sign in to import a world package.");
     return;
   }
@@ -8997,6 +9043,7 @@ async function importPackage(event) {
   await loadWorlds();
   await openWorld(payload.world.world_id, payload.world.creator.username, true);
   elements.importForm.reset();
+  setCreateWorldDialogOpen(false);
 }
 
 async function resolveWorld(event) {
@@ -9005,10 +9052,18 @@ async function resolveWorld(event) {
   const worldId = String(formData.get("worldId") ?? "").trim();
   const creatorUsername = String(formData.get("creatorUsername") ?? "").trim();
   await openWorld(worldId, creatorUsername, true);
+  elements.resolveForm.reset();
+  setCreateWorldDialogOpen(false);
 }
 
 async function joinWorld(options = {}) {
   if (!state.selectedWorld) {
+    return;
+  }
+  if (!state.session) {
+    setLauncherTab("access");
+    setLauncherOpen(true);
+    setStatus("Sign in to enter this private world.");
     return;
   }
   const anchor = getJoinAnchorPayload();
@@ -9016,9 +9071,9 @@ async function joinWorld(options = {}) {
     method: "POST",
     body: {
       creatorUsername: state.selectedWorld.creator.username,
-      guestSessionId: getGuestSessionId(),
+      guestSessionId: undefined,
       displayName: getPrivateDisplayName(),
-      joinRole: state.session ? "viewer" : "guest",
+      joinRole: "viewer",
       publicWorldSnapshotId: anchor.publicWorldSnapshotId,
       position_x: anchor.position_x,
       position_y: anchor.position_y,
@@ -9809,18 +9864,13 @@ function renderEventLog() {
 function bindEvents() {
   elements.launcherToggle?.addEventListener("click", () => {
     if (!state.launcherOpen) {
-      setLauncherTab(state.selectedWorld ? "worlds" : getPreferredLauncherTab());
+      setLauncherTab(getPreferredLauncherTab());
     }
     setLauncherOpen(!state.launcherOpen);
   });
   elements.launcherClose?.addEventListener("click", () => {
     setLauncherOpen(false);
   });
-  for (const button of elements.launcherTabButtons ?? []) {
-    button.addEventListener("click", () => {
-      setLauncherTab(button.getAttribute("data-launcher-tab") || getPreferredLauncherTab());
-    });
-  }
   for (const button of elements.privatePanelTabButtons ?? []) {
     button.addEventListener("click", () => {
       setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "build");
@@ -9830,6 +9880,18 @@ function bindEvents() {
     setLauncherTab("access");
     setLauncherOpen(true);
   });
+  for (const button of elements.openCreateWorldButtons ?? []) {
+    button.addEventListener("click", () => {
+      setLauncherTab("worlds");
+      setLauncherOpen(true);
+      setCreateWorldDialogOpen(true);
+    });
+  }
+  for (const button of elements.closeCreateWorldButtons ?? []) {
+    button.addEventListener("click", () => {
+      setCreateWorldDialogOpen(false);
+    });
+  }
   privateChatFeature.bind();
   elements.panelLiveSearchInput?.addEventListener("input", () => {
     state.liveShareQuery = String(elements.panelLiveSearchInput?.value ?? "");
@@ -9956,7 +10018,7 @@ function bindEvents() {
       setStatus(error.message);
     }
   });
-  elements.authForm.querySelector('[data-auth-action="signout"]').addEventListener("click", async () => {
+  elements.accountSignout?.addEventListener("click", async () => {
     try {
       await signOut();
     } catch (error) {
@@ -10451,6 +10513,10 @@ function bindEvents() {
       setBuilderSelection("", "");
       return;
     }
+    if (state.createWorldDialogOpen) {
+      setCreateWorldDialogOpen(false);
+      return;
+    }
     if (state.sceneDrawerOpen) {
       setSceneDrawerOpen(false);
       return;
@@ -10496,25 +10562,11 @@ async function handleLaunchRequest(options = {}) {
       }
       if (launch.autojoin) {
         if (!state.session) {
-          const localParticipant = getLocalParticipant(state.selectedWorld);
-          const activeInstance = state.selectedWorld?.active_instance ?? null;
-          const maxViewers = Math.max(0, Number(state.selectedWorld?.max_viewers ?? 0) || 0);
-          const viewerCount = Math.max(
-            0,
-            Number(activeInstance?.viewer_count ?? activeInstance?.participants?.length ?? 0) || 0,
-          );
-          if (!activeInstance) {
-            setLauncherTab("access");
-            setLauncherOpen(true);
-            setStatus("Sign in to start this private world.");
-            pushEvent("launcher", "Sign in to start this private world");
-            return;
-          }
-          if (!localParticipant && maxViewers > 0 && viewerCount >= maxViewers) {
-            setStatus("This private world is full");
-            pushEvent("launcher", "This private world is full");
-            return;
-          }
+          setLauncherTab("access");
+          setLauncherOpen(true);
+          setStatus("Sign in to enter this private world.");
+          pushEvent("launcher", "Sign in to enter this private world");
+          return;
         }
         try {
           await joinWorld();
@@ -10543,6 +10595,7 @@ async function init() {
   renderPrivateShare();
   updatePrivateBrowserPanel();
   renderSessionSummary();
+  renderAccessSection();
   ensurePreview();
   setLauncherTab(getPreferredLauncherTab());
   setMode(state.mode);
