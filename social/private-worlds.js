@@ -268,6 +268,8 @@ const state = {
   selectedWorld: null,
   selectedSceneId: "",
   selectedPrefabId: "",
+  sceneDrafts: new Map(),
+  sceneEditorSceneId: "",
   builderSelection: null,
   worldSocket: null,
   preview: null,
@@ -3274,6 +3276,51 @@ function getSelectedScene() {
   return state.selectedWorld?.scenes?.find((scene) => scene.id === state.selectedSceneId) ?? state.selectedWorld?.scenes?.[0] ?? null;
 }
 
+function buildSceneEditorSnapshot(scene = getSelectedScene(), overrides = {}) {
+  const sceneId = String(overrides.sceneId ?? scene?.id ?? state.selectedSceneId ?? "").trim();
+  if (!sceneId || !elements.sceneForm?.elements) {
+    return null;
+  }
+  return {
+    sceneId,
+    name: overrides.name != null
+      ? String(overrides.name)
+      : String(elements.sceneForm.elements.name?.value ?? scene?.name ?? ""),
+    isDefault: overrides.isDefault != null
+      ? Boolean(overrides.isDefault)
+      : elements.sceneForm.elements.isDefault?.checked === true,
+    sceneDocText: overrides.sceneDocText != null
+      ? String(overrides.sceneDocText)
+      : String(elements.sceneForm.elements.sceneDoc?.value ?? (scene ? JSON.stringify(scene.scene_doc ?? {}, null, 2) : "")),
+    scriptDslText: overrides.scriptDslText != null
+      ? String(overrides.scriptDslText)
+      : String(elements.sceneForm.elements.scriptDsl?.value ?? scene?.scene_doc?.script_dsl ?? ""),
+  };
+}
+
+function getSceneDraft(sceneId = state.selectedSceneId) {
+  const key = String(sceneId ?? "").trim();
+  return key ? state.sceneDrafts.get(key) ?? null : null;
+}
+
+function rememberSceneDraft(overrides = {}) {
+  const snapshot = buildSceneEditorSnapshot(getSelectedScene(), overrides);
+  if (snapshot?.sceneId) {
+    state.sceneDrafts.set(snapshot.sceneId, snapshot);
+  }
+}
+
+function discardSceneDraft(sceneId = state.selectedSceneId) {
+  const key = String(sceneId ?? "").trim();
+  if (!key) {
+    return;
+  }
+  state.sceneDrafts.delete(key);
+  if (state.sceneEditorSceneId === key) {
+    state.sceneEditorSceneId = "";
+  }
+}
+
 function isEditor() {
   return state.selectedWorld?.permissions?.can_edit === true;
 }
@@ -3358,10 +3405,21 @@ function renderSceneEditor() {
   const scene = getSelectedScene();
   const canEdit = isEditor();
   const buildMode = state.mode === "build";
-  elements.sceneForm.elements.name.value = scene?.name || "";
-  elements.sceneForm.elements.isDefault.checked = scene?.is_default === true;
-  elements.sceneForm.elements.sceneDoc.value = scene ? JSON.stringify(scene.scene_doc, null, 2) : "";
-  elements.sceneForm.elements.scriptDsl.value = scene?.scene_doc?.script_dsl || "";
+  const sceneId = String(scene?.id ?? "").trim();
+  const draft = getSceneDraft(sceneId);
+  if (!scene) {
+    elements.sceneForm.elements.name.value = "";
+    elements.sceneForm.elements.isDefault.checked = false;
+    elements.sceneForm.elements.sceneDoc.value = "";
+    elements.sceneForm.elements.scriptDsl.value = "";
+    state.sceneEditorSceneId = "";
+  } else if (!draft || state.sceneEditorSceneId !== sceneId) {
+    elements.sceneForm.elements.name.value = draft?.name ?? scene?.name ?? "";
+    elements.sceneForm.elements.isDefault.checked = draft?.isDefault ?? scene?.is_default === true;
+    elements.sceneForm.elements.sceneDoc.value = draft?.sceneDocText ?? JSON.stringify(scene.scene_doc ?? {}, null, 2);
+    elements.sceneForm.elements.scriptDsl.value = draft?.scriptDslText ?? scene?.scene_doc?.script_dsl ?? "";
+    state.sceneEditorSceneId = sceneId;
+  }
   elements.saveScene.disabled = !canEdit || !scene || !buildMode;
   elements.refreshScene.disabled = !scene;
   elements.sceneForm.elements.name.disabled = !canEdit || !buildMode;
@@ -5703,8 +5761,10 @@ function connectWorldSocket() {
     try {
       const payload = JSON.parse(event.data);
       if (payload.type === "world:event") {
-        pushEvent(payload.event?.type || "world:event", JSON.stringify(payload.event));
-        void openWorld(world.world_id, world.creator.username, true);
+        if (payload.event?.type !== "lock:updated") {
+          pushEvent(payload.event?.type || "world:event", JSON.stringify(payload.event));
+          void openWorld(world.world_id, world.creator.username, true);
+        }
       } else if (payload.type === "world:runtime") {
         state.runtimeSnapshot = payload.snapshot ?? null;
         if (state.selectedWorld?.active_instance && payload.snapshot?.active_scene_id) {
@@ -5805,6 +5865,8 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.sceneDrawerOpen = false;
   state.worldMenuOpen = false;
   if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
+    state.sceneDrafts.clear();
+    state.sceneEditorSceneId = "";
     state.privateChatEntries = [];
     state.activeChats.clear();
     state.livePresence.clear();
@@ -5919,6 +5981,7 @@ async function saveScene(event) {
       sceneDoc,
     },
   });
+  discardSceneDraft(scene.id);
   pushEvent("scene:saved", payload.scene.name);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
 }
@@ -6174,7 +6237,14 @@ function mutateSceneDoc(mutator) {
   if (elements.sceneForm?.elements.scriptDsl) {
     sceneDoc.script_dsl = String(elements.sceneForm.elements.scriptDsl.value || sceneDoc.script_dsl || "").trim();
   }
-  elements.sceneForm.elements.sceneDoc.value = JSON.stringify(sceneDoc, null, 2);
+  const sceneDocText = JSON.stringify(sceneDoc, null, 2);
+  elements.sceneForm.elements.sceneDoc.value = sceneDocText;
+  elements.sceneForm.elements.scriptDsl.value = sceneDoc.script_dsl || "";
+  rememberSceneDraft({
+    sceneDocText,
+    scriptDslText: sceneDoc.script_dsl || "",
+  });
+  state.sceneEditorSceneId = state.selectedSceneId;
   renderSceneBuilder();
   updatePreviewFromSelection();
 }
@@ -6842,10 +6912,20 @@ function bindEvents() {
   });
   elements.sceneForm.addEventListener("submit", saveScene);
   elements.refreshScene.addEventListener("click", () => {
+    discardSceneDraft(state.selectedSceneId);
     renderSceneEditor();
     updatePreviewFromSelection();
   });
-  elements.sceneForm.elements.sceneDoc.addEventListener("input", updatePreviewFromSelection);
+  elements.sceneForm.elements.name.addEventListener("input", () => {
+    rememberSceneDraft();
+  });
+  elements.sceneForm.elements.isDefault.addEventListener("change", () => {
+    rememberSceneDraft();
+  });
+  elements.sceneForm.elements.sceneDoc.addEventListener("input", () => {
+    rememberSceneDraft();
+    updatePreviewFromSelection();
+  });
   elements.sceneForm.elements.scriptDsl.addEventListener("input", () => {
     void acquireSceneLock();
     mutateSceneDoc((sceneDoc) => {
