@@ -327,6 +327,53 @@ function setStatus(text) {
   }
 }
 
+function setPrivateShareStatus(text) {
+  if (elements.panelShareStatus) {
+    elements.panelShareStatus.textContent = text || "";
+    return;
+  }
+  setStatus(text);
+}
+
+function canCopyToClipboard() {
+  return typeof navigator?.clipboard?.writeText === "function" || typeof document?.execCommand === "function";
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text ?? "");
+  if (!value) {
+    return false;
+  }
+  if (typeof navigator?.clipboard?.writeText === "function") {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  if (typeof document?.execCommand !== "function") {
+    throw new Error("Clipboard copy is not available in this browser.");
+  }
+  const textarea = document.createElement("textarea");
+  const previousActiveElement = document.activeElement;
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.focus({ preventScroll: true });
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (previousActiveElement instanceof HTMLElement) {
+    previousActiveElement.focus?.({ preventScroll: true });
+  }
+  if (!copied) {
+    throw new Error("Could not copy entry link.");
+  }
+  return true;
+}
+
 function getPrivateViewerSessionId() {
   if (state.profile?.id) {
     return `profile:${state.profile.id}`;
@@ -1955,14 +2002,10 @@ function sendPrivateChat(text) {
   if (!message || !state.selectedWorld || !state.session || !getLocalParticipant()) {
     return false;
   }
-  const sent = sendWorldSocketMessage({
+  return sendWorldSocketMessage({
     type: "chat:send",
     text: message,
   });
-  if (sent && elements.panelChatInput) {
-    elements.panelChatInput.value = "";
-  }
-  return sent;
 }
 
 const privateChatFeature = createChatFeature({
@@ -1974,6 +2017,9 @@ const privateChatFeature = createChatFeature({
     renderPrivateChat();
   },
   onSubmit: sendPrivateChat,
+  onBeforeReaction() {
+    setPrivatePanelTab("chat");
+  },
   onSubmitFailed: () => {
     renderPrivateChat();
   },
@@ -2016,6 +2062,32 @@ function ensurePrivateBrowserVideoPlayback(element) {
       state.browserMediaState.lastPlayError = message;
       updatePrivateBrowserPanel();
     }
+  });
+}
+
+function resumePrivateBrowserMediaPlayback() {
+  const seen = new Set();
+  const candidates = [];
+  if (elements.panelBrowserVideo) {
+    candidates.push(elements.panelBrowserVideo);
+  }
+  for (const session of state.browserSessions.values()) {
+    if (session?._remoteElement) {
+      candidates.push(session._remoteElement);
+    }
+  }
+  for (const element of candidates) {
+    if (!element || seen.has(element)) {
+      continue;
+    }
+    seen.add(element);
+    if (element.srcObject && element.paused) {
+      ensurePrivateBrowserVideoPlayback(element);
+    }
+  }
+  void getPrivateBrowserMediaController().resumePlayback({
+    sessionId: state.browserPanelRemoteSessionId || state.browserMediaState.remoteAudioSessionId,
+    kinds: ["audio", "video"],
   });
 }
 
@@ -3690,14 +3762,17 @@ function renderPrivateShare() {
     return;
   }
   const world = state.selectedWorld;
-  const shareUrl = buildPrivateWorldEntryUrl(world);
   const isActive = Boolean(world?.active_instance);
   const canShare = Boolean(world);
+  const canCopy = canShare && canCopyToClipboard();
   if (elements.panelShareCopy) {
-    elements.panelShareCopy.disabled = !canShare;
+    elements.panelShareCopy.disabled = !canCopy;
   }
   if (elements.panelShareNative) {
-    elements.panelShareNative.disabled = !canShare || typeof navigator.share !== "function";
+    elements.panelShareNative.disabled = !canShare || (
+      typeof navigator.share !== "function"
+      && !canCopy
+    );
   }
   elements.panelShareStatus.textContent = !world
     ? "Open a world to copy its entry link."
@@ -3917,10 +3992,13 @@ function renderSelectedWorld() {
     elements.panelReset.disabled = !hasWorld || !canEdit;
   }
   if (elements.panelShareCopy) {
-    elements.panelShareCopy.disabled = !hasWorld;
+    elements.panelShareCopy.disabled = !hasWorld || !canCopyToClipboard();
   }
   if (elements.panelShareNative) {
-    elements.panelShareNative.disabled = !hasWorld || typeof navigator.share !== "function";
+    elements.panelShareNative.disabled = !hasWorld || (
+      typeof navigator.share !== "function"
+      && !canCopyToClipboard()
+    );
   }
 
   for (const button of [
@@ -4540,9 +4618,9 @@ function ensurePreview() {
   state.preview.scene.add(state.preview.root);
   state.preview.scene.add(state.preview.actors);
   state.preview.scene.add(state.preview.presence);
-  state.preview.scene.add(state.preview.chatBubbleGhosts);
   state.preview.scene.add(state.preview.browserShares);
   state.preview.scene.add(state.preview.trails);
+  state.preview.scene.add(state.preview.chatBubbleGhosts);
   ensureViewerAvatar(state.preview);
   resetViewerRig();
   syncPrivateCameraToFollowTarget(state.preview);
@@ -6153,34 +6231,48 @@ function bindEvents() {
     renderPrivateLiveSharesList();
   });
   elements.panelShareCopy?.addEventListener("click", async () => {
-    const shareUrl = buildPrivateWorldEntryUrl();
+    const shareUrl = buildPrivateWorldEntryUrl(state.selectedWorld);
     if (!shareUrl) {
       return;
     }
     try {
-      await navigator.clipboard.writeText(shareUrl);
-      if (elements.panelShareStatus) {
-        elements.panelShareStatus.textContent = "Entry link copied.";
-      }
+      await copyTextToClipboard(shareUrl);
+      setPrivateShareStatus("Entry link copied.");
     } catch (error) {
-      setStatus(error.message || "Could not copy entry link");
+      setPrivateShareStatus(error.message || "Could not copy entry link.");
+      setStatus(error.message || "Could not copy entry link.");
     }
   });
   elements.panelShareNative?.addEventListener("click", async () => {
-    const shareUrl = buildPrivateWorldEntryUrl();
-    if (!shareUrl || !navigator.share) {
+    const shareUrl = buildPrivateWorldEntryUrl(state.selectedWorld);
+    if (!shareUrl) {
       return;
     }
     try {
+      if (typeof navigator.share !== "function") {
+        await copyTextToClipboard(shareUrl);
+        setPrivateShareStatus("Entry link copied.");
+        return;
+      }
       await navigator.share({
         title: state.selectedWorld?.name || "Mauworld Private World",
         text: state.selectedWorld?.about || "Join this private Mauworld scene.",
         url: shareUrl,
       });
-    } catch (_error) {
-      // user canceled native share
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return;
+      }
+      setPrivateShareStatus(error?.message || "Could not share entry link.");
+      setStatus(error?.message || "Could not share entry link.");
     }
   });
+  const resumePrivateBrowserMediaFromGesture = () => {
+    resumePrivateBrowserMediaPlayback();
+  };
+  window.addEventListener("pointerdown", resumePrivateBrowserMediaFromGesture, { capture: true });
+  window.addEventListener("touchstart", resumePrivateBrowserMediaFromGesture, { capture: true, passive: true });
+  window.addEventListener("keydown", resumePrivateBrowserMediaFromGesture, { capture: true });
   elements.panelBrowserExpand?.addEventListener("click", () => {
     setPrivateBrowserOverlayOpen(!state.browserOverlayOpen);
   });
@@ -6199,10 +6291,7 @@ function bindEvents() {
     });
   });
   elements.panelBrowserResume?.addEventListener("click", () => {
-    void getPrivateBrowserMediaController().resumePlayback({
-      sessionId: state.browserPanelRemoteSessionId || state.browserMediaState.remoteAudioSessionId,
-      kinds: ["audio", "video"],
-    });
+    resumePrivateBrowserMediaPlayback();
   });
   elements.panelModeBuild?.addEventListener("click", () => {
     setMode("build");
