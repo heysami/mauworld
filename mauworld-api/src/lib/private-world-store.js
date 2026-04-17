@@ -414,40 +414,24 @@ async function recompileWorldScenes(store, world) {
 }
 
 async function loadInstanceParticipants(store, instanceId) {
-  return (await loadInstanceParticipantsByIds(store, [instanceId], { includeReadyStates: true })).get(instanceId) ?? [];
-}
-
-async function loadInstanceParticipantsByIds(store, instanceIds, options = {}) {
-  const ids = dedupe(instanceIds);
-  if (ids.length === 0) {
-    return new Map();
+  if (!instanceId) {
+    return [];
   }
   const participants = await must(
-    store.serviceClient.from("private_world_participants").select("*").in("instance_id", ids),
+    store.serviceClient.from("private_world_participants").select("*").eq("instance_id", instanceId),
     "Could not load private world participants",
   );
-  const readyByParticipantId = new Map();
-  if (options.includeReadyStates) {
-    const readyStates = await must(
-      store.serviceClient.from("private_world_ready_states").select("*").in("instance_id", ids),
-      "Could not load private world ready states",
-    );
-    for (const row of readyStates) {
-      readyByParticipantId.set(row.participant_id, row);
-    }
-  }
+  const readyStates = await must(
+    store.serviceClient.from("private_world_ready_states").select("*").eq("instance_id", instanceId),
+    "Could not load private world ready states",
+  );
+  const readyByParticipantId = new Map(readyStates.map((row) => [row.participant_id, row]));
   const profileMap = await loadProfilesByIds(store, participants.map((row) => row.profile_id));
-  const participantsByInstanceId = new Map(ids.map((id) => [id, []]));
-  for (const row of participants) {
-    const bucket = participantsByInstanceId.get(row.instance_id) ?? [];
-    bucket.push({
-      ...row,
-      profile: row.profile_id ? profileMap.get(row.profile_id) ?? null : null,
-      ready_state: readyByParticipantId.get(row.id) ?? null,
-    });
-    participantsByInstanceId.set(row.instance_id, bucket);
-  }
-  return participantsByInstanceId;
+  return participants.map((row) => ({
+    ...row,
+    profile: row.profile_id ? profileMap.get(row.profile_id) ?? null : null,
+    ready_state: readyByParticipantId.get(row.id) ?? null,
+  }));
 }
 
 async function pruneExpiredEntityLocks(store, worldRowId, sceneId = null) {
@@ -2214,7 +2198,6 @@ export function installPrivateWorldStore(MauworldStore) {
       )).map((row) => [row.id, row]),
     );
     const creatorProfiles = await loadProfilesByIds(this, [...new Set([...worldsById.values()].map((row) => row.creator_profile_id))]);
-    const participantsByInstanceId = await loadInstanceParticipantsByIds(this, rows.map((row) => row.id));
     const miniatures = [];
     for (const row of rows) {
       const world = worldsById.get(row.world_id);
@@ -2223,55 +2206,50 @@ export function installPrivateWorldStore(MauworldStore) {
         continue;
       }
       const creator = creatorProfiles.get(world.creator_profile_id);
-      const participants = participantsByInstanceId.get(row.id) ?? [];
-      const lodBand = resolveMiniatureLodBand(row, viewerPresence);
-      const compiledMiniature = scene.compiled_doc?.miniature ?? {};
-      const compiledPlayers = Array.isArray(compiledMiniature.players) ? compiledMiniature.players : [];
-      const compiledPlayersById = new Map(compiledPlayers.map((entry) => [entry.id, entry]));
-      const runtimeSnapshot = lodBand === "near" && creator
+      const participants = await loadInstanceParticipants(this, row.id);
+      const runtimeSnapshot = creator
         ? (
             this.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
             ?? null
           )
         : null;
-      const liveVisiblePlayers = lodBand === "near"
-        ? participants
-          .filter((entry) => entry.visible_to_others !== false && entry.player_entity_id)
-          .map((entry) => ({
-            player_entity_id: entry.player_entity_id,
-            username: entry.profile?.username ?? null,
-            position: cloneJson(
-              runtimeSnapshot?.players?.find((candidate) => candidate.id === entry.player_entity_id)?.position
-              ?? compiledPlayersById.get(entry.player_entity_id)?.position
-              ?? null,
-            ),
-          }))
-          .filter((entry) => entry.position)
-        : [];
-      let miniaturePayload = {
-        static_voxels: [],
-        screens: [],
-        players: [],
-      };
-      if (lodBand === "near") {
-        miniaturePayload = {
-          static_voxels: cloneJson((compiledMiniature.static_voxels ?? []).slice(0, 120)),
-          screens: cloneJson((compiledMiniature.screens ?? []).slice(0, 16)),
-          players: [],
-        };
-      } else if (lodBand === "mid") {
-        miniaturePayload = {
-          static_voxels: (compiledMiniature.static_voxels ?? []).slice(0, 120).map((entry) => ({
-            ...cloneJson(entry),
-            material: {
-              ...(entry.material ?? {}),
-              color: "#8c94a1",
-            },
-          })),
-          screens: [],
-          players: [],
-        };
-      }
+      const lodBand = resolveMiniatureLodBand(row, viewerPresence);
+      const compiledMiniature = cloneJson(scene.compiled_doc?.miniature ?? {});
+      const liveVisiblePlayers = participants
+        .filter((entry) => entry.visible_to_others !== false && entry.player_entity_id)
+        .map((entry) => ({
+          player_entity_id: entry.player_entity_id,
+          username: entry.profile?.username ?? null,
+          position: cloneJson(
+            runtimeSnapshot?.players?.find((candidate) => candidate.id === entry.player_entity_id)?.position
+            ?? compiledMiniature.players?.find((candidate) => candidate.id === entry.player_entity_id)?.position
+            ?? null,
+          ),
+        }))
+        .filter((entry) => entry.position);
+      const miniaturePayload = lodBand === "near"
+        ? {
+            static_voxels: (compiledMiniature.static_voxels ?? []).slice(0, 120),
+            screens: (compiledMiniature.screens ?? []).slice(0, 16),
+            players: [],
+          }
+        : lodBand === "mid"
+          ? {
+              static_voxels: (compiledMiniature.static_voxels ?? []).slice(0, 120).map((entry) => ({
+                ...entry,
+                material: {
+                  ...(entry.material ?? {}),
+                  color: "#8c94a1",
+                },
+              })),
+              screens: [],
+              players: [],
+            }
+          : {
+              static_voxels: [],
+              screens: [],
+              players: [],
+            };
       miniatures.push({
         id: row.id,
         world_id: world.world_id,
@@ -2307,7 +2285,7 @@ export function installPrivateWorldStore(MauworldStore) {
           miniature: miniaturePayload,
           stats: cloneJson(scene.compiled_doc?.stats ?? {}),
         },
-        visible_players: liveVisiblePlayers,
+        visible_players: lodBand === "near" ? liveVisiblePlayers : [],
       });
     }
     return miniatures;
