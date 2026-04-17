@@ -3777,7 +3777,7 @@ function buildOptions(options = [], selectedValue = "") {
 
 function buildEntitySummary(kind, entry = {}) {
   if (kind === "particle") {
-    return `${entry.target_id || "no target"} · ${entry.enabled === false ? "off" : "on"}`;
+    return `${entry.target_id || "no target"} · ${describeVector3(entry.position)} · ${entry.enabled === false ? "off" : "on"}`;
   }
   if (kind === "prefab_instance") {
     return `${entry.prefab_id || "choose prefab"} · ${describeVector3(entry.position)}`;
@@ -4131,6 +4131,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <input type="text" data-entity-field="label" data-value-type="text" value="${htmlEscape(entry.label || "")}" />
       </label>
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
+      <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
       <div class="pw-checkbox">
         <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible !== false ? "checked" : ""} />
@@ -4142,7 +4143,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
 
   if (kind === "particle") {
     elements.entityEditor.innerHTML = `
-      <p class="pw-inspector-note">These are visible animated effects in the preview and play scene.</p>
+      <p class="pw-inspector-note">These are visible animated effects in the preview and play scene. Position, rotation, and scale are relative to the chosen target.</p>
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
           <label>
@@ -4164,6 +4165,9 @@ function renderEntityInspector(sceneDoc, selected = null) {
           ${buildTargetOptions(sceneDoc, entry.target_id || "")}
         </select>
       </label>
+      <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
+      <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
+      <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale || { x: 1, y: 1, z: 1 })}</div>
       <div class="pw-checkbox">
         <input type="checkbox" data-entity-field="enabled" data-value-type="checkbox" ${entry.enabled !== false ? "checked" : ""} />
         <span>Enabled</span>
@@ -4903,7 +4907,7 @@ function getPreviewPointerContext(pointerSource) {
     -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
   );
   preview.raycaster.setFromCamera(pointer, preview.camera);
-  const hit = preview.raycaster.intersectObjects(preview.entityPickables, false)[0] ?? null;
+  const hit = getFirstPreviewEntityHit(preview.raycaster.intersectObjects(preview.entityPickables, false));
   const groundPoint = new THREE.Vector3();
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const hasGround = preview.raycaster.ray.intersectPlane(groundPlane, groundPoint);
@@ -4912,6 +4916,20 @@ function getPreviewPointerContext(pointerSource) {
     hit,
     groundPoint: hasGround ? groundPoint.clone() : null,
   };
+}
+
+function getFirstPreviewEntityHit(intersections = []) {
+  const buildMode = state.mode === "build" && isEditor();
+  for (const hit of intersections) {
+    if (!hit?.object) {
+      continue;
+    }
+    if (hit.object.userData?.privateWorldBuildOnly && !buildMode) {
+      continue;
+    }
+    return hit;
+  }
+  return null;
 }
 
 function resolveBuildGridCell(context) {
@@ -5001,6 +5019,7 @@ function canMoveEntityKind(kind) {
     || kind === "screen"
     || kind === "text"
     || kind === "trigger"
+    || kind === "particle"
     || kind === "prefab_instance";
 }
 
@@ -5009,6 +5028,7 @@ function canScaleEntityKind(kind) {
     || kind === "screen"
     || kind === "text"
     || kind === "trigger"
+    || kind === "particle"
     || kind === "prefab_instance";
 }
 
@@ -5017,6 +5037,8 @@ function canRotateEntityKind(kind) {
     || kind === "player"
     || kind === "screen"
     || kind === "text"
+    || kind === "trigger"
+    || kind === "particle"
     || kind === "prefab_instance";
 }
 
@@ -5623,7 +5645,7 @@ function raycastPreviewPointer(event) {
     -(((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
   );
   preview.raycaster.setFromCamera(pointer, preview.camera);
-  return preview.raycaster.intersectObjects(preview.entityPickables, false)[0] ?? null;
+  return getFirstPreviewEntityHit(preview.raycaster.intersectObjects(preview.entityPickables, false));
 }
 
 function getBuildDragPoint(event, plane) {
@@ -6189,6 +6211,7 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
           id: nextId,
           label: "Start Zone",
           position: deepClone(placement.position),
+          rotation: { x: 0, y: 0, z: 0 },
           scale: { x: 2, y: 2, z: 2 },
         });
       },
@@ -6987,7 +7010,7 @@ function addTextBillboard(preview, value, position, options = {}) {
   return mesh;
 }
 
-function createParticleSystem(preview, anchorId, effectName, color, particleId = anchorId) {
+function createParticleSystem(preview, anchorId, effectName, color, particleId = anchorId, options = {}) {
   const count = String(effectName).includes("smoke") ? 28 : 18;
   const geometry = new THREE.BufferGeometry();
   const positions = new Float32Array(count * 3);
@@ -7009,14 +7032,38 @@ function createParticleSystem(preview, anchorId, effectName, color, particleId =
   const points = new THREE.Points(geometry, material);
   points.frustumCulled = false;
   preview.root.add(points);
+  let helper = null;
+  if (particleId && particleId !== anchorId) {
+    helper = new THREE.Mesh(
+      new THREE.BoxGeometry(1.4, 1.8, 1.4),
+      new THREE.MeshBasicMaterial({
+        color: color || "#ff5a7a",
+        wireframe: true,
+        transparent: true,
+        opacity: 0.24,
+        depthWrite: false,
+      }),
+    );
+    helper.userData.privateWorldEntityId = particleId;
+    helper.userData.privateWorldEntityKind = "particle";
+    helper.userData.privateWorldBuildOnly = true;
+    preview.root.add(helper);
+    preview.entityMeshes.set(particleId, helper);
+    preview.entityPickables.push(helper);
+  }
   return {
     kind: "particle",
     anchorId,
     particleId,
     object: points,
+    helper,
     positions,
     seeds,
     effectName: effectName || "sparkles",
+    offset: deepClone(options.position ?? { x: 0, y: 0, z: 0 }),
+    rotation: deepClone(options.rotation ?? { x: 0, y: 0, z: 0 }),
+    scale: deepClone(options.scale ?? { x: 1, y: 1, z: 1 }),
+    selected: options.selected === true,
   };
 }
 
@@ -7133,16 +7180,36 @@ function updateViewerTrailPuffs(preview, deltaSeconds) {
 
 function updatePreviewEffects(preview, elapsedSeconds) {
   for (const effect of preview.effectSystems ?? []) {
-    const anchor = preview.entityMeshes.get(effect.anchorId);
-    if (!anchor) {
-      effect.object.visible = false;
-      continue;
-    }
-    effect.object.visible = anchor.visible !== false;
+    const anchor = effect.anchorId ? preview.entityMeshes.get(effect.anchorId) : null;
     const worldPosition = new THREE.Vector3();
-    anchor.getWorldPosition(worldPosition);
-    const anchorScale = new THREE.Vector3();
-    anchor.getWorldScale(anchorScale);
+    const anchorScale = new THREE.Vector3(1, 1, 1);
+    if (anchor) {
+      anchor.getWorldPosition(worldPosition);
+      anchor.getWorldScale(anchorScale);
+    }
+    const offset = new THREE.Vector3(
+      Number(effect.offset?.x ?? 0) || 0,
+      Number(effect.offset?.y ?? 0) || 0,
+      Number(effect.offset?.z ?? 0) || 0,
+    );
+    const effectScale = {
+      x: Math.max(0.1, Number(effect.scale?.x ?? 1) || 1),
+      y: Math.max(0.1, Number(effect.scale?.y ?? 1) || 1),
+      z: Math.max(0.1, Number(effect.scale?.z ?? 1) || 1),
+    };
+    const anchorVisible = !effect.anchorId || Boolean(anchor && anchor.visible !== false);
+    effect.object.visible = anchorVisible;
+    effect.object.position.copy(worldPosition).add(offset);
+    effect.object.rotation.set(
+      Number(effect.rotation?.x ?? 0) || 0,
+      Number(effect.rotation?.y ?? 0) || 0,
+      Number(effect.rotation?.z ?? 0) || 0,
+    );
+    effect.object.scale.set(
+      Math.max(0.8, anchorScale.x) * effectScale.x,
+      Math.max(0.75, anchorScale.y) * effectScale.y,
+      Math.max(0.8, anchorScale.z) * effectScale.z,
+    );
     if (effect.kind === "particle") {
       const runtimeParticle = state.runtimeSnapshot?.particles?.find((entry) => entry.id === effect.particleId);
       effect.object.visible = effect.object.visible && runtimeParticle?.enabled !== false;
@@ -7151,11 +7218,18 @@ function updatePreviewEffects(preview, elapsedSeconds) {
         const progress = (elapsedSeconds * seed.speed + seed.phase) % 1;
         const orbit = elapsedSeconds * (seed.speed * 1.2) + seed.phase;
         const offset = index * 3;
-        effect.positions[offset] = worldPosition.x + Math.cos(orbit) * seed.radius * Math.max(0.8, anchorScale.x);
-        effect.positions[offset + 1] = worldPosition.y + 0.4 + progress * seed.height * Math.max(0.75, anchorScale.y);
-        effect.positions[offset + 2] = worldPosition.z + Math.sin(orbit) * seed.radius * Math.max(0.8, anchorScale.z);
+        effect.positions[offset] = Math.cos(orbit) * seed.radius;
+        effect.positions[offset + 1] = 0.4 + progress * seed.height;
+        effect.positions[offset + 2] = Math.sin(orbit) * seed.radius;
       }
       effect.object.geometry.attributes.position.needsUpdate = true;
+      if (effect.helper) {
+        effect.helper.visible = state.mode === "build" && isEditor();
+        effect.helper.position.copy(effect.object.position);
+        effect.helper.rotation.copy(effect.object.rotation);
+        effect.helper.scale.set(effectScale.x, effectScale.y, effectScale.z);
+        effect.helper.material.color = new THREE.Color(effect.selected ? "#ffd659" : effect.object.material.color);
+      }
       continue;
     }
     if (effect.kind === "trail") {
@@ -7414,6 +7488,7 @@ function updatePreviewFromSelection() {
       }),
     );
     mesh.position.set(trigger.position?.x || 0, trigger.position?.y || 0.5, trigger.position?.z || 0);
+    mesh.rotation.set(trigger.rotation?.x || 0, trigger.rotation?.y || 0, trigger.rotation?.z || 0);
     mesh.scale.set(trigger.scale?.x || 2, trigger.scale?.y || 2, trigger.scale?.z || 2);
     mesh.userData.privateWorldEntityId = trigger.id;
     mesh.userData.privateWorldEntityKind = "trigger";
@@ -7426,10 +7501,12 @@ function updatePreviewFromSelection() {
   }
 
   for (const particle of sceneDoc.particles ?? []) {
-    if (!particle.target_id) {
-      continue;
-    }
-    particleEffects.push(createParticleSystem(preview, particle.target_id, particle.effect, particle.color, particle.id));
+    particleEffects.push(createParticleSystem(preview, particle.target_id, particle.effect, particle.color, particle.id, {
+      position: particle.position,
+      rotation: particle.rotation,
+      scale: particle.scale,
+      selected: isSelected("particle", particle.id),
+    }));
   }
 
   preview.effectSystems = particleEffects;
@@ -8236,6 +8313,9 @@ function attachQuickAddButtons() {
         id: nextId,
         effect: "sparkles",
         target_id: targetId,
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
         enabled: true,
         color: "#ff5a7a",
       });
