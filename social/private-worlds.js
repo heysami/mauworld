@@ -909,7 +909,7 @@ function buildPrivatePresenceObject(entry) {
   const secondary = accents[(seed + 2) % accents.length];
   const tertiary = accents[(seed + 4) % accents.length];
   const figure = createViewerAvatarFigure({
-    scale: 0.4,
+    scale: 0.72,
     outlineColor: primary,
     primary,
     secondary,
@@ -4234,7 +4234,7 @@ function ensureViewerAvatar(preview) {
   }
   const figure = createViewerAvatarFigure({
     seed: "viewer-self",
-    scale: 0.46,
+    scale: 0.92,
     outlineColor: PRIVATE_WORLD_STYLE.accents[0],
   });
   const avatar = {
