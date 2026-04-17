@@ -570,6 +570,31 @@
 
           <section class="pw-builder-panel">
             <div class="pw-panel__header">
+              <h3>Scene atmosphere</h3>
+            </div>
+            <div class="pw-grid-2">
+              <label>
+                <span>Skybox</span>
+                <select name="sceneSkybox">
+                  <option value="blank">White / none</option>
+                  <option value="day">Day sky</option>
+                  <option value="sunset">Sunset</option>
+                  <option value="night">Night</option>
+                </select>
+              </label>
+              <label>
+                <span>Ambient light</span>
+                <select name="sceneAmbientLight">
+                  <option value="even">Evenly lit</option>
+                  <option value="dim">Dimmer</option>
+                </select>
+              </label>
+            </div>
+            <p class="pw-scene-environment__hint" data-scene-environment-hint>White background with even ambient light.</p>
+          </section>
+
+          <section class="pw-builder-panel">
+            <div class="pw-panel__header">
               <h3>Scene Items</h3>
             </div>
             <div class="pw-builder-list" data-entity-sections></div>

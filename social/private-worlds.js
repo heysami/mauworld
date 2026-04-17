@@ -321,6 +321,92 @@ const PRIVATE_WORLD_STYLE = {
   trailOutline: "#bcc3cf",
   accents: ["#ff4fa8", "#2dd8ff", "#ffd84d", "#7ce85b", "#ff9548", "#7ed7ff"],
 };
+const PRIVATE_SCENE_ENVIRONMENT_PRESETS = {
+  blank: {
+    background: "#fbfcff",
+    fog: "#f4fbff",
+    ground: "#ffffff",
+    line: "#c9dcff",
+    outline: "#33407a",
+    gridPrimary: "#7fa7ff",
+    gridSecondary: "#bfd6ff",
+    ambientSky: "#ffffff",
+    ambientGround: "#ffe8f8",
+    sunColor: "#fff4be",
+    sunIntensity: 1.16,
+    sunPosition: { x: 120, y: 280, z: 80 },
+    skyGradient: null,
+  },
+  day: {
+    background: "#dff3ff",
+    fog: "#e7f7ff",
+    ground: "#f7fbff",
+    line: "#9cc6ff",
+    outline: "#3a609a",
+    gridPrimary: "#6e9fff",
+    gridSecondary: "#d0e2ff",
+    ambientSky: "#f7fbff",
+    ambientGround: "#d5ebff",
+    sunColor: "#fff2c4",
+    sunIntensity: 1.1,
+    sunPosition: { x: 140, y: 260, z: 40 },
+    skyGradient: [
+      { stop: 0, color: "#6db5ff" },
+      { stop: 0.5, color: "#ccecff" },
+      { stop: 1, color: "#fefefe" },
+    ],
+  },
+  sunset: {
+    background: "#ffe5d6",
+    fog: "#ffe8dc",
+    ground: "#fff8f2",
+    line: "#ffb28f",
+    outline: "#7c4c5d",
+    gridPrimary: "#ff8f70",
+    gridSecondary: "#ffd7ca",
+    ambientSky: "#fff0df",
+    ambientGround: "#ffd3c2",
+    sunColor: "#ffd17a",
+    sunIntensity: 0.94,
+    sunPosition: { x: 180, y: 120, z: -110 },
+    skyGradient: [
+      { stop: 0, color: "#6c5aa8" },
+      { stop: 0.34, color: "#ff8a6d" },
+      { stop: 0.72, color: "#ffd2a6" },
+      { stop: 1, color: "#fff5ea" },
+    ],
+  },
+  night: {
+    background: "#08111f",
+    fog: "#0f1b31",
+    ground: "#13243f",
+    line: "#4e77b8",
+    outline: "#c0d7ff",
+    gridPrimary: "#88aafc",
+    gridSecondary: "#37558f",
+    ambientSky: "#b7d4ff",
+    ambientGround: "#122541",
+    sunColor: "#d6e6ff",
+    sunIntensity: 0.52,
+    sunPosition: { x: -80, y: 180, z: 130 },
+    skyGradient: [
+      { stop: 0, color: "#06101d" },
+      { stop: 0.58, color: "#132344" },
+      { stop: 1, color: "#28456d" },
+    ],
+    stars: 28,
+  },
+};
+const PRIVATE_SCENE_AMBIENT_PRESETS = {
+  even: {
+    hemisphereIntensity: 1.48,
+    sunIntensityMultiplier: 1,
+  },
+  dim: {
+    hemisphereIntensity: 0.76,
+    sunIntensityMultiplier: 0.9,
+  },
+};
 
 let privateToonGradientTexture = null;
 const privateBillboardParentQuaternion = new THREE.Quaternion();
@@ -404,6 +490,7 @@ const elements = {
   sceneLibraryHint: document.querySelector("[data-scene-library-hint]"),
   sceneLibraryList: document.querySelector("[data-scene-library-list]"),
   sceneForm: document.querySelector("[data-scene-form]"),
+  sceneEnvironmentHint: document.querySelector("[data-scene-environment-hint]"),
   saveScene: document.querySelector("[data-save-scene]"),
   refreshScene: document.querySelector("[data-refresh-scene]"),
   scriptFunctionSearch: document.querySelector("[data-script-function-search]"),
@@ -4311,12 +4398,74 @@ function discardSceneDraft(sceneId = state.selectedSceneId) {
   }
 }
 
+function normalizePrivateSceneEnvironmentSettings(settings = {}) {
+  const skybox = String(settings?.skybox ?? settings?.skyboxPreset ?? "blank").trim().toLowerCase();
+  const ambientLight = String(settings?.ambient_light ?? settings?.ambientLight ?? "even").trim().toLowerCase();
+  return {
+    skybox: Object.hasOwn(PRIVATE_SCENE_ENVIRONMENT_PRESETS, skybox) ? skybox : "blank",
+    ambient_light: Object.hasOwn(PRIVATE_SCENE_AMBIENT_PRESETS, ambientLight) ? ambientLight : "even",
+  };
+}
+
+function buildPrivateSceneEnvironmentTheme(settings = {}) {
+  const normalized = normalizePrivateSceneEnvironmentSettings(settings);
+  const skyboxPreset = PRIVATE_SCENE_ENVIRONMENT_PRESETS[normalized.skybox] ?? PRIVATE_SCENE_ENVIRONMENT_PRESETS.blank;
+  const ambientPreset = PRIVATE_SCENE_AMBIENT_PRESETS[normalized.ambient_light] ?? PRIVATE_SCENE_AMBIENT_PRESETS.even;
+  return {
+    ...PRIVATE_WORLD_STYLE,
+    ...skyboxPreset,
+    skybox: normalized.skybox,
+    ambient_light: normalized.ambient_light,
+    ambientIntensity: ambientPreset.hemisphereIntensity,
+    sunIntensity: Number((skyboxPreset.sunIntensity * ambientPreset.sunIntensityMultiplier).toFixed(4)),
+  };
+}
+
+function getPrivateSceneEnvironmentSettings(sceneDoc = null) {
+  return normalizePrivateSceneEnvironmentSettings(
+    sceneDoc?.settings
+      ?? getSelectedScene()?.scene_doc?.settings
+      ?? {},
+  );
+}
+
+function buildSceneEnvironmentHint(settings = {}) {
+  const normalized = normalizePrivateSceneEnvironmentSettings(settings);
+  const skyboxLabel = normalized.skybox === "blank"
+    ? "White background"
+    : normalized.skybox === "day"
+      ? "Day sky"
+      : normalized.skybox === "sunset"
+        ? "Sunset sky"
+        : "Night sky";
+  const ambientLabel = normalized.ambient_light === "dim" ? "dimmer ambient light" : "even ambient light";
+  return `${skyboxLabel} with ${ambientLabel}.`;
+}
+
+function renderSceneEnvironmentControls(sceneDoc = null) {
+  if (!elements.sceneForm?.elements) {
+    return;
+  }
+  const settings = getPrivateSceneEnvironmentSettings(sceneDoc);
+  if (elements.sceneForm.elements.sceneSkybox) {
+    elements.sceneForm.elements.sceneSkybox.value = settings.skybox;
+  }
+  if (elements.sceneForm.elements.sceneAmbientLight) {
+    elements.sceneForm.elements.sceneAmbientLight.value = settings.ambient_light;
+  }
+  if (elements.sceneEnvironmentHint) {
+    elements.sceneEnvironmentHint.textContent = buildSceneEnvironmentHint(settings);
+  }
+}
+
 function buildEmptySceneDoc() {
   return {
     settings: {
       gravity: { x: 0, y: -9.8, z: 0 },
       camera_mode: "third_person",
       start_on_ready: true,
+      skybox: "blank",
+      ambient_light: "even",
     },
     voxels: [],
     primitives: [],
@@ -4731,6 +4880,7 @@ function renderSceneEditor() {
   const buildMode = state.mode === "build";
   const sceneId = String(scene?.id ?? "").trim();
   const draft = getSceneDraft(sceneId);
+  let sceneDocForControls = buildEmptySceneDoc();
   if (!scene) {
     elements.sceneForm.elements.name.value = "";
     elements.sceneForm.elements.isDefault.checked = false;
@@ -4748,12 +4898,20 @@ function renderSceneEditor() {
     state.scriptFunctionQuery = "";
     state.sceneEditorSceneId = sceneId;
   }
+  try {
+    sceneDocForControls = JSON.parse(elements.sceneForm.elements.sceneDoc.value || "{}");
+  } catch (_error) {
+    sceneDocForControls = scene?.scene_doc ?? buildEmptySceneDoc();
+  }
   elements.saveScene.disabled = !canEdit || !scene || !buildMode;
   elements.refreshScene.disabled = !scene;
   elements.sceneForm.elements.name.disabled = !canEdit || !buildMode;
   elements.sceneForm.elements.isDefault.disabled = !canEdit || !buildMode;
+  elements.sceneForm.elements.sceneSkybox.disabled = !canEdit || !scene || !buildMode;
+  elements.sceneForm.elements.sceneAmbientLight.disabled = !canEdit || !scene || !buildMode;
   elements.sceneForm.elements.scriptDsl.disabled = !canEdit || !buildMode;
   elements.sceneForm.elements.sceneDoc.disabled = !canEdit || !buildMode;
+  renderSceneEnvironmentControls(sceneDocForControls);
   renderSceneLogicLibrary();
   const buildPanel = document.querySelector("[data-build-panel]");
   if (buildPanel) {
@@ -7936,6 +8094,92 @@ function buildPreviewEnvironment(preview) {
   refreshPrivatePreviewEnvironment(preview);
 }
 
+function buildPrivateSkyDome(theme = PRIVATE_WORLD_STYLE) {
+  if (!Array.isArray(theme.skyGradient) || theme.skyGradient.length === 0) {
+    return null;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return null;
+  }
+  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+  for (const stop of theme.skyGradient) {
+    gradient.addColorStop(clampNumber(stop.stop, 0, 0, 1), stop.color);
+  }
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const starCount = Math.max(0, Math.floor(Number(theme.stars) || 0));
+  if (starCount > 0) {
+    for (let index = 0; index < starCount; index += 1) {
+      const normalizedX = ((index * 67) % 97) / 97;
+      const normalizedY = ((index * 43) % 71) / 71;
+      const radius = 0.6 + ((index * 29) % 5) * 0.16;
+      const alpha = 0.35 + (((index * 17) % 7) / 10);
+      context.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(2)})`;
+      context.beginPath();
+      context.arc(
+        normalizedX * canvas.width,
+        normalizedY * canvas.height * 0.62,
+        radius,
+        0,
+        Math.PI * 2,
+      );
+      context.fill();
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return new THREE.Mesh(
+    new THREE.SphereGeometry(1500, 32, 18),
+    new THREE.MeshBasicMaterial({
+      map: texture,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+}
+
+function applyPrivatePreviewAtmosphere(preview, theme = buildPrivateSceneEnvironmentTheme()) {
+  if (!preview?.scene) {
+    return;
+  }
+  if (preview.scene.background?.isColor) {
+    preview.scene.background.set(theme.background);
+  } else {
+    preview.scene.background = new THREE.Color(theme.background);
+  }
+  if (preview.scene.fog?.isFog) {
+    preview.scene.fog.color.set(theme.fog);
+    preview.scene.fog.near = theme.skybox === "night" ? 120 : 170;
+    preview.scene.fog.far = theme.skybox === "night" ? 1120 : 1600;
+  } else {
+    preview.scene.fog = new THREE.Fog(
+      theme.fog,
+      theme.skybox === "night" ? 120 : 170,
+      theme.skybox === "night" ? 1120 : 1600,
+    );
+  }
+  if (preview.ambientLight) {
+    preview.ambientLight.color.set(theme.ambientSky);
+    preview.ambientLight.groundColor.set(theme.ambientGround);
+    preview.ambientLight.intensity = theme.ambientIntensity;
+  }
+  if (preview.sunLight) {
+    preview.sunLight.color.set(theme.sunColor);
+    preview.sunLight.intensity = theme.sunIntensity;
+    preview.sunLight.position.set(
+      theme.sunPosition?.x ?? 120,
+      theme.sunPosition?.y ?? 280,
+      theme.sunPosition?.z ?? 80,
+    );
+  }
+}
+
 function clearPrivatePreviewEnvironment(preview) {
   if (!preview?.environment) {
     return;
@@ -7960,12 +8204,21 @@ function clearPrivatePreviewEnvironment(preview) {
   }
 }
 
-function refreshPrivatePreviewEnvironment(preview = state.preview, world = state.selectedWorld) {
+function refreshPrivatePreviewEnvironment(preview = state.preview, world = state.selectedWorld, sceneDoc = null) {
   if (!preview?.environment) {
     return;
   }
+  const sceneEnvironmentSettings = normalizePrivateSceneEnvironmentSettings(
+    sceneDoc?.settings
+      ?? preview.sceneEnvironmentSettings
+      ?? getSelectedScene()?.scene_doc?.settings
+      ?? {},
+  );
+  preview.sceneEnvironmentSettings = sceneEnvironmentSettings;
+  const theme = buildPrivateSceneEnvironmentTheme(sceneEnvironmentSettings);
+  applyPrivatePreviewAtmosphere(preview, theme);
   const bounds = getPrivateWorldBounds(world);
-  const nextKey = `${bounds.width}:${bounds.length}:${bounds.height}`;
+  const nextKey = `${bounds.width}:${bounds.length}:${bounds.height}:${theme.skybox}:${theme.ambient_light}`;
   if (preview.environmentKey === nextKey) {
     syncPrivatePreviewEnvironmentState(preview);
     return;
@@ -7973,13 +8226,18 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   preview.environmentKey = nextKey;
   clearPrivatePreviewEnvironment(preview);
 
+  const skyDome = buildPrivateSkyDome(theme);
+  if (skyDome) {
+    preview.environment.add(skyDome);
+  }
+
   const groundRadius = clampNumber(Math.max(bounds.width, bounds.length) * 0.82, 48, 28, 240);
   const ground = new THREE.Mesh(
     world
       ? new THREE.PlaneGeometry(bounds.width, bounds.length)
       : new THREE.CircleGeometry(groundRadius, 72),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.ground),
+      color: new THREE.Color(theme.ground),
       transparent: true,
       opacity: world ? 0.98 : 1,
       side: THREE.DoubleSide,
@@ -7993,7 +8251,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
     ? new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.PlaneGeometry(bounds.width, bounds.length)),
       new THREE.LineBasicMaterial({
-        color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
+        color: new THREE.Color(theme.line),
         transparent: true,
         opacity: 0.54,
         fog: false,
@@ -8002,7 +8260,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
     : new THREE.Mesh(
       new THREE.RingGeometry(groundRadius * 0.985, groundRadius, 96),
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
+        color: new THREE.Color(theme.line),
         transparent: true,
         opacity: 0.46,
         side: THREE.DoubleSide,
@@ -8016,7 +8274,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
 
   const gridSize = Math.max(bounds.width, bounds.length);
   const gridDivisions = Math.max(1, Math.round(gridSize / PRIVATE_WORLD_BLOCK_UNIT));
-  const grid = new THREE.GridHelper(gridSize, gridDivisions, "#7fa7ff", "#bfd6ff");
+  const grid = new THREE.GridHelper(gridSize, gridDivisions, theme.gridPrimary, theme.gridSecondary);
   grid.position.y = 0.04;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
     material.opacity = 0.32;
@@ -8029,7 +8287,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   const footprint = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.BoxGeometry(bounds.width, 0.04, bounds.length)),
     new THREE.LineBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.outline),
+      color: new THREE.Color(theme.outline),
       transparent: true,
       opacity: 0.44,
       fog: false,
@@ -8074,7 +8332,7 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   }
 }
 
-function buildWorldBoundsPreview(world = state.selectedWorld) {
+function buildWorldBoundsPreview(world = state.selectedWorld, theme = buildPrivateSceneEnvironmentTheme()) {
   if (!world) {
     return null;
   }
@@ -8087,7 +8345,7 @@ function buildWorldBoundsPreview(world = state.selectedWorld) {
   const boundsLines = new THREE.LineSegments(
     boundsEdges,
     new THREE.LineBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.line),
+      color: new THREE.Color(theme.line),
       transparent: true,
       opacity: world.world_type === "field" ? 0.22 : 0.32,
       fog: false,
@@ -8120,7 +8378,7 @@ function buildWorldBoundsPreview(world = state.selectedWorld) {
     const rail = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(width, Math.max(0.4, height * 0.14), length)),
       new THREE.LineBasicMaterial({
-        color: new THREE.Color(PRIVATE_WORLD_STYLE.outline),
+        color: new THREE.Color(theme.outline),
         transparent: true,
         opacity: 0.26,
         fog: false,
@@ -8181,6 +8439,8 @@ function ensurePreview() {
     presenceEntries: new Map(),
     browserShareEntries: new Map(),
     lastFrameAt: performance.now(),
+    ambientLight: ambient,
+    sunLight,
   };
   buildPreviewEnvironment(state.preview);
   state.preview.scene.add(state.preview.root);
@@ -8956,7 +9216,8 @@ function updatePreviewFromSelection() {
 
     return renderedAny;
   };
-  refreshPrivatePreviewEnvironment(preview, state.selectedWorld);
+  refreshPrivatePreviewEnvironment(preview, state.selectedWorld, sceneDoc);
+  const environmentTheme = buildPrivateSceneEnvironmentTheme(getPrivateSceneEnvironmentSettings(sceneDoc));
   const hasPlacedGeometry = Boolean(
     (sceneDoc.voxels?.length ?? 0)
     || (sceneDoc.primitives?.length ?? 0)
@@ -8967,7 +9228,7 @@ function updatePreviewFromSelection() {
   preview.showGridHint = !hasPlacedGeometry;
   syncPrivatePreviewEnvironmentState(preview);
   const boundsPreview = state.mode === "build" && isEditor()
-    ? buildWorldBoundsPreview(state.selectedWorld)
+    ? buildWorldBoundsPreview(state.selectedWorld, environmentTheme)
     : null;
   if (boundsPreview) {
     preview.root.add(boundsPreview);
@@ -10015,6 +10276,8 @@ function buildPrefabDocFromSelection(selection) {
         gravity: { x: 0, y: -9.8, z: 0 },
         camera_mode: "third_person",
         start_on_ready: true,
+        skybox: "blank",
+        ambient_light: "even",
       },
       voxels: key === "voxels" ? [localEntry] : [],
       primitives: key === "primitives" ? [localEntry] : [],
@@ -10730,10 +10993,35 @@ function bindEvents() {
   elements.sceneForm.elements.isDefault.addEventListener("change", () => {
     rememberSceneDraft();
   });
+  elements.sceneForm.elements.sceneSkybox?.addEventListener("change", () => {
+    void acquireSceneLock();
+    mutateSceneDoc((sceneDoc) => {
+      sceneDoc.settings = sceneDoc.settings || {};
+      sceneDoc.settings.skybox = normalizePrivateSceneEnvironmentSettings({
+        skybox: elements.sceneForm.elements.sceneSkybox.value,
+      }).skybox;
+    }, {
+      renderBuilder: false,
+    });
+    renderSceneEnvironmentControls(parseSceneTextarea());
+  });
+  elements.sceneForm.elements.sceneAmbientLight?.addEventListener("change", () => {
+    void acquireSceneLock();
+    mutateSceneDoc((sceneDoc) => {
+      sceneDoc.settings = sceneDoc.settings || {};
+      sceneDoc.settings.ambient_light = normalizePrivateSceneEnvironmentSettings({
+        ambient_light: elements.sceneForm.elements.sceneAmbientLight.value,
+      }).ambient_light;
+    }, {
+      renderBuilder: false,
+    });
+    renderSceneEnvironmentControls(parseSceneTextarea());
+  });
   elements.sceneForm.elements.sceneDoc.addEventListener("input", () => {
     rememberSceneDraft();
     try {
       const parsed = JSON.parse(elements.sceneForm.elements.sceneDoc.value || "{}");
+      renderSceneEnvironmentControls(parsed);
       if (typeof parsed?.script_dsl === "string" && parsed.script_dsl !== elements.sceneForm.elements.scriptDsl.value) {
         elements.sceneForm.elements.scriptDsl.value = parsed.script_dsl;
         rememberSceneDraft({ scriptDslText: parsed.script_dsl });

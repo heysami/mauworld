@@ -41,6 +41,8 @@ const ALLOWED_TEXTURE_PRESETS = new Set(["none", "grass", "wood", "wall", "floor
 const ALLOWED_PRIMITIVE_SHAPES = new Set(["box", "sphere", "capsule", "cylinder", "cone", "plane"]);
 const ALLOWED_PLAYER_CAMERA_MODES = new Set(["first_person", "third_person", "top_down"]);
 const ALLOWED_PLAYER_BODY_MODES = new Set(["rigid", "ghost"]);
+const ALLOWED_SCENE_SKYBOXES = new Set(["blank", "day", "sunset", "night"]);
+const ALLOWED_SCENE_AMBIENT_LIGHT_MODES = new Set(["even", "dim"]);
 const ALLOWED_RULE_TRIGGERS = new Set([
   "zone_enter",
   "zone_exit",
@@ -794,6 +796,8 @@ export function createDefaultSceneDoc() {
       gravity: { x: 0, y: -9.8, z: 0 },
       camera_mode: "third_person",
       start_on_ready: true,
+      skybox: "blank",
+      ambient_light: "even",
     },
     voxels: [],
     primitives: [],
@@ -812,6 +816,12 @@ export function createDefaultSceneDoc() {
 export function normalizeSceneDoc(input = {}) {
   const source = typeof input === "object" && input ? input : {};
   const settingsCameraMode = String(source.settings?.camera_mode ?? source.settings?.cameraMode ?? "third_person")
+    .trim()
+    .toLowerCase();
+  const settingsSkybox = String(source.settings?.skybox ?? source.settings?.skyboxPreset ?? "blank")
+    .trim()
+    .toLowerCase();
+  const settingsAmbientLight = String(source.settings?.ambient_light ?? source.settings?.ambientLight ?? "even")
     .trim()
     .toLowerCase();
   const entityAliases = new Map();
@@ -895,6 +905,8 @@ export function normalizeSceneDoc(input = {}) {
         ? settingsCameraMode
         : "third_person",
       start_on_ready: source.settings?.start_on_ready !== false,
+      skybox: ALLOWED_SCENE_SKYBOXES.has(settingsSkybox) ? settingsSkybox : "blank",
+      ambient_light: ALLOWED_SCENE_AMBIENT_LIGHT_MODES.has(settingsAmbientLight) ? settingsAmbientLight : "even",
     },
     voxels,
     primitives,

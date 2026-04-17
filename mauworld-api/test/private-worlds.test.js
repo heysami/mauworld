@@ -80,6 +80,32 @@ test("normalizeSceneDoc keeps safe defaults and strips executable screen content
   assert.doesNotMatch(scene.screens[0].html, /onclick=/i);
 });
 
+test("normalizeSceneDoc preserves scene atmosphere settings with safe defaults", () => {
+  const defaultScene = createDefaultSceneDoc();
+  assert.equal(defaultScene.settings.skybox, "blank");
+  assert.equal(defaultScene.settings.ambient_light, "even");
+
+  const scene = normalizeSceneDoc({
+    settings: {
+      skybox: "sunset",
+      ambient_light: "dim",
+    },
+  });
+
+  assert.equal(scene.settings.skybox, "sunset");
+  assert.equal(scene.settings.ambient_light, "dim");
+
+  const fallbackScene = normalizeSceneDoc({
+    settings: {
+      skybox: "lava",
+      ambient_light: "blackout",
+    },
+  });
+
+  assert.equal(fallbackScene.settings.skybox, "blank");
+  assert.equal(fallbackScene.settings.ambient_light, "even");
+});
+
 test("normalizeSceneDoc remaps raw entity references onto normalized ids", () => {
   const scene = normalizeSceneDoc({
     primitives: [
