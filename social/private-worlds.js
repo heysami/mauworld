@@ -218,6 +218,20 @@ const elements = {
   sceneForm: document.querySelector("[data-scene-form]"),
   saveScene: document.querySelector("[data-save-scene]"),
   refreshScene: document.querySelector("[data-refresh-scene]"),
+  scriptFunctionSearch: document.querySelector("[data-script-function-search]"),
+  scriptFunctionSearchHint: document.querySelector("[data-script-function-search-hint]"),
+  scriptFunctionList: document.querySelector("[data-script-function-list]"),
+  scriptFunctionEditor: document.querySelector("[data-script-function-editor]"),
+  scriptFunctionEmpty: document.querySelector("[data-script-function-empty]"),
+  scriptFunctionFields: document.querySelector("[data-script-function-fields]"),
+  scriptFunctionName: document.querySelector("[data-script-function-name]"),
+  scriptFunctionMeta: document.querySelector("[data-script-function-meta]"),
+  scriptFunctionBody: document.querySelector("[data-script-function-body]"),
+  scriptFunctionPrompt: document.querySelector("[data-script-function-prompt]"),
+  scriptFunctionOpenGenerate: document.querySelector("[data-script-function-open-generate]"),
+  scriptFunctionNew: document.querySelector("[data-script-function-new]"),
+  scriptFunctionDelete: document.querySelector("[data-script-function-delete]"),
+  scriptFunctionGenerate: document.querySelector("[data-script-function-generate]"),
   entitySections: document.querySelector("[data-entity-sections]"),
   entityEditor: document.querySelector("[data-entity-editor]"),
   entityEmpty: document.querySelector("[data-entity-empty]"),
@@ -285,8 +299,10 @@ const state = {
   selectedWorld: null,
   selectedSceneId: "",
   selectedPrefabId: "",
+  selectedScriptFunctionId: "",
   prefabQuery: "",
   prefabPlacementId: "",
+  scriptFunctionQuery: "",
   sceneDrafts: new Map(),
   sceneEditorSceneId: "",
   placementTool: "",
@@ -1976,6 +1992,7 @@ const PLAYER_CAMERA_MODES = ["third_person", "first_person", "top_down"];
 const PLAYER_BODY_MODES = ["rigid", "ghost"];
 const EFFECT_OPTIONS = ["", "sparkles", "smoke", "glow", "embers", "mist"];
 const TRAIL_OPTIONS = ["", "ribbon", "glow", "spark", "comet"];
+const SCRIPT_FUNCTION_HEADER_RE = /^#\s*function(?:\[([a-z0-9_-]+)\])?:\s*(.*)$/i;
 
 function isPlacementToolKind(kind) {
   return kind === "voxel"
@@ -3756,6 +3773,262 @@ function discardSceneDraft(sceneId = state.selectedSceneId) {
   }
 }
 
+function createScriptFunctionId(seed = "") {
+  const randomToken = Math.random().toString(36).slice(2, 8);
+  return `scriptfn_${slugToken(seed || `logic_${Date.now().toString(36)}_${randomToken}`)}`;
+}
+
+function normalizeScriptFunctionEntry(entry = {}, index = 0) {
+  return {
+    id: String(entry.id ?? "").trim() || createScriptFunctionId(`logic_${index + 1}`),
+    name: String(entry.name ?? "").trim() || `Function ${index + 1}`,
+    body: String(entry.body ?? "").replace(/\s+$/g, ""),
+  };
+}
+
+function parseScriptFunctionLibrary(value = "") {
+  const source = String(value ?? "").replace(/\r\n/g, "\n");
+  if (!source.trim()) {
+    return [];
+  }
+  const lines = source.split("\n");
+  const functions = [];
+  let current = null;
+  const pushCurrent = () => {
+    if (!current) {
+      return;
+    }
+    functions.push(normalizeScriptFunctionEntry({
+      id: current.id,
+      name: current.name,
+      body: current.lines.join("\n").replace(/^\n+|\n+$/g, ""),
+    }, functions.length));
+    current = null;
+  };
+  for (const line of lines) {
+    const headerMatch = line.match(SCRIPT_FUNCTION_HEADER_RE);
+    if (headerMatch) {
+      pushCurrent();
+      current = {
+        id: String(headerMatch[1] ?? "").trim() || createScriptFunctionId(`logic_${functions.length + 1}`),
+        name: String(headerMatch[2] ?? "").trim() || `Function ${functions.length + 1}`,
+        lines: [],
+      };
+      continue;
+    }
+    if (!current) {
+      current = {
+        id: createScriptFunctionId(`logic_${functions.length + 1}`),
+        name: "Main function",
+        lines: [],
+      };
+    }
+    current.lines.push(line);
+  }
+  pushCurrent();
+  return functions;
+}
+
+function serializeScriptFunctionLibrary(functions = []) {
+  return functions
+    .map((entry, index) => normalizeScriptFunctionEntry(entry, index))
+    .map((entry) => [`# function[${entry.id}]: ${entry.name}`, entry.body].filter((part) => part !== "").join("\n"))
+    .join("\n\n")
+    .trim();
+}
+
+function getSceneScriptFunctions() {
+  return parseScriptFunctionLibrary(elements.sceneForm?.elements?.scriptDsl?.value || "");
+}
+
+function buildScriptFunctionSummary(entry = {}) {
+  const body = String(entry.body ?? "");
+  const lines = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const ruleLines = lines.filter((line) => !line.startsWith("#") && !line.startsWith("//"));
+  return {
+    lineCount: ruleLines.length,
+    preview: ruleLines[0] || "No rules yet",
+  };
+}
+
+function ensureSelectedScriptFunction(functions = getSceneScriptFunctions()) {
+  const normalizedFunctions = Array.isArray(functions) ? functions : [];
+  if (!normalizedFunctions.length) {
+    state.selectedScriptFunctionId = "";
+    return null;
+  }
+  const selected = normalizedFunctions.find((entry) => entry.id === state.selectedScriptFunctionId) ?? normalizedFunctions[0];
+  state.selectedScriptFunctionId = selected.id;
+  return selected;
+}
+
+function renderSceneLogicLibrary() {
+  if (!elements.scriptFunctionList || !elements.sceneForm?.elements) {
+    return;
+  }
+  const scene = getSelectedScene();
+  const hasScene = Boolean(scene);
+  const canEdit = hasScene && isEditor() && state.mode === "build";
+  const functions = getSceneScriptFunctions();
+  const normalizedQuery = String(state.scriptFunctionQuery ?? "").trim().toLowerCase();
+  const visibleFunctions = functions.filter((entry) => {
+    const haystack = [entry.name, entry.body].join(" ").toLowerCase();
+    return !normalizedQuery || haystack.includes(normalizedQuery);
+  });
+  if (visibleFunctions.length > 0 && !visibleFunctions.some((entry) => entry.id === state.selectedScriptFunctionId)) {
+    state.selectedScriptFunctionId = visibleFunctions[0].id;
+  }
+  const selectedFunction = ensureSelectedScriptFunction(functions);
+  if (elements.scriptFunctionSearch && elements.scriptFunctionSearch.value !== String(state.scriptFunctionQuery ?? "")) {
+    elements.scriptFunctionSearch.value = String(state.scriptFunctionQuery ?? "");
+  }
+  if (elements.scriptFunctionSearch) {
+    elements.scriptFunctionSearch.disabled = !hasScene;
+  }
+  if (elements.scriptFunctionNew) {
+    elements.scriptFunctionNew.disabled = !canEdit;
+  }
+  if (elements.scriptFunctionOpenGenerate) {
+    elements.scriptFunctionOpenGenerate.disabled = !canEdit || !state.selectedWorld || !state.session;
+  }
+  if (elements.scriptFunctionDelete) {
+    elements.scriptFunctionDelete.disabled = !canEdit || !selectedFunction;
+  }
+  if (elements.scriptFunctionGenerate) {
+    elements.scriptFunctionGenerate.disabled = !canEdit || !state.selectedWorld || !state.session;
+  }
+  if (!hasScene) {
+    elements.scriptFunctionList.innerHTML = '<div class="pw-script-card"><p>No scene selected yet.</p></div>';
+    if (elements.scriptFunctionSearchHint) {
+      elements.scriptFunctionSearchHint.textContent = "Open a scene to organize its logic.";
+    }
+  } else if (!functions.length) {
+    elements.scriptFunctionList.innerHTML = '<div class="pw-script-card"><p>No functions yet. Add one to keep scene logic in tidy pieces.</p></div>';
+    if (elements.scriptFunctionSearchHint) {
+      elements.scriptFunctionSearchHint.textContent = "Each function compiles back into the single scene script automatically.";
+    }
+  } else if (!visibleFunctions.length) {
+    elements.scriptFunctionList.innerHTML = '<div class="pw-script-card"><p>No functions match that search.</p></div>';
+    if (elements.scriptFunctionSearchHint) {
+      elements.scriptFunctionSearchHint.textContent = "Try a different function name or clear the search.";
+    }
+  } else {
+    if (elements.scriptFunctionSearchHint) {
+      elements.scriptFunctionSearchHint.textContent = `${visibleFunctions.length} function${visibleFunctions.length === 1 ? "" : "s"} in this scene. Click one to edit, or generate into the current selection.`;
+    }
+    elements.scriptFunctionList.innerHTML = visibleFunctions.map((entry, index) => {
+      const summary = buildScriptFunctionSummary(entry);
+      const isSelected = selectedFunction?.id === entry.id;
+      return `
+        <article class="pw-script-card ${isSelected ? "is-active" : ""}" data-script-function-id="${htmlEscape(entry.id)}">
+          <div class="pw-script-card__head">
+            <div class="pw-script-card__title">
+              <strong>${htmlEscape(entry.name)}</strong>
+              <span>${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}</span>
+            </div>
+            <span class="pw-script-card__badge">${isSelected ? "editing" : `f${index + 1}`}</span>
+          </div>
+          <p>${htmlEscape(summary.preview)}</p>
+        </article>
+      `;
+    }).join("");
+  }
+
+  const showEditor = Boolean(selectedFunction);
+  if (elements.scriptFunctionEmpty) {
+    elements.scriptFunctionEmpty.hidden = showEditor;
+    elements.scriptFunctionEmpty.textContent = functions.length
+      ? "Select a function to edit its rules."
+      : "Add a function to start shaping scene logic.";
+  }
+  if (elements.scriptFunctionFields) {
+    elements.scriptFunctionFields.hidden = !showEditor;
+  }
+  if (!selectedFunction) {
+    if (elements.scriptFunctionName) {
+      elements.scriptFunctionName.value = "";
+      elements.scriptFunctionName.disabled = true;
+    }
+    if (elements.scriptFunctionBody) {
+      elements.scriptFunctionBody.value = "";
+      elements.scriptFunctionBody.disabled = true;
+    }
+    if (elements.scriptFunctionMeta) {
+      elements.scriptFunctionMeta.textContent = "";
+    }
+    if (elements.scriptFunctionPrompt) {
+      elements.scriptFunctionPrompt.disabled = true;
+    }
+    return;
+  }
+  const summary = buildScriptFunctionSummary(selectedFunction);
+  if (elements.scriptFunctionName) {
+    elements.scriptFunctionName.disabled = !canEdit;
+    if (elements.scriptFunctionName.value !== selectedFunction.name) {
+      elements.scriptFunctionName.value = selectedFunction.name;
+    }
+  }
+  if (elements.scriptFunctionBody) {
+    elements.scriptFunctionBody.disabled = !canEdit;
+    if (elements.scriptFunctionBody.value !== selectedFunction.body) {
+      elements.scriptFunctionBody.value = selectedFunction.body;
+    }
+  }
+  if (elements.scriptFunctionPrompt) {
+    elements.scriptFunctionPrompt.disabled = !canEdit || !state.session;
+  }
+  if (elements.scriptFunctionMeta) {
+    elements.scriptFunctionMeta.textContent = `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"} · comments are okay · saved as one scene script behind the scenes`;
+  }
+}
+
+function mutateSceneScriptFunctions(mutator, options = {}) {
+  if (!elements.sceneForm?.elements?.scriptDsl) {
+    return [];
+  }
+  const nextFunctions = getSceneScriptFunctions().map((entry, index) => normalizeScriptFunctionEntry(entry, index));
+  mutator(nextFunctions);
+  const scriptDslText = serializeScriptFunctionLibrary(nextFunctions);
+  elements.sceneForm.elements.scriptDsl.value = scriptDslText;
+  void acquireSceneLock();
+  mutateSceneDoc((sceneDoc) => {
+    sceneDoc.script_dsl = scriptDslText;
+  }, {
+    renderBuilder: false,
+    updatePreview: false,
+  });
+  if (options.render !== false) {
+    renderSceneLogicLibrary();
+  }
+  return nextFunctions;
+}
+
+function normalizeGeneratedScriptBody(value = "") {
+  let cleaned = String(value ?? "").trim();
+  const fenced = cleaned.match(/^```(?:[\w-]+)?\n?([\s\S]*?)```$/);
+  if (fenced) {
+    cleaned = String(fenced[1] ?? "").trim();
+  }
+  return cleaned
+    .split(/\r?\n/)
+    .filter((line) => !SCRIPT_FUNCTION_HEADER_RE.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
+function focusSelectedScriptFunctionBody() {
+  window.setTimeout(() => {
+    elements.scriptFunctionBody?.focus?.();
+    if (elements.scriptFunctionBody?.value) {
+      elements.scriptFunctionBody.selectionStart = elements.scriptFunctionBody.value.length;
+      elements.scriptFunctionBody.selectionEnd = elements.scriptFunctionBody.value.length;
+    }
+  }, 0);
+}
+
 function isEditor() {
   return state.selectedWorld?.permissions?.can_edit === true;
 }
@@ -3859,12 +4132,16 @@ function renderSceneEditor() {
     elements.sceneForm.elements.isDefault.checked = false;
     elements.sceneForm.elements.sceneDoc.value = "";
     elements.sceneForm.elements.scriptDsl.value = "";
+    state.selectedScriptFunctionId = "";
+    state.scriptFunctionQuery = "";
     state.sceneEditorSceneId = "";
   } else if (!draft || state.sceneEditorSceneId !== sceneId) {
     elements.sceneForm.elements.name.value = draft?.name ?? scene?.name ?? "";
     elements.sceneForm.elements.isDefault.checked = draft?.isDefault ?? scene?.is_default === true;
     elements.sceneForm.elements.sceneDoc.value = draft?.sceneDocText ?? JSON.stringify(scene.scene_doc ?? {}, null, 2);
     elements.sceneForm.elements.scriptDsl.value = draft?.scriptDslText ?? scene?.scene_doc?.script_dsl ?? "";
+    state.selectedScriptFunctionId = "";
+    state.scriptFunctionQuery = "";
     state.sceneEditorSceneId = sceneId;
   }
   elements.saveScene.disabled = !canEdit || !scene || !buildMode;
@@ -3873,6 +4150,7 @@ function renderSceneEditor() {
   elements.sceneForm.elements.isDefault.disabled = !canEdit || !buildMode;
   elements.sceneForm.elements.scriptDsl.disabled = !canEdit || !buildMode;
   elements.sceneForm.elements.sceneDoc.disabled = !canEdit || !buildMode;
+  renderSceneLogicLibrary();
   const buildPanel = document.querySelector("[data-build-panel]");
   if (buildPanel) {
     buildPanel.hidden = false;
@@ -8374,6 +8652,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.selectedWorld = payload.world;
   state.selectedSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
   state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
+  state.selectedScriptFunctionId = "";
   writeBuilderSelection([]);
   state.buildModifierKeys.clear();
   endBuildDrag();
@@ -8387,6 +8666,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
     clearPlacementTool();
     state.sceneDrafts.clear();
     state.sceneEditorSceneId = "";
+    state.scriptFunctionQuery = "";
     state.privateChatEntries = [];
     state.activeChats.clear();
     state.livePresence.clear();
@@ -9120,33 +9400,99 @@ function attachQuickAddButtons() {
   elements.addRule.addEventListener("click", () => {
     setSceneDrawerOpen(true);
     window.setTimeout(() => {
-      elements.sceneForm?.elements?.scriptDsl?.focus?.();
+      const existingFunctions = getSceneScriptFunctions();
+      if (!existingFunctions.length && isEditor() && state.mode === "build") {
+        mutateSceneScriptFunctions((functions) => {
+          functions.push(normalizeScriptFunctionEntry({
+            id: createScriptFunctionId("logic"),
+            name: "Function 1",
+            body: "",
+          }, functions.length));
+        });
+      } else {
+        renderSceneLogicLibrary();
+      }
+      focusSelectedScriptFunctionBody();
     }, 0);
   });
 }
 
-async function generateAi(kind) {
+async function generateAi(kind, options = {}) {
   if (!state.selectedWorld) {
-    return;
+    return "";
   }
-  const formData = new FormData(elements.aiForm);
-  const apiKey = String(formData.get("apiKey") ?? "").trim();
+  const provider = String(options.provider ?? elements.aiForm?.elements?.provider?.value ?? "openai").trim() || "openai";
+  const model = String(options.model ?? elements.aiForm?.elements?.model?.value ?? "gpt-5.4-mini").trim() || "gpt-5.4-mini";
+  const apiKey = String(options.apiKey ?? elements.aiForm?.elements?.apiKey?.value ?? "").trim();
   setAiKey(apiKey);
   const path = kind === "html" ? "/private/worlds/ai/screen-html" : "/private/worlds/ai/script";
   const payload = await apiFetch(path, {
     method: "POST",
     body: {
-      provider: formData.get("provider"),
-      model: formData.get("model"),
+      provider,
+      model,
       apiKey,
       worldName: state.selectedWorld.name,
       worldAbout: state.selectedWorld.about,
-      objective: formData.get("objective"),
-      sceneSummary: JSON.stringify(getSelectedScene()?.compiled_doc?.stats ?? {}),
+      objective: options.objective ?? elements.aiForm?.elements?.objective?.value ?? "",
+      sceneSummary: options.sceneSummary ?? JSON.stringify(getSelectedScene()?.compiled_doc?.stats ?? {}),
     },
   });
-  elements.aiOutput.value = payload.text || "";
+  const text = String(payload.text ?? "").trim();
+  if (options.outputTarget instanceof HTMLTextAreaElement) {
+    options.outputTarget.value = text;
+  } else if (elements.aiOutput) {
+    elements.aiOutput.value = text;
+  }
   pushEvent("ai:generated", kind === "html" ? "Generated screen HTML" : "Generated script");
+  return text;
+}
+
+async function generateSceneLogicFunction() {
+  if (!state.selectedWorld || !isEditor() || state.mode !== "build") {
+    return;
+  }
+  const prompt = String(elements.scriptFunctionPrompt?.value ?? "").trim();
+  if (!prompt) {
+    setStatus("Add a short prompt for the logic you want generated.");
+    elements.scriptFunctionPrompt?.focus?.();
+    return;
+  }
+  let selectedFunction = ensureSelectedScriptFunction();
+  if (!selectedFunction) {
+    mutateSceneScriptFunctions((functions) => {
+      const nextIndex = functions.length;
+      const nextFunction = normalizeScriptFunctionEntry({
+        id: createScriptFunctionId("logic"),
+        name: `Function ${nextIndex + 1}`,
+        body: "",
+      }, nextIndex);
+      functions.push(nextFunction);
+      state.selectedScriptFunctionId = nextFunction.id;
+    });
+    selectedFunction = ensureSelectedScriptFunction();
+  }
+  const objective = [
+    prompt,
+    selectedFunction?.name ? `Write one self-contained Mauworld logic function called "${selectedFunction.name}".` : "Write one self-contained Mauworld logic function.",
+    "Return only the DSL rules for that function. No markdown fences. No explanation.",
+  ].join(" ");
+  const generatedText = normalizeGeneratedScriptBody(await generateAi("script", {
+    objective,
+    outputTarget: elements.aiOutput,
+  }));
+  if (!generatedText) {
+    setStatus("The AI returned an empty logic function.");
+    return;
+  }
+  mutateSceneScriptFunctions((functions) => {
+    const target = functions.find((entry) => entry.id === state.selectedScriptFunctionId) ?? functions[functions.length - 1] ?? null;
+    if (!target) {
+      return;
+    }
+    target.body = generatedText;
+  });
+  focusSelectedScriptFunctionBody();
 }
 
 async function acquireSceneLock() {
@@ -9464,19 +9810,132 @@ function bindEvents() {
   });
   elements.sceneForm.elements.sceneDoc.addEventListener("input", () => {
     rememberSceneDraft();
+    try {
+      const parsed = JSON.parse(elements.sceneForm.elements.sceneDoc.value || "{}");
+      if (typeof parsed?.script_dsl === "string" && parsed.script_dsl !== elements.sceneForm.elements.scriptDsl.value) {
+        elements.sceneForm.elements.scriptDsl.value = parsed.script_dsl;
+        rememberSceneDraft({ scriptDslText: parsed.script_dsl });
+        renderSceneLogicLibrary();
+      }
+    } catch (_error) {
+      // let the raw JSON editor stay freeform while the user is typing
+    }
     updatePreviewFromSelection();
-  });
-  elements.sceneForm.elements.scriptDsl.addEventListener("input", () => {
-    void acquireSceneLock();
-    mutateSceneDoc((sceneDoc) => {
-      sceneDoc.script_dsl = String(elements.sceneForm.elements.scriptDsl.value || "").trim();
-    });
   });
   elements.sceneForm.elements.sceneDoc.addEventListener("focus", () => {
     void acquireSceneLock();
   });
   elements.sceneForm.elements.sceneDoc.addEventListener("blur", () => {
     void releaseSceneLock();
+  });
+  elements.scriptFunctionSearch?.addEventListener("input", () => {
+    state.scriptFunctionQuery = elements.scriptFunctionSearch.value || "";
+    renderSceneLogicLibrary();
+  });
+  elements.scriptFunctionList?.addEventListener("click", (event) => {
+    const card = event.target.closest("[data-script-function-id]");
+    if (!card) {
+      return;
+    }
+    state.selectedScriptFunctionId = card.getAttribute("data-script-function-id");
+    renderSceneLogicLibrary();
+  });
+  elements.scriptFunctionNew?.addEventListener("click", () => {
+    mutateSceneScriptFunctions((functions) => {
+      const nextIndex = functions.length;
+      const nextFunction = normalizeScriptFunctionEntry({
+        id: createScriptFunctionId("logic"),
+        name: `Function ${nextIndex + 1}`,
+        body: "",
+      }, nextIndex);
+      functions.push(nextFunction);
+      state.selectedScriptFunctionId = nextFunction.id;
+    });
+    focusSelectedScriptFunctionBody();
+  });
+  elements.scriptFunctionOpenGenerate?.addEventListener("click", () => {
+    if (!ensureSelectedScriptFunction()) {
+      mutateSceneScriptFunctions((functions) => {
+        const nextIndex = functions.length;
+        const nextFunction = normalizeScriptFunctionEntry({
+          id: createScriptFunctionId("logic"),
+          name: `Function ${nextIndex + 1}`,
+          body: "",
+        }, nextIndex);
+        functions.push(nextFunction);
+        state.selectedScriptFunctionId = nextFunction.id;
+      });
+    } else {
+      renderSceneLogicLibrary();
+    }
+    window.setTimeout(() => {
+      elements.scriptFunctionPrompt?.focus?.();
+    }, 0);
+  });
+  elements.scriptFunctionDelete?.addEventListener("click", () => {
+    mutateSceneScriptFunctions((functions) => {
+      const selectedIndex = functions.findIndex((entry) => entry.id === state.selectedScriptFunctionId);
+      if (selectedIndex < 0) {
+        return;
+      }
+      functions.splice(selectedIndex, 1);
+      state.selectedScriptFunctionId = functions[Math.max(0, selectedIndex - 1)]?.id || functions[0]?.id || "";
+    });
+  });
+  elements.scriptFunctionName?.addEventListener("focus", () => {
+    void acquireSceneLock();
+  });
+  elements.scriptFunctionBody?.addEventListener("focus", () => {
+    void acquireSceneLock();
+  });
+  elements.scriptFunctionName?.addEventListener("input", () => {
+    mutateSceneScriptFunctions((functions) => {
+      const selected = functions.find((entry) => entry.id === state.selectedScriptFunctionId);
+      if (!selected) {
+        return;
+      }
+      selected.name = elements.scriptFunctionName.value;
+    }, { render: false });
+  });
+  elements.scriptFunctionBody?.addEventListener("input", () => {
+    mutateSceneScriptFunctions((functions) => {
+      const selected = functions.find((entry) => entry.id === state.selectedScriptFunctionId);
+      if (!selected) {
+        return;
+      }
+      selected.body = elements.scriptFunctionBody.value;
+    }, { render: false });
+  });
+  elements.scriptFunctionName?.addEventListener("change", () => {
+    mutateSceneScriptFunctions((functions) => {
+      const selected = functions.find((entry) => entry.id === state.selectedScriptFunctionId);
+      if (!selected) {
+        return;
+      }
+      selected.name = elements.scriptFunctionName.value;
+    });
+  });
+  elements.scriptFunctionBody?.addEventListener("change", () => {
+    mutateSceneScriptFunctions((functions) => {
+      const selected = functions.find((entry) => entry.id === state.selectedScriptFunctionId);
+      if (!selected) {
+        return;
+      }
+      selected.body = elements.scriptFunctionBody.value;
+    });
+  });
+  elements.scriptFunctionName?.addEventListener("blur", () => {
+    renderSceneLogicLibrary();
+    void releaseSceneLock();
+  });
+  elements.scriptFunctionBody?.addEventListener("blur", () => {
+    renderSceneLogicLibrary();
+    void releaseSceneLock();
+  });
+  elements.scriptFunctionGenerate?.addEventListener("click", () => {
+    void generateSceneLogicFunction().catch((error) => {
+      setStatus(error.message);
+    });
   });
   elements.entitySections.addEventListener("click", (event) => {
     const button = event.target.closest("[data-select-kind][data-select-id]");

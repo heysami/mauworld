@@ -547,6 +547,7 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
 
 .pw-world-list,
 .pw-builder-list,
+.pw-script-list,
 .pw-prefab-list,
 .pw-collaborator-list,
 .pw-event-log,
@@ -557,23 +558,40 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
   gap: 10px;
 }
 
+.pw-script-search,
 .pw-prefab-search {
   display: grid;
   gap: 6px;
+}
+
+.pw-script-search,
+.pw-prefab-search {
   margin-bottom: 10px;
 }
 
+.pw-script-search__hint,
 .pw-prefab-search__hint {
   margin: 0 0 10px;
   color: var(--pw-muted);
   line-height: 1.45;
 }
 
+.pw-script-list,
 .pw-prefab-list {
   max-height: min(48vh, 560px);
   overflow: auto;
   align-content: start;
   padding-right: 4px;
+}
+
+.pw-script-editor {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .pw-world-card,
@@ -601,6 +619,7 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
 
 .pw-world-card h3,
 .pw-world-card p,
+.pw-script-card p,
 .pw-prefab-card p,
 .pw-builder-item strong,
 .pw-builder-item small {
@@ -629,7 +648,29 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
   cursor: pointer;
 }
 
+.pw-script-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: var(--pw-surface);
+  cursor: pointer;
+}
+
+.pw-script-card.is-active {
+  border-color: rgba(255, 90, 122, 0.32);
+  background: rgba(255, 90, 122, 0.1);
+}
+
 .pw-prefab-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pw-script-card__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -641,7 +682,16 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
   gap: 4px;
 }
 
+.pw-script-card__title {
+  display: grid;
+  gap: 4px;
+}
+
 .pw-prefab-card__title strong {
+  margin: 0;
+}
+
+.pw-script-card__title strong {
   margin: 0;
 }
 
@@ -655,10 +705,32 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
   white-space: nowrap;
 }
 
+.pw-script-card__badge {
+  padding: 4px 8px;
+  border: 1px solid var(--pw-line);
+  border-radius: 6px;
+  color: var(--pw-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .pw-prefab-card.is-armed .pw-prefab-card__badge {
   border-color: rgba(45, 216, 255, 0.34);
   color: var(--pw-text);
   background: rgba(45, 216, 255, 0.12);
+}
+
+.pw-script-editor__fields {
+  display: grid;
+  gap: 12px;
+}
+
+.pw-script-editor__meta,
+.pw-script-ai__hint {
+  color: var(--pw-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .pw-toolbelt {
