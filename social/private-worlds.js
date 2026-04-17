@@ -2931,8 +2931,8 @@ function getLocalParticipant(world = state.selectedWorld) {
   if (!world?.active_instance?.participants?.length) {
     return null;
   }
-  if (state.profile?.username) {
-    return world.active_instance.participants.find((entry) => entry.profile?.username === state.profile.username) ?? null;
+  if (state.profile?.id) {
+    return world.active_instance.participants.find((entry) => entry.profile?.id === state.profile.id) ?? null;
   }
   return world.active_instance.participants.find((entry) => entry.guest_session_id === getGuestSessionId()) ?? null;
 }
