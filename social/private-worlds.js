@@ -4794,9 +4794,6 @@ function clearPreviewRoot() {
   preview.entityPickables = [];
   preview.entityMeshes.clear();
   disposePreviewEffects(preview);
-  for (const entry of [...(preview.animatedChatBubbleGhosts ?? [])]) {
-    removePrivateChatBubbleGhost(preview, entry);
-  }
   for (const child of [...preview.root.children]) {
     preview.root.remove(child);
     child.traverse((node) => {
