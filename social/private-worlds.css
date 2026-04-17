@@ -520,6 +520,15 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
   position: relative;
 }
 
+body.private-worlds-body.has-private-browser-overlay .pw-mau-panel,
+body.private-worlds-body.has-private-browser-overlay [data-private-panel-view="share"] {
+  overflow: visible;
+}
+
+body.private-worlds-body.has-private-browser-overlay .pw-share-panel.is-expanded {
+  z-index: 20;
+}
+
 .pw-share-meta,
 .pw-build-summary {
   display: grid;

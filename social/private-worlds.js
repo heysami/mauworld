@@ -300,6 +300,10 @@ const state = {
   viewerSuppressClickAt: 0,
   buildDrag: null,
   launchHandled: false,
+  launchRequestPromise: null,
+  launchRequestQueued: false,
+  authRefreshPromise: null,
+  authRefreshQueued: false,
 };
 
 const privateInputState = {
@@ -2183,6 +2187,7 @@ function getPrivateBrowserStagePlaceholderText({
 
 function setPrivateBrowserOverlayOpen(open) {
   state.browserOverlayOpen = Boolean(open);
+  document.body.classList.toggle("has-private-browser-overlay", state.browserOverlayOpen);
   setDisplayShareOverlayState({
     open: state.browserOverlayOpen,
     panel: elements.panelBrowserPanel,
@@ -2191,6 +2196,9 @@ function setPrivateBrowserOverlayOpen(open) {
     stage: elements.panelBrowserStage,
     updateView: updatePrivateBrowserPanel,
   });
+  if (state.browserOverlayOpen) {
+    elements.panelBrowserStage?.focus?.({ preventScroll: true });
+  }
 }
 
 function getLocalPrivateBrowserSession() {
@@ -2301,12 +2309,7 @@ const privateBrowserShareFeature = createNearbyDisplayShareFeature({
   setStatus: setPrivateBrowserStatus,
   updateView: updatePrivateBrowserPanel,
   updatingStatusText: "Updating live share title...",
-  canLaunch: () => Boolean(
-    state.session
-    && state.selectedWorld
-    && getLocalParticipant()
-    && state.browserMediaState.enabled !== false
-  ),
+  canLaunch: () => isPrivateWorldReadyForShare(),
   onCannotLaunch() {
     updatePrivateBrowserPanel();
   },
@@ -2329,7 +2332,7 @@ const privateBrowserShareFeature = createNearbyDisplayShareFeature({
 });
 
 function startLocalPrivateNearbyShare(share) {
-  if (!state.session || !state.selectedWorld || !getLocalParticipant()) {
+  if (!isPrivateWorldReadyForShare()) {
     updatePrivateBrowserPanel();
     return false;
   }
@@ -2457,6 +2460,17 @@ function syncPrivateBrowserMediaSubscription(sessionId, subscribed) {
     worldSnapshotId: getPrivateBrowserWorldKey(),
     canPublish: session.hostSessionId === getPrivateViewerSessionId(),
   });
+}
+
+function isPrivateWorldReadyForShare() {
+  return Boolean(
+    state.session
+    && state.selectedWorld
+    && getLocalParticipant()
+    && state.browserMediaState.enabled !== false
+    && state.worldSocket?.readyState === WebSocket.OPEN
+    && !state.authRefreshPromise
+  );
 }
 
 function attachLocalPrivateBrowserShare(sessionId, share) {
@@ -2646,6 +2660,8 @@ function updatePrivateBrowserPanel() {
     state.browserPanelRemoteSessionId = "";
   }
   const mediaAvailable = state.browserMediaState.enabled !== false;
+  const socketReady = state.worldSocket?.readyState === WebSocket.OPEN;
+  const authStable = !state.authRefreshPromise;
   const remoteSession = state.browserPanelRemoteSessionId
     ? state.browserSessions.get(state.browserPanelRemoteSessionId) ?? null
     : localSession
@@ -2653,7 +2669,7 @@ function updatePrivateBrowserPanel() {
       : [...state.browserSessions.values()].find(
         (session) => session.hostSessionId !== getPrivateViewerSessionId() && session.deliveryMode === "full",
       ) ?? null;
-  const canShare = Boolean(state.session && world && localParticipant && mediaAvailable);
+  const canShare = Boolean(state.session && world && localParticipant && mediaAvailable && socketReady && authStable);
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
     : state.localBrowserShare?.hasVideo
@@ -2768,6 +2784,14 @@ function updatePrivateBrowserPanel() {
       badge: "Idle",
       current: "Enter to share",
       hint: "Join this private world first.",
+    });
+  } else if (!authStable || !socketReady) {
+    setPrivateBrowserStatus("Private world is still connecting. Wait a moment, then share again.");
+    updatePrivateBrowserSummary({
+      state: "starting",
+      badge: "Starting",
+      current: "Connecting world",
+      hint: "Nearby Share will turn on once this private world finishes reconnecting.",
     });
   } else if (!mediaAvailable) {
     setPrivateBrowserStatus("Live share is unavailable right now.");
@@ -2900,7 +2924,7 @@ async function fetchAuthConfig() {
   });
 }
 
-async function refreshAuthState() {
+async function runRefreshAuthState() {
   renderSessionSummary();
   if (!state.session) {
     await releaseSceneLock();
@@ -2933,16 +2957,17 @@ async function refreshAuthState() {
     renderSessionSummary();
     await loadWorlds();
     const launch = getLaunchRequest();
+    const hasLaunchRequest = Boolean(launch.worldId && launch.creatorUsername);
     const launchParticipant = getLocalParticipant(state.selectedWorld);
     const shouldReplayLaunch =
-      Boolean(launch.worldId && launch.creatorUsername)
+      hasLaunchRequest
       && (
         !selectedWorldMatchesLaunchRequest(launch)
         || (launch.autojoin && (!launchParticipant || launchParticipant.join_role === "guest"))
       );
     if (shouldReplayLaunch) {
       await handleLaunchRequest({ force: true });
-    } else if (state.selectedWorld?.world_id && state.selectedWorld?.creator?.username) {
+    } else if (!hasLaunchRequest && state.selectedWorld?.world_id && state.selectedWorld?.creator?.username) {
       await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
     }
     if (!state.selectedWorld) {
@@ -2951,6 +2976,22 @@ async function refreshAuthState() {
   } catch (error) {
     setStatus(error.message);
   }
+}
+
+async function refreshAuthState() {
+  state.authRefreshQueued = true;
+  if (state.authRefreshPromise) {
+    return state.authRefreshPromise;
+  }
+  state.authRefreshPromise = (async () => {
+    while (state.authRefreshQueued) {
+      state.authRefreshQueued = false;
+      await runRefreshAuthState();
+    }
+  })().finally(() => {
+    state.authRefreshPromise = null;
+  });
+  return state.authRefreshPromise;
 }
 
 function renderProfile() {
@@ -6675,57 +6716,77 @@ function bindEvents() {
 }
 
 async function handleLaunchRequest(options = {}) {
-  if (state.launchHandled && options.force !== true) {
-    return;
+  if (options.force === true) {
+    state.launchRequestQueued = true;
   }
-  const launch = getLaunchRequest();
-  if (!launch.worldId || !launch.creatorUsername) {
-    return;
+  if (state.launchRequestPromise) {
+    return state.launchRequestPromise;
   }
-  state.launchHandled = true;
-  await openWorld(launch.worldId, launch.creatorUsername, true);
-  if (launch.fork) {
-    try {
-      await forkSelectedWorld();
-      return;
-    } catch (error) {
-      setStatus(error.message);
-      if (!state.session) {
-        setLauncherOpen(true);
-      }
-      pushEvent("launcher:fork:error", error.message);
-    }
-  }
-  if (launch.autojoin) {
-    if (!state.session) {
-      const localParticipant = getLocalParticipant(state.selectedWorld);
-      const activeInstance = state.selectedWorld?.active_instance ?? null;
-      const maxViewers = Math.max(0, Number(state.selectedWorld?.max_viewers ?? 0) || 0);
-      const viewerCount = Math.max(
-        0,
-        Number(activeInstance?.viewer_count ?? activeInstance?.participants?.length ?? 0) || 0,
-      );
-      if (!activeInstance) {
-        setLauncherTab("access");
-        setLauncherOpen(true);
-        setStatus("Sign in to start this private world.");
-        pushEvent("launcher", "Sign in to start this private world");
+  let forceRun = options.force === true;
+  state.launchRequestPromise = (async () => {
+    while (true) {
+      state.launchRequestQueued = false;
+      if (state.launchHandled && forceRun !== true) {
         return;
       }
-      if (!localParticipant && maxViewers > 0 && viewerCount >= maxViewers) {
-        setStatus("This private world is full");
-        pushEvent("launcher", "This private world is full");
+      const launch = getLaunchRequest();
+      if (!launch.worldId || !launch.creatorUsername) {
         return;
       }
+      state.launchHandled = true;
+      await openWorld(launch.worldId, launch.creatorUsername, true);
+      if (launch.fork) {
+        try {
+          await forkSelectedWorld();
+          return;
+        } catch (error) {
+          setStatus(error.message);
+          if (!state.session) {
+            setLauncherOpen(true);
+          }
+          pushEvent("launcher:fork:error", error.message);
+        }
+      }
+      if (launch.autojoin) {
+        if (!state.session) {
+          const localParticipant = getLocalParticipant(state.selectedWorld);
+          const activeInstance = state.selectedWorld?.active_instance ?? null;
+          const maxViewers = Math.max(0, Number(state.selectedWorld?.max_viewers ?? 0) || 0);
+          const viewerCount = Math.max(
+            0,
+            Number(activeInstance?.viewer_count ?? activeInstance?.participants?.length ?? 0) || 0,
+          );
+          if (!activeInstance) {
+            setLauncherTab("access");
+            setLauncherOpen(true);
+            setStatus("Sign in to start this private world.");
+            pushEvent("launcher", "Sign in to start this private world");
+            return;
+          }
+          if (!localParticipant && maxViewers > 0 && viewerCount >= maxViewers) {
+            setStatus("This private world is full");
+            pushEvent("launcher", "This private world is full");
+            return;
+          }
+        }
+        try {
+          await joinWorld();
+          pushEvent("launcher", "Joined from public world");
+        } catch (error) {
+          setStatus(error.message);
+          pushEvent("launcher:error", error.message);
+        }
+      }
+      if (!state.launchRequestQueued) {
+        return;
+      }
+      forceRun = true;
     }
-    try {
-      await joinWorld();
-      pushEvent("launcher", "Joined from public world");
-    } catch (error) {
-      setStatus(error.message);
-      pushEvent("launcher:error", error.message);
-    }
-  }
+  })().finally(() => {
+    state.launchRequestPromise = null;
+    state.launchRequestQueued = false;
+  });
+  return state.launchRequestPromise;
 }
 
 async function init() {
