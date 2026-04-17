@@ -2100,6 +2100,7 @@ function setPrivateBrowserOverlayOpen(open) {
   if (elements.panelBrowserStage) {
     elements.panelBrowserStage.tabIndex = state.browserOverlayOpen ? 0 : -1;
   }
+  updatePrivateBrowserPanel();
 }
 
 function getLocalPrivateBrowserSession() {
