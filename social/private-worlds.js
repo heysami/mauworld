@@ -50,6 +50,24 @@ const PRIVATE_PLAYER_VIEW = {
   maxRadius: 110,
   defaultRadius: 28,
 };
+const PRIVATE_WORLD_BLOCK_UNIT = 5;
+const PRIVATE_WORLD_DEFAULT_SIZE = {
+  width: 60,
+  length: 40,
+  height: 30,
+};
+const PRIVATE_PLAYER_METRICS = {
+  width: 0.6,
+  height: 1.8,
+  eyeHeight: 1.62,
+};
+const PRIVATE_PLAYER_DEFAULT_SCALE = PRIVATE_WORLD_BLOCK_UNIT;
+const PRIVATE_PLAYER_CAMERA = {
+  firstPersonLookDistance: 3.8,
+  thirdPersonDistance: 4.8,
+  thirdPersonHeight: 2.2,
+  topDownHeight: 8,
+};
 const PRIVATE_MOVEMENT_INTENT_KEYS = [
   "w",
   "a",
@@ -1650,8 +1668,8 @@ function getViewerSpawnPosition(world = state.selectedWorld) {
     return new THREE.Vector3(0, PRIVATE_CAMERA.minY + 0.8, 0);
   }
   const rig = getPrivateViewerRigConfig(world);
-  const width = Math.max(12, Number(world?.width ?? 40) || 40);
-  const length = Math.max(12, Number(world?.length ?? 40) || 40);
+  const width = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world?.width ?? PRIVATE_WORLD_DEFAULT_SIZE.width) || PRIVATE_WORLD_DEFAULT_SIZE.width);
+  const length = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world?.length ?? PRIVATE_WORLD_DEFAULT_SIZE.length) || PRIVATE_WORLD_DEFAULT_SIZE.length);
   return new THREE.Vector3(
     clampNumber(-width * 0.06, -2, -4, 4),
     rig.spawnHeight,
@@ -1660,9 +1678,9 @@ function getViewerSpawnPosition(world = state.selectedWorld) {
 }
 
 function getPrivateViewerRigConfig(world = state.selectedWorld) {
-  const width = Math.max(4, Number(world?.width ?? (world ? 40 : 64)) || (world ? 40 : 64));
-  const length = Math.max(4, Number(world?.length ?? (world ? 40 : 64)) || (world ? 40 : 64));
-  const height = Math.max(2, Number(world?.height ?? (world ? 10 : 12)) || (world ? 10 : 12));
+  const width = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world?.width ?? PRIVATE_WORLD_DEFAULT_SIZE.width) || PRIVATE_WORLD_DEFAULT_SIZE.width);
+  const length = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world?.length ?? PRIVATE_WORLD_DEFAULT_SIZE.length) || PRIVATE_WORLD_DEFAULT_SIZE.length);
+  const height = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, Number(world?.height ?? PRIVATE_WORLD_DEFAULT_SIZE.height) || PRIVATE_WORLD_DEFAULT_SIZE.height);
   const minRadius = PRIVATE_PLAYER_VIEW.minRadius;
   const defaultRadius = PRIVATE_PLAYER_VIEW.defaultRadius;
   const maxRadius = PRIVATE_PLAYER_VIEW.maxRadius;
@@ -4256,6 +4274,150 @@ function snapBuildValue(value, step = 0.1) {
   return Math.round((Number(value) || 0) / safeStep) * safeStep;
 }
 
+function roundPrivateValue(value, digits = 4) {
+  return Number((Number(value) || 0).toFixed(digits));
+}
+
+function getPrivateVoxelScale(scale = {}) {
+  return {
+    x: Math.max(0.1, Number(scale?.x ?? PRIVATE_WORLD_BLOCK_UNIT) || PRIVATE_WORLD_BLOCK_UNIT),
+    y: Math.max(0.1, Number(scale?.y ?? PRIVATE_WORLD_BLOCK_UNIT) || PRIVATE_WORLD_BLOCK_UNIT),
+    z: Math.max(0.1, Number(scale?.z ?? PRIVATE_WORLD_BLOCK_UNIT) || PRIVATE_WORLD_BLOCK_UNIT),
+  };
+}
+
+function getHalfExtentsFromScale(scale = {}) {
+  return {
+    x: Math.max(0.05, Number(scale?.x ?? 0) / 2),
+    y: Math.max(0.05, Number(scale?.y ?? 0) / 2),
+    z: Math.max(0.05, Number(scale?.z ?? 0) / 2),
+  };
+}
+
+function clampVoxelCenterToBounds(value, size, axis, world = state.selectedWorld) {
+  const bounds = getPrivateWorldBounds(world);
+  const minEdge = axis === "x" ? bounds.minX : bounds.minZ;
+  const maxEdge = axis === "x" ? bounds.maxX : bounds.maxZ;
+  const minCenter = minEdge + size / 2;
+  const maxCenter = maxEdge - size / 2;
+  return clampNumber(value, value, minCenter, Math.max(minCenter, maxCenter));
+}
+
+function snapVoxelAxisToGrid(value, size, axis, world = state.selectedWorld) {
+  const bounds = getPrivateWorldBounds(world);
+  const minEdge = axis === "x" ? bounds.minX : bounds.minZ;
+  const snapped = minEdge + size / 2 + Math.round(((Number(value) || 0) - minEdge - size / 2) / size) * size;
+  return roundPrivateValue(clampVoxelCenterToBounds(snapped, size, axis, world));
+}
+
+function snapVoxelElevationToGrid(value, size, world = state.selectedWorld) {
+  const bounds = getPrivateWorldBounds(world);
+  const minCenter = size / 2;
+  const maxCenter = Math.max(minCenter, bounds.height - size / 2);
+  const snapped = minCenter + Math.round(((Number(value) || 0) - minCenter) / size) * size;
+  return roundPrivateValue(clampNumber(snapped, snapped, minCenter, maxCenter));
+}
+
+function snapVoxelPositionToGrid(position = {}, scale = {}, world = state.selectedWorld) {
+  const voxelScale = getPrivateVoxelScale(scale);
+  return {
+    x: snapVoxelAxisToGrid(position.x, voxelScale.x, "x", world),
+    y: snapVoxelElevationToGrid(position.y, voxelScale.y, world),
+    z: snapVoxelAxisToGrid(position.z, voxelScale.z, "z", world),
+  };
+}
+
+function boxesTouchOrOverlap(leftPosition = {}, leftScale = {}, rightPosition = {}, rightScale = {}) {
+  const leftHalf = getHalfExtentsFromScale(leftScale);
+  const rightHalf = getHalfExtentsFromScale(rightScale);
+  const epsilon = 0.0001;
+  return (
+    Math.abs((leftPosition.x ?? 0) - (rightPosition.x ?? 0)) < leftHalf.x + rightHalf.x - epsilon
+    && Math.abs((leftPosition.y ?? 0) - (rightPosition.y ?? 0)) < leftHalf.y + rightHalf.y - epsilon
+    && Math.abs((leftPosition.z ?? 0) - (rightPosition.z ?? 0)) < leftHalf.z + rightHalf.z - epsilon
+  );
+}
+
+function isVoxelPlacementOccupied(sceneDoc, position, scale, ignoreId = "") {
+  return (sceneDoc?.voxels ?? []).some((voxel) => (
+    voxel?.id !== ignoreId
+    && boxesTouchOrOverlap(position, scale, voxel.position ?? {}, voxel.scale ?? {})
+  ));
+}
+
+function buildVoxelAxisCandidates(size, axis, world = state.selectedWorld) {
+  const bounds = getPrivateWorldBounds(world);
+  const minEdge = axis === "x" ? bounds.minX : bounds.minZ;
+  const maxEdge = axis === "x" ? bounds.maxX : bounds.maxZ;
+  const candidates = [];
+  for (let cursor = minEdge + size / 2; cursor <= maxEdge - size / 2 + 0.0001; cursor += size) {
+    candidates.push(roundPrivateValue(cursor));
+  }
+  return candidates.sort((left, right) => Math.abs(left) - Math.abs(right) || left - right);
+}
+
+function getDefaultVoxelPlacement(sceneDoc, world = state.selectedWorld) {
+  const scale = {
+    x: PRIVATE_WORLD_BLOCK_UNIT,
+    y: PRIVATE_WORLD_BLOCK_UNIT,
+    z: PRIVATE_WORLD_BLOCK_UNIT,
+  };
+  const selected = getSelectedEntity(sceneDoc);
+  if (selected?.kind === "voxel" && selected.entry?.position) {
+    const anchorScale = getPrivateVoxelScale(selected.entry.scale);
+    const anchorPosition = selected.entry.position;
+    const adjacentCandidates = [
+      {
+        x: anchorPosition.x,
+        y: anchorPosition.y + (anchorScale.y + scale.y) / 2,
+        z: anchorPosition.z,
+      },
+      {
+        x: anchorPosition.x + (anchorScale.x + scale.x) / 2,
+        y: anchorPosition.y,
+        z: anchorPosition.z,
+      },
+      {
+        x: anchorPosition.x - (anchorScale.x + scale.x) / 2,
+        y: anchorPosition.y,
+        z: anchorPosition.z,
+      },
+      {
+        x: anchorPosition.x,
+        y: anchorPosition.y,
+        z: anchorPosition.z + (anchorScale.z + scale.z) / 2,
+      },
+      {
+        x: anchorPosition.x,
+        y: anchorPosition.y,
+        z: anchorPosition.z - (anchorScale.z + scale.z) / 2,
+      },
+    ]
+      .map((candidate) => snapVoxelPositionToGrid(candidate, scale, world))
+      .filter((candidate) => !isVoxelPlacementOccupied(sceneDoc, candidate, scale));
+    if (adjacentCandidates.length > 0) {
+      return adjacentCandidates[0];
+    }
+  }
+
+  const xCandidates = buildVoxelAxisCandidates(scale.x, "x", world);
+  const zCandidates = buildVoxelAxisCandidates(scale.z, "z", world);
+  const groundY = snapVoxelElevationToGrid(scale.y / 2, scale.y, world);
+  for (const z of zCandidates) {
+    for (const x of xCandidates) {
+      const candidate = { x, y: groundY, z };
+      if (!isVoxelPlacementOccupied(sceneDoc, candidate, scale)) {
+        return candidate;
+      }
+    }
+  }
+  return {
+    x: snapVoxelAxisToGrid(0, scale.x, "x", world),
+    y: groundY,
+    z: snapVoxelAxisToGrid(0, scale.z, "z", world),
+  };
+}
+
 function raycastPreviewPointer(event) {
   const preview = ensurePreview();
   if (!preview) {
@@ -4341,7 +4503,6 @@ function updateBuildDrag(event) {
     return false;
   }
   const delta = new THREE.Vector3().subVectors(point, state.buildDrag.startPoint);
-  const step = state.buildDrag.kind === "voxel" ? 0.5 : state.buildDrag.kind === "trigger" ? 0.25 : 0.1;
   void acquireSceneLock();
   mutateSceneDoc((sceneDoc) => {
     const selected = getSelectedEntity(sceneDoc);
@@ -4349,6 +4510,22 @@ function updateBuildDrag(event) {
       return;
     }
     selected.entry.position = selected.entry.position || { x: 0, y: 0, z: 0 };
+    if (state.buildDrag.kind === "voxel") {
+      const snapped = snapVoxelPositionToGrid(
+        {
+          x: state.buildDrag.startPosition.x + delta.x,
+          y: state.buildDrag.startPosition.y,
+          z: state.buildDrag.startPosition.z + delta.z,
+        },
+        selected.entry.scale,
+        state.selectedWorld,
+      );
+      selected.entry.position.x = snapped.x;
+      selected.entry.position.y = snapped.y;
+      selected.entry.position.z = snapped.z;
+      return;
+    }
+    const step = state.buildDrag.kind === "trigger" ? 0.25 : 0.1;
     selected.entry.position.x = snapBuildValue(state.buildDrag.startPosition.x + delta.x, step);
     selected.entry.position.z = snapBuildValue(state.buildDrag.startPosition.z + delta.z, step);
     selected.entry.position.y = state.buildDrag.startPosition.y;
@@ -4554,26 +4731,32 @@ function updatePossessedCamera(preview) {
     return false;
   }
   const yaw = Number(player.rotation?.y ?? 0) || 0;
+  const scale = Math.max(0.25, Number(player.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
+  const eyeOffset = (PRIVATE_PLAYER_METRICS.eyeHeight - PRIVATE_PLAYER_METRICS.height / 2) * scale;
   if (player.camera_mode === "first_person") {
-    preview.camera.position.set(player.position.x, player.position.y + 1.25 * (player.scale || 1), player.position.z);
+    preview.camera.position.set(player.position.x, player.position.y + eyeOffset, player.position.z);
     preview.camera.lookAt(
-      player.position.x + Math.sin(yaw) * 4,
-      player.position.y + 1.1 * (player.scale || 1),
-      player.position.z - Math.cos(yaw) * 4,
+      player.position.x + Math.sin(yaw) * PRIVATE_PLAYER_CAMERA.firstPersonLookDistance * scale,
+      player.position.y + eyeOffset,
+      player.position.z - Math.cos(yaw) * PRIVATE_PLAYER_CAMERA.firstPersonLookDistance * scale,
     );
     return true;
   }
   if (player.camera_mode === "top_down") {
-    preview.camera.position.set(player.position.x, player.position.y + 18, player.position.z + 0.01);
-    preview.camera.lookAt(player.position.x, player.position.y, player.position.z);
+    preview.camera.position.set(
+      player.position.x,
+      player.position.y + PRIVATE_PLAYER_CAMERA.topDownHeight * scale,
+      player.position.z + 0.01,
+    );
+    preview.camera.lookAt(player.position.x, player.position.y + eyeOffset, player.position.z);
     return true;
   }
   preview.camera.position.set(
-    player.position.x - Math.sin(yaw) * 7,
-    player.position.y + 4.2,
-    player.position.z + Math.cos(yaw) * 7,
+    player.position.x - Math.sin(yaw) * PRIVATE_PLAYER_CAMERA.thirdPersonDistance * scale,
+    player.position.y + PRIVATE_PLAYER_CAMERA.thirdPersonHeight * scale,
+    player.position.z + Math.cos(yaw) * PRIVATE_PLAYER_CAMERA.thirdPersonDistance * scale,
   );
-  preview.camera.lookAt(player.position.x, player.position.y + 1.2, player.position.z);
+  preview.camera.lookAt(player.position.x, player.position.y + eyeOffset, player.position.z);
   return true;
 }
 
@@ -4668,7 +4851,7 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   preview.environment.add(groundRim);
 
   const gridSize = Math.max(bounds.width, bounds.length);
-  const gridDivisions = Math.max(4, Math.round(gridSize));
+  const gridDivisions = Math.max(1, Math.round(gridSize / PRIVATE_WORLD_BLOCK_UNIT));
   const grid = new THREE.GridHelper(gridSize, gridDivisions, "#7fa7ff", "#bfd6ff");
   grid.position.y = 0.04;
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
@@ -4731,9 +4914,9 @@ function buildWorldBoundsPreview(world = state.selectedWorld) {
   if (!world) {
     return null;
   }
-  const width = Math.max(4, Number(world.width ?? 24) || 24);
-  const length = Math.max(4, Number(world.length ?? 24) || 24);
-  const height = Math.max(2, Number(world.height ?? 8) || 8);
+  const width = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world.width ?? PRIVATE_WORLD_DEFAULT_SIZE.width) || PRIVATE_WORLD_DEFAULT_SIZE.width);
+  const length = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world.length ?? PRIVATE_WORLD_DEFAULT_SIZE.length) || PRIVATE_WORLD_DEFAULT_SIZE.length);
+  const height = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, Number(world.height ?? PRIVATE_WORLD_DEFAULT_SIZE.height) || PRIVATE_WORLD_DEFAULT_SIZE.height);
   const group = new THREE.Group();
   const boundsGeometry = new THREE.BoxGeometry(width, height, length);
   const boundsEdges = new THREE.EdgesGeometry(boundsGeometry);
@@ -5013,8 +5196,8 @@ function disposePreviewEffects(preview) {
 
 function makeMaterial(material = {}, scale = { x: 1, y: 1, z: 1 }, { selected = false } = {}) {
   const built = createPatternedMaterial(THREE, material, {
-    repeatX: Math.max(1, Number(scale?.x ?? 1) * 0.9),
-    repeatY: Math.max(1, Number(scale?.z ?? scale?.y ?? 1) * 0.9),
+    repeatX: Math.max(1, Number(scale?.x ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
+    repeatY: Math.max(1, Number(scale?.z ?? scale?.y ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
   });
   if (selected) {
     built.emissive = new THREE.Color("#355f9b");
@@ -5351,7 +5534,12 @@ function updatePreviewFromSelection() {
   for (const player of sceneDoc.players ?? []) {
     const runtimePlayer = runtimeTransforms.playerById.get(player.id);
     const mesh = addMesh(
-      new THREE.CapsuleGeometry(0.35, 1.3, 8, 16),
+      new THREE.CapsuleGeometry(
+        PRIVATE_PLAYER_METRICS.width / 2,
+        PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
+        8,
+        16,
+      ),
       makeMaterial(
         { color: runtimePlayer?.occupied_by_username ? "#ff5a6f" : (player.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f"), texture_preset: "none" },
         { x: player.scale || 1, y: player.scale || 1, z: player.scale || 1 },
@@ -5372,14 +5560,27 @@ function updatePreviewFromSelection() {
       continue;
     }
     const mesh = addMesh(
-      new THREE.CapsuleGeometry(0.35, 1.3, 8, 16),
+      new THREE.CapsuleGeometry(
+        PRIVATE_PLAYER_METRICS.width / 2,
+        PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
+        8,
+        16,
+      ),
       makeMaterial(
         { color: runtimePlayer?.occupied_by_username ? "#ff5a6f" : "#ff8e4f", texture_preset: "none" },
-        { x: 1, y: 1, z: 1 },
+        {
+          x: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
+          y: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
+          z: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
+        },
       ),
       runtimePlayer.position || { x: 0, y: 1, z: 0 },
       runtimePlayer.rotation || { x: 0, y: 0, z: 0 },
-      { x: 1, y: 1, z: 1 },
+      {
+        x: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
+        y: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
+        z: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
+      },
       { id: playerId, kind: "player" },
     );
     mesh.userData.privateWorldPlayerId = playerId;
@@ -6198,10 +6399,11 @@ function attachQuickAddButtons() {
     mutateSceneDoc((sceneDoc) => {
       sceneDoc.voxels = sceneDoc.voxels || [];
       const nextId = `voxel_${sceneDoc.voxels.length + 1}`;
+      const nextPosition = getDefaultVoxelPlacement(sceneDoc, state.selectedWorld);
       sceneDoc.voxels.push({
         id: nextId,
-        position: { x: sceneDoc.voxels.length * 1.25, y: 0.5, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
+        position: nextPosition,
+        scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
         material: { color: "#85b84f", texture_preset: "grass" },
       });
       state.builderSelection = { kind: "voxel", id: nextId };
@@ -6212,11 +6414,16 @@ function attachQuickAddButtons() {
     mutateSceneDoc((sceneDoc) => {
       sceneDoc.primitives = sceneDoc.primitives || [];
       const nextId = `primitive_${sceneDoc.primitives.length + 1}`;
+      const scale = { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT };
       sceneDoc.primitives.push({
         id: nextId,
         shape: "box",
-        position: { x: sceneDoc.primitives.length * 1.8, y: 1, z: -2 },
-        scale: { x: 1.5, y: 1.5, z: 1.5 },
+        position: {
+          x: PRIVATE_WORLD_BLOCK_UNIT / 2 + sceneDoc.primitives.length * PRIVATE_WORLD_BLOCK_UNIT * 2,
+          y: scale.y / 2,
+          z: -PRIVATE_WORLD_BLOCK_UNIT * 1.5,
+        },
+        scale,
         rotation: { x: 0, y: 0, z: 0 },
         material: { color: "#d3d8e2", texture_preset: "stone" },
         physics: { gravity_scale: 1, restitution: 0.2, friction: 0.7, mass: 1 },
@@ -6232,7 +6439,12 @@ function attachQuickAddButtons() {
       sceneDoc.players.push({
         id: nextId,
         label: `Player ${sceneDoc.players.length + 1}`,
-        position: { x: 0, y: 1, z: sceneDoc.players.length * 2.4 },
+        position: {
+          x: 0,
+          y: (PRIVATE_PLAYER_METRICS.height * PRIVATE_PLAYER_DEFAULT_SCALE) / 2,
+          z: sceneDoc.players.length * PRIVATE_WORLD_BLOCK_UNIT * 2,
+        },
+        scale: PRIVATE_PLAYER_DEFAULT_SCALE,
         camera_mode: "third_person",
         body_mode: "rigid",
       });

@@ -7,6 +7,7 @@ import {
   computeMiniatureDimensions,
   createDefaultSceneDoc,
   normalizeSceneDoc,
+  resolvePrivateWorldSize,
   validatePrivateWorldExportPackage,
 } from "../src/lib/private-worlds.js";
 
@@ -26,6 +27,40 @@ test("default private world scenes start empty until the builder places entities
   assert.deepEqual(scene.voxels, []);
   assert.deepEqual(scene.primitives, []);
   assert.deepEqual(scene.players, []);
+});
+
+test("resolvePrivateWorldSize uses voxel-friendly defaults for new worlds", () => {
+  assert.deepEqual(
+    resolvePrivateWorldSize({ worldType: "room", templateSize: "medium" }),
+    {
+      worldType: "room",
+      templateSize: "medium",
+      width: 60,
+      length: 40,
+      height: 30,
+      cap: { width: 160, length: 120, height: 64 },
+    },
+  );
+  assert.deepEqual(
+    resolvePrivateWorldSize({ worldType: "board", templateSize: "small" }),
+    {
+      worldType: "board",
+      templateSize: "small",
+      width: 40,
+      length: 40,
+      height: 10,
+      cap: { width: 160, length: 160, height: 32 },
+    },
+  );
+});
+
+test("normalizeSceneDoc gives player spawns a character-scale default", () => {
+  const scene = normalizeSceneDoc({
+    players: [{ id: "player_a", label: "Player A" }],
+  });
+
+  assert.equal(scene.players[0].scale, 5);
+  assert.deepEqual(scene.players[0].position, { x: 0, y: 4.5, z: 0 });
 });
 
 test("normalizeSceneDoc keeps safe defaults and strips executable screen content", () => {

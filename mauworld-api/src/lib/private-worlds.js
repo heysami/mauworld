@@ -11,27 +11,27 @@ export const PRIVATE_WORLD_LIMITS = {
 export const PRIVATE_WORLD_TYPE_DEFINITIONS = {
   room: {
     templates: {
-      small: { width: 24, length: 16, height: 8 },
-      medium: { width: 40, length: 20, height: 10 },
-      large: { width: 64, length: 32, height: 16 },
+      small: { width: 40, length: 30, height: 20 },
+      medium: { width: 60, length: 40, height: 30 },
+      large: { width: 100, length: 60, height: 40 },
     },
-    cap: { width: 96, length: 48, height: 24 },
+    cap: { width: 160, length: 120, height: 64 },
   },
   field: {
     templates: {
-      small: { width: 96, length: 96, height: 16 },
-      medium: { width: 180, length: 180, height: 32 },
-      large: { width: 300, length: 300, height: 50 },
+      small: { width: 120, length: 120, height: 30 },
+      medium: { width: 200, length: 200, height: 40 },
+      large: { width: 320, length: 320, height: 60 },
     },
     cap: { width: 512, length: 512, height: 64 },
   },
   board: {
     templates: {
-      small: { width: 24, length: 24, height: 4 },
-      medium: { width: 48, length: 48, height: 8 },
-      large: { width: 80, length: 80, height: 12 },
+      small: { width: 40, length: 40, height: 10 },
+      medium: { width: 60, length: 60, height: 15 },
+      large: { width: 100, length: 100, height: 20 },
     },
-    cap: { width: 128, length: 128, height: 16 },
+    cap: { width: 160, length: 160, height: 32 },
   },
 };
 
@@ -59,6 +59,9 @@ const ALLOWED_RULE_ACTIONS = new Set([
   "set_text",
   "start_scene",
 ]);
+const PRIVATE_WORLD_BLOCK_UNIT = 5;
+const PRIVATE_PLAYER_DEFAULT_SCALE = PRIVATE_WORLD_BLOCK_UNIT;
+const PRIVATE_PLAYER_STANDING_CENTER_Y = (PRIVATE_PLAYER_DEFAULT_SCALE * 1.8) / 2;
 
 function nowIso() {
   return new Date().toISOString();
@@ -320,9 +323,9 @@ function sanitizePlayerEntry(entry = {}, index = 0) {
   return {
     id: ensureEntityId("player", entry.id || `player-${index + 1}`),
     label: String(entry.label ?? `Player ${index + 1}`).trim().slice(0, 48) || `Player ${index + 1}`,
-    position: sanitizeVector3(entry.position, { x: 0, y: 1, z: 0 }),
+    position: sanitizeVector3(entry.position, { x: 0, y: PRIVATE_PLAYER_STANDING_CENTER_Y, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
-    scale: Number(clampNumber(entry.scale, 1, 0.25, 6).toFixed(4)),
+    scale: Number(clampNumber(entry.scale, PRIVATE_PLAYER_DEFAULT_SCALE, 0.25, 12).toFixed(4)),
     camera_mode: ALLOWED_PLAYER_CAMERA_MODES.has(cameraMode) ? cameraMode : "third_person",
     body_mode: ALLOWED_PLAYER_BODY_MODES.has(bodyMode) ? bodyMode : "rigid",
     occupiable: entry.occupiable !== false,

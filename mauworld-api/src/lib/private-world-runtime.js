@@ -6,10 +6,16 @@ await RAPIER.init({});
 
 const DEFAULT_TICK_MS = 50;
 const DEFAULT_BROADCAST_MS = 250;
-const PLAYER_MOVE_SPEED = 11.5;
-const PLAYER_SPRINT_SPEED = 17.5;
+const PRIVATE_WORLD_BLOCK_UNIT = 5;
+const PLAYER_DIMENSIONS = {
+  width: 0.6,
+  height: 1.8,
+  eyeHeight: 1.62,
+};
+const PLAYER_MOVE_SPEED = 4.317 * PRIVATE_WORLD_BLOCK_UNIT;
+const PLAYER_SPRINT_SPEED = 5.612 * PRIVATE_WORLD_BLOCK_UNIT;
 const PLAYER_ACCELERATION = 26;
-const PLAYER_JUMP_VELOCITY = 7.8;
+const PLAYER_JUMP_VELOCITY = Math.sqrt(Math.abs(-9.8) * 2 * (1.25 * PRIVATE_WORLD_BLOCK_UNIT));
 const PLAYER_LINEAR_DAMPING = 6.5;
 const PLAYER_ANGULAR_DAMPING = 10;
 const DYNAMIC_LINEAR_DAMPING = 1.8;
@@ -69,9 +75,9 @@ function getBodyHalfExtents(body) {
   if (body.kind === "player") {
     const scale = Math.max(0.25, mustFinite(body.scale, 1));
     return {
-      x: 0.38 * scale,
-      y: 0.95 * scale,
-      z: 0.38 * scale,
+      x: (PLAYER_DIMENSIONS.width / 2) * scale,
+      y: (PLAYER_DIMENSIONS.height / 2) * scale,
+      z: (PLAYER_DIMENSIONS.width / 2) * scale,
     };
   }
   return {
@@ -460,16 +466,18 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       z: Math.max(0.1, mustFinite(entry.scale?.z, 1) / 2),
     },
   }));
-  const players = (sceneDoc.players ?? []).map((entry) => ({
+  const players = (sceneDoc.players ?? []).map((entry) => {
+    const scale = Math.max(0.25, mustFinite(entry.scale, PRIVATE_WORLD_BLOCK_UNIT));
+    return {
     kind: "player",
     id: entry.id,
     label: entry.label,
-    scale: mustFinite(entry.scale, 1),
+    scale,
     camera_mode: entry.camera_mode,
     body_mode: entry.body_mode,
     occupiable: entry.occupiable !== false,
-    initialPosition: vec3(entry.position, { x: 0, y: 1, z: 0 }),
-    position: vec3(entry.position, { x: 0, y: 1, z: 0 }),
+    initialPosition: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
+    position: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
     rotation: vec3(entry.rotation),
     velocity: { x: 0, y: 0, z: 0 },
     onGround: false,
@@ -480,7 +488,8 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     pressedKeys: new Set(),
     visibility: true,
     material_override: null,
-  }));
+    };
+  });
   const dynamicObjects = (sceneDoc.primitives ?? []).map((entry) => ({
     kind: "dynamic_object",
     id: entry.id,
