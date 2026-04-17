@@ -512,8 +512,7 @@ body.private-worlds-body.is-launcher-open .pw-launcher {
   position: relative;
 }
 
-.pw-share-meta,
-.pw-build-summary {
+.pw-share-meta {
   display: grid;
   gap: 8px;
 }

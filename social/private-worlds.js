@@ -197,7 +197,6 @@ const elements = {
   panelBrowserFrame: document.querySelector("[data-private-browser-frame]"),
   panelBrowserPlaceholder: document.querySelector("[data-private-browser-placeholder]"),
   panelBrowserResume: document.querySelector("[data-private-browser-resume]"),
-  panelBuildSummary: document.querySelector("[data-private-build-summary]"),
   panelWorldMeta: document.querySelector("[data-private-panel-world-meta]"),
   panelModeBuild: document.querySelector("[data-private-panel-mode-build]"),
   panelModePlay: document.querySelector("[data-private-panel-mode-play]"),
@@ -5183,54 +5182,6 @@ function renderPrivateShare() {
       : "This world is inactive, but the entry link still resolves it for signed-in access.";
 }
 
-function renderBuildSummary() {
-  if (!elements.panelBuildSummary) {
-    return;
-  }
-  const world = state.selectedWorld;
-  const localParticipant = getLocalParticipant(world);
-  const runtime = state.runtimeSnapshot ?? world?.active_instance?.runtime ?? null;
-  const defaultScene = getDefaultScene(world);
-  const editingScene = getSelectedScene();
-  const sceneLabel = state.mode === "build"
-    ? (editingScene?.name || defaultScene?.name || "Main Scene")
-    : (runtime?.scene_name || defaultScene?.name || "Main Scene");
-  const defaultSceneSuffix = defaultScene?.name && defaultScene.name !== sceneLabel
-    ? ` · default ${htmlEscape(defaultScene.name)}`
-    : defaultScene?.name
-      ? " · default"
-      : "";
-  if (!world) {
-    elements.panelBuildSummary.innerHTML = `
-      <div class="pw-world-meta__row">
-        <strong>Session</strong>
-        <span>Open or create a world to enter.</span>
-      </div>
-    `;
-    return;
-  }
-  elements.panelBuildSummary.innerHTML = `
-    <div class="pw-world-meta__row">
-      <strong>Scene</strong>
-      <span>${htmlEscape(sceneLabel)}${defaultSceneSuffix}</span>
-    </div>
-    <div class="pw-world-meta__row">
-      <strong>Status</strong>
-      <span>${htmlEscape(runtime?.status || world.active_instance?.status || "inactive")}${runtime?.tick ? ` · tick ${Number(runtime.tick)}` : ""}</span>
-    </div>
-    <div class="pw-world-meta__row">
-      <strong>Presence</strong>
-      <span>${localParticipant ? `${localParticipant.join_role}${localParticipant.player_entity_id ? " · possessed" : ""}` : "outside world"}</span>
-    </div>
-    <div class="pw-world-meta__row">
-      <strong>Controls</strong>
-      <span>${state.mode === "build"
-        ? "Edit here, then use Play Default Scene to test the world's default scene from its real starting state."
-        : "WASD to move, hold Shift to sprint, Q/E to rise or drop, drag to look, and click a player capsule when you want to inhabit it."}</span>
-    </div>
-  `;
-}
-
 function renderCollaborators() {
   const collaborators = state.selectedWorld?.collaborators ?? [];
   elements.collaboratorList.innerHTML = collaborators.map((entry) => `
@@ -5312,7 +5263,6 @@ function renderSelectedWorld() {
   renderSceneEditor();
   renderCollaborators();
   renderRuntimeStatus();
-  renderBuildSummary();
   renderPrivateShare();
   updatePrivateBrowserPanel();
 
@@ -10592,7 +10542,6 @@ async function init() {
   renderPrivateChat();
   renderPrivateShare();
   updatePrivateBrowserPanel();
-  renderBuildSummary();
   renderSessionSummary();
   ensurePreview();
   setLauncherTab(getPreferredLauncherTab());
