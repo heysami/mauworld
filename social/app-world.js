@@ -2,14 +2,19 @@ import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { createBubbleTexture, createWorldVisitorSystem, updateMascotMotion } from "./world-visitors.js";
 import { createBrowserMediaController } from "./world-browser-media.js";
 import {
+  createChatBubbleState,
   createChatBubbleRenderer,
   createChatFeature,
   createNearbyDisplayShareFeature,
   getBrowserShareKindLabel,
+  getDisplayShareStageLayout,
+  getDisplayShareStagePlaceholderText,
   getDisplayShareLaunchState,
   getLocalDisplaySharePresentation,
+  isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
   normalizeBrowserShareKind,
   sanitizeBrowserShareTitle,
+  updateChatBubbleGhosts,
 } from "./world-interactions.js";
 import { createWorldRealtimeClient } from "./world-realtime.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
@@ -1108,12 +1113,7 @@ function getPresenceDisplayNameForSessionId(viewerSessionId) {
 }
 
 function isEmojiOnlyChatText(value) {
-  const trimmed = String(value ?? "").trim();
-  if (!trimmed) {
-    return false;
-  }
-  const compact = trimmed.replace(/\s+/gu, "");
-  return /^(?:\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)+$/u.test(compact);
+  return sharedIsEmojiOnlyChatText(value);
 }
 
 function getRenderablePresenceRows() {
@@ -4103,43 +4103,16 @@ const CHAT_BUBBLE_MIN_WIDTH = 6.2;
 const CHAT_BUBBLE_MIN_HEIGHT = 4.9;
 
 function createActorBubbleState(color, options = {}) {
-  const baseWidth = CHAT_BUBBLE_BASE_WIDTH;
-  const baseHeight = CHAT_BUBBLE_BASE_HEIGHT;
-  const bubble = createBillboard(
-    createBubbleTexture("💬", {
-      accent: color,
-      stroke: WORLD_STYLE.outline,
-      text: "",
-    }),
-    baseWidth,
-    baseHeight,
-    {
-      opacity: 0,
-      fog: false,
-      depthTest: false,
-      renderOrder: 11,
-      persistent: options.persistent === true,
-    },
-  );
-  bubble.visible = false;
-  bubble.position.set(0, 15.2, 0);
-  return {
-    mesh: bubble,
-    currentKey: "",
-    opacity: 0,
-    targetOpacity: 0,
-    duration: 0,
-    elapsed: 0,
-    highEnergy: false,
-    bounceCount: 0,
+  return createChatBubbleState({
+    accent: color,
     anchorY: 15.2,
-    baseWidth,
-    baseHeight,
-    width: baseWidth,
-    height: baseHeight,
-    targetWidth: baseWidth,
-    targetHeight: baseHeight,
-  };
+    baseWidth: CHAT_BUBBLE_BASE_WIDTH,
+    baseHeight: CHAT_BUBBLE_BASE_HEIGHT,
+    stroke: WORLD_STYLE.outline,
+    createTexture: createBubbleTexture,
+    createBillboard,
+    persistent: options.persistent === true,
+  });
 }
 
 const publicChatBubbleRenderer = createChatBubbleRenderer({
@@ -7366,37 +7339,16 @@ function getBrowserStagePlaceholderText({
   needsManualPlaybackStart = false,
   needsManualAudioStart = false,
 } = {}) {
-  if (needsManualPlaybackStart) {
-    return "Browser blocked autoplay. Press start to watch this nearby stream.";
-  }
-  const session = localSession ?? remotePanelSession;
-  const shareKind = getBrowserSessionShareKind(session);
-  if (needsManualAudioStart) {
-    return shareKind === "audio"
-      ? "Press enable sound to hear this nearby voice stream."
-      : "Press enable sound to hear this nearby stream.";
-  }
-  if (!session) {
-    return "Share a screen, video, or voice nearby.";
-  }
-  if (shareKind === "audio") {
-    return session.hostSessionId === state.viewerSessionId
-      ? "Voice-only share is live nearby."
-      : `Listening to ${session.title || "live voice"} nearby.`;
-  }
-  if (shareKind === "camera") {
-    return session.hostSessionId === state.viewerSessionId
-      ? "Video share is live nearby."
-      : `Watching ${session.title || "live video"} nearby.`;
-  }
-  if (session.sessionMode === "display-share") {
-    return session.hostSessionId === state.viewerSessionId
-      ? "Choose a tab or window in the picker to start sharing."
-      : `Watching ${session.title || "nearby share"} nearby.`;
-  }
-  return session.hostSessionId === state.viewerSessionId
-    ? "Opening browser worker..."
-    : `Viewing ${session.title || "nearby share"} nearby.`;
+  return getDisplayShareStagePlaceholderText({
+    localSession,
+    remoteSession: remotePanelSession,
+    needsManualPlaybackStart,
+    needsManualAudioStart,
+    getSessionShareKind: getBrowserSessionShareKind,
+    strings: {
+      localBrowser: "Opening browser worker...",
+    },
+  });
 }
 
 function updateBrowserPanel() {
@@ -7439,17 +7391,19 @@ function updateBrowserPanel() {
   );
   const frameUrl = localSession?.lastFrameDataUrl ?? "";
   const hasActiveBrowserMedia = Boolean(previewStream || hasRemotePanelVideo || hasRemotePanelSession || localSession || frameUrl);
-  const needsPermissionAction = Boolean(needsManualPlaybackStart || needsManualAudioStart);
-  const collapseDockedStage = !state.browserOverlayOpen && !needsPermissionAction;
-  const permissionOnlyDockedStage = !state.browserOverlayOpen && needsPermissionAction;
-  elements.browserPanel?.classList.toggle("is-docked-compact", collapseDockedStage);
+  const stageLayout = getDisplayShareStageLayout({
+    overlayOpen: state.browserOverlayOpen,
+    needsManualPlaybackStart,
+    needsManualAudioStart,
+  });
+  elements.browserPanel?.classList.toggle("is-docked-compact", stageLayout.collapseDockedStage);
   elements.browserStage?.classList.toggle("is-active", hasActiveBrowserMedia);
-  elements.browserStage?.classList.toggle("is-collapsed", collapseDockedStage);
-  elements.browserStage?.classList.toggle("is-permission-only", permissionOnlyDockedStage);
-  elements.browserStage?.classList.toggle("needs-video-start", needsManualPlaybackStart);
+  elements.browserStage?.classList.toggle("is-collapsed", stageLayout.collapseDockedStage);
+  elements.browserStage?.classList.toggle("is-permission-only", stageLayout.permissionOnlyDockedStage);
+  elements.browserStage?.classList.toggle("needs-video-start", stageLayout.needsManualPlaybackStart);
   if (elements.browserStage) {
     elements.browserStage.tabIndex = state.browserOverlayOpen ? 0 : -1;
-    elements.browserStage.setAttribute("aria-hidden", collapseDockedStage ? "true" : "false");
+    elements.browserStage.setAttribute("aria-hidden", stageLayout.collapseDockedStage ? "true" : "false");
   }
   if (!state.realtimeConnected) {
     setBrowserStatus("Realtime share offline.");
@@ -7563,7 +7517,7 @@ function updateBrowserPanel() {
       elements.browserPlaceholder.textContent = "Browser blocked autoplay. Press start to watch this nearby stream.";
     }
     if (elements.browserResume) {
-      elements.browserResume.hidden = !(needsManualPlaybackStart || needsManualAudioStart);
+      elements.browserResume.hidden = !stageLayout.needsPermissionAction;
       elements.browserResume.textContent = needsManualPlaybackStart ? "Start Stream" : "Enable Sound";
     }
     return;
@@ -7594,7 +7548,7 @@ function updateBrowserPanel() {
       needsManualAudioStart,
     });
     if (elements.browserResume) {
-      elements.browserResume.hidden = !needsPermissionAction;
+      elements.browserResume.hidden = !stageLayout.needsPermissionAction;
       elements.browserResume.textContent = needsManualPlaybackStart ? "Start Stream" : "Enable Sound";
     }
   }
@@ -8102,17 +8056,11 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     updateActorBubble(entry, deltaSeconds);
   }
 
-  for (let index = sceneState.animatedChatBubbleGhosts.length - 1; index >= 0; index -= 1) {
-    const entry = sceneState.animatedChatBubbleGhosts[index];
-    entry.age += deltaSeconds;
-    const life = clamp(entry.age / entry.lifetime, 0, 1);
-    entry.mesh.position.addScaledVector(entry.drift, deltaSeconds);
-    entry.mesh.scale.copy(entry.scaleBase).multiplyScalar(1 + life * 0.18);
-    entry.mesh.material.opacity = entry.opacity * Math.pow(1 - life, 1.6);
-    if (life >= 1) {
-      removeChatBubbleGhost(entry);
-    }
-  }
+  updateChatBubbleGhosts({
+    entries: sceneState.animatedChatBubbleGhosts,
+    deltaSeconds,
+    removeGhost: removeChatBubbleGhost,
+  });
 
   for (const entry of sceneState.animatedBrowserScreens) {
     updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds);

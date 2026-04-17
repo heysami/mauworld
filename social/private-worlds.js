@@ -4,14 +4,19 @@ import { createPatternedMaterial } from "./private-world-materials.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 import { createBrowserMediaController } from "./world-browser-media.js";
 import {
+  createChatBubbleState,
   createChatBubbleRenderer,
   createChatFeature,
   createNearbyDisplayShareFeature,
   getBrowserShareKindLabel,
+  getDisplayShareStageLayout,
+  getDisplayShareStagePlaceholderText,
   getDisplayShareLaunchState,
   getLocalDisplaySharePresentation,
+  isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
   normalizeBrowserShareKind,
   sanitizeBrowserShareTitle,
+  updateChatBubbleGhosts,
 } from "./world-interactions.js";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 
@@ -722,51 +727,20 @@ function createViewerAvatarFigure(options = {}) {
 }
 
 function isEmojiOnlyPrivateChatText(value) {
-  const trimmed = String(value ?? "").trim();
-  if (!trimmed) {
-    return false;
-  }
-  const compact = trimmed.replace(/\s+/gu, "");
-  return /^(?:\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)+$/u.test(compact);
+  return sharedIsEmojiOnlyChatText(value);
 }
 
 function createPrivateActorBubbleState(color, options = {}) {
-  const anchorY = Number(options.anchorY ?? 15.2) || 15.2;
-  const bubble = createPrivateBillboard(
-    createBubbleTexture("💬", {
-      accent: color,
-      stroke: PRIVATE_WORLD_STYLE.outline,
-      text: "",
-    }),
-    PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
-    PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
-    {
-      opacity: 0,
-      fog: false,
-      depthTest: false,
-      renderOrder: 11,
-      persistent: options.persistent === true,
-    },
-  );
-  bubble.visible = false;
-  bubble.position.set(0, anchorY, 0);
-  return {
-    mesh: bubble,
-    currentKey: "",
-    opacity: 0,
-    targetOpacity: 0,
-    duration: 0,
-    elapsed: 0,
-    highEnergy: false,
-    bounceCount: 0,
-    anchorY,
+  return createChatBubbleState({
+    accent: color,
+    anchorY: Number(options.anchorY ?? 15.2) || 15.2,
     baseWidth: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
     baseHeight: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
-    width: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
-    height: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
-    targetWidth: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
-    targetHeight: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
-  };
+    stroke: PRIVATE_WORLD_STYLE.outline,
+    createTexture: createBubbleTexture,
+    createBillboard: createPrivateBillboard,
+    persistent: options.persistent === true,
+  });
 }
 
 function orientPrivateBillboardToCamera(mesh, camera) {
@@ -1352,23 +1326,13 @@ function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
 }
 
 function updatePrivateChatBubbleGhosts(preview, deltaSeconds, camera = preview?.camera) {
-  if (!preview?.animatedChatBubbleGhosts?.length) {
-    return;
-  }
-  for (let index = preview.animatedChatBubbleGhosts.length - 1; index >= 0; index -= 1) {
-    const entry = preview.animatedChatBubbleGhosts[index];
-    entry.age += deltaSeconds;
-    const life = clampNumber(entry.age / entry.lifetime, 0, 0, 1);
-    entry.mesh.position.addScaledVector(entry.drift, deltaSeconds);
-    entry.mesh.scale.copy(entry.scaleBase).multiplyScalar(1 + life * 0.18);
-    entry.mesh.material.opacity = entry.opacity * Math.pow(1 - life, 1.6);
-    if (camera) {
-      orientPrivateBillboardToCamera(entry.mesh, camera);
-    }
-    if (life >= 1) {
-      removePrivateChatBubbleGhost(preview, entry);
-    }
-  }
+  updateChatBubbleGhosts({
+    entries: preview?.animatedChatBubbleGhosts ?? null,
+    deltaSeconds,
+    camera,
+    orientToCamera: orientPrivateBillboardToCamera,
+    removeGhost: (entry) => removePrivateChatBubbleGhost(preview, entry),
+  });
 }
 
 function removePrivatePresenceObject(presenceId) {
@@ -2089,6 +2053,33 @@ function updatePrivateBrowserSummary(summary = {}) {
   }
 }
 
+function getPrivateBrowserStagePlaceholderText({
+  localSession = null,
+  remoteSession = null,
+  needsManualPlaybackStart = false,
+  needsManualAudioStart = false,
+} = {}) {
+  return getDisplayShareStagePlaceholderText({
+    localSession,
+    remoteSession,
+    needsManualPlaybackStart,
+    needsManualAudioStart,
+    getSessionShareKind: getPrivateBrowserSessionShareKind,
+    strings: {
+      blockedAutoplay: "Browser blocked autoplay. Press start to watch this live stream.",
+      enableAudioVoice: "Press enable sound to hear this live voice stream.",
+      enableAudioDefault: "Press enable sound to hear this live stream.",
+      localAudio: "Voice-only share is live inside this private world.",
+      remoteAudio: (session) => `Listening to ${session?.title || "live voice"} from inside this private world.`,
+      localCamera: "Video share is live inside this private world.",
+      remoteCamera: (session) => `Watching ${session?.title || "live video"} from this private world.`,
+      remoteDisplay: (session) => `Watching ${session?.title || "nearby share"} from this private world.`,
+      localBrowser: "This browser session is live in this private world.",
+      remoteBrowser: (session) => `Viewing ${session?.title || "nearby share"} from this private world.`,
+    },
+  });
+}
+
 function setPrivateBrowserOverlayOpen(open) {
   state.browserOverlayOpen = Boolean(open);
   if (!elements.panelBrowserPanel) {
@@ -2548,21 +2539,44 @@ function updatePrivateBrowserPanel() {
     : state.localBrowserShare?.hasVideo
       ? state.localBrowserShare.stream
       : state.localBrowserPreviewStream ?? null;
-  const showingRemoteVideo = Boolean(
+  const remoteSessionHasVideo = Boolean(remoteSession && remoteSession.hasVideo !== false);
+  const hasRemotePanelVideo = Boolean(
     !previewStream
+    && remoteSessionHasVideo
     && remoteSession
     && elements.panelBrowserVideo?.srcObject
     && state.browserPanelRemoteSessionId === remoteSession.sessionId,
   );
-  const needsPlaybackStart = Boolean(showingRemoteVideo && String(state.browserMediaState.lastPlayError || "").includes("NotAllowedError"));
+  const needsPlaybackStart = Boolean(
+    !previewStream
+    && remoteSession
+    && remoteSessionHasVideo
+    && String(state.browserMediaState.lastPlayError || "").includes("NotAllowedError"),
+  );
   const needsAudioStart = Boolean(
     remoteSession
     && state.browserMediaState.remoteAudioAvailable
     && state.browserMediaState.remoteAudioBlocked
     && state.browserMediaState.remoteAudioSessionId === remoteSession.sessionId,
   );
+  const frameUrl = localSession?.lastFrameDataUrl ?? remoteSession?.lastFrameDataUrl ?? "";
+  const hasActiveBrowserMedia = Boolean(previewStream || hasRemotePanelVideo || remoteSession || localSession || frameUrl);
+  const stageLayout = getDisplayShareStageLayout({
+    overlayOpen: state.browserOverlayOpen,
+    needsManualPlaybackStart: needsPlaybackStart,
+    needsManualAudioStart: needsAudioStart,
+  });
 
   privateBrowserShareFeature.setSelectedMode(state.browserShareMode);
+  elements.panelBrowserPanel?.classList.toggle("is-docked-compact", stageLayout.collapseDockedStage);
+  elements.panelBrowserStage?.classList.toggle("is-active", hasActiveBrowserMedia);
+  elements.panelBrowserStage?.classList.toggle("is-collapsed", stageLayout.collapseDockedStage);
+  elements.panelBrowserStage?.classList.toggle("is-permission-only", stageLayout.permissionOnlyDockedStage);
+  elements.panelBrowserStage?.classList.toggle("needs-video-start", stageLayout.needsManualPlaybackStart);
+  if (elements.panelBrowserStage) {
+    elements.panelBrowserStage.tabIndex = state.browserOverlayOpen ? 0 : -1;
+    elements.panelBrowserStage.setAttribute("aria-hidden", stageLayout.collapseDockedStage ? "true" : "false");
+  }
   if (elements.panelBrowserShareTitle) {
     elements.panelBrowserShareTitle.disabled = !canShare;
   }
@@ -2580,7 +2594,8 @@ function updatePrivateBrowserPanel() {
     elements.panelBrowserStop.disabled = !localSession;
   }
   if (elements.panelBrowserExpand) {
-    elements.panelBrowserExpand.disabled = !previewStream && !showingRemoteVideo && !remoteSession;
+    elements.panelBrowserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
+    elements.panelBrowserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
   }
 
   if (!world) {
@@ -2672,36 +2687,61 @@ function updatePrivateBrowserPanel() {
     }
     elements.panelBrowserVideo.hidden = false;
     ensurePrivateBrowserVideoPlayback(elements.panelBrowserVideo);
-  } else if (!showingRemoteVideo) {
+  } else if (!hasRemotePanelVideo) {
     setPrivateBrowserPreviewStream(null);
   }
 
-  if (elements.panelBrowserFrame) {
+  if (!elements.panelBrowserFrame || !elements.panelBrowserPlaceholder) {
+    return;
+  }
+  if (previewStream || hasRemotePanelVideo) {
+    if (elements.panelBrowserVideo) {
+      elements.panelBrowserVideo.hidden = false;
+    }
     elements.panelBrowserFrame.hidden = true;
     elements.panelBrowserFrame.removeAttribute("src");
-  }
-  if (elements.panelBrowserPlaceholder) {
-    const hasDisplayedVideo = Boolean(elements.panelBrowserVideo?.srcObject);
-    let placeholder = "Share a screen, video, or voice nearby.";
+    elements.panelBrowserPlaceholder.hidden = !needsPlaybackStart;
     if (needsPlaybackStart) {
-      placeholder = "Browser blocked autoplay. Press start to watch this live stream.";
-    } else if (needsAudioStart) {
-      placeholder = remoteSession?.shareKind === "audio"
-        ? "Press enable sound to hear this live voice stream."
-        : "Press enable sound to hear this live stream.";
-    } else if (localSession?.shareKind === "audio") {
-      placeholder = "Voice is live inside this private world.";
-    } else if (remoteSession?.shareKind === "audio") {
-      placeholder = "Listening to live voice from inside this private world.";
-    } else if (remoteSession && !hasDisplayedVideo) {
-      placeholder = "Waiting for the live stream to appear.";
+      elements.panelBrowserPlaceholder.textContent = getPrivateBrowserStagePlaceholderText({
+        localSession,
+        remoteSession,
+        needsManualPlaybackStart: true,
+      });
     }
-    elements.panelBrowserPlaceholder.hidden = hasDisplayedVideo;
-    elements.panelBrowserPlaceholder.textContent = placeholder;
+    if (elements.panelBrowserResume) {
+      elements.panelBrowserResume.hidden = !stageLayout.needsPermissionAction;
+      elements.panelBrowserResume.textContent = needsPlaybackStart ? "Start Stream" : "Enable Sound";
+    }
+    return;
   }
+  if (frameUrl) {
+    if (elements.panelBrowserVideo) {
+      elements.panelBrowserVideo.hidden = true;
+    }
+    elements.panelBrowserFrame.hidden = false;
+    if (elements.panelBrowserFrame.getAttribute("src") !== frameUrl) {
+      elements.panelBrowserFrame.src = frameUrl;
+    }
+    elements.panelBrowserPlaceholder.hidden = true;
+    if (elements.panelBrowserResume) {
+      elements.panelBrowserResume.hidden = true;
+    }
+    return;
+  }
+  if (elements.panelBrowserVideo) {
+    elements.panelBrowserVideo.hidden = true;
+  }
+  elements.panelBrowserFrame.hidden = true;
+  elements.panelBrowserFrame.removeAttribute("src");
+  elements.panelBrowserPlaceholder.hidden = false;
+  elements.panelBrowserPlaceholder.textContent = getPrivateBrowserStagePlaceholderText({
+    localSession,
+    remoteSession,
+    needsManualPlaybackStart: needsPlaybackStart,
+    needsManualAudioStart: needsAudioStart,
+  });
   if (elements.panelBrowserResume) {
-    const needsPermissionAction = needsPlaybackStart || needsAudioStart;
-    elements.panelBrowserResume.hidden = !needsPermissionAction;
+    elements.panelBrowserResume.hidden = !stageLayout.needsPermissionAction;
     elements.panelBrowserResume.textContent = needsPlaybackStart ? "Start Stream" : "Enable Sound";
   }
 }

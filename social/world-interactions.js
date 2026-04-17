@@ -102,6 +102,15 @@ export function getLocalDisplayShareDraft(options = {}) {
   };
 }
 
+export function isEmojiOnlyChatText(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return false;
+  }
+  const compact = trimmed.replace(/\s+/gu, "");
+  return /^(?:\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)+$/u.test(compact);
+}
+
 export function createChatComposerController(options = {}) {
   const input = options.input ?? null;
 
@@ -438,6 +447,70 @@ export function createChatBubbleRenderer(options = {}) {
   };
 }
 
+export function createChatBubbleState(options = {}) {
+  const baseWidth = Number(options.baseWidth) || 18;
+  const baseHeight = Number(options.baseHeight) || 12;
+  const anchorY = Number(options.anchorY ?? 15.2) || 15.2;
+  const mesh = options.createBillboard?.(
+    options.createTexture?.(options.symbol || "💬", {
+      accent: options.accent,
+      stroke: options.stroke,
+      text: "",
+    }),
+    baseWidth,
+    baseHeight,
+    {
+      opacity: 0,
+      fog: false,
+      depthTest: false,
+      renderOrder: 11,
+      persistent: options.persistent === true,
+    },
+  );
+  if (mesh) {
+    mesh.visible = false;
+    mesh.position.set(0, anchorY, 0);
+  }
+  return {
+    mesh,
+    currentKey: "",
+    opacity: 0,
+    targetOpacity: 0,
+    duration: 0,
+    elapsed: 0,
+    highEnergy: false,
+    bounceCount: 0,
+    anchorY,
+    baseWidth,
+    baseHeight,
+    width: baseWidth,
+    height: baseHeight,
+    targetWidth: baseWidth,
+    targetHeight: baseHeight,
+  };
+}
+
+export function updateChatBubbleGhosts(options = {}) {
+  const entries = options.entries ?? null;
+  if (!entries?.length) {
+    return;
+  }
+  const deltaSeconds = Math.max(0, Number(options.deltaSeconds) || 0);
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    entry.age += deltaSeconds;
+    const rawLife = entry.lifetime > 0 ? entry.age / entry.lifetime : 1;
+    const life = Math.max(0, Math.min(1, Number.isFinite(rawLife) ? rawLife : 1));
+    entry.mesh.position.addScaledVector(entry.drift, deltaSeconds);
+    entry.mesh.scale.copy(entry.scaleBase).multiplyScalar(1 + life * 0.18);
+    entry.mesh.material.opacity = entry.opacity * Math.pow(1 - life, 1.6);
+    options.orientToCamera?.(entry.mesh, options.camera ?? null);
+    if (life >= 1) {
+      options.removeGhost?.(entry);
+    }
+  }
+}
+
 export function createLocalDisplayShare(stream, options = {}) {
   const videoTrack = stream?.getVideoTracks?.()[0] ?? null;
   const audioTrack = stream?.getAudioTracks?.()[0] ?? null;
@@ -573,6 +646,88 @@ export function getLocalDisplaySharePresentation(options = {}) {
     state: summaryState,
     status,
   };
+}
+
+function resolveStageCopy(copy, session) {
+  if (typeof copy === "function") {
+    return String(copy(session) ?? "");
+  }
+  return String(copy ?? "");
+}
+
+export function getDisplayShareStageLayout(options = {}) {
+  const overlayOpen = options.overlayOpen === true;
+  const needsManualPlaybackStart = options.needsManualPlaybackStart === true;
+  const needsManualAudioStart = options.needsManualAudioStart === true;
+  const needsPermissionAction = needsManualPlaybackStart || needsManualAudioStart;
+  return {
+    needsPermissionAction,
+    collapseDockedStage: !overlayOpen && !needsPermissionAction,
+    permissionOnlyDockedStage: !overlayOpen && needsPermissionAction,
+    needsManualPlaybackStart,
+    needsManualAudioStart,
+  };
+}
+
+export function getDisplayShareStagePlaceholderText(options = {}) {
+  const localSession = options.localSession ?? null;
+  const remoteSession = options.remoteSession ?? null;
+  const session = localSession ?? remoteSession ?? null;
+  const needsManualPlaybackStart = options.needsManualPlaybackStart === true;
+  const needsManualAudioStart = options.needsManualAudioStart === true;
+  const getSessionShareKind = typeof options.getSessionShareKind === "function"
+    ? options.getSessionShareKind
+    : (entry) => normalizeBrowserShareKind(
+      entry?.shareKind,
+      entry?.sessionMode === "remote-browser" ? "browser" : "screen",
+    );
+  const strings = options.strings ?? {};
+  const shareKind = getSessionShareKind(session);
+  const defaults = {
+    idle: "Share a screen, video, or voice nearby.",
+    blockedAutoplay: "Browser blocked autoplay. Press start to watch this nearby stream.",
+    enableAudioVoice: "Press enable sound to hear this nearby voice stream.",
+    enableAudioDefault: "Press enable sound to hear this nearby stream.",
+    localAudio: "Voice-only share is live nearby.",
+    remoteAudio: (entry) => `Listening to ${entry?.title || "live voice"} nearby.`,
+    localCamera: "Video share is live nearby.",
+    remoteCamera: (entry) => `Watching ${entry?.title || "live video"} nearby.`,
+    localDisplay: "Choose a tab or window in the picker to start sharing.",
+    remoteDisplay: (entry) => `Watching ${entry?.title || "nearby share"} nearby.`,
+    localBrowser: "This browser session is live nearby.",
+    remoteBrowser: (entry) => `Viewing ${entry?.title || "nearby share"} nearby.`,
+  };
+
+  if (needsManualPlaybackStart) {
+    return resolveStageCopy(strings.blockedAutoplay ?? defaults.blockedAutoplay, session);
+  }
+  if (needsManualAudioStart) {
+    return shareKind === "audio"
+      ? resolveStageCopy(strings.enableAudioVoice ?? defaults.enableAudioVoice, session)
+      : resolveStageCopy(strings.enableAudioDefault ?? defaults.enableAudioDefault, session);
+  }
+  if (!session) {
+    return resolveStageCopy(strings.idle ?? defaults.idle, null);
+  }
+  const isLocal = Boolean(localSession);
+  if (shareKind === "audio") {
+    return isLocal
+      ? resolveStageCopy(strings.localAudio ?? defaults.localAudio, session)
+      : resolveStageCopy(strings.remoteAudio ?? defaults.remoteAudio, session);
+  }
+  if (shareKind === "camera") {
+    return isLocal
+      ? resolveStageCopy(strings.localCamera ?? defaults.localCamera, session)
+      : resolveStageCopy(strings.remoteCamera ?? defaults.remoteCamera, session);
+  }
+  if (session.sessionMode === "display-share") {
+    return isLocal
+      ? resolveStageCopy(strings.localDisplay ?? defaults.localDisplay, session)
+      : resolveStageCopy(strings.remoteDisplay ?? defaults.remoteDisplay, session);
+  }
+  return isLocal
+    ? resolveStageCopy(strings.localBrowser ?? defaults.localBrowser, session)
+    : resolveStageCopy(strings.remoteBrowser ?? defaults.remoteBrowser, session);
 }
 
 export function createNearbyDisplayShareFeature(options = {}) {
