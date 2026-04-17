@@ -395,6 +395,15 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     jsonOk(res, payload);
   }));
 
+  app.delete("/api/private/worlds/:worldId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.deletePrivateWorld(profile, {
+      worldId: requireString(req.params.worldId, "worldId"),
+      creatorUsername: requireString(req.query.creatorUsername, "creatorUsername"),
+    });
+    jsonOk(res, payload);
+  }));
+
   app.post("/api/private/worlds/:worldId/scenes", asyncRoute(async (req, res) => {
     const { profile } = await requireUser(req, store);
     const payload = await store.savePrivateWorldScene(profile, {

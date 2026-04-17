@@ -1004,6 +1004,27 @@ export function installPrivateWorldStore(MauworldStore) {
     return detail;
   };
 
+  MauworldStore.prototype.deletePrivateWorld = async function deletePrivateWorld(profile, input = {}) {
+    const { world, creator } = await requireWorldCreator(this, profile, input.worldId, input.creatorUsername);
+    await must(
+      this.serviceClient
+        .from("private_worlds")
+        .delete()
+        .eq("id", world.id),
+      "Could not delete private world",
+    );
+    this.privateWorldRuntime?.removeWorldByReference?.(world.world_id, creator.username);
+    emitPrivateWorldEvent(this, {
+      type: "world:deleted",
+      world_id: world.world_id,
+      creator_username: creator.username,
+    });
+    return {
+      deleted: true,
+      world_id: world.world_id,
+    };
+  };
+
   MauworldStore.prototype.updatePrivateWorld = async function updatePrivateWorld(profile, input = {}) {
     const { world, creator } = await requireWorldEditor(this, profile, input.worldId, input.creatorUsername);
     const size = resolvePrivateWorldSize({

@@ -1058,6 +1058,19 @@ export class PrivateWorldRuntime {
     return buildPrivateWorldRuntimeSnapshot(simulation);
   }
 
+  removeWorldByReference(worldId, creatorUsername) {
+    const key = this.getWorldRefKey(worldId, creatorUsername);
+    const instanceId = this.keysByWorldRef.get(key);
+    if (!instanceId) {
+      return false;
+    }
+    const simulation = this.instancesById.get(instanceId);
+    destroyPhysicsState(simulation?.runtime?.physics);
+    this.instancesById.delete(instanceId);
+    this.keysByWorldRef.delete(key);
+    return true;
+  }
+
   async syncWorldByReference({ worldId, creatorUsername } = {}) {
     const context = await loadRuntimeWorldContext(this.store, worldId, creatorUsername);
     if (!context?.world) {

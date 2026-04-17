@@ -148,6 +148,12 @@ function createStubStore() {
         },
       };
     },
+    async deletePrivateWorld(_profile, payload) {
+      return {
+        deleted: true,
+        world_id: payload.worldId,
+      };
+    },
     async queuePrivateWorldInput(_profile, payload) {
       return {
         accepted: true,
@@ -473,6 +479,23 @@ test("private world export endpoint returns a forkable package attachment", asyn
   assert.equal(response.body.ok, true);
   assert.equal(response.body.package.format, "mauworld.private-world.v1");
   assert.match(String(response.headers["content-disposition"] || ""), /mw_origin123\.mauworld\.json/i);
+});
+
+test("private world delete endpoint removes a creator-owned world", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .delete("/api/private/worlds/mw_delete123")
+    .query({ creatorUsername: "maker" })
+    .set("Authorization", "Bearer token");
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.deleted, true);
+  assert.equal(response.body.world_id, "mw_delete123");
 });
 
 test("private world detail forwards guest session ids for guest viewers", async () => {
