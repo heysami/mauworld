@@ -223,6 +223,8 @@ const elements = {
   entityEmpty: document.querySelector("[data-entity-empty]"),
   selectionLabel: document.querySelector("[data-selection-label]"),
   prefabList: document.querySelector("[data-prefab-list]"),
+  prefabSearch: document.querySelector("[data-prefab-search]"),
+  prefabSearchHint: document.querySelector("[data-prefab-search-hint]"),
   removeEntity: document.querySelector("[data-remove-entity]"),
   convertPrefab: document.querySelector("[data-convert-prefab]"),
   placePrefab: document.querySelector("[data-place-prefab]"),
@@ -283,6 +285,8 @@ const state = {
   selectedWorld: null,
   selectedSceneId: "",
   selectedPrefabId: "",
+  prefabQuery: "",
+  prefabPlacementId: "",
   sceneDrafts: new Map(),
   sceneEditorSceneId: "",
   placementTool: "",
@@ -542,6 +546,7 @@ function setPrivatePanelTab(tab, options = {}) {
 
 function updateShellState() {
   const activePlacementTool = getActivePlacementTool();
+  const activePrefabPlacementId = getActivePrefabPlacementId();
   const buildTransformMode = getResolvedBuildTransformMode();
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
@@ -550,7 +555,7 @@ function updateShellState() {
   document.body.classList.toggle("is-signed-in", Boolean(state.session));
   document.body.classList.toggle(
     "has-placement-tool",
-    Boolean(activePlacementTool && canUsePlacementTools()),
+    Boolean((activePlacementTool || activePrefabPlacementId) && canUsePlacementTools()),
   );
   document.body.classList.toggle(
     "has-selection",
@@ -568,6 +573,16 @@ function updateShellState() {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
     button.title = buildPlacementToolLabel(kind);
+  }
+  if (elements.placePrefab) {
+    const hasActivePrefab = Boolean(state.selectedPrefabId);
+    const isArmed = Boolean(activePrefabPlacementId) && activePrefabPlacementId === state.selectedPrefabId;
+    elements.placePrefab.classList.toggle("is-active", isArmed);
+    elements.placePrefab.textContent = isArmed ? "Cancel world placement" : "Use in world";
+    elements.placePrefab.disabled = !canUsePlacementTools() || !hasActivePrefab;
+  }
+  if (elements.prefabSearch) {
+    elements.prefabSearch.disabled = !state.selectedWorld;
   }
   setLauncherTab(state.launcherTab);
   setPrivatePanelTab(state.privatePanelTab, { syncMode: false });
@@ -2006,6 +2021,10 @@ function getActivePlacementTool() {
   return isPlacementToolKind(persistent) ? persistent : "";
 }
 
+function getActivePrefabPlacementId() {
+  return canUsePlacementTools() ? String(state.prefabPlacementId ?? "").trim() : "";
+}
+
 function clearPlacementTool(options = {}) {
   const temporaryOnly = options.temporaryOnly === true;
   if (temporaryOnly) {
@@ -2013,6 +2032,7 @@ function clearPlacementTool(options = {}) {
   } else {
     state.placementShortcutTool = "";
     state.placementTool = "";
+    state.prefabPlacementId = "";
   }
   if (state.previewPointer.inside && canUsePlacementTools()) {
     refreshBuildHoverFromStoredPointer();
@@ -2031,8 +2051,23 @@ function setPlacementTool(kind, options = {}) {
   if (options.temporary === true) {
     state.placementShortcutTool = normalized;
   } else {
+    state.prefabPlacementId = "";
     state.placementTool = normalized && state.placementTool === normalized ? "" : normalized;
   }
+  refreshBuildHoverFromStoredPointer();
+  syncBuildPlacementOverlay();
+  updateShellState();
+}
+
+function armPrefabPlacement(prefabId = state.selectedPrefabId, options = {}) {
+  const normalizedPrefabId = String(prefabId ?? "").trim();
+  if (!canUsePlacementTools()) {
+    return;
+  }
+  state.selectedPrefabId = normalizedPrefabId;
+  state.placementShortcutTool = "";
+  state.placementTool = "";
+  state.prefabPlacementId = options.toggle === true && state.prefabPlacementId === normalizedPrefabId ? "" : normalizedPrefabId;
   refreshBuildHoverFromStoredPointer();
   syncBuildPlacementOverlay();
   updateShellState();
@@ -2227,7 +2262,7 @@ function getBuildTransformShortcut(event) {
 }
 
 function canUseBuildTransformShortcuts() {
-  return canUsePlacementTools() && !getActivePlacementTool();
+  return canUsePlacementTools() && !getActivePlacementTool() && !getActivePrefabPlacementId();
 }
 
 function getBuildTransformMode() {
@@ -3897,6 +3932,9 @@ function renderSceneBuilder() {
   }
   const selected = ensureBuilderSelection(sceneDoc);
   updateShellState();
+  if (elements.prefabSearch && elements.prefabSearch.value !== String(state.prefabQuery ?? "")) {
+    elements.prefabSearch.value = String(state.prefabQuery ?? "");
+  }
   renderEntitySections(sceneDoc, selected);
   renderEntityInspector(sceneDoc, selected);
   renderPrefabList(sceneDoc);
@@ -3992,6 +4030,187 @@ function buildTargetOptions(sceneDoc, selectedValue = "") {
   return options.map((option) => `
     <option value="${htmlEscape(option.value)}" ${option.value === selectedValue ? "selected" : ""}>${htmlEscape(option.label)}</option>
   `).join("");
+}
+
+function getSelectedPrefabEntry(prefabId = state.selectedPrefabId) {
+  const normalizedPrefabId = String(prefabId ?? "").trim();
+  if (!normalizedPrefabId) {
+    return null;
+  }
+  return (state.selectedWorld?.prefabs ?? []).find((entry) => entry.id === normalizedPrefabId) ?? null;
+}
+
+function getPrefabEntryCounts(prefabDoc = {}) {
+  return {
+    voxel: (prefabDoc.voxels ?? []).length,
+    primitive: (prefabDoc.primitives ?? []).length,
+    screen: (prefabDoc.screens ?? []).length,
+    player: (prefabDoc.players ?? []).length,
+    text: (prefabDoc.texts ?? []).length,
+    trigger: (prefabDoc.trigger_zones ?? []).length,
+    particle: (prefabDoc.particles ?? []).length,
+    prefab_instance: (prefabDoc.prefab_instances ?? []).length,
+  };
+}
+
+function getPrefabTypeSummary(counts = {}) {
+  const labels = [];
+  if (counts.voxel) {
+    labels.push("voxels");
+  }
+  if (counts.primitive) {
+    labels.push("objects");
+  }
+  if (counts.screen) {
+    labels.push("screens");
+  }
+  if (counts.player) {
+    labels.push("players");
+  }
+  if (counts.text) {
+    labels.push("text");
+  }
+  if (counts.trigger) {
+    labels.push("triggers");
+  }
+  if (counts.particle) {
+    labels.push("effects");
+  }
+  if (counts.prefab_instance) {
+    labels.push("linked prefabs");
+  }
+  return labels.slice(0, 3).join(" · ") || "empty";
+}
+
+function getEntityApproxRenderSize(kind, entry = {}) {
+  if (kind === "voxel") {
+    const scale = getPrivateVoxelScale(entry.scale);
+    return new THREE.Vector3(scale.x, scale.y, scale.z);
+  }
+  if (kind === "primitive") {
+    const scale = entry.scale ?? { x: 1, y: 1, z: 1 };
+    if (entry.shape === "plane") {
+      return new THREE.Vector3(scale.x || 1, Math.max(0.1, (scale.y || 1) * 0.1), scale.z || 1);
+    }
+    return new THREE.Vector3(scale.x || 1, scale.y || 1, scale.z || 1);
+  }
+  if (kind === "player") {
+    const scale = Math.max(0.2, Number(entry.scale ?? 1) || 1);
+    return new THREE.Vector3(
+      PRIVATE_PLAYER_METRICS.width * scale,
+      PRIVATE_PLAYER_METRICS.height * scale,
+      PRIVATE_PLAYER_METRICS.width * scale,
+    );
+  }
+  if (kind === "screen") {
+    return new THREE.Vector3(
+      Math.max(0.2, Number(entry.scale?.x ?? 4) || 4),
+      Math.max(0.2, Number(entry.scale?.y ?? 2.25) || 2.25),
+      Math.max(0.05, Number(entry.scale?.z ?? 0.1) || 0.1),
+    );
+  }
+  if (kind === "text") {
+    const scale = Math.max(0.2, Number(entry.scale ?? 1) || 1);
+    return new THREE.Vector3(4.5 * scale, 1.2 * scale, 0.12 * scale);
+  }
+  if (kind === "trigger") {
+    return new THREE.Vector3(
+      Math.max(0.2, Number(entry.scale?.x ?? 2) || 2),
+      Math.max(0.2, Number(entry.scale?.y ?? 2) || 2),
+      Math.max(0.2, Number(entry.scale?.z ?? 2) || 2),
+    );
+  }
+  if (kind === "particle") {
+    return new THREE.Vector3(
+      Math.max(0.3, Number(entry.scale?.x ?? 1) || 1) * 1.4,
+      Math.max(0.3, Number(entry.scale?.y ?? 1) || 1) * 1.8,
+      Math.max(0.3, Number(entry.scale?.z ?? 1) || 1) * 1.4,
+    );
+  }
+  return new THREE.Vector3(1, 1, 1);
+}
+
+function buildBoundsBoxFromEntry(kind, entry = {}, nestedBox = null) {
+  const position = new THREE.Vector3(
+    Number(entry.position?.x ?? 0) || 0,
+    Number(entry.position?.y ?? 0) || 0,
+    Number(entry.position?.z ?? 0) || 0,
+  );
+  const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    Number(entry.rotation?.x ?? 0) || 0,
+    Number(entry.rotation?.y ?? 0) || 0,
+    Number(entry.rotation?.z ?? 0) || 0,
+  ));
+  const box = nestedBox
+    ? nestedBox.clone()
+    : new THREE.Box3(
+      new THREE.Vector3().copy(getEntityApproxRenderSize(kind, entry)).multiplyScalar(-0.5),
+      getEntityApproxRenderSize(kind, entry).multiplyScalar(0.5),
+    );
+  const scaleVector = kind === "prefab_instance"
+    ? new THREE.Vector3(
+      Math.max(0.1, Number(entry.scale?.x ?? 1) || 1),
+      Math.max(0.1, Number(entry.scale?.y ?? 1) || 1),
+      Math.max(0.1, Number(entry.scale?.z ?? 1) || 1),
+    )
+    : new THREE.Vector3(1, 1, 1);
+  box.applyMatrix4(new THREE.Matrix4().compose(position, quaternion, scaleVector));
+  return box;
+}
+
+function getPrefabDocBounds(prefabDoc = {}, visitedIds = new Set()) {
+  let bounds = null;
+  const collections = [
+    ["voxel", prefabDoc.voxels ?? []],
+    ["primitive", prefabDoc.primitives ?? []],
+    ["screen", prefabDoc.screens ?? []],
+    ["player", prefabDoc.players ?? []],
+    ["text", prefabDoc.texts ?? []],
+    ["trigger", prefabDoc.trigger_zones ?? []],
+    ["particle", prefabDoc.particles ?? []],
+    ["prefab_instance", prefabDoc.prefab_instances ?? []],
+  ];
+  for (const [kind, entries] of collections) {
+    for (const entry of entries) {
+      let entryBounds = null;
+      if (kind === "prefab_instance") {
+        const nestedPrefabId = String(entry.prefab_id ?? "").trim();
+        if (!nestedPrefabId || visitedIds.has(nestedPrefabId)) {
+          continue;
+        }
+        const nestedPrefab = getSelectedPrefabEntry(nestedPrefabId);
+        const nestedBounds = nestedPrefab ? getPrefabDocBounds(nestedPrefab.prefab_doc ?? {}, new Set([...visitedIds, nestedPrefabId])) : null;
+        if (!nestedBounds) {
+          continue;
+        }
+        entryBounds = buildBoundsBoxFromEntry(kind, entry, nestedBounds);
+      } else {
+        entryBounds = buildBoundsBoxFromEntry(kind, entry);
+      }
+      if (!bounds) {
+        bounds = entryBounds.clone();
+      } else {
+        bounds.union(entryBounds);
+      }
+    }
+  }
+  return bounds;
+}
+
+function getPrefabLibraryMeta(prefab) {
+  const doc = prefab?.prefab_doc ?? {};
+  const counts = getPrefabEntryCounts(doc);
+  const itemCount = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  const bounds = getPrefabDocBounds(doc);
+  const dimensions = bounds ? bounds.getSize(new THREE.Vector3()) : new THREE.Vector3(1, 1, 1);
+  const typeSummary = getPrefabTypeSummary(counts);
+  return {
+    itemCount,
+    typeSummary,
+    dimensions,
+    sizeSummary: `${roundPrivateValue(dimensions.x, 1)} x ${roundPrivateValue(dimensions.y, 1)} x ${roundPrivateValue(dimensions.z, 1)}`,
+    searchText: [prefab?.name || "", typeSummary].join(" ").toLowerCase(),
+  };
 }
 
 function buildPersistentGroupInspectorActions(sceneDoc, selectedEntities = []) {
@@ -4317,34 +4536,65 @@ function renderEntityInspector(sceneDoc, selected = null) {
 
 function renderPrefabList(sceneDoc) {
   const prefabs = state.selectedWorld?.prefabs ?? [];
-  elements.placePrefab.disabled = !isEditor() || state.mode !== "build" || !state.selectedPrefabId;
+  const normalizedQuery = String(state.prefabQuery ?? "").trim().toLowerCase();
+  const visiblePrefabs = prefabs
+    .map((prefab) => ({
+      prefab,
+      meta: getPrefabLibraryMeta(prefab),
+    }))
+    .filter(({ prefab, meta }) => !normalizedQuery || meta.searchText.includes(normalizedQuery) || String(prefab.id ?? "").toLowerCase().includes(normalizedQuery))
+    .sort((left, right) => {
+      const leftActive = left.prefab.id === state.prefabPlacementId ? 2 : left.prefab.id === state.selectedPrefabId ? 1 : 0;
+      const rightActive = right.prefab.id === state.prefabPlacementId ? 2 : right.prefab.id === state.selectedPrefabId ? 1 : 0;
+      if (leftActive !== rightActive) {
+        return rightActive - leftActive;
+      }
+      return String(right.prefab.updated_at ?? "").localeCompare(String(left.prefab.updated_at ?? ""));
+    });
   if (!prefabs.length) {
     elements.prefabList.innerHTML = '<div class="pw-prefab-card"><p>No prefabs yet. Select an object and convert it into one.</p></div>';
+    if (elements.prefabSearchHint) {
+      elements.prefabSearchHint.textContent = "Turn a scene item into a prefab, then place it in the world from here.";
+    }
     return;
   }
-  elements.prefabList.innerHTML = prefabs.map((prefab) => {
-    const doc = prefab.prefab_doc ?? {};
-    const itemCount = [
-      ...(doc.voxels ?? []),
-      ...(doc.primitives ?? []),
-      ...(doc.screens ?? []),
-      ...(doc.players ?? []),
-      ...(doc.texts ?? []),
-      ...(doc.trigger_zones ?? []),
-    ].length;
+  if (!visiblePrefabs.length) {
+    elements.prefabList.innerHTML = '<div class="pw-prefab-card"><p>No prefabs match that search.</p></div>';
+    if (elements.prefabSearchHint) {
+      elements.prefabSearchHint.textContent = "Try a different name or clear the search.";
+    }
+    return;
+  }
+  const activePrefab = visiblePrefabs.find(({ prefab }) => prefab.id === state.prefabPlacementId || prefab.id === state.selectedPrefabId)?.prefab ?? null;
+  if (elements.prefabSearchHint) {
+    elements.prefabSearchHint.textContent = state.prefabPlacementId
+      ? `Placing ${activePrefab?.name || "prefab"} in the world. Click a spot in build mode to drop it.`
+      : `${visiblePrefabs.length} prefab${visiblePrefabs.length === 1 ? "" : "s"} ready. Pick one, then click in the world to place it.`;
+  }
+  elements.prefabList.innerHTML = visiblePrefabs.map(({ prefab, meta }) => {
+    const isSelected = state.selectedPrefabId === prefab.id;
+    const isArmed = state.prefabPlacementId === prefab.id;
     return `
-      <article class="pw-prefab-card ${state.selectedPrefabId === prefab.id ? "is-active" : ""}" data-prefab-card="${htmlEscape(prefab.id)}">
+      <article class="pw-prefab-card ${isSelected ? "is-active" : ""} ${isArmed ? "is-armed" : ""}" data-prefab-card="${htmlEscape(prefab.id)}" data-prefab-card-select="${htmlEscape(prefab.id)}">
+        <div class="pw-prefab-card__head">
+          <div class="pw-prefab-card__title">
+            <strong>${htmlEscape(prefab.name)}</strong>
+            <span>${htmlEscape(meta.typeSummary)}</span>
+          </div>
+          <span class="pw-prefab-card__badge">${isArmed ? "armed" : isSelected ? "selected" : "saved"}</span>
+        </div>
+        <p>${htmlEscape(meta.itemCount)} item${meta.itemCount === 1 ? "" : "s"} · ${htmlEscape(meta.sizeSummary)}</p>
+        <div class="pw-prefab-card__meta">
+          <span>${htmlEscape(prefab.updated_at ? new Date(prefab.updated_at).toLocaleString() : "new")}</span>
+          <span>${htmlEscape(meta.typeSummary)}</span>
+        </div>
         <label>
           <span>Name</span>
           <input type="text" data-prefab-name="${htmlEscape(prefab.id)}" value="${htmlEscape(prefab.name)}" ${!isEditor() || state.mode !== "build" ? "disabled" : ""} />
         </label>
-        <div class="pw-prefab-card__meta">
-          <span>${itemCount} item${itemCount === 1 ? "" : "s"}</span>
-          <span>${htmlEscape(prefab.updated_at ? new Date(prefab.updated_at).toLocaleString() : "new")}</span>
-        </div>
         <div class="pw-prefab-card__actions">
-          <button type="button" class="is-muted" data-select-prefab="${htmlEscape(prefab.id)}">Select</button>
-          <button type="button" class="is-muted" data-place-prefab-id="${htmlEscape(prefab.id)}" ${!isEditor() || state.mode !== "build" ? "disabled" : ""}>Place Instance</button>
+          <button type="button" data-place-prefab-id="${htmlEscape(prefab.id)}" ${!isEditor() || state.mode !== "build" ? "disabled" : ""}>${isArmed ? "Cancel" : "Use in world"}</button>
+          <button type="button" class="is-muted" data-select-prefab="${htmlEscape(prefab.id)}">Details</button>
           <button type="button" class="is-muted" data-delete-prefab="${htmlEscape(prefab.id)}" ${!isEditor() || state.mode !== "build" ? "disabled" : ""}>Remove</button>
         </div>
       </article>
@@ -4777,6 +5027,10 @@ function renderSelectedWorld() {
   }
   if (elements.placePrefab) {
     elements.placePrefab.disabled = !hasWorld || !canEdit || state.mode !== "build" || !state.selectedPrefabId;
+    elements.placePrefab.classList.toggle("is-active", Boolean(state.prefabPlacementId) && state.prefabPlacementId === state.selectedPrefabId);
+    elements.placePrefab.textContent = state.prefabPlacementId && state.prefabPlacementId === state.selectedPrefabId
+      ? "Cancel world placement"
+      : "Use in world";
   }
 
   setMode(state.mode, { syncPanelTab: false });
@@ -4986,6 +5240,71 @@ function getToolPlacementCenterYOffset(kind, supportTopY = 0) {
     return clampPlacementCenterY(supportTopY + 0.5, dimensions.y);
   }
   return clampPlacementCenterY(supportTopY + dimensions.y / 2, dimensions.y);
+}
+
+function getPrefabPlacementProfile(prefabId = state.selectedPrefabId) {
+  const prefab = getSelectedPrefabEntry(prefabId);
+  if (!prefab) {
+    return null;
+  }
+  const bounds = getPrefabDocBounds(prefab.prefab_doc ?? {});
+  if (!bounds) {
+    return {
+      prefab,
+      bounds: new THREE.Box3(
+        new THREE.Vector3(-PRIVATE_WORLD_BLOCK_UNIT / 2, 0, -PRIVATE_WORLD_BLOCK_UNIT / 2),
+        new THREE.Vector3(PRIVATE_WORLD_BLOCK_UNIT / 2, PRIVATE_WORLD_BLOCK_UNIT, PRIVATE_WORLD_BLOCK_UNIT / 2),
+      ),
+    };
+  }
+  return { prefab, bounds };
+}
+
+function resolvePrefabPlacementPreview(prefabId, sceneDoc, context) {
+  if (!prefabId || !context || !state.selectedWorld) {
+    return null;
+  }
+  const profile = getPrefabPlacementProfile(prefabId);
+  if (!profile) {
+    return null;
+  }
+  const gridCell = resolveBuildGridCell(context);
+  if (!gridCell) {
+    return null;
+  }
+  const dimensions = profile.bounds.getSize(new THREE.Vector3());
+  const localCenter = profile.bounds.getCenter(new THREE.Vector3());
+  let supportTopY = 0;
+  const dominantNormal = getDominantHitNormal(context.hit);
+  if (context.hit?.object && dominantNormal?.y > 0) {
+    const hitBounds = new THREE.Box3().setFromObject(context.hit.object);
+    supportTopY = Number(hitBounds.max.y ?? 0) || 0;
+  }
+  const worldCenter = {
+    x: snapPlacementAxisToBlockGrid(gridCell.x, "x", Math.max(0.2, dimensions.x)),
+    y: clampPlacementCenterY(supportTopY + Math.max(0.2, dimensions.y) / 2, Math.max(0.2, dimensions.y)),
+    z: snapPlacementAxisToBlockGrid(gridCell.z, "z", Math.max(0.2, dimensions.z)),
+  };
+  const position = {
+    x: roundPrivateValue(worldCenter.x - localCenter.x),
+    y: roundPrivateValue(worldCenter.y - localCenter.y),
+    z: roundPrivateValue(worldCenter.z - localCenter.z),
+  };
+  return {
+    kind: "prefab",
+    prefabId,
+    label: profile.prefab.name || "Prefab",
+    key: `prefab:${prefabId}:${position.x}:${position.y}:${position.z}`,
+    position,
+    rotation: { x: 0, y: 0, z: 0 },
+    dimensions: {
+      x: Math.max(0.2, dimensions.x),
+      y: Math.max(0.2, dimensions.y),
+      z: Math.max(0.2, dimensions.z),
+    },
+    valid: true,
+    supportTopY,
+  };
 }
 
 function getScreenTextureRenderSize(screen = {}) {
@@ -5384,12 +5703,13 @@ function refreshBuildHoverFromPointer(pointerSource) {
     return null;
   }
   const toolKind = getActivePlacementTool();
+  const prefabPlacementId = getActivePrefabPlacementId();
   let sceneDoc = null;
   try {
     sceneDoc = parseSceneTextarea();
     ensureBuilderSelection(sceneDoc);
   } catch (_error) {
-    if (toolKind) {
+    if (toolKind || prefabPlacementId) {
       state.buildHover = null;
       syncBuildPlacementOverlay();
       return null;
@@ -5402,7 +5722,11 @@ function refreshBuildHoverFromPointer(pointerSource) {
   state.buildHover = {
     context,
     gridCell: resolveBuildGridCell(context),
-    placement: toolKind && sceneDoc ? resolvePlacementPreview(toolKind, sceneDoc, context) : null,
+    placement: prefabPlacementId && sceneDoc
+      ? resolvePrefabPlacementPreview(prefabPlacementId, sceneDoc, context)
+      : toolKind && sceneDoc
+        ? resolvePlacementPreview(toolKind, sceneDoc, context)
+        : null,
     entityRef: getEntityRefFromHit(context.hit),
     transformHandle: transformHandleHit?.object?.userData?.privateWorldTransformHandle
       ? { ...transformHandleHit.object.userData.privateWorldTransformHandle }
@@ -5444,7 +5768,7 @@ function buildPlacementGhost(preview, placement) {
   if (!preview?.buildOverlay || !placement) {
     return;
   }
-  const accent = placement.kind === "voxel" ? "#85b84f" : "#4ca7ff";
+  const accent = placement.kind === "voxel" ? "#85b84f" : placement.kind === "prefab" ? "#ff8a5c" : "#4ca7ff";
   const invalidAccent = "#ff5a7a";
   const color = placement.valid ? accent : invalidAccent;
   const dimensions = placement.dimensions || getToolPlacementDimensions(placement.kind);
@@ -5484,6 +5808,12 @@ function buildPlacementGhost(preview, placement) {
     };
   } else if (placement.kind === "screen") {
     geometry = new THREE.BoxGeometry(1, 1, 0.1);
+  } else if (placement.kind === "prefab") {
+    geometry = new THREE.BoxGeometry(
+      Math.max(0.2, dimensions.x),
+      Math.max(0.2, dimensions.y),
+      Math.max(0.2, dimensions.z),
+    );
   } else if (placement.kind === "trigger") {
     const wire = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(dimensions.x, dimensions.y, dimensions.z)),
@@ -5524,6 +5854,8 @@ function buildPlacementGhost(preview, placement) {
         ? new THREE.BoxGeometry(4.5, 1.2, 0.12)
         : placement.kind === "screen"
           ? new THREE.BoxGeometry(dimensions.x, dimensions.y, Math.max(0.1, dimensions.z))
+          : placement.kind === "prefab"
+            ? new THREE.BoxGeometry(Math.max(0.2, dimensions.x), Math.max(0.2, dimensions.y), Math.max(0.2, dimensions.z))
           : placement.kind === "player"
             ? new THREE.BoxGeometry(dimensions.x, dimensions.y, dimensions.z)
             : new THREE.BoxGeometry(dimensions.x, dimensions.y, dimensions.z)
@@ -5661,6 +5993,7 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   const buildMode = canUsePlacementTools();
   const hover = buildMode ? state.buildHover : null;
   const activeTool = buildMode ? getActivePlacementTool() : "";
+  const activePrefabPlacementId = buildMode ? getActivePrefabPlacementId() : "";
   const requestedTransformMode = buildMode ? getBuildTransformMode() : "";
   const gridCell = hover?.gridCell ?? null;
   const placement = hover?.placement ?? null;
@@ -5681,7 +6014,7 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   const selectionBounds = selectionRefs.length ? getOverlayBoundsForRefs(preview, selectionRefs) : null;
   const overlayKey = [
     buildMode ? "build" : "idle",
-    activeTool || "none",
+    activePrefabPlacementId ? `prefab:${activePrefabPlacementId}` : activeTool || "none",
     transformMode || "none",
     selectionRefs.map((entry) => `${entry.kind}:${entry.id}`).join(",") || "noselection",
     getOverlayBoundsSignature(selectionBounds),
@@ -6354,6 +6687,13 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
 }
 
 function placeActiveTool(placement = state.buildHover?.placement, toolKind = getActivePlacementTool()) {
+  const prefabPlacementId = getActivePrefabPlacementId();
+  if (prefabPlacementId) {
+    if (!placement || placement.kind !== "prefab" || placement.prefabId !== prefabPlacementId || placement.valid === false) {
+      return false;
+    }
+    return placeSelectedPrefab(prefabPlacementId, placement);
+  }
   if (!toolKind || placement?.kind !== toolKind || placement?.valid === false) {
     return false;
   }
@@ -6905,7 +7245,7 @@ function ensurePreview() {
     state.previewPointer.inside = true;
     refreshBuildHoverFromPointer(event);
     if (state.mode === "build" && isEditor()) {
-      if (getActivePlacementTool()) {
+      if (getActivePlacementTool() || getActivePrefabPlacementId()) {
         return;
       }
       const transformMode = getBuildTransformMode();
@@ -7020,7 +7360,7 @@ function ensurePreview() {
     if (state.viewerSuppressClickAt && performance.now() - state.viewerSuppressClickAt < 240) {
       return;
     }
-    if (state.mode === "build" && getActivePlacementTool()) {
+    if (state.mode === "build" && (getActivePlacementTool() || getActivePrefabPlacementId())) {
       refreshBuildHoverFromPointer(event);
       placeActiveTool();
       return;
@@ -7139,7 +7479,7 @@ function addTextBillboard(preview, value, position, options = {}) {
   mesh.position.set(position.x, position.y, position.z);
   mesh.rotation.set(options.rotation?.x || 0, options.rotation?.y || 0, options.rotation?.z || 0);
   mesh.scale.setScalar(Math.max(0.2, Number(options.scale ?? 1) || 1));
-  preview.root.add(mesh);
+  (options.parent ?? preview.root).add(mesh);
   return mesh;
 }
 
@@ -7423,15 +7763,216 @@ function updatePreviewFromSelection() {
     preview.root.add(mesh);
     return mesh;
   };
+  const attachPrefabPickable = (object, metadata = null) => {
+    if (!metadata?.id) {
+      return object;
+    }
+    object.userData.privateWorldEntityId = metadata.id;
+    object.userData.privateWorldEntityKind = metadata.kind;
+    preview.entityPickables.push(object);
+    return object;
+  };
+  const addPrefabMesh = (parent, geometry, material, position, rotation = { x: 0, y: 0, z: 0 }, scale = { x: 1, y: 1, z: 1 }, metadata = null) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(position.x, position.y, position.z);
+    mesh.rotation.set(rotation.x || 0, rotation.y || 0, rotation.z || 0);
+    mesh.scale.set(scale.x || 1, scale.y || 1, scale.z || 1);
+    attachPrefabPickable(mesh, metadata);
+    parent.add(mesh);
+    return mesh;
+  };
+  const getPrimitiveGeometry = (primitive = {}) => {
+    if (primitive.shape === "sphere") {
+      return new THREE.SphereGeometry(0.5, 24, 24);
+    }
+    if (primitive.shape === "cylinder") {
+      return new THREE.CylinderGeometry(0.5, 0.5, 1, 20);
+    }
+    if (primitive.shape === "cone") {
+      return new THREE.ConeGeometry(0.5, 1, 20);
+    }
+    if (primitive.shape === "plane") {
+      return new THREE.BoxGeometry(1, 0.1, 1);
+    }
+    return new THREE.BoxGeometry(1, 1, 1);
+  };
   const runtimeTransforms = getRuntimeTransformMaps();
   const particleEffects = [];
   const isSelected = (kind, id) => isEntitySelected(kind, id);
+  const renderPrefabDocument = (parent, prefabDoc = {}, options = {}) => {
+    const metadata = options.metadata ?? null;
+    const selected = options.selected === true;
+    const inheritedMaterial = options.materialOverride ?? null;
+    const visitedPrefabIds = options.visitedPrefabIds ?? new Set();
+    let renderedAny = false;
+    const getMergedMaterial = (material = {}) => inheritedMaterial
+      ? { ...material, ...inheritedMaterial }
+      : material;
+
+    for (const [index, voxel] of (prefabDoc.voxels ?? []).entries()) {
+      renderedAny = true;
+      addPrefabMesh(
+        parent,
+        new THREE.BoxGeometry(1, 1, 1),
+        makeMaterial(getMergedMaterial(voxel.material), voxel.scale, { selected }),
+        voxel.position || { x: 0, y: 0, z: 0 },
+        { x: 0, y: 0, z: 0 },
+        voxel.scale || { x: 1, y: 1, z: 1 },
+        metadata ?? { id: voxel.id || `prefab_voxel_${index}`, kind: "voxel" },
+      );
+    }
+
+    for (const [index, primitive] of (prefabDoc.primitives ?? []).entries()) {
+      renderedAny = true;
+      const mesh = addPrefabMesh(
+        parent,
+        getPrimitiveGeometry(primitive),
+        makeMaterial(getMergedMaterial(primitive.material), primitive.scale, { selected }),
+        primitive.position || { x: 0, y: 1, z: 0 },
+        primitive.rotation || { x: 0, y: 0, z: 0 },
+        primitive.scale || { x: 1, y: 1, z: 1 },
+        metadata ?? { id: primitive.id || `prefab_primitive_${index}`, kind: "primitive" },
+      );
+      if (selected && mesh.material?.emissiveIntensity !== undefined) {
+        mesh.material.emissiveIntensity = 0.3;
+      }
+    }
+
+    for (const [index, player] of (prefabDoc.players ?? []).entries()) {
+      renderedAny = true;
+      const tint = getMergedMaterial({ color: player.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f", texture_preset: "none" });
+      const mesh = addPrefabMesh(
+        parent,
+        new THREE.CapsuleGeometry(
+          PRIVATE_PLAYER_METRICS.width / 2,
+          PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
+          8,
+          16,
+        ),
+        makeMaterial(
+          tint,
+          { x: player.scale || 1, y: player.scale || 1, z: player.scale || 1 },
+          { selected },
+        ),
+        player.position || { x: 0, y: 1, z: 0 },
+        player.rotation || { x: 0, y: 0, z: 0 },
+        { x: player.scale || 1, y: player.scale || 1, z: player.scale || 1 },
+        metadata ?? { id: player.id || `prefab_player_${index}`, kind: "player" },
+      );
+    }
+
+    for (const [index, screen] of (prefabDoc.screens ?? []).entries()) {
+      renderedAny = true;
+      const resolvedMaterial = getMergedMaterial(screen.material);
+      const material = new THREE.MeshStandardMaterial({
+        color: resolvedMaterial?.color || "#ffffff",
+        roughness: 0.42,
+        metalness: 0.08,
+        emissive: "#4f6d8f",
+        emissiveIntensity: selected ? 0.24 : 0.2,
+      });
+      const mesh = addPrefabMesh(
+        parent,
+        new THREE.BoxGeometry(1, 1, 0.1),
+        material,
+        screen.position || { x: 0, y: 2, z: 0 },
+        screen.rotation || { x: 0, y: 0, z: 0 },
+        screen.scale || { x: 4, y: 2, z: 0.1 },
+        metadata ?? { id: screen.id || `prefab_screen_${index}`, kind: "screen" },
+      );
+      const textureViewport = getScreenTextureRenderSize(screen);
+      void renderScreenHtmlTexture(THREE, screen, {
+        width: textureViewport.width,
+        height: textureViewport.height,
+      }).then((texture) => {
+        if (!texture || !mesh.parent) {
+          return;
+        }
+        material.map = texture;
+        material.emissiveIntensity = selected ? 0.16 : 0.06;
+        material.needsUpdate = true;
+      }).catch(() => {
+        // ignore transient screen texture failures
+      });
+    }
+
+    for (const [index, text] of (prefabDoc.texts ?? []).entries()) {
+      renderedAny = true;
+      const mesh = addTextBillboard(preview, text.value || text.text, text.position || { x: 0, y: 2, z: 0 }, {
+        parent,
+        rotation: text.rotation || { x: 0, y: 0, z: 0 },
+        scale: text.scale ?? 1,
+        selected,
+      });
+      attachPrefabPickable(mesh, metadata ?? { id: text.id || `prefab_text_${index}`, kind: "text" });
+    }
+
+    for (const [index, trigger] of (prefabDoc.trigger_zones ?? prefabDoc.triggerZones ?? []).entries()) {
+      renderedAny = true;
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshBasicMaterial({
+          color: selected ? "#ffd659" : "#ff4f78",
+          wireframe: true,
+          transparent: true,
+          opacity: 0.55,
+        }),
+      );
+      mesh.position.set(trigger.position?.x || 0, trigger.position?.y || 0.5, trigger.position?.z || 0);
+      mesh.rotation.set(trigger.rotation?.x || 0, trigger.rotation?.y || 0, trigger.rotation?.z || 0);
+      mesh.scale.set(trigger.scale?.x || 2, trigger.scale?.y || 2, trigger.scale?.z || 2);
+      attachPrefabPickable(mesh, metadata ?? { id: trigger.id || `prefab_trigger_${index}`, kind: "trigger" });
+      parent.add(mesh);
+    }
+
+    for (const nestedInstance of prefabDoc.prefab_instances ?? []) {
+      if (nestedInstance.overrides?.visible === false) {
+        continue;
+      }
+      const nestedPrefabId = String(nestedInstance.prefab_id ?? "").trim();
+      if (!nestedPrefabId || visitedPrefabIds.has(nestedPrefabId)) {
+        continue;
+      }
+      const nestedPrefab = getSelectedPrefabEntry(nestedPrefabId);
+      if (!nestedPrefab) {
+        continue;
+      }
+      const nestedGroup = new THREE.Group();
+      nestedGroup.position.set(
+        nestedInstance.position?.x || 0,
+        nestedInstance.position?.y || 0,
+        nestedInstance.position?.z || 0,
+      );
+      nestedGroup.rotation.set(
+        nestedInstance.rotation?.x || 0,
+        nestedInstance.rotation?.y || 0,
+        nestedInstance.rotation?.z || 0,
+      );
+      nestedGroup.scale.set(
+        nestedInstance.scale?.x || 1,
+        nestedInstance.scale?.y || 1,
+        nestedInstance.scale?.z || 1,
+      );
+      parent.add(nestedGroup);
+      renderedAny = renderPrefabDocument(nestedGroup, nestedPrefab.prefab_doc ?? {}, {
+        metadata,
+        selected,
+        materialOverride: nestedInstance.overrides?.material
+          ? { ...(inheritedMaterial ?? {}), ...nestedInstance.overrides.material }
+          : inheritedMaterial,
+        visitedPrefabIds: new Set([...visitedPrefabIds, nestedPrefabId]),
+      }) || renderedAny;
+    }
+
+    return renderedAny;
+  };
   refreshPrivatePreviewEnvironment(preview, state.selectedWorld);
   const hasPlacedGeometry = Boolean(
     (sceneDoc.voxels?.length ?? 0)
     || (sceneDoc.primitives?.length ?? 0)
     || (sceneDoc.screens?.length ?? 0)
-    || (sceneDoc.text3d?.length ?? 0),
+    || (sceneDoc.texts?.length ?? 0)
+    || (sceneDoc.prefab_instances?.length ?? 0),
   );
   preview.showGridHint = !hasPlacedGeometry;
   syncPrivatePreviewEnvironmentState(preview);
@@ -7547,6 +8088,60 @@ function updatePreviewFromSelection() {
       { id: playerId, kind: "player" },
     );
     mesh.userData.privateWorldPlayerId = playerId;
+  }
+
+  for (const prefabInstance of sceneDoc.prefab_instances ?? []) {
+    const prefab = getSelectedPrefabEntry(prefabInstance.prefab_id);
+    if (!prefab || prefabInstance.overrides?.visible === false) {
+      continue;
+    }
+    const group = new THREE.Group();
+    group.position.set(
+      prefabInstance.position?.x || 0,
+      prefabInstance.position?.y || 0,
+      prefabInstance.position?.z || 0,
+    );
+    group.rotation.set(
+      prefabInstance.rotation?.x || 0,
+      prefabInstance.rotation?.y || 0,
+      prefabInstance.rotation?.z || 0,
+    );
+    group.scale.set(
+      prefabInstance.scale?.x || 1,
+      prefabInstance.scale?.y || 1,
+      prefabInstance.scale?.z || 1,
+    );
+    preview.root.add(group);
+    preview.entityMeshes.set(prefabInstance.id, group);
+    const rendered = renderPrefabDocument(group, prefab.prefab_doc ?? {}, {
+      metadata: { id: prefabInstance.id, kind: "prefab_instance" },
+      selected: isSelected("prefab_instance", prefabInstance.id),
+      materialOverride: prefabInstance.overrides?.material ?? null,
+      visitedPrefabIds: new Set([String(prefab.id ?? "").trim()]),
+    });
+    if (!rendered) {
+      const fallbackBounds = getPrefabDocBounds(prefab.prefab_doc ?? {});
+      const fallbackSize = fallbackBounds?.getSize(new THREE.Vector3()) ?? new THREE.Vector3(1, 1, 1);
+      const fallbackCenter = fallbackBounds?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3(0, 0.5, 0);
+      const fallback = new THREE.LineSegments(
+        new THREE.EdgesGeometry(
+          new THREE.BoxGeometry(
+            Math.max(0.4, fallbackSize.x),
+            Math.max(0.4, fallbackSize.y),
+            Math.max(0.4, fallbackSize.z),
+          ),
+        ),
+        new THREE.LineBasicMaterial({
+          color: new THREE.Color(isSelected("prefab_instance", prefabInstance.id) ? "#ffb36e" : "#ff8a5c"),
+          transparent: true,
+          opacity: 0.7,
+          fog: false,
+        }),
+      );
+      fallback.position.copy(fallbackCenter);
+      attachPrefabPickable(fallback, { id: prefabInstance.id, kind: "prefab_instance" });
+      group.add(fallback);
+    }
   }
 
   for (const screen of sceneDoc.screens ?? []) {
@@ -8416,6 +9011,9 @@ async function deletePrefab(prefabId) {
   if (state.selectedPrefabId === prefabId) {
     state.selectedPrefabId = "";
   }
+  if (state.prefabPlacementId === prefabId) {
+    state.prefabPlacementId = "";
+  }
   mutateSceneDoc((sceneDoc) => {
     sceneDoc.prefab_instances = (sceneDoc.prefab_instances ?? []).filter((entry) => entry.prefab_id !== prefabId);
     if (state.builderSelection?.kind === "prefab_instance" && !sceneDoc.prefab_instances.some((entry) => entry.id === state.builderSelection.id)) {
@@ -8425,10 +9023,12 @@ async function deletePrefab(prefabId) {
   pushEvent("prefab:removed", prefabId);
 }
 
-function placeSelectedPrefab(prefabId = state.selectedPrefabId) {
+function placeSelectedPrefab(prefabId = state.selectedPrefabId, placement = null) {
   if (!prefabId) {
-    return;
+    return false;
   }
+  let placed = false;
+  void acquireSceneLock();
   mutateSceneDoc((sceneDoc) => {
     sceneDoc.prefab_instances = sceneDoc.prefab_instances || [];
     const instanceId = `prefabinst_${slugToken(prefabId)}_${sceneDoc.prefab_instances.length + 1}`;
@@ -8436,8 +9036,12 @@ function placeSelectedPrefab(prefabId = state.selectedPrefabId) {
       id: instanceId,
       prefab_id: prefabId,
       label: `Instance ${sceneDoc.prefab_instances.length + 1}`,
-      position: { x: sceneDoc.prefab_instances.length * 2.5, y: 0, z: 0 },
-      rotation: { x: 0, y: 0, z: 0 },
+      position: placement?.kind === "prefab" && placement.prefabId === prefabId
+        ? deepClone(placement.position)
+        : { x: sceneDoc.prefab_instances.length * 2.5, y: 0, z: 0 },
+      rotation: placement?.kind === "prefab" && placement.prefabId === prefabId
+        ? deepClone(placement.rotation ?? { x: 0, y: 0, z: 0 })
+        : { x: 0, y: 0, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
       overrides: {
         material: null,
@@ -8445,8 +9049,13 @@ function placeSelectedPrefab(prefabId = state.selectedPrefabId) {
       },
     });
     writeBuilderSelection([{ kind: "prefab_instance", id: instanceId }], { kind: "prefab_instance", id: instanceId });
+    placed = true;
   });
+  if (placed) {
+    refreshBuildHoverFromStoredPointer();
+  }
   pushEvent("prefab:instanced", prefabId);
+  return placed;
 }
 
 async function removeCollaborator(username) {
@@ -8923,7 +9532,8 @@ function bindEvents() {
     });
   });
   elements.placePrefab.addEventListener("click", () => {
-    placeSelectedPrefab();
+    armPrefabPlacement(state.selectedPrefabId, { toggle: true });
+    renderSceneBuilder();
   });
   elements.prefabList.addEventListener("click", (event) => {
     const selectButton = event.target.closest("[data-select-prefab]");
@@ -8934,8 +9544,10 @@ function bindEvents() {
     }
     const placeButton = event.target.closest("[data-place-prefab-id]");
     if (placeButton) {
-      state.selectedPrefabId = placeButton.getAttribute("data-place-prefab-id");
-      placeSelectedPrefab(state.selectedPrefabId);
+      const prefabId = placeButton.getAttribute("data-place-prefab-id");
+      state.selectedPrefabId = prefabId;
+      armPrefabPlacement(prefabId, { toggle: true });
+      renderSceneBuilder();
       return;
     }
     const deleteButton = event.target.closest("[data-delete-prefab]");
@@ -8943,6 +9555,12 @@ function bindEvents() {
       void deletePrefab(deleteButton.getAttribute("data-delete-prefab")).catch((error) => {
         setStatus(error.message);
       });
+      return;
+    }
+    const card = event.target.closest("[data-prefab-card-select]");
+    if (card && !event.target.closest("button, input, select, textarea, label")) {
+      state.selectedPrefabId = card.getAttribute("data-prefab-card-select");
+      renderSceneBuilder();
     }
   });
   elements.prefabList.addEventListener("change", (event) => {
@@ -8953,6 +9571,10 @@ function bindEvents() {
     void renamePrefab(input.getAttribute("data-prefab-name"), input.value).catch((error) => {
       setStatus(error.message);
     });
+  });
+  elements.prefabSearch?.addEventListener("input", () => {
+    state.prefabQuery = elements.prefabSearch.value || "";
+    renderSceneBuilder();
   });
   elements.readyToggle.addEventListener("click", () => {
     void setReady();
@@ -9119,7 +9741,7 @@ function bindEvents() {
       setPrivateBrowserOverlayOpen(false);
       return;
     }
-    if (getActivePlacementTool()) {
+    if (getActivePlacementTool() || getActivePrefabPlacementId()) {
       clearPlacementTool();
       return;
     }

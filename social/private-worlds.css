@@ -557,6 +557,25 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
   gap: 10px;
 }
 
+.pw-prefab-search {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.pw-prefab-search__hint {
+  margin: 0 0 10px;
+  color: var(--pw-muted);
+  line-height: 1.45;
+}
+
+.pw-prefab-list {
+  max-height: min(48vh, 560px);
+  overflow: auto;
+  align-content: start;
+  padding-right: 4px;
+}
+
 .pw-world-card,
 .pw-builder-item,
 .pw-scene-pill {
@@ -573,6 +592,11 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
 .pw-scene-pill.is-active {
   border-color: rgba(255, 90, 122, 0.32);
   background: rgba(255, 90, 122, 0.1);
+}
+
+.pw-prefab-card.is-armed {
+  border-color: rgba(45, 216, 255, 0.38);
+  background: rgba(45, 216, 255, 0.11);
 }
 
 .pw-world-card h3,
@@ -597,6 +621,44 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
 .pw-builder-group__header span {
   color: var(--pw-muted);
   font-size: 0.76rem;
+}
+
+.pw-prefab-card {
+  display: grid;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.pw-prefab-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pw-prefab-card__title {
+  display: grid;
+  gap: 4px;
+}
+
+.pw-prefab-card__title strong {
+  margin: 0;
+}
+
+.pw-prefab-card__badge {
+  padding: 4px 8px;
+  border: 1px solid var(--pw-line);
+  border-radius: 6px;
+  color: var(--pw-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pw-prefab-card.is-armed .pw-prefab-card__badge {
+  border-color: rgba(45, 216, 255, 0.34);
+  color: var(--pw-text);
+  background: rgba(45, 216, 255, 0.12);
 }
 
 .pw-toolbelt {
@@ -889,6 +951,11 @@ body.private-worlds-body:not(.has-world) .pw-scene-dock {
   gap: 8px;
 }
 
+.pw-prefab-card__actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .pw-collaborator-item,
 .pw-event-log__item {
   padding: 12px;
@@ -1021,6 +1088,10 @@ body.private-worlds-body.is-launcher-open .pw-scene-dock {
   }
 
   .pw-launcher-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pw-prefab-card__actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

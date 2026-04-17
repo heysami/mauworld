@@ -475,8 +475,13 @@
           <section class="pw-builder-panel">
             <div class="pw-panel__header">
               <h3>Prefabs</h3>
-              <button type="button" class="is-muted" data-place-prefab disabled>Place Prefab</button>
+              <button type="button" class="is-muted" data-place-prefab disabled>Use in world</button>
             </div>
+            <label class="pw-prefab-search">
+              <span>Find prefab</span>
+              <input type="search" data-prefab-search placeholder="Search prefab library" />
+            </label>
+            <p class="pw-prefab-search__hint" data-prefab-search-hint>Pick a prefab, then click in the world to place it.</p>
             <div class="pw-prefab-list" data-prefab-list></div>
           </section>
 
