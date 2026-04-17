@@ -32,6 +32,7 @@ const { mauworldApiUrl } = window.MauworldSocial;
 
 const AI_KEY_STORAGE_KEY = "mauworldPrivateWorldAiKey";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
+const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 const LAUNCHER_TABS = new Set(["worlds", "access"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
@@ -125,6 +126,190 @@ const BUILD_TRANSFORM_SHORTCUTS = new Map([
   ["r", "rotate"],
   ["t", "delete"],
 ]);
+const TOOL_PRESET_KINDS = ["voxel", "primitive", "player", "screen", "text", "trigger"];
+const TOOL_PRESET_BUILTINS = {
+  voxel: [
+    {
+      id: "grass-block",
+      name: "Grass Block",
+      builtin: true,
+      entry: {
+        scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
+        material: { color: "#85b84f", texture_preset: "grass" },
+        shape_preset: "cube",
+      },
+    },
+    {
+      id: "stone-block",
+      name: "Stone Block",
+      builtin: true,
+      entry: {
+        scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
+        material: { color: "#d3d8e2", texture_preset: "stone" },
+        shape_preset: "cube",
+      },
+    },
+    {
+      id: "pillar",
+      name: "Pillar",
+      builtin: true,
+      entry: {
+        scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT * 2, z: PRIVATE_WORLD_BLOCK_UNIT },
+        material: { color: "#d3d8e2", texture_preset: "stone" },
+        shape_preset: "cube",
+      },
+    },
+  ],
+  primitive: [
+    {
+      id: "cube",
+      name: "Cube",
+      builtin: true,
+      entry: {
+        shape: "box",
+        scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#d3d8e2", texture_preset: "stone" },
+        rigid_mode: "rigid",
+        physics: { gravity_scale: 1, restitution: 0.2, friction: 0.7, mass: 1 },
+        particle_effect: "",
+        trail_effect: "",
+      },
+    },
+    {
+      id: "sphere",
+      name: "Sphere",
+      builtin: true,
+      entry: {
+        shape: "sphere",
+        scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#b6d7ff", texture_preset: "none" },
+        rigid_mode: "rigid",
+        physics: { gravity_scale: 1, restitution: 0.45, friction: 0.35, mass: 1 },
+        particle_effect: "",
+        trail_effect: "",
+      },
+    },
+    {
+      id: "capsule",
+      name: "Capsule",
+      builtin: true,
+      entry: {
+        shape: "capsule",
+        scale: { x: PRIVATE_WORLD_BLOCK_UNIT * 0.8, y: PRIVATE_WORLD_BLOCK_UNIT * 1.4, z: PRIVATE_WORLD_BLOCK_UNIT * 0.8 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#ffd6e8", texture_preset: "none" },
+        rigid_mode: "rigid",
+        physics: { gravity_scale: 1, restitution: 0.2, friction: 0.8, mass: 1 },
+        particle_effect: "",
+        trail_effect: "",
+      },
+    },
+  ],
+  player: [
+    {
+      id: "player-standard",
+      name: "Standard Player",
+      builtin: true,
+      entry: {
+        label: "Player",
+        scale: PRIVATE_PLAYER_DEFAULT_SCALE,
+        rotation: { x: 0, y: 0, z: 0 },
+        camera_mode: "third_person",
+        body_mode: "rigid",
+        occupiable: true,
+      },
+    },
+    {
+      id: "player-ghost",
+      name: "Ghost Player",
+      builtin: true,
+      entry: {
+        label: "Ghost Player",
+        scale: PRIVATE_PLAYER_DEFAULT_SCALE,
+        rotation: { x: 0, y: 0, z: 0 },
+        camera_mode: "third_person",
+        body_mode: "ghost",
+        occupiable: true,
+      },
+    },
+  ],
+  screen: [
+    {
+      id: "screen-panel",
+      name: "Panel Screen",
+      builtin: true,
+      entry: {
+        scale: { x: 4, y: 2.25, z: 0.2 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#ffffff", texture_preset: "none" },
+        html: "<div style=\"padding:24px\"><h1>Hello world</h1><p>Static world screen.</p></div>",
+      },
+    },
+    {
+      id: "screen-banner",
+      name: "Wide Banner",
+      builtin: true,
+      entry: {
+        scale: { x: 6, y: 2, z: 0.2 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#ffffff", texture_preset: "none" },
+        html: "<div style=\"padding:20px;text-align:center\"><h1>Banner</h1><p>Wide responsive screen.</p></div>",
+      },
+    },
+  ],
+  text: [
+    {
+      id: "text-label",
+      name: "Label",
+      builtin: true,
+      entry: {
+        value: "Welcome",
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: 1,
+        material: { color: "#ffffff", texture_preset: "none" },
+        group_id: "",
+      },
+    },
+    {
+      id: "text-title",
+      name: "Title",
+      builtin: true,
+      entry: {
+        value: "Title",
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: 2,
+        material: { color: "#ffffff", texture_preset: "none" },
+        group_id: "",
+      },
+    },
+  ],
+  trigger: [
+    {
+      id: "trigger-zone",
+      name: "Zone",
+      builtin: true,
+      entry: {
+        label: "Start Zone",
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 2, y: 2, z: 2 },
+        invisible: true,
+      },
+    },
+    {
+      id: "trigger-gate",
+      name: "Gate",
+      builtin: true,
+      entry: {
+        label: "Gate Zone",
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 4, y: 4, z: 1.5 },
+        invisible: true,
+      },
+    },
+  ],
+};
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
   fog: "#f4fbff",
@@ -266,6 +451,15 @@ const elements = {
   addTrigger: document.querySelector("[data-add-trigger]"),
   addParticle: document.querySelector("[data-add-particle]"),
   addRule: document.querySelector("[data-add-rule]"),
+  toolPresetPanel: document.querySelector("[data-tool-preset-panel]"),
+  toolPresetTitle: document.querySelector("[data-tool-preset-title]"),
+  toolPresetHint: document.querySelector("[data-tool-preset-hint]"),
+  toolPresetSelect: document.querySelector("[data-tool-preset-select]"),
+  toolPresetSummary: document.querySelector("[data-tool-preset-summary]"),
+  toolPresetName: document.querySelector("[data-tool-preset-name]"),
+  saveToolPreset: document.querySelector("[data-save-tool-preset]"),
+  updateToolPreset: document.querySelector("[data-update-tool-preset]"),
+  deleteToolPreset: document.querySelector("[data-delete-tool-preset]"),
 };
 
 elements.launcherSections = [...document.querySelectorAll("[data-launcher-section]")];
@@ -276,6 +470,149 @@ elements.privatePanelViews = [...document.querySelectorAll("[data-private-panel-
 elements.panelChatReactionButtons = [...document.querySelectorAll("[data-private-chat-reaction]")];
 elements.panelBrowserShareModes = [...document.querySelectorAll("[data-private-browser-share-mode]")];
 elements.sceneAddButtons = [...document.querySelectorAll("[data-scene-add-button]")];
+
+function createEmptyToolPresetCustoms() {
+  return Object.fromEntries(TOOL_PRESET_KINDS.map((kind) => [kind, []]));
+}
+
+function createDefaultToolPresetSelection() {
+  return Object.fromEntries(TOOL_PRESET_KINDS.map((kind) => [kind, TOOL_PRESET_BUILTINS[kind]?.[0]?.id || ""]));
+}
+
+function createBaseToolPresetEntry(kind) {
+  if (kind === "voxel") {
+    return {
+      scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
+      material: { color: "#85b84f", texture_preset: "grass" },
+      shape_preset: "cube",
+    };
+  }
+  if (kind === "primitive") {
+    return {
+      shape: "box",
+      scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
+      rotation: { x: 0, y: 0, z: 0 },
+      material: { color: "#d3d8e2", texture_preset: "stone" },
+      rigid_mode: "rigid",
+      physics: { gravity_scale: 1, restitution: 0.2, friction: 0.7, mass: 1 },
+      particle_effect: "",
+      trail_effect: "",
+      group_id: "",
+    };
+  }
+  if (kind === "player") {
+    return {
+      label: "Player",
+      scale: PRIVATE_PLAYER_DEFAULT_SCALE,
+      rotation: { x: 0, y: 0, z: 0 },
+      camera_mode: "third_person",
+      body_mode: "rigid",
+      occupiable: true,
+    };
+  }
+  if (kind === "screen") {
+    return {
+      scale: { x: 4, y: 2.25, z: 0.2 },
+      rotation: { x: 0, y: 0, z: 0 },
+      material: { color: "#ffffff", texture_preset: "none" },
+      html: "<div style=\"padding:24px\"><h1>Hello world</h1><p>Static world screen.</p></div>",
+    };
+  }
+  if (kind === "text") {
+    return {
+      value: "Welcome",
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: 1,
+      material: { color: "#ffffff", texture_preset: "none" },
+      group_id: "",
+    };
+  }
+  if (kind === "trigger") {
+    return {
+      label: "Start Zone",
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 2, y: 2, z: 2 },
+      invisible: true,
+    };
+  }
+  return {};
+}
+
+function deepMerge(baseValue, overrideValue) {
+  if (Array.isArray(baseValue) || Array.isArray(overrideValue)) {
+    return deepClone(overrideValue ?? baseValue);
+  }
+  if (!baseValue || typeof baseValue !== "object" || !overrideValue || typeof overrideValue !== "object") {
+    return deepClone(overrideValue ?? baseValue);
+  }
+  const merged = deepClone(baseValue);
+  for (const [key, value] of Object.entries(overrideValue)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && merged[key] && typeof merged[key] === "object" && !Array.isArray(merged[key])) {
+      merged[key] = deepMerge(merged[key], value);
+    } else {
+      merged[key] = deepClone(value);
+    }
+  }
+  return merged;
+}
+
+function extractToolPresetEntry(kind, entry = {}) {
+  const normalized = deepMerge(createBaseToolPresetEntry(kind), deepClone(entry));
+  delete normalized.id;
+  delete normalized.position;
+  if (kind !== "voxel" && kind !== "player" && kind !== "screen" && kind !== "text" && kind !== "trigger" && kind !== "primitive") {
+    return normalized;
+  }
+  return normalized;
+}
+
+function normalizeCustomToolPreset(kind, preset, index = 0) {
+  if (!preset || typeof preset !== "object") {
+    return null;
+  }
+  const name = String(preset.name ?? `Preset ${index + 1}`).trim() || `Preset ${index + 1}`;
+  const rawId = slugToken(preset.id || "");
+  const id = rawId
+    ? (rawId.startsWith("custom-") ? rawId : `custom-${rawId}`)
+    : `custom-${slugToken(name) || `${kind}-preset-${index + 1}`}`;
+  return {
+    id,
+    name,
+    builtin: false,
+    entry: extractToolPresetEntry(kind, preset.entry ?? preset),
+  };
+}
+
+function loadStoredToolPresetState() {
+  const fallback = {
+    customs: createEmptyToolPresetCustoms(),
+    selected: createDefaultToolPresetSelection(),
+  };
+  try {
+    const raw = window.localStorage.getItem(TOOL_PRESET_STORAGE_KEY);
+    if (!raw) {
+      return fallback;
+    }
+    const parsed = JSON.parse(raw);
+    const customs = createEmptyToolPresetCustoms();
+    const selected = createDefaultToolPresetSelection();
+    for (const kind of TOOL_PRESET_KINDS) {
+      if (Array.isArray(parsed?.customs?.[kind])) {
+        customs[kind] = parsed.customs[kind]
+          .map((preset, index) => normalizeCustomToolPreset(kind, preset, index))
+          .filter(Boolean);
+      }
+      if (typeof parsed?.selected?.[kind] === "string" && parsed.selected[kind].trim()) {
+        selected[kind] = parsed.selected[kind].trim();
+      }
+    }
+    return { customs, selected };
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+const initialToolPresetState = loadStoredToolPresetState();
 
 function createEmptyPrivateBrowserMediaState() {
   return {
@@ -304,6 +641,8 @@ const state = {
   selectedSceneId: "",
   buildReturnSceneId: "",
   selectedPrefabId: "",
+  toolPresetSelection: initialToolPresetState.selected,
+  toolPresetCustoms: initialToolPresetState.customs,
   selectedScriptFunctionId: "",
   prefabQuery: "",
   prefabPlacementId: "",
@@ -615,6 +954,7 @@ function updateShellState() {
   }
   setLauncherTab(state.launcherTab);
   setPrivatePanelTab(state.privatePanelTab, { syncMode: false });
+  renderToolPresetPanel();
 }
 
 function setLauncherOpen(open) {
@@ -2011,6 +2351,163 @@ function isPlacementToolKind(kind) {
     || kind === "trigger";
 }
 
+function isToolPresetKind(kind) {
+  return TOOL_PRESET_KINDS.includes(kind);
+}
+
+function getToolPresetOptions(kind) {
+  if (!isToolPresetKind(kind)) {
+    return [];
+  }
+  return [
+    ...(TOOL_PRESET_BUILTINS[kind] ?? []),
+    ...(state.toolPresetCustoms?.[kind] ?? []),
+  ];
+}
+
+function getSelectedToolPresetId(kind) {
+  const options = getToolPresetOptions(kind);
+  const selectedId = String(state.toolPresetSelection?.[kind] ?? "").trim();
+  if (options.some((preset) => preset.id === selectedId)) {
+    return selectedId;
+  }
+  return options[0]?.id || "";
+}
+
+function getToolPreset(kind, presetId = getSelectedToolPresetId(kind)) {
+  return getToolPresetOptions(kind).find((preset) => preset.id === presetId) ?? null;
+}
+
+function persistToolPresetState() {
+  try {
+    window.localStorage.setItem(TOOL_PRESET_STORAGE_KEY, JSON.stringify({
+      selected: state.toolPresetSelection,
+      customs: state.toolPresetCustoms,
+    }));
+  } catch (_error) {
+    // local storage can fail in private browsing; presets still work for this session
+  }
+}
+
+function setSelectedToolPreset(kind, presetId) {
+  if (!isToolPresetKind(kind)) {
+    return;
+  }
+  const nextPresetId = String(presetId ?? "").trim();
+  const options = getToolPresetOptions(kind);
+  const resolvedPresetId = options.some((preset) => preset.id === nextPresetId)
+    ? nextPresetId
+    : (options[0]?.id || "");
+  state.toolPresetSelection[kind] = resolvedPresetId;
+  persistToolPresetState();
+  renderToolPresetPanel();
+  updateShellState();
+}
+
+function buildToolPresetDisplayName(kind) {
+  if (kind === "voxel") {
+    return "Voxel";
+  }
+  if (kind === "primitive") {
+    return "Object";
+  }
+  if (kind === "player") {
+    return "Player";
+  }
+  if (kind === "screen") {
+    return "Screen";
+  }
+  if (kind === "text") {
+    return "Text";
+  }
+  if (kind === "trigger") {
+    return "Trigger";
+  }
+  return "Tool";
+}
+
+function createCustomToolPresetId(kind, name = "") {
+  const baseToken = slugToken(name) || `${kind}-preset`;
+  let nextId = `custom-${baseToken}-${Date.now().toString(36)}`;
+  let suffix = 1;
+  while (getToolPresetOptions(kind).some((preset) => preset.id === nextId)) {
+    suffix += 1;
+    nextId = `custom-${baseToken}-${Date.now().toString(36)}-${suffix}`;
+  }
+  return nextId;
+}
+
+function getSelectedEntityForToolPreset(kind) {
+  if (!isToolPresetKind(kind)) {
+    return null;
+  }
+  try {
+    const sceneDoc = parseSceneTextarea();
+    const selected = getSelectedEntity(sceneDoc);
+    if (!selected || selected.kind !== kind) {
+      return null;
+    }
+    return selected.entry;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function saveToolPreset(kind, options = {}) {
+  if (!isToolPresetKind(kind)) {
+    return;
+  }
+  const sourceEntry = options.sourceEntry
+    ? extractToolPresetEntry(kind, options.sourceEntry)
+    : extractToolPresetEntry(kind, getToolPreset(kind)?.entry ?? createBaseToolPresetEntry(kind));
+  const nextName = String(options.name ?? "").trim() || `${buildToolPresetDisplayName(kind)} Preset ${Math.max(1, (state.toolPresetCustoms?.[kind] ?? []).length + 1)}`;
+  const nextPreset = {
+    id: createCustomToolPresetId(kind, nextName),
+    name: nextName,
+    builtin: false,
+    entry: sourceEntry,
+  };
+  state.toolPresetCustoms[kind] = [
+    ...(state.toolPresetCustoms?.[kind] ?? []),
+    nextPreset,
+  ];
+  state.toolPresetSelection[kind] = nextPreset.id;
+  persistToolPresetState();
+  renderToolPresetPanel();
+  updateShellState();
+}
+
+function updateCustomToolPreset(kind, presetId, sourceEntry) {
+  if (!isToolPresetKind(kind) || !sourceEntry) {
+    return;
+  }
+  const nextPresets = [...(state.toolPresetCustoms?.[kind] ?? [])];
+  const targetIndex = nextPresets.findIndex((preset) => preset.id === presetId);
+  if (targetIndex < 0) {
+    return;
+  }
+  nextPresets[targetIndex] = {
+    ...nextPresets[targetIndex],
+    entry: extractToolPresetEntry(kind, sourceEntry),
+  };
+  state.toolPresetCustoms[kind] = nextPresets;
+  persistToolPresetState();
+  renderToolPresetPanel();
+  updateShellState();
+}
+
+function deleteCustomToolPreset(kind, presetId) {
+  if (!isToolPresetKind(kind)) {
+    return;
+  }
+  state.toolPresetCustoms[kind] = (state.toolPresetCustoms?.[kind] ?? []).filter((preset) => preset.id !== presetId);
+  const fallbackPresetId = getToolPresetOptions(kind).find((preset) => preset.id !== presetId)?.id || "";
+  state.toolPresetSelection[kind] = fallbackPresetId;
+  persistToolPresetState();
+  renderToolPresetPanel();
+  updateShellState();
+}
+
 function getPlacementToolButton(kind) {
   if (kind === "voxel") {
     return elements.addVoxel;
@@ -2100,23 +2597,25 @@ function armPrefabPlacement(prefabId = state.selectedPrefabId, options = {}) {
 
 function buildPlacementToolLabel(kind) {
   const shortcut = [...BUILD_PLACEMENT_SHORTCUTS.entries()].find(([, value]) => value === kind)?.[0] || "";
+  const presetName = getToolPreset(kind)?.name || "";
+  const suffix = presetName ? ` · ${presetName}` : "";
   if (kind === "voxel") {
-    return shortcut ? `Voxel (${shortcut})` : "Voxel";
+    return `${shortcut ? `Voxel (${shortcut})` : "Voxel"}${suffix}`;
   }
   if (kind === "primitive") {
-    return shortcut ? `Object (${shortcut})` : "Object";
+    return `${shortcut ? `Object (${shortcut})` : "Object"}${suffix}`;
   }
   if (kind === "player") {
-    return shortcut ? `Player (${shortcut})` : "Player";
+    return `${shortcut ? `Player (${shortcut})` : "Player"}${suffix}`;
   }
   if (kind === "screen") {
-    return shortcut ? `Screen (${shortcut})` : "Screen";
+    return `${shortcut ? `Screen (${shortcut})` : "Screen"}${suffix}`;
   }
   if (kind === "text") {
-    return shortcut ? `Text (${shortcut})` : "Text";
+    return `${shortcut ? `Text (${shortcut})` : "Text"}${suffix}`;
   }
   if (kind === "trigger") {
-    return shortcut ? `Trigger (${shortcut})` : "Trigger";
+    return `${shortcut ? `Trigger (${shortcut})` : "Trigger"}${suffix}`;
   }
   return "";
 }
@@ -4376,6 +4875,7 @@ function renderSceneBuilder() {
   renderEntitySections(sceneDoc, selected);
   renderEntityInspector(sceneDoc, selected);
   renderPrefabList(sceneDoc);
+  renderToolPresetPanel();
   const inspectorDisabled = !isEditor() || state.mode !== "build";
   for (const field of elements.entityEditor.querySelectorAll("input, select, textarea")) {
     field.disabled = inspectorDisabled;
@@ -4468,6 +4968,92 @@ function buildTargetOptions(sceneDoc, selectedValue = "") {
   return options.map((option) => `
     <option value="${htmlEscape(option.value)}" ${option.value === selectedValue ? "selected" : ""}>${htmlEscape(option.label)}</option>
   `).join("");
+}
+
+function buildToolPresetSummary(kind, entry = {}) {
+  if (kind === "voxel") {
+    const scale = getPrivateVoxelScale(entry.scale);
+    return `${entry.shape_preset || "cube"} · ${entry.material?.texture_preset || "none"} · ${roundPrivateValue(scale.x, 1)} x ${roundPrivateValue(scale.y, 1)} x ${roundPrivateValue(scale.z, 1)}`;
+  }
+  if (kind === "primitive") {
+    const scale = entry.scale ?? { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT };
+    return `${entry.shape || "box"} · ${entry.rigid_mode || "rigid"} · ${roundPrivateValue(scale.x ?? 1, 1)} x ${roundPrivateValue(scale.y ?? 1, 1)} x ${roundPrivateValue(scale.z ?? 1, 1)}`;
+  }
+  if (kind === "player") {
+    return `${entry.camera_mode || "third_person"} · ${entry.body_mode || "rigid"} · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
+  }
+  if (kind === "screen") {
+    const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.2 };
+    return `${roundPrivateValue(scale.x ?? 4, 1)} x ${roundPrivateValue(scale.y ?? 2.25, 1)} screen · ${stripHtmlTags(entry.html || "").slice(0, 40) || "custom html"}`;
+  }
+  if (kind === "text") {
+    return `"${String(entry.value || "").slice(0, 36) || "Text"}" · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
+  }
+  if (kind === "trigger") {
+    const scale = entry.scale ?? { x: 2, y: 2, z: 2 };
+    return `${entry.label || "Trigger"} · ${roundPrivateValue(scale.x ?? 2, 1)} x ${roundPrivateValue(scale.y ?? 2, 1)} x ${roundPrivateValue(scale.z ?? 2, 1)}`;
+  }
+  return "";
+}
+
+function stripHtmlTags(value = "") {
+  return String(value ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function renderToolPresetPanel() {
+  if (!elements.toolPresetPanel) {
+    return;
+  }
+  const kind = getActivePlacementTool();
+  if (!isToolPresetKind(kind) || !canUsePlacementTools()) {
+    elements.toolPresetPanel.hidden = true;
+    return;
+  }
+  const presetOptions = getToolPresetOptions(kind);
+  const selectedPresetId = getSelectedToolPresetId(kind);
+  const selectedPreset = getToolPreset(kind, selectedPresetId) ?? presetOptions[0] ?? null;
+  const selectedEntry = getSelectedEntityForToolPreset(kind);
+  const canUpdateFromSelection = Boolean(selectedEntry && selectedPreset && selectedPreset.builtin !== true);
+  const canDeletePreset = Boolean(selectedPreset && selectedPreset.builtin !== true);
+  const saveFromSelection = Boolean(selectedEntry);
+  elements.toolPresetPanel.hidden = false;
+  if (elements.toolPresetTitle) {
+    elements.toolPresetTitle.textContent = `${buildToolPresetDisplayName(kind)} Presets`;
+  }
+  if (elements.toolPresetHint) {
+    elements.toolPresetHint.textContent = saveFromSelection
+      ? `New ${buildToolPresetDisplayName(kind).toLowerCase()} placements will use this preset. Save or update from the selected item when it looks right.`
+      : `New ${buildToolPresetDisplayName(kind).toLowerCase()} placements will use this preset until you switch to another one.`;
+  }
+  if (elements.toolPresetSelect) {
+    elements.toolPresetSelect.innerHTML = presetOptions.map((preset) => `
+      <option value="${htmlEscape(preset.id)}">${htmlEscape(preset.name)}${preset.builtin ? " · built in" : ""}</option>
+    `).join("");
+    elements.toolPresetSelect.value = selectedPresetId;
+    elements.toolPresetSelect.disabled = presetOptions.length <= 1 && !saveFromSelection;
+  }
+  if (elements.toolPresetSummary) {
+    elements.toolPresetSummary.textContent = selectedPreset
+      ? buildToolPresetSummary(kind, selectedPreset.entry)
+      : "No preset available yet.";
+  }
+  if (elements.toolPresetName) {
+    elements.toolPresetName.placeholder = `New ${buildToolPresetDisplayName(kind).toLowerCase()} preset`;
+  }
+  if (elements.saveToolPreset) {
+    elements.saveToolPreset.textContent = saveFromSelection ? "Save From Selection" : "Save Copy";
+    elements.saveToolPreset.disabled = !selectedPreset;
+  }
+  if (elements.updateToolPreset) {
+    elements.updateToolPreset.disabled = !canUpdateFromSelection;
+    elements.updateToolPreset.textContent = selectedPreset?.builtin ? "Built In" : "Update From Selection";
+  }
+  if (elements.deleteToolPreset) {
+    elements.deleteToolPreset.disabled = !canDeletePreset;
+  }
 }
 
 function getSelectedPrefabEntry(prefabId = state.selectedPrefabId) {
@@ -6990,6 +7576,7 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
   }
   if (kind === "voxel") {
     const nextId = `voxel_${(sceneDoc.voxels?.length ?? 0) + 1}`;
+    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
     return {
       kind,
       id: nextId,
@@ -6998,14 +7585,14 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
         sceneDoc.voxels.push({
           id: nextId,
           position: deepClone(placement.position),
-          scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
-          material: { color: "#85b84f", texture_preset: "grass" },
+          ...deepClone(presetEntry),
         });
       },
     };
   }
   if (kind === "primitive") {
     const nextId = `primitive_${(sceneDoc.primitives?.length ?? 0) + 1}`;
+    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
     return {
       kind,
       id: nextId,
@@ -7013,18 +7600,15 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
         sceneDoc.primitives = sceneDoc.primitives || [];
         sceneDoc.primitives.push({
           id: nextId,
-          shape: "box",
           position: deepClone(placement.position),
-          scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
-          rotation: { x: 0, y: 0, z: 0 },
-          material: { color: "#d3d8e2", texture_preset: "stone" },
-          physics: { gravity_scale: 1, restitution: 0.2, friction: 0.7, mass: 1 },
+          ...deepClone(presetEntry),
         });
       },
     };
   }
   if (kind === "player") {
     const nextId = `player_${(sceneDoc.players?.length ?? 0) + 1}`;
+    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
     return {
       kind,
       id: nextId,
@@ -7032,17 +7616,18 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
         sceneDoc.players = sceneDoc.players || [];
         sceneDoc.players.push({
           id: nextId,
-          label: `Player ${(sceneDoc.players?.length ?? 0) + 1}`,
           position: deepClone(placement.position),
-          scale: PRIVATE_PLAYER_DEFAULT_SCALE,
-          camera_mode: "third_person",
-          body_mode: "rigid",
+          ...deepClone(presetEntry),
+          label: presetEntry.label && !/^player(?:\s+\d+)?$/i.test(String(presetEntry.label).trim())
+            ? presetEntry.label
+            : `Player ${(sceneDoc.players?.length ?? 0) + 1}`,
         });
       },
     };
   }
   if (kind === "screen") {
     const nextId = `screen_${(sceneDoc.screens?.length ?? 0) + 1}`;
+    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
     return {
       kind,
       id: nextId,
@@ -7051,16 +7636,14 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
         sceneDoc.screens.push({
           id: nextId,
           position: deepClone(placement.position),
-          scale: { x: 4, y: 2.25, z: 0.2 },
-          rotation: { x: 0, y: 0, z: 0 },
-          material: { color: "#ffffff", texture_preset: "none" },
-          html: "<div style=\"padding:24px\"><h1>Hello world</h1><p>Static world screen.</p></div>",
+          ...deepClone(presetEntry),
         });
       },
     };
   }
   if (kind === "text") {
     const nextId = `text_${(sceneDoc.texts?.length ?? 0) + 1}`;
+    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
     return {
       kind,
       id: nextId,
@@ -7068,16 +7651,15 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
         sceneDoc.texts = sceneDoc.texts || [];
         sceneDoc.texts.push({
           id: nextId,
-          value: "Welcome",
           position: deepClone(placement.position),
-          scale: 1,
-          material: { color: "#ffffff", texture_preset: "none" },
+          ...deepClone(presetEntry),
         });
       },
     };
   }
   if (kind === "trigger") {
     const nextId = `trigger_${(sceneDoc.trigger_zones?.length ?? 0) + 1}`;
+    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
     return {
       kind,
       id: nextId,
@@ -7085,10 +7667,8 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
         sceneDoc.trigger_zones = sceneDoc.trigger_zones || [];
         sceneDoc.trigger_zones.push({
           id: nextId,
-          label: "Start Zone",
           position: deepClone(placement.position),
-          rotation: { x: 0, y: 0, z: 0 },
-          scale: { x: 2, y: 2, z: 2 },
+          ...deepClone(presetEntry),
         });
       },
     };
@@ -10062,6 +10642,52 @@ function bindEvents() {
   });
   elements.importForm.addEventListener("submit", importPackage);
   elements.resolveForm.addEventListener("submit", resolveWorld);
+  elements.toolPresetSelect?.addEventListener("change", () => {
+    const kind = getActivePlacementTool();
+    if (!isToolPresetKind(kind)) {
+      return;
+    }
+    setSelectedToolPreset(kind, elements.toolPresetSelect.value);
+  });
+  elements.saveToolPreset?.addEventListener("click", () => {
+    const kind = getActivePlacementTool();
+    if (!isToolPresetKind(kind)) {
+      return;
+    }
+    const sourceEntry = getSelectedEntityForToolPreset(kind) || getToolPreset(kind)?.entry;
+    if (!sourceEntry) {
+      return;
+    }
+    saveToolPreset(kind, {
+      name: elements.toolPresetName?.value,
+      sourceEntry,
+    });
+    if (elements.toolPresetName) {
+      elements.toolPresetName.value = "";
+    }
+    setStatus(`${buildToolPresetDisplayName(kind)} preset saved.`);
+  });
+  elements.updateToolPreset?.addEventListener("click", () => {
+    const kind = getActivePlacementTool();
+    const selectedPresetId = getSelectedToolPresetId(kind);
+    const selectedPreset = getToolPreset(kind, selectedPresetId);
+    const selectedEntry = getSelectedEntityForToolPreset(kind);
+    if (!isToolPresetKind(kind) || !selectedEntry || !selectedPreset || selectedPreset.builtin) {
+      return;
+    }
+    updateCustomToolPreset(kind, selectedPresetId, selectedEntry);
+    setStatus(`${selectedPreset.name} updated from the current selection.`);
+  });
+  elements.deleteToolPreset?.addEventListener("click", () => {
+    const kind = getActivePlacementTool();
+    const selectedPresetId = getSelectedToolPresetId(kind);
+    const selectedPreset = getToolPreset(kind, selectedPresetId);
+    if (!isToolPresetKind(kind) || !selectedPreset || selectedPreset.builtin) {
+      return;
+    }
+    deleteCustomToolPreset(kind, selectedPresetId);
+    setStatus(`${selectedPreset.name} removed.`);
+  });
   elements.sceneStrip.addEventListener("click", (event) => {
     const button = event.target.closest("[data-scene-id]");
     if (!button) {

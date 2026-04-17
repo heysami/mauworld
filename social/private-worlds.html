@@ -498,6 +498,30 @@
         </button>
       </aside>
 
+      <aside class="pw-tool-preset-panel" data-tool-preset-panel aria-label="Tool presets" hidden>
+        <div class="pw-panel__header">
+          <div>
+            <div class="pw-inspector__eyebrow">Tool preset</div>
+            <h2 data-tool-preset-title>Preset</h2>
+          </div>
+        </div>
+        <p class="pw-inspector-note" data-tool-preset-hint>Select a default preset for this tool. New placements use it until you switch.</p>
+        <label>
+          <span>Default preset</span>
+          <select data-tool-preset-select></select>
+        </label>
+        <p class="pw-tool-preset-summary" data-tool-preset-summary></p>
+        <label>
+          <span>New preset name</span>
+          <input type="text" maxlength="80" data-tool-preset-name placeholder="Custom preset name" />
+        </label>
+        <div class="pw-inline-actions pw-tool-preset-actions">
+          <button type="button" data-save-tool-preset>Save New</button>
+          <button type="button" class="is-muted" data-update-tool-preset>Update From Selection</button>
+          <button type="button" class="is-muted" data-delete-tool-preset>Delete</button>
+        </div>
+      </aside>
+
       <aside class="pw-inspector" data-inspector aria-label="Selection inspector">
         <div class="pw-panel__header">
           <div>
