@@ -1437,10 +1437,15 @@ function reconcilePrivateShareBubbles() {
 
 function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
   const preview = state.preview;
-  if (!preview?.browserShareEntries?.size || !preview?.camera) {
+  if (!preview?.camera) {
     return;
   }
-  for (const session of getPrivateShareBubbleSessions()) {
+  reconcilePrivateShareBubbles();
+  const bubbleSessions = getPrivateShareBubbleSessions();
+  if (bubbleSessions.length === 0) {
+    return;
+  }
+  for (const session of bubbleSessions) {
     const entry = ensurePrivateShareBubbleEntry(session);
     if (!entry) {
       continue;
