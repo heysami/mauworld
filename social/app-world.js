@@ -19,6 +19,11 @@ import {
   setDisplayShareOverlayState,
   updateChatBubbleGhosts,
 } from "./world-interactions.js";
+import {
+  SHARED_BROWSER_SHARE_LAYOUT,
+  SHARED_CHAT_BUBBLE_LAYOUT,
+  getSharedBrowserScreenOffsetY,
+} from "./world-overhead-layout.js";
 import { createWorldRealtimeClient } from "./world-realtime.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 
@@ -149,9 +154,9 @@ const INTERACTION_DEFAULTS = {
   chatMaxChars: 160,
   chatTtlSeconds: 8,
   chatDetailRadius: 180,
-  browserRadius: 96,
+  browserRadius: SHARED_BROWSER_SHARE_LAYOUT.radius,
   maxRecipients: 20,
-  browserAspectRatio: 16 / 9,
+  browserAspectRatio: SHARED_BROWSER_SHARE_LAYOUT.aspectRatio,
   browserViewportWidth: 960,
   browserViewportHeight: 540,
 };
@@ -4127,20 +4132,15 @@ function getPresenceEntryId(entry = {}) {
     .trim();
 }
 
-const CHAT_BUBBLE_BASE_WIDTH = 18;
-const CHAT_BUBBLE_BASE_HEIGHT = 12;
-const CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 820;
-const CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 620;
-const CHAT_BUBBLE_MAX_LINES = 8;
-const CHAT_BUBBLE_MIN_WIDTH = 6.2;
-const CHAT_BUBBLE_MIN_HEIGHT = 4.9;
+const CHAT_BUBBLE = SHARED_CHAT_BUBBLE_LAYOUT;
+const BROWSER_SHARE = SHARED_BROWSER_SHARE_LAYOUT;
 
 function createActorBubbleState(color, options = {}) {
   return createChatBubbleState({
     accent: color,
-    anchorY: 15.2,
-    baseWidth: CHAT_BUBBLE_BASE_WIDTH,
-    baseHeight: CHAT_BUBBLE_BASE_HEIGHT,
+    anchorY: CHAT_BUBBLE.anchorY,
+    baseWidth: CHAT_BUBBLE.baseWidth,
+    baseHeight: CHAT_BUBBLE.baseHeight,
     stroke: WORLD_STYLE.outline,
     createTexture: createBubbleTexture,
     createBillboard,
@@ -4149,13 +4149,13 @@ function createActorBubbleState(color, options = {}) {
 }
 
 const publicChatBubbleRenderer = createChatBubbleRenderer({
-  baseWidth: CHAT_BUBBLE_BASE_WIDTH,
-  baseHeight: CHAT_BUBBLE_BASE_HEIGHT,
-  minWidth: CHAT_BUBBLE_MIN_WIDTH,
-  minHeight: CHAT_BUBBLE_MIN_HEIGHT,
-  maxTextureWidth: CHAT_BUBBLE_TEXTURE_MAX_WIDTH,
-  maxTextureHeight: CHAT_BUBBLE_TEXTURE_MAX_HEIGHT,
-  maxLines: CHAT_BUBBLE_MAX_LINES,
+  baseWidth: CHAT_BUBBLE.baseWidth,
+  baseHeight: CHAT_BUBBLE.baseHeight,
+  minWidth: CHAT_BUBBLE.minWidth,
+  minHeight: CHAT_BUBBLE.minHeight,
+  maxTextureWidth: CHAT_BUBBLE.textureMaxWidth,
+  maxTextureHeight: CHAT_BUBBLE.textureMaxHeight,
+  maxLines: CHAT_BUBBLE.maxLines,
   stroke: WORLD_STYLE.outline,
   getDefaultAccent: () => WORLD_STYLE.accents[1],
   createTexture: createBubbleTexture,
@@ -4816,7 +4816,7 @@ function updateBrowserScreenGeometry(entry) {
   if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
     return;
   }
-  const width = 20;
+  const width = BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   entry.frame.geometry.dispose();
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
@@ -4886,7 +4886,7 @@ function ensureBrowserScreenEntry(session) {
   }
 
   const aspectRatio = Number(session.aspectRatio) || getInteractionConfig().browserAspectRatio;
-  const width = 20;
+  const width = BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   const group = new THREE.Group();
   const frameShell = new THREE.Mesh(
@@ -4968,10 +4968,12 @@ function updateBrowserScreenPresentation(entry) {
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
   const shareKind = getBrowserSessionShareKind(entry.session);
   const baseAspectRatio = Number(entry.session?.aspectRatio) || getInteractionConfig().browserAspectRatio;
-  const baseWidth = 20;
+  const baseWidth = BROWSER_SHARE.screenWidth;
   const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
-  const bubbleWidth = shareKind === "audio" ? 7.8 : 8.6;
-  const bubbleHeight = bubbleWidth / (384 / 280);
+  const bubbleWidth = shareKind === "audio"
+    ? BROWSER_SHARE.placeholderAudioWidth
+    : BROWSER_SHARE.placeholderVideoWidth;
+  const bubbleHeight = bubbleWidth / BROWSER_SHARE.placeholderAspectRatio;
   const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
   const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
   const offsetY = 0;
@@ -5063,7 +5065,7 @@ function getBrowserScreenRenderTarget(entry) {
   if (!hostPosition) {
     return null;
   }
-  return hostPosition.clone().add(new THREE.Vector3(0, 18, 0));
+  return hostPosition.clone().add(new THREE.Vector3(0, BROWSER_SHARE.liveOffsetY, 0));
 }
 
 function getFocusedBrowserScreenCenter() {
@@ -5099,7 +5101,7 @@ function computeFocusedBrowserView(sessionId, sourcePosition = getNavigationPosi
   } else {
     planarApproach.normalize();
   }
-  const screenWidth = 20;
+  const screenWidth = BROWSER_SHARE.screenWidth;
   const screenHeight = screenWidth / Math.max(0.1, Number(entry.session?.aspectRatio) || getInteractionConfig().browserAspectRatio);
   const eyeDistance = Math.max(16, screenWidth * 0.82, screenHeight * 1.58);
   const eyePosition = focusTarget.clone().sub(planarApproach.multiplyScalar(eyeDistance));
@@ -5168,9 +5170,7 @@ function updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds) {
   }
   const showingLiveMedia = isBrowserScreenShowingLiveMedia(entry);
   entry.targetPosition.copy(hostPosition);
-  entry.targetPosition.y += showingLiveMedia
-    ? 18 + Math.sin(elapsedSeconds * 1.3) * 0.7
-    : 15.4 + Math.sin(elapsedSeconds * 1.1) * 0.18;
+  entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
   entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
   entry.group.position.copy(entry.position);
   entry.group.rotation.set(0, 0, 0);
@@ -6814,10 +6814,10 @@ function moveToBrowserShareHost(sessionId) {
   } else {
     offset.normalize();
   }
-  const destination = hostPosition.clone().add(offset.multiplyScalar(18));
+  const destination = hostPosition.clone().add(offset.multiplyScalar(Math.max(16, BROWSER_SHARE.screenWidth * 1.45)));
   destination.y = clamp(hostPosition.y, CAMERA.minY, CAMERA.maxY);
 
-  const lookTarget = hostPosition.clone().add(new THREE.Vector3(0, 18, 0));
+  const lookTarget = hostPosition.clone().add(new THREE.Vector3(0, BROWSER_SHARE.liveOffsetY, 0));
   const eyePosition = destination.clone().add(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
   const { yaw, pitch } = computeLookAngles(eyePosition, lookTarget);
   const distance = start.distanceTo(destination);

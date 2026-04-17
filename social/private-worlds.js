@@ -21,6 +21,11 @@ import {
   setDisplayShareOverlayState,
   updateChatBubbleGhosts,
 } from "./world-interactions.js";
+import {
+  SHARED_BROWSER_SHARE_LAYOUT,
+  SHARED_CHAT_BUBBLE_LAYOUT,
+  getSharedBrowserScreenOffsetY,
+} from "./world-overhead-layout.js";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 
 const { mauworldApiUrl } = window.MauworldSocial;
@@ -82,24 +87,10 @@ const PRIVATE_SPRINT = {
   rampSeconds: 10,
   decaySeconds: 10,
 };
-const PRIVATE_OVERHEAD_SCALE = 1;
 const PRIVATE_CHAT_MAX_ENTRIES = 28;
-const PRIVATE_CHAT_BUBBLE_BASE_WIDTH = 18 * PRIVATE_OVERHEAD_SCALE;
-const PRIVATE_CHAT_BUBBLE_BASE_HEIGHT = 12 * PRIVATE_OVERHEAD_SCALE;
-const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH = 820;
-const PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT = 620;
-const PRIVATE_CHAT_BUBBLE_MAX_LINES = 8;
-const PRIVATE_CHAT_BUBBLE_MIN_WIDTH = 6.2 * PRIVATE_OVERHEAD_SCALE;
-const PRIVATE_CHAT_BUBBLE_MIN_HEIGHT = 4.9 * PRIVATE_OVERHEAD_SCALE;
-const PRIVATE_ACTOR_OVERHEAD_ANCHOR_Y = 15.2 * PRIVATE_OVERHEAD_SCALE;
-const PRIVATE_BROWSER_RADIUS = 96;
-const PRIVATE_BROWSER_ASPECT_RATIO = 16 / 9;
-const PRIVATE_BROWSER_SCREEN_WIDTH = PRIVATE_CHAT_BUBBLE_BASE_WIDTH * 0.69;
-const PRIVATE_BROWSER_PLACEHOLDER_ASPECT_RATIO = 384 / 280;
-const PRIVATE_BROWSER_PLACEHOLDER_AUDIO_WIDTH = PRIVATE_BROWSER_SCREEN_WIDTH * 0.39;
-const PRIVATE_BROWSER_PLACEHOLDER_VIDEO_WIDTH = PRIVATE_BROWSER_SCREEN_WIDTH * 0.43;
-const PRIVATE_BROWSER_LIVE_OFFSET_Y = PRIVATE_ACTOR_OVERHEAD_ANCHOR_Y + (0.4 * PRIVATE_OVERHEAD_SCALE);
-const PRIVATE_BROWSER_PLACEHOLDER_OFFSET_Y = PRIVATE_ACTOR_OVERHEAD_ANCHOR_Y - (0.8 * PRIVATE_OVERHEAD_SCALE);
+const PRIVATE_CHAT_BUBBLE = SHARED_CHAT_BUBBLE_LAYOUT;
+const PRIVATE_BROWSER_SHARE = SHARED_BROWSER_SHARE_LAYOUT;
+const PRIVATE_BROWSER_RADIUS = PRIVATE_BROWSER_SHARE.radius;
 const PRIVATE_LOCAL_PREVIEW_SESSION_ID = "__private_local_preview__";
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
@@ -796,9 +787,9 @@ function isEmojiOnlyPrivateChatText(value) {
 function createPrivateActorBubbleState(color, options = {}) {
   return createChatBubbleState({
     accent: color,
-    anchorY: Number(options.anchorY ?? PRIVATE_ACTOR_OVERHEAD_ANCHOR_Y) || PRIVATE_ACTOR_OVERHEAD_ANCHOR_Y,
-    baseWidth: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
-    baseHeight: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
+    anchorY: Number(options.anchorY ?? PRIVATE_CHAT_BUBBLE.anchorY) || PRIVATE_CHAT_BUBBLE.anchorY,
+    baseWidth: PRIVATE_CHAT_BUBBLE.baseWidth,
+    baseHeight: PRIVATE_CHAT_BUBBLE.baseHeight,
     stroke: PRIVATE_WORLD_STYLE.outline,
     createTexture: createBubbleTexture,
     createBillboard: createPrivateBillboard,
@@ -824,13 +815,13 @@ function orientPrivateBillboardToCamera(mesh, camera) {
 }
 
 const privateChatBubbleRenderer = createChatBubbleRenderer({
-  baseWidth: PRIVATE_CHAT_BUBBLE_BASE_WIDTH,
-  baseHeight: PRIVATE_CHAT_BUBBLE_BASE_HEIGHT,
-  minWidth: PRIVATE_CHAT_BUBBLE_MIN_WIDTH,
-  minHeight: PRIVATE_CHAT_BUBBLE_MIN_HEIGHT,
-  maxTextureWidth: PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_WIDTH,
-  maxTextureHeight: PRIVATE_CHAT_BUBBLE_TEXTURE_MAX_HEIGHT,
-  maxLines: PRIVATE_CHAT_BUBBLE_MAX_LINES,
+  baseWidth: PRIVATE_CHAT_BUBBLE.baseWidth,
+  baseHeight: PRIVATE_CHAT_BUBBLE.baseHeight,
+  minWidth: PRIVATE_CHAT_BUBBLE.minWidth,
+  minHeight: PRIVATE_CHAT_BUBBLE.minHeight,
+  maxTextureWidth: PRIVATE_CHAT_BUBBLE.textureMaxWidth,
+  maxTextureHeight: PRIVATE_CHAT_BUBBLE.textureMaxHeight,
+  maxLines: PRIVATE_CHAT_BUBBLE.maxLines,
   stroke: PRIVATE_WORLD_STYLE.outline,
   getDefaultAccent: () => PRIVATE_WORLD_STYLE.accents[1],
   createTexture: createBubbleTexture,
@@ -1137,11 +1128,11 @@ function updatePrivateShareBubbleGeometry(entry) {
   if (!entry?.frame || !entry?.frameShell) {
     return;
   }
-  const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO;
+  const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_SHARE.aspectRatio;
   if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
     return;
   }
-  const width = PRIVATE_BROWSER_SCREEN_WIDTH;
+  const width = PRIVATE_BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   entry.frame.geometry.dispose();
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
@@ -1200,13 +1191,13 @@ function updatePrivateShareBubblePresentation(entry) {
       : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
   const shareKind = getPrivateBrowserSessionShareKind(entry.session);
-  const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO;
-  const baseWidth = PRIVATE_BROWSER_SCREEN_WIDTH;
+  const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_SHARE.aspectRatio;
+  const baseWidth = PRIVATE_BROWSER_SHARE.screenWidth;
   const baseHeight = baseWidth / Math.max(0.1, aspectRatio);
   const bubbleWidth = shareKind === "audio"
-    ? PRIVATE_BROWSER_PLACEHOLDER_AUDIO_WIDTH
-    : PRIVATE_BROWSER_PLACEHOLDER_VIDEO_WIDTH;
-  const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_PLACEHOLDER_ASPECT_RATIO;
+    ? PRIVATE_BROWSER_SHARE.placeholderAudioWidth
+    : PRIVATE_BROWSER_SHARE.placeholderVideoWidth;
+  const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_SHARE.placeholderAspectRatio;
   const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
   const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
   entry.frame.scale.set(scaleX, scaleY, 1);
@@ -1312,8 +1303,8 @@ function ensurePrivateShareBubbleEntry(session = {}) {
     return existing;
   }
 
-  const aspectRatio = Number(session.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO;
-  const width = PRIVATE_BROWSER_SCREEN_WIDTH;
+  const aspectRatio = Number(session.aspectRatio) || PRIVATE_BROWSER_SHARE.aspectRatio;
+  const width = PRIVATE_BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   const group = new THREE.Group();
   const frameShell = new THREE.Mesh(
@@ -1389,7 +1380,7 @@ function getPrivateLocalPreviewBubbleSession() {
     shareKind: localPreviewShare.shareKind || "screen",
     hasVideo: true,
     hasAudio: localPreviewShare.hasAudio === true,
-    aspectRatio: Number(localPreviewShare.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO,
+    aspectRatio: Number(localPreviewShare.aspectRatio) || PRIVATE_BROWSER_SHARE.aspectRatio,
     sessionMode: "display-share",
     frameTransport: "local-preview",
     deliveryMode: "full",
@@ -1470,9 +1461,7 @@ function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
     updatePrivateShareBubblePresentation(entry);
     const showingLiveMedia = isPrivateShareBubbleShowingLiveMedia(entry);
     entry.targetPosition.copy(hostPosition);
-    entry.targetPosition.y += showingLiveMedia
-      ? PRIVATE_BROWSER_LIVE_OFFSET_Y + Math.sin(elapsedSeconds * 1.3) * 0.7
-      : PRIVATE_BROWSER_PLACEHOLDER_OFFSET_Y + Math.sin(elapsedSeconds * 1.1) * 0.18;
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
     entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
     entry.group.visible = true;
     entry.group.position.copy(entry.position);
@@ -2625,7 +2614,7 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
     lastFrameDataUrl: sessionPatch.lastFrameDataUrl ?? previous.lastFrameDataUrl ?? "",
     lastFrameId: Number(sessionPatch.lastFrameId ?? previous.lastFrameId) || 0,
     sessionMode: sessionPatch.sessionMode ?? previous.sessionMode ?? "display-share",
-    aspectRatio: Number(sessionPatch.aspectRatio ?? previous.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO,
+    aspectRatio: Number(sessionPatch.aspectRatio ?? previous.aspectRatio) || PRIVATE_BROWSER_SHARE.aspectRatio,
   }, getPrivateViewerSessionId());
   state.browserSessions.set(sessionId, next);
   if (next.hasVideo === false) {
