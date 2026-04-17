@@ -2584,10 +2584,15 @@ function updatePrivateBrowserPanel() {
   if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
     state.browserPanelRemoteSessionId = "";
   }
+  const mediaAvailable = state.browserMediaState.enabled !== false;
   const remoteSession = state.browserPanelRemoteSessionId
     ? state.browserSessions.get(state.browserPanelRemoteSessionId) ?? null
-    : [...state.browserSessions.values()].find((session) => session.hostSessionId !== getPrivateViewerSessionId()) ?? null;
-  const canShare = Boolean(state.session && world && localParticipant);
+    : localSession
+      ? null
+      : [...state.browserSessions.values()].find(
+        (session) => session.hostSessionId !== getPrivateViewerSessionId() && session.deliveryMode === "full",
+      ) ?? null;
+  const canShare = Boolean(state.session && world && localParticipant && mediaAvailable);
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
     : state.localBrowserShare?.hasVideo
@@ -2625,22 +2630,6 @@ function updatePrivateBrowserPanel() {
       current: "No world selected",
       hint: "Open a world first.",
     });
-  } else if (!state.session) {
-    setPrivateBrowserStatus("Guests can watch but cannot start nearby share.");
-    updatePrivateBrowserSummary({
-      state: "offline",
-      badge: "Signed out",
-      current: "Sign in to go live",
-      hint: "Signed-in participants can share screen, video, or voice.",
-    });
-  } else if (!localParticipant) {
-    setPrivateBrowserStatus("Enter this world to start a live share.");
-    updatePrivateBrowserSummary({
-      state: "idle",
-      badge: "Idle",
-      current: "Enter to share",
-      hint: "Join this private world first.",
-    });
   } else if (state.pendingBrowserShare) {
     setPrivateBrowserStatus(`Starting ${getBrowserShareKindLabel(state.pendingBrowserShare.shareKind).toLowerCase()} share...`);
     updatePrivateBrowserSummary({
@@ -2662,14 +2651,38 @@ function updatePrivateBrowserPanel() {
     });
   } else if (remoteSession) {
     const shareKind = getBrowserShareKindLabel(remoteSession.shareKind || "screen");
-    setPrivateBrowserStatus(`Watching ${shareKind.toLowerCase()} nearby.`);
+    setPrivateBrowserStatus(
+      shareKind === "Voice"
+        ? `Listening to ${remoteSession.title || "live voice"} from this private world.`
+        : `Viewing ${remoteSession.title || "nearby share"} from this private world.`,
+    );
     updatePrivateBrowserSummary({
-      state: "live",
-      badge: "Live",
-      current: remoteSession.title || `${shareKind} live`,
-      hint: "Open Live to jump between active shares.",
+      state: "draft",
+      badge: "Nearby",
+      current: shareKind === "Voice"
+        ? `Hearing ${remoteSession.title || "live voice"}`
+        : `Seeing ${remoteSession.title || "nearby share"}`,
+      hint: state.session
+        ? "Your Share controls still start your own nearby share."
+        : "Sign in if you want to start your own nearby share.",
     });
-  } else if (state.browserMediaState.enabled === false) {
+  } else if (!state.session) {
+    setPrivateBrowserStatus("Guests can watch but cannot start nearby share.");
+    updatePrivateBrowserSummary({
+      state: "offline",
+      badge: "Signed out",
+      current: "Sign in to go live",
+      hint: "Signed-in participants can share screen, video, or voice.",
+    });
+  } else if (!localParticipant) {
+    setPrivateBrowserStatus("Enter this world to start a live share.");
+    updatePrivateBrowserSummary({
+      state: "idle",
+      badge: "Idle",
+      current: "Enter to share",
+      hint: "Join this private world first.",
+    });
+  } else if (!mediaAvailable) {
     setPrivateBrowserStatus("Live share is unavailable right now.");
     updatePrivateBrowserSummary({
       state: "offline",
