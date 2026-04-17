@@ -852,6 +852,14 @@ function setEntryLoading(active, options = {}) {
   document.body.classList.toggle("is-world-entry-loading", state.entryLoading);
 }
 
+function waitForUiPaint() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(resolve);
+    });
+  });
+}
+
 function setPrivateShareStatus(text) {
   if (elements.panelShareStatus) {
     elements.panelShareStatus.textContent = text || "";
@@ -9804,15 +9812,25 @@ function disconnectWorldSocket() {
 }
 
 async function openWorld(worldId, creatorUsername, includeContent = true, options = {}) {
-  const showEntryLoading = options.entryLoading === true;
+  const previousWorldKey = state.selectedWorld
+    ? `${state.selectedWorld.world_id}:${String(state.selectedWorld.creator?.username ?? "").trim().toLowerCase()}`
+    : "";
+  const requestedWorldKey = `${String(worldId ?? "").trim()}:${String(creatorUsername ?? "").trim().toLowerCase()}`;
+  const showEntryLoading =
+    options.entryLoading === true
+    || (
+      options.entryLoading !== false
+      && Boolean(previousWorldKey)
+      && previousWorldKey !== requestedWorldKey
+    );
   if (showEntryLoading) {
     setEntryLoading(true, {
-      title: options.loadingTitle || "Opening private world",
+      title: options.loadingTitle || (previousWorldKey ? "Switching private worlds" : "Opening private world"),
       note: options.loadingNote || "Loading the scene you picked.",
     });
+    await waitForUiPaint();
   }
   try {
-    const previousWorldKey = state.selectedWorld ? `${state.selectedWorld.world_id}:${state.selectedWorld.creator.username}` : "";
     const previousSelectedSceneId = String(state.selectedSceneId ?? "").trim();
     const payload = await apiFetch(`/private/worlds/${encodeURIComponent(worldId)}`, {
       search: {
@@ -9821,7 +9839,9 @@ async function openWorld(worldId, creatorUsername, includeContent = true, option
         guestSessionId: state.session ? undefined : getGuestSessionId(),
       },
     });
-    const nextWorldKey = payload.world ? `${payload.world.world_id}:${payload.world.creator.username}` : "";
+    const nextWorldKey = payload.world
+      ? `${payload.world.world_id}:${String(payload.world.creator?.username ?? "").trim().toLowerCase()}`
+      : "";
     state.selectedWorld = payload.world;
     const defaultSceneId = payload.world?.active_instance?.active_scene_id
       || payload.world?.default_scene_id
