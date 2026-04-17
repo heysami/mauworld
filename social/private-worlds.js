@@ -2133,6 +2133,86 @@ function getBuilderSelectionRefs() {
   return primary ? [primary] : [];
 }
 
+function getEntityPersistentGroupId(entry = {}) {
+  return String(entry?.group_id ?? "").trim();
+}
+
+function getPersistentGroupRefs(sceneDoc, groupId = "") {
+  const normalizedGroupId = String(groupId ?? "").trim();
+  if (!normalizedGroupId) {
+    return [];
+  }
+  const refs = [];
+  for (const config of ENTITY_COLLECTIONS) {
+    for (const entry of getEntityArray(sceneDoc, config.key)) {
+      if (getEntityPersistentGroupId(entry) !== normalizedGroupId) {
+        continue;
+      }
+      refs.push({ kind: config.kind, id: entry.id });
+    }
+  }
+  return normalizeEntityRefs(refs);
+}
+
+function expandSelectionRefsWithPersistentGroups(refs = [], sceneDoc) {
+  const normalizedRefs = normalizeEntityRefs(refs);
+  if (!sceneDoc || !normalizedRefs.length) {
+    return normalizedRefs;
+  }
+  const expanded = [...normalizedRefs];
+  for (const ref of normalizedRefs) {
+    const selected = findEntityByRef(sceneDoc, ref);
+    const groupId = getEntityPersistentGroupId(selected?.entry);
+    if (!groupId) {
+      continue;
+    }
+    for (const groupedRef of getPersistentGroupRefs(sceneDoc, groupId)) {
+      if (!expanded.some((entry) => isSameEntityRef(entry, groupedRef))) {
+        expanded.push(groupedRef);
+      }
+    }
+  }
+  return normalizeEntityRefs(expanded);
+}
+
+function getSelectionPersistentGroupInfo(sceneDoc = parseSceneTextarea(), selectedEntities = getSelectedEntities(sceneDoc)) {
+  const selectedRefs = normalizeEntityRefs(selectedEntities.map((entry) => ({ kind: entry.kind, id: entry.entry.id })));
+  const groupIds = [...new Set(selectedEntities.map((entry) => getEntityPersistentGroupId(entry.entry)).filter(Boolean))];
+  if (groupIds.length !== 1) {
+    return {
+      groupId: "",
+      memberRefs: [],
+      isWholeGroupSelected: false,
+    };
+  }
+  const memberRefs = getPersistentGroupRefs(sceneDoc, groupIds[0]);
+  const isWholeGroupSelected = memberRefs.length > 1
+    && memberRefs.length === selectedRefs.length
+    && memberRefs.every((memberRef) => selectedRefs.some((selectedRef) => isSameEntityRef(selectedRef, memberRef)));
+  return {
+    groupId: groupIds[0],
+    memberRefs,
+    isWholeGroupSelected,
+  };
+}
+
+function createNextPersistentGroupId(sceneDoc) {
+  const usedGroupIds = new Set();
+  for (const config of ENTITY_COLLECTIONS) {
+    for (const entry of getEntityArray(sceneDoc, config.key)) {
+      const groupId = getEntityPersistentGroupId(entry);
+      if (groupId) {
+        usedGroupIds.add(groupId);
+      }
+    }
+  }
+  let index = 1;
+  while (usedGroupIds.has(`group_${index}`)) {
+    index += 1;
+  }
+  return `group_${index}`;
+}
+
 function hasBuilderSelection() {
   return getBuilderSelectionRefs().length > 0;
 }
@@ -2264,7 +2344,10 @@ function getSelectedEntities(sceneDoc = parseSceneTextarea()) {
 }
 
 function ensureBuilderSelection(sceneDoc = parseSceneTextarea()) {
-  const validSelections = getSelectedEntities(sceneDoc);
+  const expandedRefs = expandSelectionRefsWithPersistentGroups(getBuilderSelectionRefs(), sceneDoc);
+  const validSelections = expandedRefs
+    .map((ref) => findEntityByRef(sceneDoc, ref))
+    .filter(Boolean);
   if (!validSelections.length) {
     writeBuilderSelection([]);
     return null;
@@ -2280,6 +2363,12 @@ function ensureBuilderSelection(sceneDoc = parseSceneTextarea()) {
 
 function setBuilderSelection(kind, id, options = {}) {
   const nextRef = createEntityRef(kind, id);
+  let sceneDoc = null;
+  try {
+    sceneDoc = parseSceneTextarea();
+  } catch (_error) {
+    sceneDoc = null;
+  }
   if (!nextRef) {
     writeBuilderSelection([]);
   } else if (options.append === true) {
@@ -2287,9 +2376,9 @@ function setBuilderSelection(kind, id, options = {}) {
     if (!nextRefs.some((entry) => isSameEntityRef(entry, nextRef))) {
       nextRefs.push(nextRef);
     }
-    writeBuilderSelection(nextRefs, nextRef);
+    writeBuilderSelection(expandSelectionRefsWithPersistentGroups(nextRefs, sceneDoc), nextRef);
   } else {
-    writeBuilderSelection([nextRef], nextRef);
+    writeBuilderSelection(expandSelectionRefsWithPersistentGroups([nextRef], sceneDoc), nextRef);
   }
   updateShellState();
   renderSceneBuilder();
@@ -3905,6 +3994,27 @@ function buildTargetOptions(sceneDoc, selectedValue = "") {
   `).join("");
 }
 
+function buildPersistentGroupInspectorActions(sceneDoc, selectedEntities = []) {
+  if (!isEditor() || state.mode !== "build" || selectedEntities.length < 2) {
+    return "";
+  }
+  const groupInfo = getSelectionPersistentGroupInfo(sceneDoc, selectedEntities);
+  if (groupInfo.isWholeGroupSelected) {
+    return `
+      <div class="pw-runtime-actions">
+        <button type="button" class="is-muted" data-ungroup-selection="${htmlEscape(groupInfo.groupId)}">Ungroup</button>
+      </div>
+      <p class="pw-inspector-note">Persistent group ${htmlEscape(groupInfo.groupId)}. Selecting one member now brings back the whole group.</p>
+    `;
+  }
+  return `
+    <div class="pw-runtime-actions">
+      <button type="button" data-group-selection="true">Group Selection</button>
+    </div>
+    <p class="pw-inspector-note">Save this temporary selection as a persistent group so it comes back together later.</p>
+  `;
+}
+
 function renderEntityInspector(sceneDoc, selected = null) {
   const selectedEntities = getSelectedEntities(sceneDoc);
   if (!selected) {
@@ -3922,6 +4032,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     elements.convertPrefab.disabled = true;
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">This group moves together. Hold Shift to add more, drag it while Shift is held, or hold Q for axis grabbers.</p>
+      ${buildPersistentGroupInspectorActions(sceneDoc, selectedEntities)}
       <div class="pw-builder-group">
         <div class="pw-builder-group__header">
           <strong>Selection</strong>
@@ -8098,6 +8209,53 @@ function updateSelectedEntityField(path, rawValue, valueType = "text", options =
   }, options);
 }
 
+function groupSelectedEntities() {
+  mutateSceneDoc((sceneDoc) => {
+    const selectedEntities = getSelectedEntities(sceneDoc);
+    if (selectedEntities.length < 2) {
+      return;
+    }
+    const nextGroupId = createNextPersistentGroupId(sceneDoc);
+    for (const selection of selectedEntities) {
+      selection.entry.group_id = nextGroupId;
+    }
+    const refs = selectedEntities.map((selection) => ({ kind: selection.kind, id: selection.entry.id }));
+    writeBuilderSelection(expandSelectionRefsWithPersistentGroups(refs, sceneDoc), refs[refs.length - 1] ?? null);
+  });
+}
+
+function ungroupSelectedEntities() {
+  mutateSceneDoc((sceneDoc) => {
+    const selectedEntities = getSelectedEntities(sceneDoc);
+    if (!selectedEntities.length) {
+      return;
+    }
+    const groupInfo = getSelectionPersistentGroupInfo(sceneDoc, selectedEntities);
+    const refsToKeepSelected = selectedEntities.map((selection) => ({ kind: selection.kind, id: selection.entry.id }));
+    if (groupInfo.isWholeGroupSelected) {
+      for (const memberRef of groupInfo.memberRefs) {
+        const member = findEntityByRef(sceneDoc, memberRef);
+        if (member?.entry && "group_id" in member.entry) {
+          delete member.entry.group_id;
+        } else if (member?.entry) {
+          member.entry.group_id = null;
+          delete member.entry.group_id;
+        }
+      }
+    } else {
+      for (const selection of selectedEntities) {
+        if ("group_id" in selection.entry) {
+          delete selection.entry.group_id;
+        } else {
+          selection.entry.group_id = null;
+          delete selection.entry.group_id;
+        }
+      }
+    }
+    writeBuilderSelection(refsToKeepSelected, refsToKeepSelected[refsToKeepSelected.length - 1] ?? null);
+  });
+}
+
 function removeEntityRefFromSelection(ref) {
   const remaining = getBuilderSelectionRefs().filter((entry) => !isSameEntityRef(entry, ref));
   writeBuilderSelection(remaining, remaining[remaining.length - 1] ?? null);
@@ -8744,6 +8902,17 @@ function bindEvents() {
       field.type === "checkbox" ? field.checked : field.value,
       field.getAttribute("data-value-type") || "text",
     );
+  });
+  elements.entityEditor.addEventListener("click", (event) => {
+    const groupButton = event.target.closest("[data-group-selection]");
+    if (groupButton) {
+      groupSelectedEntities();
+      return;
+    }
+    const ungroupButton = event.target.closest("[data-ungroup-selection]");
+    if (ungroupButton) {
+      ungroupSelectedEntities();
+    }
   });
   elements.removeEntity.addEventListener("click", () => {
     removeSelectedEntity();
