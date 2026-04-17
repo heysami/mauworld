@@ -4083,7 +4083,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
 
   if (kind === "screen") {
     elements.entityEditor.innerHTML = `
-      <p class="pw-inspector-note">Static HTML and CSS only. No custom JavaScript or remote resources.</p>
+      <p class="pw-inspector-note">Static HTML and CSS only. No custom JavaScript or remote resources. Width and height changes now reflow the HTML to match the new viewport instead of just stretching it.</p>
       ${buildMaterialEditor(entry.material)}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
@@ -4875,6 +4875,28 @@ function getToolPlacementCenterYOffset(kind, supportTopY = 0) {
     return clampPlacementCenterY(supportTopY + 0.5, dimensions.y);
   }
   return clampPlacementCenterY(supportTopY + dimensions.y / 2, dimensions.y);
+}
+
+function getScreenTextureRenderSize(screen = {}) {
+  const baseWidth = 1024;
+  const baseHeight = 576;
+  const baseAspect = baseWidth / baseHeight;
+  const scaleX = Math.max(0.1, Number(screen.scale?.x ?? 4) || 4);
+  const scaleY = Math.max(0.1, Number(screen.scale?.y ?? 2.25) || 2.25);
+  const aspect = scaleX / Math.max(0.1, scaleY);
+  let width = baseWidth;
+  let height = baseHeight;
+  if (aspect > baseAspect) {
+    width = Math.round(baseHeight * aspect);
+  } else if (aspect < baseAspect) {
+    height = Math.round(baseWidth / Math.max(0.1, aspect));
+  }
+  const maxDimension = 2048;
+  const scaleDown = Math.min(1, maxDimension / Math.max(width, height));
+  return {
+    width: Math.max(384, Math.round(width * scaleDown)),
+    height: Math.max(256, Math.round(height * scaleDown)),
+  };
 }
 
 function getDominantHitNormal(hit) {
@@ -7436,9 +7458,10 @@ function updatePreviewFromSelection() {
       material.emissive = new THREE.Color("#355f9b");
       material.emissiveIntensity = 0.24;
     }
+    const textureViewport = getScreenTextureRenderSize(screen);
     void renderScreenHtmlTexture(THREE, screen, {
-      width: 1024,
-      height: 576,
+      width: textureViewport.width,
+      height: textureViewport.height,
     }).then((texture) => {
       if (!texture || !mesh.parent) {
         return;
@@ -8023,7 +8046,7 @@ async function addCollaborator(event) {
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
 }
 
-function mutateSceneDoc(mutator) {
+function mutateSceneDoc(mutator, options = {}) {
   const sceneDoc = parseSceneTextarea();
   mutator(sceneDoc);
   if (elements.sceneForm?.elements.scriptDsl) {
@@ -8037,11 +8060,15 @@ function mutateSceneDoc(mutator) {
     scriptDslText: sceneDoc.script_dsl || "",
   });
   state.sceneEditorSceneId = state.selectedSceneId;
-  renderSceneBuilder();
-  updatePreviewFromSelection();
+  if (options.renderBuilder !== false) {
+    renderSceneBuilder();
+  }
+  if (options.updatePreview !== false) {
+    updatePreviewFromSelection();
+  }
 }
 
-function updateSelectedEntityField(path, rawValue, valueType = "text") {
+function updateSelectedEntityField(path, rawValue, valueType = "text", options = {}) {
   void acquireSceneLock();
   mutateSceneDoc((sceneDoc) => {
     const selected = getSelectedEntity(sceneDoc);
@@ -8068,7 +8095,7 @@ function updateSelectedEntityField(path, rawValue, valueType = "text") {
         setByPath(selected.entry, path, "none");
       }
     }
-  });
+  }, options);
 }
 
 function removeEntityRefFromSelection(ref) {
@@ -8704,6 +8731,7 @@ function bindEvents() {
       field.getAttribute("data-entity-field"),
       field.type === "checkbox" ? field.checked : field.value,
       field.getAttribute("data-value-type") || "text",
+      { renderBuilder: false },
     );
   });
   elements.entityEditor.addEventListener("change", (event) => {
