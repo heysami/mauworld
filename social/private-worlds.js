@@ -265,6 +265,7 @@ const state = {
   browserMediaController: null,
   pendingBrowserShare: null,
   localBrowserShare: null,
+  localBrowserPreviewStream: null,
   browserShareMode: "screen",
   browserPanelRemoteSessionId: "",
   browserOverlayOpen: false,
@@ -1415,9 +1416,8 @@ function reconcilePrivateShareBubbles() {
       setPrivateShareBubbleVideo(session.sessionId, session._remoteElement);
     } else if (
       session.hostSessionId === getPrivateViewerSessionId()
-      && state.localBrowserShare?.sessionId === session.sessionId
-      && state.localBrowserShare?.hasVideo
       && elements.panelBrowserVideo
+      && elements.panelBrowserVideo.srcObject
     ) {
       setPrivateShareBubbleVideo(session.sessionId, elements.panelBrowserVideo);
     }
@@ -2157,6 +2157,11 @@ function stopMediaStream(stream) {
   stream?.getTracks?.().forEach((track) => track.stop());
 }
 
+function setLocalPrivateBrowserPreviewStream(stream = null) {
+  state.localBrowserPreviewStream = stream ?? null;
+  setPrivateBrowserPreviewStream(state.localBrowserPreviewStream);
+}
+
 function ensurePrivateBrowserVideoPlayback(element) {
   if (!element) {
     return;
@@ -2317,6 +2322,9 @@ function clearPendingPrivateBrowserShare({ stopTracks = false } = {}) {
   }
   releasePrivateBrowserShare(state.pendingBrowserShare, { stopTracks });
   state.pendingBrowserShare = null;
+  if (!state.localBrowserShare) {
+    setLocalPrivateBrowserPreviewStream(null);
+  }
 }
 
 function clearLocalPrivateBrowserShare({ stopTracks = false, sessionId = "" } = {}) {
@@ -2328,8 +2336,8 @@ function clearLocalPrivateBrowserShare({ stopTracks = false, sessionId = "" } = 
     return;
   }
   releasePrivateBrowserShare(activeShare, { stopTracks });
-  setPrivateBrowserPreviewStream(null);
   state.localBrowserShare = null;
+  setLocalPrivateBrowserPreviewStream(null);
 }
 
 async function fetchPrivateBrowserMediaToken({ canPublish = false } = {}) {
@@ -2440,10 +2448,10 @@ function attachLocalPrivateBrowserShare(sessionId, share) {
     sessionId,
   };
   setSelectedPrivateBrowserShareMode(share.shareKind);
+  setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
   if (elements.panelBrowserShareTitle) {
     elements.panelBrowserShareTitle.value = share.title || "";
   }
-  setPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
   void getPrivateBrowserMediaController().publishStream({
     sessionId,
     stream: share.stream,
@@ -2587,7 +2595,7 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
   state.localBrowserSessionId = "";
   state.browserPanelRemoteSessionId = "";
   state.browserMediaState = createEmptyPrivateBrowserMediaState();
-  setPrivateBrowserPreviewStream(null);
+  setLocalPrivateBrowserPreviewStream(null);
   if (elements.panelBrowserFrame) {
     elements.panelBrowserFrame.hidden = true;
     elements.panelBrowserFrame.removeAttribute("src");
@@ -2621,7 +2629,7 @@ async function launchPrivateScreenShare() {
       title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("screen", videoTrack)),
     });
     state.pendingBrowserShare = share;
-    setPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
+    setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
     updatePrivateBrowserPanel();
     const sent = sendWorldSocketMessage({
       type: "browser:start",
@@ -2669,7 +2677,7 @@ async function launchPrivateCameraShare() {
       title: getRequestedPrivateBrowserShareTitle(getDefaultBrowserShareTitle("camera")),
     });
     state.pendingBrowserShare = share;
-    setPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
+    setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
     updatePrivateBrowserPanel();
     const sent = sendWorldSocketMessage({
       type: "browser:start",
@@ -2715,7 +2723,7 @@ async function launchPrivateVoiceShare() {
       aspectRatio: 1.2,
     });
     state.pendingBrowserShare = share;
-    setPrivateBrowserPreviewStream(null);
+    setLocalPrivateBrowserPreviewStream(null);
     updatePrivateBrowserPanel();
     const sent = sendWorldSocketMessage({
       type: "browser:start",
@@ -2775,10 +2783,14 @@ function updatePrivateBrowserPanel() {
   const canShare = Boolean(state.session && world && localParticipant && mediaAvailable);
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
-    : state.localBrowserShare?.hasVideo
-      ? state.localBrowserShare.stream
+    : state.localBrowserPreviewStream
       : null;
-  const showingRemoteVideo = Boolean(!previewStream && remoteSession && elements.panelBrowserVideo?.srcObject);
+  const showingRemoteVideo = Boolean(
+    !previewStream
+    && remoteSession
+    && elements.panelBrowserVideo?.srcObject
+    && state.browserPanelRemoteSessionId === remoteSession.sessionId,
+  );
   const needsPlaybackStart = Boolean(showingRemoteVideo && String(state.browserMediaState.lastPlayError || "").includes("NotAllowedError"));
   const needsAudioStart = Boolean(
     remoteSession
@@ -2883,7 +2895,7 @@ function updatePrivateBrowserPanel() {
   }
 
   if (previewStream) {
-    setPrivateBrowserPreviewStream(previewStream);
+    setLocalPrivateBrowserPreviewStream(previewStream);
   } else if (remoteSession?._remoteElement?.srcObject && elements.panelBrowserVideo) {
     if (elements.panelBrowserVideo.srcObject !== remoteSession._remoteElement.srcObject) {
       elements.panelBrowserVideo.srcObject = remoteSession._remoteElement.srcObject;
@@ -2899,7 +2911,7 @@ function updatePrivateBrowserPanel() {
     elements.panelBrowserFrame.removeAttribute("src");
   }
   if (elements.panelBrowserPlaceholder) {
-    const hasDisplayedVideo = Boolean(previewStream || (remoteSession && elements.panelBrowserVideo?.srcObject));
+    const hasDisplayedVideo = Boolean(elements.panelBrowserVideo?.srcObject);
     let placeholder = "Share a screen, video, or voice nearby.";
     if (needsPlaybackStart) {
       placeholder = "Browser blocked autoplay. Press start to watch this live stream.";
