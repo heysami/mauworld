@@ -454,6 +454,15 @@
         </div>
 
         <form class="pw-scene-form" data-scene-form>
+          <section class="pw-builder-panel">
+            <div class="pw-panel__header">
+              <h3>Scene library</h3>
+              <button type="button" class="is-muted" data-scene-add-button disabled>New scene</button>
+            </div>
+            <p class="pw-builder-empty" data-scene-library-hint>Build multiple scenes, then jump between them here.</p>
+            <div class="pw-scene-library" data-scene-library-list></div>
+          </section>
+
           <div class="pw-grid-2">
             <label>
               <span>Scene Name</span>
@@ -621,7 +630,17 @@
         </section>
       </aside>
 
-      <section class="pw-scene-dock">
+      <section class="pw-scene-dock" data-scene-dock>
+        <div class="pw-scene-dock__head">
+          <div class="pw-scene-dock__title">
+            <strong>Scenes</strong>
+            <span data-scene-dock-summary>0 scenes</span>
+          </div>
+          <div class="pw-inline-actions">
+            <button type="button" class="is-muted" data-scene-dock-open>Library</button>
+            <button type="button" class="is-muted" data-scene-add-button disabled>New scene</button>
+          </div>
+        </div>
         <div class="pw-scene-strip" data-scene-strip></div>
         <div class="pw-runtime-actions">
           <button type="button" class="is-muted" data-ready-toggle disabled>Ready</button>

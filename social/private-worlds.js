@@ -214,7 +214,12 @@ const elements = {
   panelRelease: document.querySelector("[data-private-panel-release]"),
   panelReset: document.querySelector("[data-private-panel-reset]"),
   worldMeta: document.querySelector("[data-world-meta]"),
+  sceneDock: document.querySelector("[data-scene-dock]"),
+  sceneDockSummary: document.querySelector("[data-scene-dock-summary]"),
+  sceneDockOpen: document.querySelector("[data-scene-dock-open]"),
   sceneStrip: document.querySelector("[data-scene-strip]"),
+  sceneLibraryHint: document.querySelector("[data-scene-library-hint]"),
+  sceneLibraryList: document.querySelector("[data-scene-library-list]"),
   sceneForm: document.querySelector("[data-scene-form]"),
   saveScene: document.querySelector("[data-save-scene]"),
   refreshScene: document.querySelector("[data-refresh-scene]"),
@@ -272,6 +277,7 @@ elements.privatePanelTabButtons = [...document.querySelectorAll("[data-private-p
 elements.privatePanelViews = [...document.querySelectorAll("[data-private-panel-view]")];
 elements.panelChatReactionButtons = [...document.querySelectorAll("[data-private-chat-reaction]")];
 elements.panelBrowserShareModes = [...document.querySelectorAll("[data-private-browser-share-mode]")];
+elements.sceneAddButtons = [...document.querySelectorAll("[data-scene-add-button]")];
 
 function createEmptyPrivateBrowserMediaState() {
   return {
@@ -3774,6 +3780,40 @@ function discardSceneDraft(sceneId = state.selectedSceneId) {
   }
 }
 
+function buildEmptySceneDoc() {
+  return {
+    settings: {
+      gravity: { x: 0, y: -9.8, z: 0 },
+      camera_mode: "third_person",
+      start_on_ready: true,
+    },
+    voxels: [],
+    primitives: [],
+    screens: [],
+    players: [],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    prefab_instances: [],
+    particles: [],
+    rules: [],
+    script_dsl: "",
+  };
+}
+
+function buildSceneCountLabel(count = 0) {
+  return `${count} scene${count === 1 ? "" : "s"}`;
+}
+
+function createNextSceneName(scenes = state.selectedWorld?.scenes ?? []) {
+  const usedNames = new Set((scenes ?? []).map((scene) => String(scene?.name ?? "").trim().toLowerCase()).filter(Boolean));
+  let index = (scenes?.length ?? 0) + 1;
+  while (usedNames.has(`scene ${index}`.toLowerCase())) {
+    index += 1;
+  }
+  return `Scene ${index}`;
+}
+
 function createScriptFunctionId(seed = "") {
   const randomToken = Math.random().toString(36).slice(2, 8);
   return `scriptfn_${slugToken(seed || `logic_${Date.now().toString(36)}_${randomToken}`)}`;
@@ -4180,10 +4220,65 @@ function renderSceneStrip() {
     return;
   }
   const scenes = state.selectedWorld?.scenes ?? [];
+  if (elements.sceneDockSummary) {
+    elements.sceneDockSummary.textContent = scenes.length
+      ? `${buildSceneCountLabel(scenes.length)} · ${getSelectedScene()?.name || "No selection"}`
+      : "No scenes yet";
+  }
   elements.sceneStrip.innerHTML = scenes.map((scene) => `
     <button type="button" class="pw-scene-pill ${scene.id === state.selectedSceneId ? "is-active" : ""}" data-scene-id="${htmlEscape(scene.id)}">
       <strong>${htmlEscape(scene.name)}</strong>
       <span>${scene.version ? `v${scene.version}` : ""}${scene.is_default ? " · default" : ""}</span>
+    </button>
+  `).join("");
+}
+
+function buildSceneLibrarySummary(scene = {}) {
+  const stats = scene.compiled_doc?.stats ?? {};
+  const entityCount =
+    Number(stats.solid_voxel_count ?? 0)
+    + Number(stats.primitive_count ?? 0)
+    + Number(stats.screen_count ?? 0)
+    + Number(stats.player_count ?? 0)
+    + Number(stats.text_count ?? 0)
+    + Number(stats.trigger_zone_count ?? 0)
+    + Number(stats.prefab_instance_count ?? 0);
+  const ruleCount = Number(stats.dsl_rule_count ?? stats.rule_count ?? 0);
+  const meta = [];
+  meta.push(`${entityCount} item${entityCount === 1 ? "" : "s"}`);
+  meta.push(`${ruleCount} rule${ruleCount === 1 ? "" : "s"}`);
+  if (scene.is_default) {
+    meta.push("default");
+  }
+  return meta.join(" · ");
+}
+
+function renderSceneLibrary() {
+  if (!elements.sceneLibraryList) {
+    return;
+  }
+  const scenes = state.selectedWorld?.scenes ?? [];
+  if (elements.sceneLibraryHint) {
+    elements.sceneLibraryHint.textContent = scenes.length
+      ? `${buildSceneCountLabel(scenes.length)} ready. Switch here, then edit the selected scene below.`
+      : "No scenes yet. Add one to start building a different room, level, or state.";
+  }
+  if (!scenes.length) {
+    elements.sceneLibraryList.innerHTML = '<div class="pw-scene-library-item"><p class="pw-builder-empty">No scenes yet.</p></div>';
+    return;
+  }
+  const activeRuntimeSceneId = state.selectedWorld?.active_instance?.active_scene_id || "";
+  elements.sceneLibraryList.innerHTML = scenes.map((scene) => `
+    <button
+      type="button"
+      class="pw-scene-library-item ${scene.id === state.selectedSceneId ? "is-active" : ""}"
+      data-scene-library-id="${htmlEscape(scene.id)}"
+    >
+      <div class="pw-scene-library-item__head">
+        <strong>${htmlEscape(scene.name)}</strong>
+        <span>${scene.id === activeRuntimeSceneId ? "live" : scene.id === state.selectedSceneId ? "editing" : scene.is_default ? "default" : "saved"}</span>
+      </div>
+      <small>${htmlEscape(buildSceneLibrarySummary(scene))}</small>
     </button>
   `).join("");
 }
@@ -5222,6 +5317,7 @@ function renderSelectedWorld() {
   }
   renderWorldMeta();
   renderSceneStrip();
+  renderSceneLibrary();
   renderSceneEditor();
   renderCollaborators();
   renderRuntimeStatus();
@@ -5253,6 +5349,12 @@ function renderSelectedWorld() {
   }
   if (elements.sceneToolsToggle) {
     elements.sceneToolsToggle.disabled = !hasWorld || !canEdit;
+  }
+  if (elements.sceneDock) {
+    elements.sceneDock.hidden = !hasWorld || !canEdit || state.mode !== "build";
+  }
+  for (const button of elements.sceneAddButtons ?? []) {
+    button.disabled = !hasWorld || !canEdit || state.mode !== "build";
   }
   if (elements.worldMenuToggle) {
     elements.worldMenuToggle.disabled = !hasWorld;
@@ -8668,6 +8770,7 @@ function disconnectWorldSocket() {
 
 async function openWorld(worldId, creatorUsername, includeContent = true) {
   const previousWorldKey = state.selectedWorld ? `${state.selectedWorld.world_id}:${state.selectedWorld.creator.username}` : "";
+  const previousSelectedSceneId = String(state.selectedSceneId ?? "").trim();
   const payload = await apiFetch(`/private/worlds/${encodeURIComponent(worldId)}`, {
     search: {
       creatorUsername,
@@ -8677,7 +8780,13 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   });
   const nextWorldKey = payload.world ? `${payload.world.world_id}:${payload.world.creator.username}` : "";
   state.selectedWorld = payload.world;
-  state.selectedSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
+  const defaultSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
+  const canPreserveSceneSelection =
+    previousWorldKey === nextWorldKey
+    && state.mode === "build"
+    && payload.world?.permissions?.can_edit === true
+    && (payload.world?.scenes ?? []).some((scene) => scene.id === previousSelectedSceneId);
+  state.selectedSceneId = canPreserveSceneSelection ? previousSelectedSceneId : defaultSceneId;
   state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
   state.selectedScriptFunctionId = "";
   writeBuilderSelection([]);
@@ -8799,6 +8908,7 @@ async function saveScene(event) {
   if (!scene || !state.selectedWorld) {
     return;
   }
+  const keepDrawerOpen = state.sceneDrawerOpen === true;
   const sceneDoc = parseSceneTextarea();
   const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/scenes/${encodeURIComponent(scene.id)}`, {
     method: "PATCH",
@@ -8812,6 +8922,30 @@ async function saveScene(event) {
   discardSceneDraft(scene.id);
   pushEvent("scene:saved", payload.scene.name);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  state.sceneDrawerOpen = keepDrawerOpen;
+  renderSelectedWorld();
+}
+
+async function createScene() {
+  if (!state.selectedWorld || !isEditor()) {
+    return;
+  }
+  const nextName = createNextSceneName(state.selectedWorld.scenes ?? []);
+  const keepDrawerOpen = state.sceneDrawerOpen === true;
+  const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/scenes`, {
+    method: "POST",
+    body: {
+      creatorUsername: state.selectedWorld.creator.username,
+      name: nextName,
+      isDefault: false,
+      sceneDoc: buildEmptySceneDoc(),
+    },
+  });
+  pushEvent("scene:created", payload.scene.name);
+  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  state.selectedSceneId = payload.scene.id;
+  state.sceneDrawerOpen = keepDrawerOpen;
+  renderSelectedWorld();
 }
 
 async function exportWorld() {
@@ -9860,9 +9994,30 @@ function bindEvents() {
       return;
     }
     state.selectedSceneId = button.getAttribute("data-scene-id");
-    setSceneDrawerOpen(false);
     renderSelectedWorld();
   });
+  elements.sceneDockOpen?.addEventListener("click", () => {
+    if (!state.selectedWorld || !isEditor()) {
+      return;
+    }
+    setSceneDrawerOpen(true);
+    setPrivatePanelTab("build");
+  });
+  elements.sceneLibraryList?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-scene-library-id]");
+    if (!button) {
+      return;
+    }
+    state.selectedSceneId = button.getAttribute("data-scene-library-id");
+    renderSelectedWorld();
+  });
+  for (const button of elements.sceneAddButtons ?? []) {
+    button.addEventListener("click", () => {
+      void createScene().catch((error) => {
+        setStatus(error.message || "Could not create scene.");
+      });
+    });
+  }
   elements.sceneForm.addEventListener("submit", saveScene);
   elements.refreshScene.addEventListener("click", () => {
     discardSceneDraft(state.selectedSceneId);
