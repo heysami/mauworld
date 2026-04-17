@@ -990,6 +990,12 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
     ) ?? null;
   };
   if (normalized === getPrivateViewerSessionId()) {
+    const localAvatarPosition = state.preview?.viewerAvatar?.group?.visible !== false
+      ? state.preview?.viewerAvatar?.group?.position ?? null
+      : null;
+    if (localAvatarPosition) {
+      return localAvatarPosition;
+    }
     const localParticipant = getLocalParticipant();
     const occupiedPlayerPosition = getPlayerAnchorPosition(localParticipant?.player_entity_id);
     if (occupiedPlayerPosition) {
@@ -999,23 +1005,24 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
     return state.preview?.viewerAvatar?.group?.position
       ?? new THREE.Vector3(localPresencePosition.x, localPresencePosition.y, localPresencePosition.z);
   }
+  const renderedPresenceEntry = state.preview?.presenceEntries?.get(normalized) ?? null;
+  const renderedPosition = renderedPresenceEntry?.group?.position ?? null;
+  if (renderedPosition && renderedPresenceEntry.group.visible !== false) {
+    return renderedPosition;
+  }
+  const entry = state.livePresence.get(normalized);
+  if (entry) {
+    return new THREE.Vector3(
+      Number(entry.position_x ?? 0) || 0,
+      Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
+      Number(entry.position_z ?? 0) || 0,
+    );
+  }
   const occupiedPlayerPosition = getPlayerAnchorPosition(getParticipantByViewerSessionId(normalized)?.player_entity_id);
   if (occupiedPlayerPosition) {
     return occupiedPlayerPosition;
   }
-  const renderedPosition = state.preview?.presenceEntries?.get(normalized)?.group?.position ?? null;
-  if (renderedPosition) {
-    return renderedPosition;
-  }
-  const entry = state.livePresence.get(normalized);
-  if (!entry) {
-    return null;
-  }
-  return new THREE.Vector3(
-    Number(entry.position_x ?? 0) || 0,
-    Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
-    Number(entry.position_z ?? 0) || 0,
-  );
+  return null;
 }
 
 function getPrivateBrowserSessionShareKind(session = {}) {
