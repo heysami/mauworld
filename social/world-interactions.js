@@ -116,6 +116,45 @@ export function normalizeHostedBrowserSession(session = {}, viewerSessionId = ""
   };
 }
 
+export function isLocalDisplayShareActive(share = null) {
+  if (!share?.stream) {
+    return false;
+  }
+  if (share.stream.active === false) {
+    return false;
+  }
+  const observedTrack = share.observedTrack ?? share.videoTrack ?? share.audioTrack ?? null;
+  if (observedTrack) {
+    return String(observedTrack.readyState ?? "live") !== "ended";
+  }
+  const tracks = [
+    ...(share.stream.getVideoTracks?.() ?? []),
+    ...(share.stream.getAudioTracks?.() ?? []),
+  ];
+  if (tracks.length === 0) {
+    return false;
+  }
+  return tracks.some((track) => String(track?.readyState ?? "live") !== "ended");
+}
+
+export function setDisplayShareOverlayState(options = {}) {
+  const open = options.open === true;
+  options.panel?.classList?.toggle("is-expanded", open);
+  options.backdrop?.classList?.toggle("is-visible", open);
+  options.backdrop?.setAttribute?.("aria-hidden", open ? "false" : "true");
+  if (options.expandButton) {
+    options.expandButton.textContent = open ? "Dock" : "Focus";
+    options.expandButton.setAttribute("aria-expanded", String(open));
+  }
+  if (options.stage) {
+    options.stage.tabIndex = open ? 0 : -1;
+  }
+  if (!open) {
+    options.onClose?.();
+  }
+  options.updateView?.();
+}
+
 export function isEmojiOnlyChatText(value) {
   const trimmed = String(value ?? "").trim();
   if (!trimmed) {
@@ -820,6 +859,7 @@ export function createNearbyDisplayShareFeature(options = {}) {
       onEndedWhileLive() {
         const sessionId = String(options.getLocalShare?.()?.sessionId ?? "").trim();
         options.clearLocalShare?.({ stopTracks: false, sessionId });
+        options.onLocalShareEnded?.({ sessionId, share });
         if (sessionId) {
           options.stopLiveShare?.(sessionId);
         }

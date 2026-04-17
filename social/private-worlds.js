@@ -13,10 +13,12 @@ import {
   getDisplayShareStagePlaceholderText,
   getDisplayShareLaunchState,
   getLocalDisplaySharePresentation,
+  isLocalDisplayShareActive,
   isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
   normalizeBrowserShareKind,
   normalizeHostedBrowserSession,
   sanitizeBrowserShareTitle,
+  setDisplayShareOverlayState,
   updateChatBubbleGhosts,
 } from "./world-interactions.js";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
@@ -469,6 +471,9 @@ function setPrivatePanelTab(tab, options = {}) {
   const nextTab = normalizePrivatePanelTab(tab);
   const syncMode = options.syncMode !== false;
   state.privatePanelTab = nextTab;
+  if (nextTab !== "share" && state.browserOverlayOpen) {
+    setPrivateBrowserOverlayOpen(false);
+  }
   if (syncMode && nextTab === "build" && state.mode !== "build" && isEditor()) {
     setMode("build");
     return;
@@ -2178,25 +2183,14 @@ function getPrivateBrowserStagePlaceholderText({
 
 function setPrivateBrowserOverlayOpen(open) {
   state.browserOverlayOpen = Boolean(open);
-  if (!elements.panelBrowserPanel) {
-    return;
-  }
-  if (state.browserOverlayOpen) {
-    elements.panelBrowserOverlayRoot?.append(elements.panelBrowserPanel);
-  } else {
-    elements.panelBrowserDock?.before(elements.panelBrowserPanel);
-  }
-  elements.panelBrowserPanel.classList.toggle("is-expanded", state.browserOverlayOpen);
-  elements.panelBrowserBackdrop?.classList.toggle("is-visible", state.browserOverlayOpen);
-  elements.panelBrowserBackdrop?.setAttribute("aria-hidden", state.browserOverlayOpen ? "false" : "true");
-  if (elements.panelBrowserExpand) {
-    elements.panelBrowserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
-    elements.panelBrowserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
-  }
-  if (elements.panelBrowserStage) {
-    elements.panelBrowserStage.tabIndex = state.browserOverlayOpen ? 0 : -1;
-  }
-  updatePrivateBrowserPanel();
+  setDisplayShareOverlayState({
+    open: state.browserOverlayOpen,
+    panel: elements.panelBrowserPanel,
+    backdrop: elements.panelBrowserBackdrop,
+    expandButton: elements.panelBrowserExpand,
+    stage: elements.panelBrowserStage,
+    updateView: updatePrivateBrowserPanel,
+  });
 }
 
 function getLocalPrivateBrowserSession() {
@@ -2240,6 +2234,29 @@ function clearLocalPrivateBrowserShare({ stopTracks = false, sessionId = "" } = 
   }
 }
 
+function dropLocalPrivateBrowserSession(sessionId, { unpublish = true } = {}) {
+  const normalized = String(sessionId ?? "").trim();
+  if (!normalized) {
+    return false;
+  }
+  state.browserMediaController?.removeSession?.(normalized);
+  if (unpublish) {
+    void state.browserMediaController?.unpublishSession?.(normalized);
+  }
+  state.browserSessions.delete(normalized);
+  if (state.localBrowserSessionId === normalized) {
+    state.localBrowserSessionId = "";
+  }
+  if (state.browserPanelRemoteSessionId === normalized) {
+    state.browserPanelRemoteSessionId = "";
+    if (!state.localBrowserShare) {
+      setPrivateBrowserPreviewStream(null);
+    }
+  }
+  removePrivateShareBubbleEntry(normalized);
+  return true;
+}
+
 const privateBrowserShareFeature = createNearbyDisplayShareFeature({
   modeButtons: elements.panelBrowserShareModes,
   modeAttribute: "data-private-browser-share-mode",
@@ -2259,6 +2276,10 @@ const privateBrowserShareFeature = createNearbyDisplayShareFeature({
   getLocalShare: () => state.localBrowserShare,
   clearPendingShare: clearPendingPrivateBrowserShare,
   clearLocalShare: clearLocalPrivateBrowserShare,
+  onLocalShareEnded({ sessionId }) {
+    dropLocalPrivateBrowserSession(sessionId);
+    renderPrivateLiveSharesList();
+  },
   getFallbackSize: () => ({ width: 16, height: 9 }),
   stopLiveShare(sessionId) {
     sendWorldSocketMessage({
@@ -2465,6 +2486,7 @@ function attachLocalPrivateBrowserShare(sessionId, share) {
   }).then((published) => {
     if (!published) {
       clearLocalPrivateBrowserShare({ stopTracks: true, sessionId });
+      dropLocalPrivateBrowserSession(sessionId);
       sendWorldSocketMessage({
         type: "browser:stop",
         sessionId,
@@ -2473,6 +2495,7 @@ function attachLocalPrivateBrowserShare(sessionId, share) {
     }
   }).catch(() => {
     clearLocalPrivateBrowserShare({ stopTracks: true, sessionId });
+    dropLocalPrivateBrowserSession(sessionId);
     sendWorldSocketMessage({
       type: "browser:stop",
       sessionId,
@@ -2570,18 +2593,7 @@ function handlePrivateBrowserStop(payload = {}) {
     clearPendingPrivateBrowserShare();
   }
   clearLocalPrivateBrowserShare({ sessionId });
-  getPrivateBrowserMediaController().removeSession?.(sessionId);
-  void getPrivateBrowserMediaController().unpublishSession(sessionId);
-  state.browserSessions.delete(sessionId);
-  if (state.localBrowserSessionId === sessionId) {
-    state.localBrowserSessionId = "";
-  }
-  if (state.browserPanelRemoteSessionId === sessionId) {
-    state.browserPanelRemoteSessionId = "";
-    if (!state.localBrowserShare) {
-      setPrivateBrowserPreviewStream(null);
-    }
-  }
+  dropLocalPrivateBrowserSession(sessionId);
   reconcilePrivateShareBubbles();
   updatePrivateBrowserPanel();
   renderPrivateLiveSharesList();
@@ -2615,6 +2627,17 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
 }
 
 function updatePrivateBrowserPanel() {
+  if (state.localBrowserShare && !isLocalDisplayShareActive(state.localBrowserShare)) {
+    const endedSessionId = String(state.localBrowserShare.sessionId ?? state.localBrowserSessionId ?? "").trim();
+    clearLocalPrivateBrowserShare({ stopTracks: false, sessionId: endedSessionId });
+    dropLocalPrivateBrowserSession(endedSessionId);
+    if (endedSessionId) {
+      sendWorldSocketMessage({
+        type: "browser:stop",
+        sessionId: endedSessionId,
+      });
+    }
+  }
   const world = state.selectedWorld;
   const localParticipant = getLocalParticipant();
   const localSession = getLocalPrivateBrowserSession();

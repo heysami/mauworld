@@ -11,10 +11,12 @@ import {
   getDisplayShareStagePlaceholderText,
   getDisplayShareLaunchState,
   getLocalDisplaySharePresentation,
+  isLocalDisplayShareActive,
   isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
   normalizeBrowserShareKind,
   normalizeHostedBrowserSession,
   sanitizeBrowserShareTitle,
+  setDisplayShareOverlayState,
   updateChatBubbleGhosts,
 } from "./world-interactions.js";
 import { createWorldRealtimeClient } from "./world-realtime.js";
@@ -1529,6 +1531,27 @@ function clearLocalBrowserShare({ stopTracks = false, sessionId = "" } = {}) {
   state.localBrowserShare = null;
 }
 
+function dropLocalBrowserSession(sessionId, { unpublish = true } = {}) {
+  const normalized = String(sessionId ?? "").trim();
+  if (!normalized) {
+    return false;
+  }
+  state.browserMediaController?.removeSession?.(normalized);
+  if (unpublish) {
+    void state.browserMediaController?.unpublishSession?.(normalized);
+  }
+  state.browserSessions.delete(normalized);
+  if (state.browserPanelRemoteSessionId === normalized) {
+    state.browserPanelRemoteSessionId = "";
+  }
+  removeBrowserScreenEntry(normalized);
+  if (state.localBrowserSessionId === normalized) {
+    state.localBrowserSessionId = "";
+    state.browserMediaTransport = "jpeg-sequence";
+  }
+  return true;
+}
+
 function getBrowserSharePublishErrorLabel(shareKind) {
   const kind = normalizeBrowserShareKind(shareKind, "screen");
   if (kind === "camera") {
@@ -1570,6 +1593,10 @@ const browserShareFeature = createNearbyDisplayShareFeature({
   getLocalShare: () => state.localBrowserShare,
   clearPendingShare: clearPendingBrowserShare,
   clearLocalShare: clearLocalBrowserShare,
+  onLocalShareEnded({ sessionId }) {
+    dropLocalBrowserSession(sessionId);
+    renderLiveSharesList();
+  },
   getFallbackSize(shareKind) {
     const interaction = getInteractionConfig();
     return shareKind === "audio"
@@ -1644,6 +1671,7 @@ function attachLocalBrowserShare(sessionId, share) {
     if (!published) {
       showToast(getBrowserSharePublishErrorLabel(share.shareKind));
       clearLocalBrowserShare({ stopTracks: true, sessionId });
+      dropLocalBrowserSession(sessionId);
       state.realtimeClient?.stopBrowser(sessionId);
       updateBrowserPanel();
       return;
@@ -1656,6 +1684,7 @@ function attachLocalBrowserShare(sessionId, share) {
   }).catch((error) => {
     showToast(error?.message || getBrowserSharePublishErrorLabel(share.shareKind));
     clearLocalBrowserShare({ stopTracks: true, sessionId });
+    dropLocalBrowserSession(sessionId);
     state.realtimeClient?.stopBrowser(sessionId);
     updateBrowserPanel();
   });
@@ -1817,6 +1846,9 @@ function normalizeWorldPanelTab(tab) {
 function setWorldPanelTab(tab) {
   const nextTab = normalizeWorldPanelTab(tab);
   state.activePanelTab = nextTab;
+  if (nextTab !== "share" && state.browserOverlayOpen) {
+    setBrowserOverlayOpen(false);
+  }
   for (const button of elements.panelTabs) {
     const active = button?.getAttribute("data-world-panel-tab") === nextTab;
     button.classList.toggle("is-active", active);
@@ -7200,24 +7232,15 @@ function isBrowserStageFocused() {
 
 function setBrowserOverlayOpen(open) {
   state.browserOverlayOpen = Boolean(open);
-  if (state.browserOverlayOpen) {
-    if (elements.browserOverlayRoot && elements.browserPanel?.parentElement !== elements.browserOverlayRoot) {
-      elements.browserOverlayRoot.append(elements.browserPanel);
-    }
-  } else if (elements.browserDock) {
-    elements.browserDock.before(elements.browserPanel);
-  }
-  elements.browserPanel?.classList.toggle("is-expanded", state.browserOverlayOpen);
-  elements.browserBackdrop?.classList.toggle("is-visible", state.browserOverlayOpen);
-  elements.browserBackdrop?.setAttribute("aria-hidden", state.browserOverlayOpen ? "false" : "true");
-  if (elements.browserExpand) {
-    elements.browserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
-    elements.browserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
-  }
-  if (!state.browserOverlayOpen) {
-    releaseBrowserStagePointer();
-  }
-  updateBrowserPanel();
+  setDisplayShareOverlayState({
+    open: state.browserOverlayOpen,
+    panel: elements.browserPanel,
+    backdrop: elements.browserBackdrop,
+    expandButton: elements.browserExpand,
+    stage: elements.browserStage,
+    onClose: releaseBrowserStagePointer,
+    updateView: updateBrowserPanel,
+  });
 }
 
 function focusBrowserStage() {
@@ -7353,6 +7376,14 @@ function getBrowserStagePlaceholderText({
 }
 
 function updateBrowserPanel() {
+  if (state.localBrowserShare && !isLocalDisplayShareActive(state.localBrowserShare)) {
+    const endedSessionId = String(state.localBrowserShare.sessionId ?? state.localBrowserSessionId ?? "").trim();
+    clearLocalBrowserShare({ stopTracks: false, sessionId: endedSessionId });
+    dropLocalBrowserSession(endedSessionId);
+    if (endedSessionId) {
+      state.realtimeClient?.stopBrowser(endedSessionId);
+    }
+  }
   if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
     state.browserPanelRemoteSessionId = "";
   }
@@ -7616,17 +7647,7 @@ function handleBrowserStop(payload) {
   }
   clearLocalBrowserShare({ sessionId });
   clearBrowserScreenVideo(sessionId);
-  getBrowserMediaController().removeSession?.(sessionId);
-  void getBrowserMediaController().unpublishSession(sessionId);
-  state.browserSessions.delete(sessionId);
-  if (state.browserPanelRemoteSessionId === sessionId) {
-    state.browserPanelRemoteSessionId = "";
-  }
-  removeBrowserScreenEntry(sessionId);
-  if (state.localBrowserSessionId === sessionId) {
-    state.localBrowserSessionId = "";
-    state.browserMediaTransport = "jpeg-sequence";
-  }
+  dropLocalBrowserSession(sessionId);
   updateBrowserPanel();
   renderLiveSharesList();
 }
