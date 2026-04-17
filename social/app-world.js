@@ -7235,6 +7235,8 @@ function setBrowserOverlayOpen(open) {
   setDisplayShareOverlayState({
     open: state.browserOverlayOpen,
     panel: elements.browserPanel,
+    overlayRoot: elements.browserOverlayRoot,
+    dockMarker: elements.browserDock,
     backdrop: elements.browserBackdrop,
     expandButton: elements.browserExpand,
     stage: elements.browserStage,

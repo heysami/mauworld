@@ -139,7 +139,22 @@ export function isLocalDisplayShareActive(share = null) {
 
 export function setDisplayShareOverlayState(options = {}) {
   const open = options.open === true;
-  options.panel?.classList?.toggle("is-expanded", open);
+  const panel = options.panel ?? null;
+  const overlayRoot = options.overlayRoot ?? null;
+  const dockMarker = options.dockMarker ?? null;
+  if (panel) {
+    if (open) {
+      if (overlayRoot && panel.parentElement !== overlayRoot) {
+        overlayRoot.append(panel);
+      }
+    } else if (dockMarker?.parentNode) {
+      const dockParent = dockMarker.parentNode;
+      if (panel.parentElement !== dockParent || panel.nextSibling !== dockMarker) {
+        dockParent.insertBefore(panel, dockMarker);
+      }
+    }
+    panel.classList.toggle("is-expanded", open);
+  }
   options.backdrop?.classList?.toggle("is-visible", open);
   options.backdrop?.setAttribute?.("aria-hidden", open ? "false" : "true");
   if (options.expandButton) {

@@ -2187,18 +2187,16 @@ function getPrivateBrowserStagePlaceholderText({
 
 function setPrivateBrowserOverlayOpen(open) {
   state.browserOverlayOpen = Boolean(open);
-  document.body.classList.toggle("has-private-browser-overlay", state.browserOverlayOpen);
   setDisplayShareOverlayState({
     open: state.browserOverlayOpen,
     panel: elements.panelBrowserPanel,
+    overlayRoot: elements.panelBrowserOverlayRoot,
+    dockMarker: elements.panelBrowserDock,
     backdrop: elements.panelBrowserBackdrop,
     expandButton: elements.panelBrowserExpand,
     stage: elements.panelBrowserStage,
     updateView: updatePrivateBrowserPanel,
   });
-  if (state.browserOverlayOpen) {
-    elements.panelBrowserStage?.focus?.({ preventScroll: true });
-  }
 }
 
 function getLocalPrivateBrowserSession() {
