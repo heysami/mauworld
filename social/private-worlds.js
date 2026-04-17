@@ -836,7 +836,7 @@ function buildPrivatePresenceObject(entry) {
     Number(entry.position_y ?? PRIVATE_CAMERA.minY) || PRIVATE_CAMERA.minY,
     Number(entry.position_z ?? 0) || 0,
   );
-  const bubble = createPrivateActorBubbleState(primary);
+  const bubble = createPrivateActorBubbleState(primary, { anchorY: 15.2 * (0.4 / 0.92) });
   figure.group.add(bubble.mesh);
   return {
     id: presenceId,
@@ -870,8 +870,12 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
     return null;
   }
   if (normalized === getPrivateViewerSessionId()) {
-    const position = getPrivatePresencePosition();
-    return new THREE.Vector3(position.x, position.y, position.z);
+    return state.preview?.viewerAvatar?.group?.position
+      ?? new THREE.Vector3(state.viewerPosition.x, state.viewerPosition.y, state.viewerPosition.z);
+  }
+  const renderedPosition = state.preview?.presenceEntries?.get(normalized)?.group?.position ?? null;
+  if (renderedPosition) {
+    return renderedPosition;
   }
   const entry = state.livePresence.get(normalized);
   if (!entry) {
@@ -1217,7 +1221,7 @@ function reconcilePrivateShareBubbles() {
   }
 }
 
-function updatePrivateShareBubbles(elapsedSeconds) {
+function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
   const preview = state.preview;
   if (!preview?.browserShareEntries?.size || !preview?.camera) {
     return;
@@ -1242,7 +1246,7 @@ function updatePrivateShareBubbles(elapsedSeconds) {
     entry.targetPosition.y += showingLiveMedia
       ? 18 + Math.sin(elapsedSeconds * 1.3) * 0.7
       : 15.4 + Math.sin(elapsedSeconds * 1.1) * 0.18;
-    entry.position.lerp(entry.targetPosition, 0.22);
+    entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
     entry.group.visible = true;
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);
@@ -4096,6 +4100,7 @@ function ensureViewerAvatar(preview) {
     bubbleAccent: PRIVATE_WORLD_STYLE.accents[0],
     bubble: createPrivateActorBubbleState(PRIVATE_WORLD_STYLE.accents[0], {
       persistent: true,
+      anchorY: 15.2 * (0.46 / 0.92),
     }),
   };
   avatar.group.add(avatar.bubble.mesh);
@@ -4510,7 +4515,7 @@ function ensurePreview() {
     sendPrivatePresence();
     pruneExpiredPrivateChatEvents();
     updatePrivatePresenceScene(deltaSeconds, timestamp / 1000);
-    updatePrivateShareBubbles(timestamp / 1000);
+    updatePrivateShareBubbles(deltaSeconds, timestamp / 1000);
     updatePreviewEffects(state.preview, timestamp / 1000);
     updateViewerTrailPuffs(state.preview, deltaSeconds);
     state.preview.renderer.render(state.preview.scene, state.preview.camera);
