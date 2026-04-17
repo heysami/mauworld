@@ -320,6 +320,65 @@
           aria-hidden="true"
         ></button>
 
+        <button
+          class="world-private-gate__backdrop"
+          type="button"
+          data-world-private-gate-backdrop
+          aria-label="Dismiss private worlds"
+          hidden
+        ></button>
+
+        <section
+          class="world-private-gate"
+          data-world-private-gate
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="world-private-gate-title"
+          hidden
+        >
+          <div class="world-private-gate__head">
+            <div class="world-private-gate__heading">
+              <p class="world-private-gate__eyebrow">Private worlds</p>
+              <h2 id="world-private-gate-title" data-world-private-gate-title>Sign in to continue</h2>
+            </div>
+            <button type="button" class="world-private-gate__close" data-world-private-gate-close>Close</button>
+          </div>
+
+          <p class="world-private-gate__copy" data-world-private-gate-copy>
+            Sign in here first. Then you can choose one of your private worlds or start a new one.
+          </p>
+
+          <div class="world-private-gate__account" data-world-private-gate-account hidden>
+            <span data-world-private-gate-account-label>Signed in.</span>
+            <button type="button" class="world-private-gate__ghost" data-world-private-gate-signout>Sign Out</button>
+          </div>
+
+          <form class="world-private-gate__auth" data-world-private-gate-auth>
+            <label>
+              <span>Email</span>
+              <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
+            </label>
+            <label>
+              <span>Password</span>
+              <input type="password" name="password" autocomplete="current-password" placeholder="Password" required />
+            </label>
+            <div class="world-private-gate__actions">
+              <button type="submit" data-world-private-gate-auth-action="signin">Sign In</button>
+              <button type="button" class="world-private-gate__ghost" data-world-private-gate-auth-action="signup">Create Account</button>
+            </div>
+          </form>
+
+          <section class="world-private-gate__worlds" data-world-private-gate-worlds hidden>
+            <div class="world-private-gate__actions world-private-gate__actions--top">
+              <button type="button" data-world-private-gate-create>New World</button>
+              <button type="button" class="world-private-gate__ghost" data-world-private-gate-refresh>Refresh</button>
+            </div>
+            <div class="world-private-gate__list" data-world-private-gate-list></div>
+          </section>
+
+          <p class="world-private-gate__status" data-world-private-gate-status aria-live="polite"></p>
+        </section>
+
         <aside class="world-inspector is-empty" aria-label="Post details">
           <div class="world-inspector__head">
             <div>

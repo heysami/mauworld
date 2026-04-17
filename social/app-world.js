@@ -1,4 +1,5 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 import { createBubbleTexture, createWorldVisitorSystem, updateMascotMotion } from "./world-visitors.js";
 import { createBrowserMediaController } from "./world-browser-media.js";
 import {
@@ -74,6 +75,20 @@ const elements = {
   browserPlaceholder: document.querySelector("[data-world-browser-placeholder]"),
   browserResume: document.querySelector("[data-world-browser-resume]"),
   privateLaunch: document.querySelector("[data-world-private-launch]"),
+  privateGate: document.querySelector("[data-world-private-gate]"),
+  privateGateBackdrop: document.querySelector("[data-world-private-gate-backdrop]"),
+  privateGateClose: document.querySelector("[data-world-private-gate-close]"),
+  privateGateTitle: document.querySelector("[data-world-private-gate-title]"),
+  privateGateCopy: document.querySelector("[data-world-private-gate-copy]"),
+  privateGateAccount: document.querySelector("[data-world-private-gate-account]"),
+  privateGateAccountLabel: document.querySelector("[data-world-private-gate-account-label]"),
+  privateGateAuthForm: document.querySelector("[data-world-private-gate-auth]"),
+  privateGateWorlds: document.querySelector("[data-world-private-gate-worlds]"),
+  privateGateList: document.querySelector("[data-world-private-gate-list]"),
+  privateGateStatus: document.querySelector("[data-world-private-gate-status]"),
+  privateGateRefresh: document.querySelector("[data-world-private-gate-refresh]"),
+  privateGateCreate: document.querySelector("[data-world-private-gate-create]"),
+  privateGateSignout: document.querySelector("[data-world-private-gate-signout]"),
   nameInput: document.querySelector("[data-world-name-input]"),
   chatComposer: document.querySelector("[data-world-chat-composer]"),
   chatInput: document.querySelector("[data-world-chat-input]"),
@@ -174,6 +189,21 @@ const SKYLINE_BAND_ASSETS = {
 const skylineTextureCache = new Map();
 let toonGradientTexture = null;
 
+function createEmptyPrivateWorldGateState() {
+  return {
+    open: false,
+    authConfig: null,
+    supabase: null,
+    session: null,
+    profile: null,
+    worlds: [],
+    busy: false,
+    loadingWorlds: false,
+    status: "",
+    requestId: 0,
+  };
+}
+
 const state = {
   meta: null,
   stream: null,
@@ -200,6 +230,7 @@ const state = {
   viewerDisplayName: "",
   viewerDisplayNameCustom: "",
   viewerDisplayNameTimer: 0,
+  privateWorldGate: createEmptyPrivateWorldGateState(),
   moveButtons: new Set(),
   navigationPosition: new THREE.Vector3(0, 76, 156),
   cameraRadius: PLAYER_VIEW.defaultRadius,
@@ -772,6 +803,9 @@ function buildPrivateWorldLauncherUrl(options = {}) {
   if (options.fork === true) {
     url.searchParams.set("fork", "true");
   }
+  if (options.intent) {
+    url.searchParams.set("intent", String(options.intent));
+  }
   return url.toString();
 }
 
@@ -783,6 +817,312 @@ function updatePrivateWorldLauncher() {
 }
 
 function launchPrivateWorld(options = {}) {
+  navigateToPrivateWorld(options);
+}
+
+function setPrivateWorldGateStatus(text) {
+  state.privateWorldGate.status = String(text ?? "");
+  if (elements.privateGateStatus) {
+    elements.privateGateStatus.textContent = state.privateWorldGate.status;
+  }
+}
+
+function getOwnedPrivateWorlds(worlds = [], profile = null) {
+  const username = String(profile?.username ?? "").trim().toLowerCase();
+  if (!username) {
+    return Array.isArray(worlds) ? worlds : [];
+  }
+  return (Array.isArray(worlds) ? worlds : []).filter((world) =>
+    String(world?.creator?.username ?? "").trim().toLowerCase() === username);
+}
+
+function renderPrivateWorldGateList() {
+  if (!elements.privateGateList) {
+    return;
+  }
+  const gate = state.privateWorldGate;
+  if (!gate.session) {
+    elements.privateGateList.innerHTML = "";
+    return;
+  }
+  if (gate.loadingWorlds) {
+    elements.privateGateList.innerHTML = [
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+    ].join("");
+    return;
+  }
+  if (!gate.worlds.length) {
+    elements.privateGateList.innerHTML = `
+      <div class="world-private-gate__empty">
+        <strong>No private worlds yet</strong>
+        <p>Start a new one, then the scene will open from there.</p>
+      </div>
+    `;
+    return;
+  }
+  elements.privateGateList.innerHTML = gate.worlds.map((world) => `
+    <button
+      type="button"
+      class="world-private-gate__world"
+      data-world-private-gate-world-id="${htmlEscape(world.world_id)}"
+      data-world-private-gate-world-creator="${htmlEscape(world.creator?.username || "")}"
+    >
+      <strong>${htmlEscape(world.name || "Private world")}</strong>
+      <p>${htmlEscape(world.about || "No description yet.")}</p>
+      <small>${htmlEscape(world.world_type || "world")} · ${Number(world.width ?? 0)} x ${Number(world.length ?? 0)} x ${Number(world.height ?? 0)}</small>
+    </button>
+  `).join("");
+}
+
+function renderPrivateWorldGate() {
+  const gate = state.privateWorldGate;
+  const open = gate.open === true;
+  const signedIn = Boolean(gate.session);
+  document.body.classList.toggle("is-private-gate-open", open);
+  if (elements.privateGate) {
+    elements.privateGate.hidden = !open;
+  }
+  if (elements.privateGateBackdrop) {
+    elements.privateGateBackdrop.hidden = !open;
+  }
+  if (!open) {
+    return;
+  }
+
+  const isCheckingSession = gate.busy && !signedIn && !gate.profile && !gate.authConfig;
+  if (elements.privateGateTitle) {
+    elements.privateGateTitle.textContent = isCheckingSession
+      ? "Checking your account"
+      : signedIn
+        ? "Choose a private world"
+        : "Sign in to continue";
+  }
+  if (elements.privateGateCopy) {
+    elements.privateGateCopy.textContent = isCheckingSession
+      ? "Looking for your current session."
+      : signedIn
+        ? "Open one of your worlds or start a new one. The scene loads after you choose."
+        : "Sign in here first. Then you can choose one of your private worlds or start a new one.";
+  }
+  if (elements.privateGateAccount) {
+    elements.privateGateAccount.hidden = !signedIn;
+  }
+  if (elements.privateGateAccountLabel && signedIn) {
+    elements.privateGateAccountLabel.textContent = gate.profile?.username
+      ? `Signed in as @${gate.profile.username}`
+      : "Signed in.";
+  }
+  if (elements.privateGateAuthForm) {
+    elements.privateGateAuthForm.hidden = signedIn;
+    for (const field of elements.privateGateAuthForm.querySelectorAll("input, button")) {
+      field.disabled = gate.busy;
+    }
+  }
+  if (elements.privateGateWorlds) {
+    elements.privateGateWorlds.hidden = !signedIn;
+  }
+  if (elements.privateGateRefresh) {
+    elements.privateGateRefresh.disabled = gate.busy;
+  }
+  if (elements.privateGateCreate) {
+    elements.privateGateCreate.disabled = gate.busy;
+  }
+  if (elements.privateGateSignout) {
+    elements.privateGateSignout.disabled = gate.busy;
+  }
+  renderPrivateWorldGateList();
+  setPrivateWorldGateStatus(gate.status);
+}
+
+async function privateWorldGateApiFetch(path, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers ?? {}),
+  };
+  const accessToken = state.privateWorldGate.session?.access_token;
+  if (accessToken && !headers.Authorization) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  if (options.body === undefined) {
+    delete headers["Content-Type"];
+  }
+  const response = await fetch(mauworldApiUrl(path, options.search), {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || `Request failed (${response.status})`);
+  }
+  return payload;
+}
+
+async function ensurePrivateWorldGateClient() {
+  const gate = state.privateWorldGate;
+  if (gate.supabase) {
+    return gate;
+  }
+  gate.busy = true;
+  renderPrivateWorldGate();
+  try {
+    gate.authConfig = await fetchJson("/public/auth/config");
+    gate.supabase = createClient(gate.authConfig.supabaseUrl, gate.authConfig.supabaseAnonKey);
+    const { data } = await gate.supabase.auth.getSession();
+    gate.session = data.session;
+    gate.supabase.auth.onAuthStateChange((_event, session) => {
+      gate.session = session;
+      if (!session) {
+        gate.profile = null;
+        gate.worlds = [];
+        gate.loadingWorlds = false;
+        gate.busy = false;
+        renderPrivateWorldGate();
+        return;
+      }
+      void refreshPrivateWorldGateState({ preserveStatus: true });
+    });
+    return gate;
+  } finally {
+    gate.busy = false;
+    renderPrivateWorldGate();
+  }
+}
+
+async function refreshPrivateWorldGateState(options = {}) {
+  const gate = state.privateWorldGate;
+  if (!gate.session) {
+    gate.profile = null;
+    gate.worlds = [];
+    gate.loadingWorlds = false;
+    gate.busy = false;
+    renderPrivateWorldGate();
+    return;
+  }
+  const requestId = gate.requestId + 1;
+  gate.requestId = requestId;
+  gate.busy = true;
+  gate.loadingWorlds = true;
+  if (options.preserveStatus !== true) {
+    setPrivateWorldGateStatus("");
+  }
+  renderPrivateWorldGate();
+  try {
+    const [profilePayload, worldsPayload] = await Promise.all([
+      privateWorldGateApiFetch("/private/profile"),
+      privateWorldGateApiFetch("/private/worlds"),
+    ]);
+    if (gate.requestId !== requestId) {
+      return;
+    }
+    gate.profile = profilePayload.profile ?? null;
+    gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
+  } catch (error) {
+    if (gate.requestId !== requestId) {
+      return;
+    }
+    setPrivateWorldGateStatus(error.message || "Could not load private worlds.");
+  } finally {
+    if (gate.requestId === requestId) {
+      gate.busy = false;
+      gate.loadingWorlds = false;
+      renderPrivateWorldGate();
+    }
+  }
+}
+
+async function openPrivateWorldGate() {
+  state.privateWorldGate.open = true;
+  renderPrivateWorldGate();
+  try {
+    await ensurePrivateWorldGateClient();
+    await refreshPrivateWorldGateState();
+  } catch (error) {
+    state.privateWorldGate.busy = false;
+    setPrivateWorldGateStatus(error.message || "Could not open private worlds.");
+    renderPrivateWorldGate();
+  }
+}
+
+function closePrivateWorldGate() {
+  state.privateWorldGate.open = false;
+  renderPrivateWorldGate();
+}
+
+async function handlePrivateWorldGateAuthSubmit(event) {
+  event.preventDefault();
+  const gate = state.privateWorldGate;
+  try {
+    await ensurePrivateWorldGateClient();
+    gate.busy = true;
+    setPrivateWorldGateStatus("");
+    renderPrivateWorldGate();
+    const formData = new FormData(elements.privateGateAuthForm);
+    const email = String(formData.get("email") ?? "").trim();
+    const password = String(formData.get("password") ?? "").trim();
+    const { error } = await gate.supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      throw error;
+    }
+    setPrivateWorldGateStatus("Signed in.");
+  } catch (error) {
+    gate.busy = false;
+    setPrivateWorldGateStatus(error.message || "Could not sign in.");
+    renderPrivateWorldGate();
+  }
+}
+
+async function signUpPrivateWorldGate() {
+  const gate = state.privateWorldGate;
+  try {
+    await ensurePrivateWorldGateClient();
+    gate.busy = true;
+    setPrivateWorldGateStatus("");
+    renderPrivateWorldGate();
+    const formData = new FormData(elements.privateGateAuthForm);
+    const email = String(formData.get("email") ?? "").trim();
+    const password = String(formData.get("password") ?? "").trim();
+    const { error } = await gate.supabase.auth.signUp({ email, password });
+    if (error) {
+      throw error;
+    }
+    gate.busy = false;
+    setPrivateWorldGateStatus("Account created. If email confirmation is required, confirm it before signing in.");
+    renderPrivateWorldGate();
+  } catch (error) {
+    gate.busy = false;
+    setPrivateWorldGateStatus(error.message || "Could not create that account.");
+    renderPrivateWorldGate();
+  }
+}
+
+async function signOutPrivateWorldGate() {
+  const gate = state.privateWorldGate;
+  if (!gate.supabase) {
+    return;
+  }
+  try {
+    gate.busy = true;
+    setPrivateWorldGateStatus("");
+    renderPrivateWorldGate();
+    const { error } = await gate.supabase.auth.signOut();
+    if (error) {
+      throw error;
+    }
+    gate.busy = false;
+    setPrivateWorldGateStatus("Signed out.");
+    renderPrivateWorldGate();
+  } catch (error) {
+    gate.busy = false;
+    setPrivateWorldGateStatus(error.message || "Could not sign out.");
+    renderPrivateWorldGate();
+  }
+}
+
+function navigateToPrivateWorld(options = {}) {
+  closePrivateWorldGate();
   window.location.href = buildPrivateWorldLauncherUrl(options);
 }
 
@@ -8706,7 +9046,38 @@ function registerInput() {
   window.addEventListener("resize", resizeScene);
   elements.privateLaunch?.addEventListener("click", (event) => {
     event.preventDefault();
-    launchPrivateWorld();
+    void openPrivateWorldGate();
+  });
+  elements.privateGateClose?.addEventListener("click", () => {
+    closePrivateWorldGate();
+  });
+  elements.privateGateBackdrop?.addEventListener("click", () => {
+    closePrivateWorldGate();
+  });
+  elements.privateGateAuthForm?.addEventListener("submit", (event) => {
+    void handlePrivateWorldGateAuthSubmit(event);
+  });
+  elements.privateGateAuthForm?.querySelector('[data-world-private-gate-auth-action="signup"]')?.addEventListener("click", () => {
+    void signUpPrivateWorldGate();
+  });
+  elements.privateGateRefresh?.addEventListener("click", () => {
+    void refreshPrivateWorldGateState();
+  });
+  elements.privateGateCreate?.addEventListener("click", () => {
+    navigateToPrivateWorld({ intent: "create" });
+  });
+  elements.privateGateSignout?.addEventListener("click", () => {
+    void signOutPrivateWorldGate();
+  });
+  elements.privateGateList?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-world-private-gate-world-id]");
+    if (!button) {
+      return;
+    }
+    navigateToPrivateWorld({
+      worldId: button.getAttribute("data-world-private-gate-world-id"),
+      creatorUsername: button.getAttribute("data-world-private-gate-world-creator"),
+    });
   });
   const resumeBrowserMediaFromGesture = () => {
     resumeBrowserMediaPlayback();
@@ -8715,6 +9086,10 @@ function registerInput() {
   window.addEventListener("touchstart", resumeBrowserMediaFromGesture, { capture: true, passive: true });
   window.addEventListener("keydown", resumeBrowserMediaFromGesture, { capture: true });
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.privateWorldGate.open) {
+      closePrivateWorldGate();
+      return;
+    }
     if (
       event.key === "/"
       && !event.ctrlKey

@@ -413,6 +413,9 @@ const privateBillboardParentQuaternion = new THREE.Quaternion();
 const privateBillboardCameraQuaternion = new THREE.Quaternion();
 
 const elements = {
+  entryLoading: document.querySelector("[data-entry-loading]"),
+  entryLoadingTitle: document.querySelector("[data-entry-loading-title]"),
+  entryLoadingNote: document.querySelector("[data-entry-loading-note]"),
   launcher: document.querySelector("[data-launcher]"),
   launcherToggle: document.querySelector("[data-launcher-toggle]"),
   launcherClose: document.querySelector("[data-launcher-close]"),
@@ -749,6 +752,7 @@ const state = {
   livePresence: new Map(),
   joinedAsGuest: false,
   joined: false,
+  entryLoading: false,
   launcherOpen: false,
   createWorldDialogOpen: false,
   sceneDrawerOpen: false,
@@ -787,6 +791,7 @@ const state = {
   buildModifierKeys: new Set(),
   buildDrag: null,
   buildHover: null,
+  launcherIntentHandled: false,
   previewPointer: {
     clientX: 0,
     clientY: 0,
@@ -827,6 +832,24 @@ function setStatus(text) {
   if (elements.authStatus) {
     elements.authStatus.textContent = text || "";
   }
+}
+
+function setEntryLoading(active, options = {}) {
+  state.entryLoading = active === true;
+  if (elements.entryLoadingTitle && options.title) {
+    elements.entryLoadingTitle.textContent = options.title;
+  } else if (elements.entryLoadingTitle && !state.entryLoading) {
+    elements.entryLoadingTitle.textContent = "Opening private world";
+  }
+  if (elements.entryLoadingNote && options.note) {
+    elements.entryLoadingNote.textContent = options.note;
+  } else if (elements.entryLoadingNote && !state.entryLoading) {
+    elements.entryLoadingNote.textContent = "Loading the scene you picked.";
+  }
+  if (elements.entryLoading) {
+    elements.entryLoading.hidden = !state.entryLoading;
+  }
+  document.body.classList.toggle("is-world-entry-loading", state.entryLoading);
 }
 
 function setPrivateShareStatus(text) {
@@ -1001,6 +1024,7 @@ function updateShellState() {
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
   document.body.classList.toggle("is-auth-gated", authGated);
+  document.body.classList.toggle("is-world-entry-loading", state.entryLoading === true);
   document.body.classList.toggle("is-create-world-dialog-open", state.createWorldDialogOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
   document.body.classList.toggle("is-signed-in", Boolean(state.session));
@@ -3075,6 +3099,13 @@ function getLaunchRequest() {
   };
 }
 
+function getLauncherIntent() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    create: params.get("intent") === "create",
+  };
+}
+
 function selectedWorldMatchesLaunchRequest(launch = getLaunchRequest(), world = state.selectedWorld) {
   if (!launch?.worldId || !launch?.creatorUsername || !world?.world_id || !world?.creator?.username) {
     return false;
@@ -4117,6 +4148,10 @@ async function runRefreshAuthState() {
     await releaseSceneLock();
     state.profile = null;
     state.worlds = [];
+    state.selectedWorld = null;
+    state.selectedSceneId = "";
+    state.selectedPrefabId = "";
+    state.selectedScriptFunctionId = "";
     state.runtimeSnapshot = null;
     state.privateChatEntries = [];
     state.activeChats.clear();
@@ -4131,6 +4166,7 @@ async function runRefreshAuthState() {
     state.viewerSuppressClickAt = 0;
     state.buildSuppressedClick = null;
     resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
+    setEntryLoading(false);
     renderProfile();
     renderWorldList();
     renderSelectedWorld();
@@ -4147,6 +4183,7 @@ async function runRefreshAuthState() {
     renderSessionSummary();
     await loadWorlds();
     const launch = getLaunchRequest();
+    const launcherIntent = getLauncherIntent();
     const hasLaunchRequest = Boolean(launch.worldId && launch.creatorUsername);
     const launchParticipant = getLocalParticipant(state.selectedWorld);
     const shouldReplayLaunch =
@@ -4157,14 +4194,17 @@ async function runRefreshAuthState() {
       );
     if (shouldReplayLaunch) {
       await handleLaunchRequest({ force: true });
-    } else if (!hasLaunchRequest && state.selectedWorld?.world_id && state.selectedWorld?.creator?.username) {
-      await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
     }
     if (state.launcherTab === "access") {
       setLauncherTab("worlds");
     }
-    if (!state.selectedWorld) {
+    if (!hasLaunchRequest && !state.selectedWorld) {
+      setLauncherOpen(true);
       setLauncherTab(getPreferredLauncherTab());
+      if (launcherIntent.create && !state.launcherIntentHandled) {
+        state.launcherIntentHandled = true;
+        setCreateWorldDialogOpen(true);
+      }
     }
   } catch (error) {
     setStatus(error.message);
@@ -9763,56 +9803,69 @@ function disconnectWorldSocket() {
   updatePrivateBrowserPanel();
 }
 
-async function openWorld(worldId, creatorUsername, includeContent = true) {
-  const previousWorldKey = state.selectedWorld ? `${state.selectedWorld.world_id}:${state.selectedWorld.creator.username}` : "";
-  const previousSelectedSceneId = String(state.selectedSceneId ?? "").trim();
-  const payload = await apiFetch(`/private/worlds/${encodeURIComponent(worldId)}`, {
-    search: {
-      creatorUsername,
-      includeContent: includeContent ? "true" : "false",
-      guestSessionId: state.session ? undefined : getGuestSessionId(),
-    },
-  });
-  const nextWorldKey = payload.world ? `${payload.world.world_id}:${payload.world.creator.username}` : "";
-  state.selectedWorld = payload.world;
-  const defaultSceneId = payload.world?.active_instance?.active_scene_id
-    || payload.world?.default_scene_id
-    || payload.world?.scenes?.find((scene) => scene.is_default === true)?.id
-    || payload.world?.scenes?.[0]?.id
-    || "";
-  const canPreserveSceneSelection =
-    previousWorldKey === nextWorldKey
-    && state.mode === "build"
-    && payload.world?.permissions?.can_edit === true
-    && (payload.world?.scenes ?? []).some((scene) => scene.id === previousSelectedSceneId);
-  state.selectedSceneId = canPreserveSceneSelection ? previousSelectedSceneId : defaultSceneId;
-  state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
-  state.selectedScriptFunctionId = "";
-  writeBuilderSelection([]);
-  state.buildModifierKeys.clear();
-  endBuildDrag();
-  state.buildSuppressedClick = null;
-  state.buildHover = null;
-  state.launcherOpen = false;
-  state.sceneDrawerOpen = false;
-  if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
-    state.buildReturnSceneId = "";
-    state.previewPointer.inside = false;
-    clearPlacementTool();
-    state.sceneDrafts.clear();
-    state.screenAiPromptDrafts.clear();
-    state.sceneEditorSceneId = "";
-    state.scriptFunctionQuery = "";
-    state.privateChatEntries = [];
-    state.activeChats.clear();
-    state.livePresence.clear();
-    reconcilePrivatePresenceScene();
-    resetViewerRig(payload.world);
-    resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
+async function openWorld(worldId, creatorUsername, includeContent = true, options = {}) {
+  const showEntryLoading = options.entryLoading === true;
+  if (showEntryLoading) {
+    setEntryLoading(true, {
+      title: options.loadingTitle || "Opening private world",
+      note: options.loadingNote || "Loading the scene you picked.",
+    });
   }
-  syncRuntimeFromWorld(payload.world);
-  renderSelectedWorld();
-  connectWorldSocket();
+  try {
+    const previousWorldKey = state.selectedWorld ? `${state.selectedWorld.world_id}:${state.selectedWorld.creator.username}` : "";
+    const previousSelectedSceneId = String(state.selectedSceneId ?? "").trim();
+    const payload = await apiFetch(`/private/worlds/${encodeURIComponent(worldId)}`, {
+      search: {
+        creatorUsername,
+        includeContent: includeContent ? "true" : "false",
+        guestSessionId: state.session ? undefined : getGuestSessionId(),
+      },
+    });
+    const nextWorldKey = payload.world ? `${payload.world.world_id}:${payload.world.creator.username}` : "";
+    state.selectedWorld = payload.world;
+    const defaultSceneId = payload.world?.active_instance?.active_scene_id
+      || payload.world?.default_scene_id
+      || payload.world?.scenes?.find((scene) => scene.is_default === true)?.id
+      || payload.world?.scenes?.[0]?.id
+      || "";
+    const canPreserveSceneSelection =
+      previousWorldKey === nextWorldKey
+      && state.mode === "build"
+      && payload.world?.permissions?.can_edit === true
+      && (payload.world?.scenes ?? []).some((scene) => scene.id === previousSelectedSceneId);
+    state.selectedSceneId = canPreserveSceneSelection ? previousSelectedSceneId : defaultSceneId;
+    state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
+    state.selectedScriptFunctionId = "";
+    writeBuilderSelection([]);
+    state.buildModifierKeys.clear();
+    endBuildDrag();
+    state.buildSuppressedClick = null;
+    state.buildHover = null;
+    state.launcherOpen = false;
+    state.sceneDrawerOpen = false;
+    if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
+      state.buildReturnSceneId = "";
+      state.previewPointer.inside = false;
+      clearPlacementTool();
+      state.sceneDrafts.clear();
+      state.screenAiPromptDrafts.clear();
+      state.sceneEditorSceneId = "";
+      state.scriptFunctionQuery = "";
+      state.privateChatEntries = [];
+      state.activeChats.clear();
+      state.livePresence.clear();
+      reconcilePrivatePresenceScene();
+      resetViewerRig(payload.world);
+      resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
+    }
+    syncRuntimeFromWorld(payload.world);
+    renderSelectedWorld();
+    connectWorldSocket();
+  } finally {
+    if (showEntryLoading) {
+      setEntryLoading(false);
+    }
+  }
 }
 
 async function saveProfile(event) {
@@ -9893,7 +9946,11 @@ async function handleCreateWorld(event) {
   pushEvent("world:created", `${payload.world.name} created`);
   await loadWorlds();
   state.mode = "build";
-  await openWorld(payload.world.world_id, payload.world.creator.username, true);
+  await openWorld(payload.world.world_id, payload.world.creator.username, true, {
+    entryLoading: true,
+    loadingTitle: "Creating private world",
+    loadingNote: "Preparing your default scene.",
+  });
   try {
     await joinWorld();
   } catch (error) {
@@ -10005,7 +10062,11 @@ async function forkSelectedWorld() {
   pushEvent("world:forked", `${imported.world.world_id} from ${state.selectedWorld.world_id}`);
   state.mode = "build";
   await loadWorlds();
-  await openWorld(imported.world.world_id, imported.world.creator.username, true);
+  await openWorld(imported.world.world_id, imported.world.creator.username, true, {
+    entryLoading: true,
+    loadingTitle: "Opening forked world",
+    loadingNote: "Loading your new private copy.",
+  });
   try {
     await joinWorld();
   } catch (error) {
@@ -10032,7 +10093,11 @@ async function importPackage(event) {
   });
   pushEvent("world:imported", payload.world.world_id);
   await loadWorlds();
-  await openWorld(payload.world.world_id, payload.world.creator.username, true);
+  await openWorld(payload.world.world_id, payload.world.creator.username, true, {
+    entryLoading: true,
+    loadingTitle: "Opening imported world",
+    loadingNote: "Loading the imported scene.",
+  });
   elements.importForm.reset();
   setCreateWorldDialogOpen(false);
 }
@@ -10042,7 +10107,11 @@ async function resolveWorld(event) {
   const formData = new FormData(elements.resolveForm);
   const worldId = String(formData.get("worldId") ?? "").trim();
   const creatorUsername = String(formData.get("creatorUsername") ?? "").trim();
-  await openWorld(worldId, creatorUsername, true);
+  await openWorld(worldId, creatorUsername, true, {
+    entryLoading: true,
+    loadingTitle: "Opening private world",
+    loadingNote: "Loading the world you picked.",
+  });
   elements.resolveForm.reset();
   setCreateWorldDialogOpen(false);
 }
@@ -11036,7 +11105,11 @@ function bindEvents() {
     if (!card) {
       return;
     }
-    void openWorld(card.getAttribute("data-world-card"), card.getAttribute("data-world-creator"), true).catch((error) => {
+    void openWorld(card.getAttribute("data-world-card"), card.getAttribute("data-world-creator"), true, {
+      entryLoading: true,
+      loadingTitle: "Opening private world",
+      loadingNote: "Loading the world you picked.",
+    }).catch((error) => {
       setStatus(error.message);
     });
   });
@@ -11051,7 +11124,11 @@ function bindEvents() {
     if (!card) {
       return;
     }
-    void openWorld(card.getAttribute("data-world-card"), card.getAttribute("data-world-creator"), true).catch((error) => {
+    void openWorld(card.getAttribute("data-world-card"), card.getAttribute("data-world-creator"), true, {
+      entryLoading: true,
+      loadingTitle: "Opening private world",
+      loadingNote: "Loading the world you picked.",
+    }).catch((error) => {
       setStatus(error.message);
     });
   });
@@ -11612,28 +11689,29 @@ async function handleLaunchRequest(options = {}) {
       if (!launch.worldId || !launch.creatorUsername) {
         return;
       }
+      if (!state.session) {
+        setLauncherTab("access");
+        setLauncherOpen(true);
+        setStatus("Sign in to continue to this private world.");
+        pushEvent("launcher", "Sign in to continue to this private world");
+        return;
+      }
       state.launchHandled = true;
-      await openWorld(launch.worldId, launch.creatorUsername, true);
+      await openWorld(launch.worldId, launch.creatorUsername, true, {
+        entryLoading: true,
+        loadingTitle: launch.fork ? "Preparing private world" : "Opening private world",
+        loadingNote: launch.fork ? "Loading the source world before the fork opens." : "Loading the scene you picked.",
+      });
       if (launch.fork) {
         try {
           await forkSelectedWorld();
           return;
         } catch (error) {
           setStatus(error.message);
-          if (!state.session) {
-            setLauncherOpen(true);
-          }
           pushEvent("launcher:fork:error", error.message);
         }
       }
       if (launch.autojoin) {
-        if (!state.session) {
-          setLauncherTab("access");
-          setLauncherOpen(true);
-          setStatus("Sign in to enter this private world.");
-          pushEvent("launcher", "Sign in to enter this private world");
-          return;
-        }
         try {
           await joinWorld();
           pushEvent("launcher", "Joined from public world");

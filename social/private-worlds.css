@@ -75,6 +75,60 @@ body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
   z-index: 2;
 }
 
+.pw-entry-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(251, 252, 255, 0.7);
+  backdrop-filter: blur(8px);
+}
+
+.pw-entry-loading__inner {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.pw-entry-loading__inner strong,
+.pw-entry-loading__inner p {
+  margin: 0;
+}
+
+.pw-entry-loading__inner strong {
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.pw-entry-loading__inner p {
+  max-width: 28ch;
+  color: var(--pw-muted);
+  line-height: 1.5;
+}
+
+.pw-entry-loading__spinner {
+  width: 56px;
+  height: 56px;
+  border: 3px solid rgba(61, 87, 182, 0.12);
+  border-top-color: rgba(61, 87, 182, 0.56);
+  border-right-color: rgba(255, 79, 168, 0.42);
+  border-radius: 999px;
+  animation: pw-entry-loading-spin 0.9s linear infinite;
+}
+
+body.private-worlds-body.is-world-entry-loading .pw-mau-panel,
+body.private-worlds-body.is-world-entry-loading .pw-launcher,
+body.private-worlds-body.is-world-entry-loading .pw-toolbelt,
+body.private-worlds-body.is-world-entry-loading .pw-tool-preset-panel,
+body.private-worlds-body.is-world-entry-loading .pw-scene-drawer,
+body.private-worlds-body.is-world-entry-loading .pw-inspector,
+body.private-worlds-body.is-world-entry-loading .pw-scene-dock {
+  pointer-events: none;
+}
+
 .pw-mau-panel {
   max-height: calc(100dvh - 36px);
   overflow: auto;
@@ -535,6 +589,12 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   margin: 0;
   color: var(--pw-muted);
   font-size: 0.82rem;
+}
+
+@keyframes pw-entry-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .pw-access-note {

@@ -21,6 +21,14 @@
       <section class="world-scene-shell private-worlds-scene-shell">
       <canvas class="world-canvas pw-canvas" data-preview-canvas></canvas>
 
+      <div class="pw-entry-loading" data-entry-loading hidden aria-live="polite" aria-atomic="true">
+        <div class="pw-entry-loading__inner">
+          <div class="pw-entry-loading__spinner" aria-hidden="true"></div>
+          <strong data-entry-loading-title>Opening private world</strong>
+          <p data-entry-loading-note>Loading the scene you picked.</p>
+        </div>
+      </div>
+
       <aside class="world-panel pw-mau-panel" data-private-panel aria-label="Private world tools">
         <div class="world-panel__bar">
           <div class="world-panel__brand">
@@ -297,8 +305,8 @@
         </div>
 
         <div class="pw-launcher__intro">
-          <h1>Build inside Mauworld, then play it.</h1>
-          <p>Walk in as a viewer, edit when you are allowed, and possess players from inside the scene.</p>
+          <h1>Sign in, choose a world, then step in.</h1>
+          <p>Open one of your private worlds or start a new one. The scene loads after you choose.</p>
         </div>
 
         <div class="pw-launcher__views">
