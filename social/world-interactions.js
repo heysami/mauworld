@@ -346,7 +346,7 @@ export function createChatBubbleRenderer(options = {}) {
     ghostState.root.add(mesh);
     ghostState.entries.push({
       mesh,
-      opacity: actorEntry.bubble.mesh.material.opacity,
+      opacity: Math.max(actorEntry.bubble.mesh.material.opacity, 0.55),
       lifetime: 1.55 + Math.random() * 0.35,
       age: 0,
       drift: new THREE.Vector3(
@@ -533,7 +533,7 @@ export function updateChatBubbleGhosts(options = {}) {
     const life = Math.max(0, Math.min(1, Number.isFinite(rawLife) ? rawLife : 1));
     entry.mesh.position.addScaledVector(entry.drift, deltaSeconds);
     entry.mesh.scale.copy(entry.scaleBase).multiplyScalar(1 + life * 0.18);
-    entry.mesh.material.opacity = entry.opacity * Math.pow(1 - life, 1.6);
+    entry.mesh.material.opacity = entry.opacity * Math.pow(1 - life, 0.95);
     options.orientToCamera?.(entry.mesh, options.camera ?? null);
     if (life >= 1) {
       options.removeGhost?.(entry);
