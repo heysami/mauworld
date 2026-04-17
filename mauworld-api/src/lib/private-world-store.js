@@ -1952,15 +1952,24 @@ export function installPrivateWorldStore(MauworldStore) {
     if (!instance) {
       throw new HttpError(404, "Private world is not active");
     }
+    const requestedSceneId = String(input.sceneId ?? "").trim();
+    let activeSceneId = String(instance.active_scene_id ?? world.default_scene_id ?? "").trim();
+    if (requestedSceneId) {
+      await requireWorldEditor(this, profile, input.worldId, input.creatorUsername);
+      const scenes = await loadWorldScenes(this, world.id);
+      const requestedScene = scenes.find((row) => row.id === requestedSceneId) ?? null;
+      if (!requestedScene) {
+        throw new HttpError(404, "Selected scene was not found in this world");
+      }
+      activeSceneId = requestedScene.id;
+    }
     const participants = await loadInstanceParticipants(this, instance.id);
     const occupiedPlayers = participants.filter((row) => row.join_role === "player" && row.player_entity_id);
-    if (occupiedPlayers.length === 0) {
-      throw new HttpError(409, "No players are currently occupying this scene");
-    }
-    if (!occupiedPlayers.every((row) => row.ready_state?.ready === true)) {
+    if (occupiedPlayers.length > 0 && !occupiedPlayers.every((row) => row.ready_state?.ready === true)) {
       throw new HttpError(409, "All occupied player slots must be ready before starting the scene");
     }
     const runtimeState = cloneJson(instance.runtime_state ?? {});
+    runtimeState.active_scene_id = activeSceneId;
     runtimeState.scene_started = true;
     runtimeState.started_at = nowIso();
     runtimeState.started_by_profile_id = profile.id;
@@ -1968,6 +1977,7 @@ export function installPrivateWorldStore(MauworldStore) {
       this.serviceClient
         .from("private_world_active_instances")
         .update({
+          active_scene_id: activeSceneId,
           status: "started",
           runtime_state: runtimeState,
           last_active_at: nowIso(),

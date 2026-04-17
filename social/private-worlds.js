@@ -541,14 +541,9 @@ function normalizePrivatePanelTab(tab) {
 
 function setPrivatePanelTab(tab, options = {}) {
   const nextTab = normalizePrivatePanelTab(tab);
-  const syncMode = options.syncMode !== false;
   state.privatePanelTab = nextTab;
   if (nextTab !== "share" && state.browserOverlayOpen) {
     setPrivateBrowserOverlayOpen(false);
-  }
-  if (syncMode && nextTab === "build" && state.mode !== "build" && isEditor()) {
-    setMode("build");
-    return;
   }
   for (const button of elements.privatePanelTabButtons ?? []) {
     const active = button.getAttribute("data-private-panel-tab") === nextTab;
@@ -4113,6 +4108,15 @@ function getRenderableSceneDoc() {
   if (!scene) {
     return null;
   }
+  if (isEditor() && state.sceneEditorSceneId === String(scene.id ?? "").trim()) {
+    try {
+      return parseSceneTextarea();
+    } catch (error) {
+      if (state.mode === "build") {
+        throw error;
+      }
+    }
+  }
   if (state.mode === "play") {
     return scene.compiled_doc?.runtime?.resolved_scene_doc ?? scene.scene_doc ?? null;
   }
@@ -4121,8 +4125,6 @@ function getRenderableSceneDoc() {
 
 function setMode(mode, options = {}) {
   const nextMode = mode === "build" && isEditor() ? "build" : "play";
-  const syncPanelTab = options.syncPanelTab !== false;
-  const previousMode = state.mode;
   state.mode = nextMode;
   if (nextMode === "play") {
     state.buildModifierKeys.clear();
@@ -4131,11 +4133,6 @@ function setMode(mode, options = {}) {
     clearPlacementTool();
     writeBuilderSelection([]);
     state.sceneDrawerOpen = false;
-    if (syncPanelTab && state.privatePanelTab === "build") {
-      state.privatePanelTab = "chat";
-    }
-  } else if (syncPanelTab && previousMode !== "build") {
-    state.privatePanelTab = "build";
   }
   if (nextMode === "build") {
     for (const key of ["q", "e", "shift"]) {
@@ -5348,7 +5345,7 @@ function renderSelectedWorld() {
     }
   }
   if (elements.sceneToolsToggle) {
-    elements.sceneToolsToggle.disabled = !hasWorld || !canEdit;
+    elements.sceneToolsToggle.disabled = !hasWorld || !canEdit || state.mode !== "build";
   }
   if (elements.sceneDock) {
     elements.sceneDock.hidden = !hasWorld || !canEdit || state.mode !== "build";
@@ -5375,7 +5372,7 @@ function renderSelectedWorld() {
     elements.panelModePlay.classList.toggle("is-active", state.mode === "play");
   }
   if (elements.panelScenes) {
-    elements.panelScenes.disabled = !hasWorld || !canEdit;
+    elements.panelScenes.disabled = !hasWorld || !canEdit || state.mode !== "build";
   }
   if (elements.panelWorld) {
     elements.panelWorld.disabled = !hasWorld;
@@ -7474,20 +7471,20 @@ function syncPrivatePreviewEnvironmentState(preview = state.preview) {
   }
   if (preview.groundRim) {
     preview.groundRim.visible = true;
-    preview.groundRim.material.opacity = noWorld ? 0.46 : (showGridHint ? 0.62 : 0.5);
+    preview.groundRim.material.opacity = noWorld ? 0.46 : (buildMode ? (showGridHint ? 0.62 : 0.5) : 0.18);
   }
-  preview.buildGrid.visible = noWorld || Boolean(state.selectedWorld);
+  preview.buildGrid.visible = noWorld || buildMode;
   if (preview.buildGrid.material) {
     const materials = Array.isArray(preview.buildGrid.material)
       ? preview.buildGrid.material
       : [preview.buildGrid.material];
     for (const material of materials) {
-      material.opacity = noWorld ? 0.22 : (showGridHint ? 0.44 : (buildMode ? 0.34 : 0.22));
+      material.opacity = noWorld ? 0.22 : (buildMode ? (showGridHint ? 0.44 : 0.34) : 0);
     }
   }
   if (preview.buildFootprint) {
-    preview.buildFootprint.visible = true;
-    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (showGridHint ? 0.48 : (buildMode ? 0.5 : 0.34));
+    preview.buildFootprint.visible = noWorld || buildMode;
+    preview.buildFootprint.material.opacity = noWorld ? 0.3 : (buildMode ? (showGridHint ? 0.48 : 0.5) : 0);
   }
 }
 
@@ -8383,7 +8380,7 @@ function updatePreviewFromSelection() {
   );
   preview.showGridHint = !hasPlacedGeometry;
   syncPrivatePreviewEnvironmentState(preview);
-  const boundsPreview = (state.mode === "build" && isEditor()) || !hasPlacedGeometry
+  const boundsPreview = state.mode === "build" && isEditor()
     ? buildWorldBoundsPreview(state.selectedWorld)
     : null;
   if (boundsPreview) {
@@ -8633,6 +8630,7 @@ function updatePreviewFromSelection() {
     if (isSelected("trigger", trigger.id)) {
       mesh.material.color = new THREE.Color("#ffd659");
     }
+    mesh.visible = state.mode === "build" && isEditor();
     preview.root.add(mesh);
   }
 
@@ -8902,13 +8900,13 @@ async function handleCreateWorld(event) {
   elements.createWorldForm.reset();
 }
 
-async function saveScene(event) {
-  event.preventDefault();
+async function saveCurrentScene(options = {}) {
   const scene = getSelectedScene();
   if (!scene || !state.selectedWorld) {
-    return;
+    return null;
   }
-  const keepDrawerOpen = state.sceneDrawerOpen === true;
+  const keepDrawerOpen = options.keepDrawerOpen ?? (state.sceneDrawerOpen === true);
+  const keepPanelTab = options.keepPanelTab ?? state.privatePanelTab;
   const sceneDoc = parseSceneTextarea();
   const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/scenes/${encodeURIComponent(scene.id)}`, {
     method: "PATCH",
@@ -8920,10 +8918,19 @@ async function saveScene(event) {
     },
   });
   discardSceneDraft(scene.id);
-  pushEvent("scene:saved", payload.scene.name);
+  if (options.pushEvent !== false) {
+    pushEvent("scene:saved", payload.scene.name);
+  }
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
   state.sceneDrawerOpen = keepDrawerOpen;
+  state.privatePanelTab = keepPanelTab;
   renderSelectedWorld();
+  return payload;
+}
+
+async function saveScene(event) {
+  event.preventDefault();
+  await saveCurrentScene();
 }
 
 async function createScene() {
@@ -9032,7 +9039,7 @@ async function resolveWorld(event) {
   await openWorld(worldId, creatorUsername, true);
 }
 
-async function joinWorld() {
+async function joinWorld(options = {}) {
   if (!state.selectedWorld) {
     return;
   }
@@ -9054,7 +9061,9 @@ async function joinWorld() {
   state.joinedAsGuest = !state.session;
   state.selectedWorld = payload.world;
   renderSelectedWorld();
-  setPrivatePanelTab("chat");
+  if (options.switchPanelTab !== false) {
+    setPrivatePanelTab("chat");
+  }
   pushEvent("world:joined", `${payload.world.name}`);
 }
 
@@ -9116,35 +9125,52 @@ async function leaveWorld() {
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
 }
 
+async function setReadyState(nextReady, options = {}) {
+  if (!state.selectedWorld) {
+    return;
+  }
+  const keepPanelTab = options.keepPanelTab ?? state.privatePanelTab;
+  await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/ready`, {
+    method: "POST",
+    body: {
+      creatorUsername: state.selectedWorld.creator.username,
+      ready: nextReady === true,
+    },
+  });
+  if (options.pushEvent !== false) {
+    pushEvent("ready:updated", nextReady ? "Ready" : "Not ready");
+  }
+  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  state.privatePanelTab = keepPanelTab;
+  renderSelectedWorld();
+}
+
 async function setReady() {
   if (!state.selectedWorld) {
     return;
   }
   const localParticipant = getLocalParticipant(state.selectedWorld);
-  const nextReady = !(localParticipant?.ready === true);
-  await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/ready`, {
-    method: "POST",
-    body: {
-      creatorUsername: state.selectedWorld.creator.username,
-      ready: nextReady,
-    },
-  });
-  pushEvent("ready:updated", nextReady ? "Ready" : "Not ready");
-  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  await setReadyState(!(localParticipant?.ready === true));
 }
 
-async function startScene() {
+async function startScene(options = {}) {
   if (!state.selectedWorld) {
     return;
   }
+  const keepPanelTab = options.keepPanelTab ?? state.privatePanelTab;
   await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/start-scene`, {
     method: "POST",
     body: {
       creatorUsername: state.selectedWorld.creator.username,
+      sceneId: options.sceneId ?? state.selectedSceneId,
     },
   });
-  pushEvent("scene:started", state.selectedWorld.name);
+  if (options.pushEvent !== false) {
+    pushEvent("scene:started", state.selectedWorld.name);
+  }
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  state.privatePanelTab = keepPanelTab;
+  renderSelectedWorld();
 }
 
 async function resetScene() {
@@ -9159,6 +9185,44 @@ async function resetScene() {
   });
   pushEvent("scene:reset", state.selectedWorld.name);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+}
+
+async function enterPlayMode() {
+  if (!state.selectedWorld) {
+    return;
+  }
+  const keepPanelTab = state.privatePanelTab;
+  if (isEditor() && getSelectedScene()) {
+    await saveCurrentScene({
+      pushEvent: false,
+      keepPanelTab,
+    });
+  }
+  if (!getLocalParticipant()) {
+    await joinWorld({ switchPanelTab: false });
+  }
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  const localParticipant = getLocalParticipant();
+  const activeSceneId = runtime?.active_scene_id || state.selectedWorld?.active_instance?.active_scene_id || "";
+  const sceneAlreadyRunning = runtime?.scene_started === true && activeSceneId === state.selectedSceneId;
+  const occupiedPlayers = (state.selectedWorld?.active_instance?.participants ?? [])
+    .filter((entry) => entry.join_role === "player" && entry.player_entity_id);
+  if (localParticipant?.join_role === "player" && localParticipant.ready !== true && occupiedPlayers.length <= 1) {
+    await setReadyState(true, {
+      keepPanelTab,
+      pushEvent: false,
+    });
+  }
+  if (state.session && isEditor() && !sceneAlreadyRunning) {
+    await startScene({
+      sceneId: state.selectedSceneId,
+      keepPanelTab,
+      pushEvent: false,
+    });
+  }
+  state.privatePanelTab = keepPanelTab;
+  setMode("play", { syncPanelTab: false });
+  renderSelectedWorld();
 }
 
 async function sendRuntimeInput(key, runtimeState = "down") {
@@ -9875,12 +9939,13 @@ function bindEvents() {
     resumePrivateBrowserMediaPlayback();
   });
   elements.panelModeBuild?.addEventListener("click", () => {
-    setMode("build");
+    setMode("build", { syncPanelTab: false });
     renderSelectedWorld();
   });
   elements.panelModePlay?.addEventListener("click", () => {
-    setMode("play");
-    renderSelectedWorld();
+    void enterPlayMode().catch((error) => {
+      setStatus(error.message || "Could not enter play mode.");
+    });
   });
   elements.panelScenes?.addEventListener("click", () => {
     if (state.selectedWorld && isEditor()) {

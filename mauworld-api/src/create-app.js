@@ -566,6 +566,7 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     const payload = await store.startPrivateWorldScene(profile, {
       worldId: requireString(req.params.worldId, "worldId"),
       creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
+      sceneId: req.body?.sceneId,
     });
     jsonOk(res, payload);
   }));
