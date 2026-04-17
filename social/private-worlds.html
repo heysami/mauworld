@@ -56,6 +56,20 @@
           <button
             type="button"
             class="world-panel__tab"
+            data-private-panel-tab="build"
+            role="tab"
+            aria-selected="false"
+          >Build</button>
+          <button
+            type="button"
+            class="world-panel__tab"
+            data-private-panel-tab="world"
+            role="tab"
+            aria-selected="false"
+          >World</button>
+          <button
+            type="button"
+            class="world-panel__tab"
             data-private-panel-tab="share"
             role="tab"
             aria-selected="false"
@@ -67,21 +81,6 @@
             role="tab"
             aria-selected="false"
           >Live</button>
-        </div>
-
-        <div class="world-search-modes pw-panel-modes" role="group" aria-label="Private world controls">
-          <button
-            type="button"
-            class="world-search-mode"
-            data-private-panel-tab="build"
-            aria-pressed="false"
-          >Build</button>
-          <button
-            type="button"
-            class="world-search-mode"
-            data-private-panel-tab="world"
-            aria-pressed="false"
-          >World</button>
         </div>
 
         <section class="world-panel__view" data-private-panel-view="chat" role="tabpanel">
@@ -205,7 +204,6 @@
           <div class="pw-action-grid">
             <button type="button" data-private-panel-mode-play>Play Default Scene</button>
             <button type="button" data-private-panel-scenes>Scenes</button>
-            <button type="button" data-private-panel-world>World</button>
             <button type="button" data-private-panel-export>Export</button>
             <button type="button" data-private-panel-enter>Enter</button>
             <button type="button" data-private-panel-leave>Leave</button>
@@ -218,12 +216,70 @@
             <button type="button" data-private-native-share disabled>Share Entry</button>
           </div>
           <p class="world-live-status" data-private-share-status>Open a world to copy its entry link.</p>
-          <div class="pw-share-meta" data-private-share-meta></div>
           <div class="pw-world-meta" data-private-panel-world-meta></div>
-          <div class="pw-panel__header">
-            <h2>Live feed</h2>
-          </div>
-          <div class="pw-event-log pw-panel-event-log" data-private-panel-events></div>
+
+          <section class="pw-panel pw-panel--compact">
+            <div class="pw-panel__header">
+              <h2>Collaborators</h2>
+            </div>
+            <form class="pw-collaborator-form" data-collaborator-form>
+              <div class="pw-grid-2">
+                <label>
+                  <span>Username</span>
+                  <input type="text" name="username" maxlength="24" placeholder="teammate" />
+                </label>
+                <label>
+                  <span>Role</span>
+                  <select name="role">
+                    <option value="editor">Editor</option>
+                  </select>
+                </label>
+              </div>
+              <button type="submit" data-save-collaborator disabled>Add Editor</button>
+            </form>
+            <div class="pw-collaborator-list" data-collaborator-list></div>
+          </section>
+
+          <section class="pw-panel pw-panel--compact">
+            <div class="pw-panel__header">
+              <h2>AI Builder</h2>
+            </div>
+            <form class="pw-ai-form" data-ai-form>
+              <label>
+                <span>Provider</span>
+                <select name="provider">
+                  <option value="openai">OpenAI</option>
+                </select>
+              </label>
+              <label>
+                <span>Model</span>
+                <input type="text" name="model" value="gpt-5.4-mini" />
+              </label>
+              <label>
+                <span>API Key</span>
+                <input type="password" name="apiKey" autocomplete="off" placeholder="Stored only in this browser session" />
+              </label>
+              <label>
+                <span>Objective</span>
+                <textarea name="objective" rows="4" placeholder="Describe the screen or script you want."></textarea>
+              </label>
+              <div class="pw-inline-actions">
+                <button type="button" data-generate-html disabled>Generate Screen HTML</button>
+                <button type="button" class="is-muted" data-generate-script disabled>Generate Script</button>
+              </div>
+            </form>
+            <label>
+              <span>AI Output</span>
+              <textarea data-ai-output rows="10" spellcheck="false"></textarea>
+            </label>
+          </section>
+
+          <section class="pw-panel pw-panel--compact">
+            <div class="pw-panel__header">
+              <h2>Live feed</h2>
+            </div>
+            <div class="pw-event-log pw-panel-event-log" data-event-log></div>
+          </section>
         </section>
       </aside>
 
@@ -547,86 +603,6 @@
             <button type="button" class="is-muted" data-refresh-scene disabled>Reload</button>
           </div>
         </form>
-      </aside>
-
-      <aside class="pw-world-menu" data-world-menu aria-label="World options">
-        <div class="pw-drawer__head">
-          <div>
-            <p class="pw-drawer__eyebrow">World</p>
-            <h2>Metadata, collaborators, AI, and activity</h2>
-          </div>
-          <button type="button" class="pw-drawer__close" data-world-menu-close>Close</button>
-        </div>
-
-        <section class="pw-panel pw-panel--compact">
-          <div class="pw-panel__header">
-            <h3>World Metadata</h3>
-          </div>
-          <div class="pw-world-meta" data-world-meta></div>
-        </section>
-
-        <section class="pw-panel pw-panel--compact">
-          <div class="pw-panel__header">
-            <h3>Collaborators</h3>
-          </div>
-          <form class="pw-collaborator-form" data-collaborator-form>
-            <div class="pw-grid-2">
-              <label>
-                <span>Username</span>
-                <input type="text" name="username" maxlength="24" placeholder="teammate" />
-              </label>
-              <label>
-                <span>Role</span>
-                <select name="role">
-                  <option value="editor">Editor</option>
-                </select>
-              </label>
-            </div>
-            <button type="submit" data-save-collaborator disabled>Add Editor</button>
-          </form>
-          <div class="pw-collaborator-list" data-collaborator-list></div>
-        </section>
-
-        <section class="pw-panel pw-panel--compact">
-          <div class="pw-panel__header">
-            <h3>AI Builder</h3>
-          </div>
-          <form class="pw-ai-form" data-ai-form>
-            <label>
-              <span>Provider</span>
-              <select name="provider">
-                <option value="openai">OpenAI</option>
-              </select>
-            </label>
-            <label>
-              <span>Model</span>
-              <input type="text" name="model" value="gpt-5.4-mini" />
-            </label>
-            <label>
-              <span>API Key</span>
-              <input type="password" name="apiKey" autocomplete="off" placeholder="Stored only in this browser session" />
-            </label>
-            <label>
-              <span>Objective</span>
-              <textarea name="objective" rows="4" placeholder="Describe the screen or script you want."></textarea>
-            </label>
-            <div class="pw-inline-actions">
-              <button type="button" data-generate-html disabled>Generate Screen HTML</button>
-              <button type="button" class="is-muted" data-generate-script disabled>Generate Script</button>
-            </div>
-          </form>
-          <label>
-            <span>AI Output</span>
-            <textarea data-ai-output rows="10" spellcheck="false"></textarea>
-          </label>
-        </section>
-
-        <section class="pw-panel pw-panel--compact">
-          <div class="pw-panel__header">
-            <h3>Live Feed</h3>
-          </div>
-          <div class="pw-event-log" data-event-log></div>
-        </section>
       </aside>
 
       <section class="pw-scene-dock" data-scene-dock>

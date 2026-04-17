@@ -148,9 +148,6 @@ const elements = {
   sceneDrawer: document.querySelector("[data-scene-drawer]"),
   sceneToolsToggle: document.querySelector("[data-scene-tools-toggle]"),
   sceneToolsClose: document.querySelector("[data-scene-tools-close]"),
-  worldMenu: document.querySelector("[data-world-menu]"),
-  worldMenuToggle: document.querySelector("[data-world-menu-toggle]"),
-  worldMenuClose: document.querySelector("[data-world-menu-close]"),
   inspector: document.querySelector("[data-inspector]"),
   selectionClear: document.querySelector("[data-selection-clear]"),
   authForm: document.querySelector("[data-auth-form]"),
@@ -181,7 +178,6 @@ const elements = {
   panelLiveStatus: document.querySelector("[data-private-live-status]"),
   panelLiveResults: document.querySelector("[data-private-live-results]"),
   panelShareStatus: document.querySelector("[data-private-share-status]"),
-  panelShareMeta: document.querySelector("[data-private-share-meta]"),
   panelShareCopy: document.querySelector("[data-private-copy-link]"),
   panelShareNative: document.querySelector("[data-private-native-share]"),
   panelBrowserPanel: document.querySelector("[data-private-browser-panel]"),
@@ -203,18 +199,15 @@ const elements = {
   panelBrowserResume: document.querySelector("[data-private-browser-resume]"),
   panelBuildSummary: document.querySelector("[data-private-build-summary]"),
   panelWorldMeta: document.querySelector("[data-private-panel-world-meta]"),
-  panelEvents: document.querySelector("[data-private-panel-events]"),
   panelModeBuild: document.querySelector("[data-private-panel-mode-build]"),
   panelModePlay: document.querySelector("[data-private-panel-mode-play]"),
   panelScenes: document.querySelector("[data-private-panel-scenes]"),
-  panelWorld: document.querySelector("[data-private-panel-world]"),
   panelExport: document.querySelector("[data-private-panel-export]"),
   panelEnter: document.querySelector("[data-private-panel-enter]"),
   panelLeave: document.querySelector("[data-private-panel-leave]"),
   panelReady: document.querySelector("[data-private-panel-ready]"),
   panelRelease: document.querySelector("[data-private-panel-release]"),
   panelReset: document.querySelector("[data-private-panel-reset]"),
-  worldMeta: document.querySelector("[data-world-meta]"),
   sceneDock: document.querySelector("[data-scene-dock]"),
   sceneDockSummary: document.querySelector("[data-scene-dock-summary]"),
   sceneDockOpen: document.querySelector("[data-scene-dock-open]"),
@@ -325,7 +318,6 @@ const state = {
   joined: false,
   launcherOpen: false,
   sceneDrawerOpen: false,
-  worldMenuOpen: false,
   activeLockEntityKey: "",
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
@@ -574,7 +566,6 @@ function updateShellState() {
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
-  document.body.classList.toggle("is-world-menu-open", state.worldMenuOpen === true);
   document.body.classList.toggle("is-signed-in", Boolean(state.session));
   document.body.classList.toggle(
     "has-placement-tool",
@@ -615,7 +606,6 @@ function setLauncherOpen(open) {
   state.launcherOpen = open === true;
   if (state.launcherOpen) {
     state.sceneDrawerOpen = false;
-    state.worldMenuOpen = false;
     writeBuilderSelection([]);
     if (!LAUNCHER_TABS.has(state.launcherTab)) {
       state.launcherTab = getPreferredLauncherTab();
@@ -626,17 +616,6 @@ function setLauncherOpen(open) {
 
 function setSceneDrawerOpen(open) {
   state.sceneDrawerOpen = open === true;
-  if (state.sceneDrawerOpen) {
-    state.worldMenuOpen = false;
-  }
-  updateShellState();
-}
-
-function setWorldMenuOpen(open) {
-  state.worldMenuOpen = open === true;
-  if (state.worldMenuOpen) {
-    state.sceneDrawerOpen = false;
-  }
   updateShellState();
 }
 
@@ -3693,12 +3672,14 @@ function buildMetaRows(world) {
   if (!world) {
     return [];
   }
+  const isActive = Boolean(world.active_instance);
   return [
     { label: "World ID", value: world.world_id },
     { label: "Creator", value: `${world.creator.display_name || world.creator.username} (@${world.creator.username})` },
     { label: "Size", value: `${world.width} × ${world.length} × ${world.height}` },
     { label: "Type", value: `${world.world_type} · ${world.template_size}` },
     { label: "Viewers", value: `${world.active_instance?.viewer_count ?? 0} / ${world.max_viewers}` },
+    { label: "Entry", value: isActive ? "Direct autojoin link ready" : "Resolve link ready" },
     {
       label: "Lineage",
       value: world.lineage?.is_imported
@@ -5028,7 +5009,6 @@ function renderPrefabList(sceneDoc) {
 
 function renderWorldMeta() {
   const rows = buildMetaRows(state.selectedWorld);
-  renderMetaRows(elements.worldMeta, rows);
   renderMetaRows(elements.panelWorldMeta, rows);
 }
 
@@ -5180,7 +5160,7 @@ function renderPrivateLiveSharesList() {
 }
 
 function renderPrivateShare() {
-  if (!elements.panelShareStatus || !elements.panelShareMeta) {
+  if (!elements.panelShareStatus) {
     return;
   }
   const world = state.selectedWorld;
@@ -5201,24 +5181,6 @@ function renderPrivateShare() {
     : isActive
       ? "Copy or share the direct entry link for this active private world."
       : "This world is inactive, but the entry link still resolves it for signed-in access.";
-  elements.panelShareMeta.innerHTML = !world ? "" : `
-    <div class="pw-world-meta__row">
-      <strong>Creator</strong>
-      <span>${htmlEscape(world.creator.username)}</span>
-    </div>
-    <div class="pw-world-meta__row">
-      <strong>Type</strong>
-      <span>${htmlEscape(world.world_type)} · ${htmlEscape(world.template_size)}</span>
-    </div>
-    <div class="pw-world-meta__row">
-      <strong>Occupancy</strong>
-      <span>${Number(world.active_instance?.viewer_count ?? 0)} / ${Number(world.max_viewers ?? 20)}</span>
-    </div>
-    <div class="pw-world-meta__row">
-      <strong>Entry</strong>
-      <span>${htmlEscape(isActive ? "Direct autojoin link ready" : "Resolve link ready")}</span>
-    </div>
-  `;
 }
 
 function renderBuildSummary() {
@@ -5248,10 +5210,6 @@ function renderBuildSummary() {
     return;
   }
   elements.panelBuildSummary.innerHTML = `
-    <div class="pw-world-meta__row">
-      <strong>Mode</strong>
-      <span>${state.mode === "build" ? "Build" : "Play"} · ${isEditor() ? "editor access" : "viewer access"}</span>
-    </div>
     <div class="pw-world-meta__row">
       <strong>Scene</strong>
       <span>${htmlEscape(sceneLabel)}${defaultSceneSuffix}</span>
@@ -5335,7 +5293,6 @@ function renderSelectedWorld() {
   if (!world) {
     writeBuilderSelection([]);
     state.sceneDrawerOpen = false;
-    state.worldMenuOpen = false;
     state.launcherTab = getPreferredLauncherTab();
   }
   if (state.mode === "build" && !isEditor()) {
@@ -5394,9 +5351,6 @@ function renderSelectedWorld() {
   for (const button of elements.sceneAddButtons ?? []) {
     button.disabled = !hasWorld || !canEdit || state.mode !== "build";
   }
-  if (elements.worldMenuToggle) {
-    elements.worldMenuToggle.disabled = !hasWorld;
-  }
   elements.saveCollaborator.disabled = !hasWorld || !canEdit;
   elements.generateHtml.disabled = !hasWorld || !state.session;
   elements.generateScript.disabled = !hasWorld || !state.session;
@@ -5410,9 +5364,6 @@ function renderSelectedWorld() {
   }
   if (elements.panelScenes) {
     elements.panelScenes.disabled = !hasWorld || !canEdit || state.mode !== "build";
-  }
-  if (elements.panelWorld) {
-    elements.panelWorld.disabled = !hasWorld;
   }
   if (elements.panelExport) {
     elements.panelExport.disabled = !hasWorld || !state.session;
@@ -8861,7 +8812,6 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.buildHover = null;
   state.launcherOpen = false;
   state.sceneDrawerOpen = false;
-  state.worldMenuOpen = false;
   if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
     state.buildReturnSceneId = "";
     state.previewPointer.inside = false;
@@ -9904,9 +9854,6 @@ function renderEventLog() {
   if (elements.eventLog) {
     elements.eventLog.innerHTML = markup;
   }
-  if (elements.panelEvents) {
-    elements.panelEvents.innerHTML = markup;
-  }
 }
 
 function bindEvents() {
@@ -10021,12 +9968,6 @@ function bindEvents() {
       setPrivatePanelTab("build");
     }
   });
-  elements.panelWorld?.addEventListener("click", () => {
-    if (state.selectedWorld) {
-      setWorldMenuOpen(true);
-      setPrivatePanelTab("world");
-    }
-  });
   elements.panelExport?.addEventListener("click", () => {
     void exportWorld();
   });
@@ -10053,15 +9994,6 @@ function bindEvents() {
   });
   elements.sceneToolsClose?.addEventListener("click", () => {
     setSceneDrawerOpen(false);
-  });
-  elements.worldMenuToggle?.addEventListener("click", () => {
-    if (!state.selectedWorld) {
-      return;
-    }
-    setWorldMenuOpen(!state.worldMenuOpen);
-  });
-  elements.worldMenuClose?.addEventListener("click", () => {
-    setWorldMenuOpen(false);
   });
   elements.selectionClear?.addEventListener("click", () => {
     setBuilderSelection("", "");
@@ -10567,10 +10499,6 @@ function bindEvents() {
     }
     if (hasBuilderSelection()) {
       setBuilderSelection("", "");
-      return;
-    }
-    if (state.worldMenuOpen) {
-      setWorldMenuOpen(false);
       return;
     }
     if (state.sceneDrawerOpen) {
