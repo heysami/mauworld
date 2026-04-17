@@ -670,6 +670,22 @@ body.private-worlds-body.has-placement-tool .pw-canvas {
   cursor: crosshair;
 }
 
+body.private-worlds-body.is-build-move:not(.has-placement-tool) .pw-canvas {
+  cursor: grab;
+}
+
+body.private-worlds-body.is-build-scale:not(.has-placement-tool) .pw-canvas {
+  cursor: nwse-resize;
+}
+
+body.private-worlds-body.is-build-multi:not(.has-placement-tool) .pw-canvas {
+  cursor: copy;
+}
+
+body.private-worlds-body.is-build-delete:not(.has-placement-tool) .pw-canvas {
+  cursor: not-allowed;
+}
+
 .pw-inspector {
   top: 18px;
   right: 18px;
