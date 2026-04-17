@@ -36,7 +36,7 @@ const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "ar
 const LAUNCHER_TABS = new Set(["create", "worlds", "access", "import"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
 const PRIVATE_CAMERA = {
-  minY: 8,
+  minY: 0,
   maxY: 360,
   lookMin: -1.1,
   lookMax: 1.1,
@@ -1665,7 +1665,7 @@ function setLauncherTab(tab) {
 
 function getViewerSpawnPosition(world = state.selectedWorld) {
   if (!world) {
-    return new THREE.Vector3(0, PRIVATE_CAMERA.minY + 0.8, 0);
+    return new THREE.Vector3(0, PRIVATE_CAMERA.minY, 0);
   }
   const rig = getPrivateViewerRigConfig(world);
   const width = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world?.width ?? PRIVATE_WORLD_DEFAULT_SIZE.width) || PRIVATE_WORLD_DEFAULT_SIZE.width);
@@ -1684,12 +1684,7 @@ function getPrivateViewerRigConfig(world = state.selectedWorld) {
   const minRadius = PRIVATE_PLAYER_VIEW.minRadius;
   const defaultRadius = PRIVATE_PLAYER_VIEW.defaultRadius;
   const maxRadius = PRIVATE_PLAYER_VIEW.maxRadius;
-  const spawnHeight = clampNumber(
-    PRIVATE_CAMERA.minY,
-    PRIVATE_CAMERA.minY,
-    6,
-    Math.max(PRIVATE_CAMERA.minY, height + 6),
-  );
+  const spawnHeight = PRIVATE_CAMERA.minY;
   const lookHeight = PRIVATE_PLAYER_VIEW.lookHeight;
   return {
     width,
