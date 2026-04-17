@@ -2783,8 +2783,9 @@ function updatePrivateBrowserPanel() {
   const canShare = Boolean(state.session && world && localParticipant && mediaAvailable);
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
-    : state.localBrowserPreviewStream
-      : null;
+    : state.localBrowserShare?.hasVideo
+      ? state.localBrowserShare.stream
+      : state.localBrowserPreviewStream ?? null;
   const showingRemoteVideo = Boolean(
     !previewStream
     && remoteSession
