@@ -2904,6 +2904,23 @@ function updatePrivateBrowserPanel() {
       current: "Enter to share",
       hint: "Join this private world first.",
     });
+  } else if (localSession?.sessionMode === "display-share") {
+    const presentation = getLocalDisplaySharePresentation({
+      localSession,
+      localShare: state.localBrowserShare,
+      draft,
+      audienceLabel: "this private world",
+      screenPrompt: "Share a tab or window to start the live stream.",
+    });
+    if (presentation) {
+      if (!authStable || !socketReady) {
+        presentation.hint = "This private world is reconnecting, but your live share is still on.";
+      } else if (!mediaAvailable) {
+        presentation.hint = "Live media is unavailable for new shares right now, but this share is still on.";
+      }
+      setPrivateBrowserStatus(presentation.status);
+      updatePrivateBrowserSummary(presentation);
+    }
   } else if (!authStable || !socketReady) {
     setPrivateBrowserStatus("Private world is still connecting. Wait a moment, then share again.");
     updatePrivateBrowserSummary({
@@ -2920,18 +2937,6 @@ function updatePrivateBrowserPanel() {
       current: "Live share unavailable",
       hint: "Live media is not available on this server right now.",
     });
-  } else if (localSession?.sessionMode === "display-share") {
-    const presentation = getLocalDisplaySharePresentation({
-      localSession,
-      localShare: state.localBrowserShare,
-      draft,
-      audienceLabel: "this private world",
-      screenPrompt: "Share a tab or window to start the live stream.",
-    });
-    if (presentation) {
-      setPrivateBrowserStatus(presentation.status);
-      updatePrivateBrowserSummary(presentation);
-    }
   } else {
     setPrivateBrowserStatus("Share a screen, video, or voice nearby.");
     updatePrivateBrowserSummary({
