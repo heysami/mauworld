@@ -111,6 +111,12 @@
             <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="👀" aria-label="Watching">👀</button>
             <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="🙌" aria-label="Hands up">🙌</button>
           </div>
+          <div class="pw-action-grid pw-action-grid--runtime" data-private-runtime-actions>
+            <button type="button" data-private-panel-ready hidden>Ready Up</button>
+            <button type="button" data-private-panel-release hidden>Leave Player</button>
+            <button type="button" data-private-panel-reset hidden>Reset Scene</button>
+          </div>
+          <p class="pw-preview-hint" data-private-runtime-note>Click a player capsule to inhabit it. Ready Up appears after you take a player.</p>
           <p class="world-live-status" data-private-chat-empty hidden></p>
         </section>
 
@@ -197,19 +203,12 @@
         <section class="world-panel__view" data-private-panel-view="build" role="tabpanel" hidden>
           <div class="pw-build-summary" data-private-build-summary></div>
           <div class="pw-action-grid">
-            <button type="button" data-private-panel-mode-build>Build Mode</button>
-            <button type="button" data-private-panel-mode-play>Play Mode</button>
+            <button type="button" data-private-panel-mode-play>Play Default Scene</button>
             <button type="button" data-private-panel-scenes>Scenes</button>
             <button type="button" data-private-panel-world>World</button>
             <button type="button" data-private-panel-export>Export</button>
             <button type="button" data-private-panel-enter>Enter</button>
             <button type="button" data-private-panel-leave>Leave</button>
-          </div>
-          <div class="pw-action-grid pw-action-grid--runtime">
-            <button type="button" data-private-panel-ready>Ready</button>
-            <button type="button" data-private-panel-start>Start Scene</button>
-            <button type="button" data-private-panel-release>Release Player</button>
-            <button type="button" data-private-panel-reset>Reset</button>
           </div>
         </section>
 
@@ -642,12 +641,6 @@
           </div>
         </div>
         <div class="pw-scene-strip" data-scene-strip></div>
-        <div class="pw-runtime-actions">
-          <button type="button" class="is-muted" data-ready-toggle disabled>Ready</button>
-          <button type="button" class="is-muted" data-start-scene disabled>Start Scene</button>
-          <button type="button" class="is-muted" data-release-player disabled>Release Player</button>
-          <button type="button" class="is-muted" data-reset-scene disabled>Reset</button>
-        </div>
         <div class="pw-runtime-status" data-runtime-status></div>
       </section>
       </section>

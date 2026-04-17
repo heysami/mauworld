@@ -1126,13 +1126,15 @@ export class PrivateWorldRuntime {
     } else {
       simulation.activeSceneId = activeScene.id;
       simulation.scenesById = new Map(context.scenes.map((entry) => [entry.id, entry]));
+      const nextSceneStarted = context.instance.status === "started" || runtimeState.scene_started === true;
       if (
         simulation.runtime.sceneRowId !== activeScene.id
         || simulation.runtime.sceneUpdatedAt !== (activeScene.updated_at ?? activeScene.created_at ?? null)
+        || nextSceneStarted !== true
       ) {
         destroyPhysicsState(simulation.runtime.physics);
         simulation.runtime = seedSceneRuntime(activeScene, {
-          sceneStarted: context.instance.status === "started" || runtimeState.scene_started === true,
+          sceneStarted: nextSceneStarted,
           status: context.instance.status,
           runtimeState,
           tick: mustFinite(runtimeState.tick, 0),
@@ -1140,7 +1142,7 @@ export class PrivateWorldRuntime {
         });
       } else {
         simulation.runtime.status = context.instance.status;
-        simulation.runtime.sceneStarted = context.instance.status === "started" || runtimeState.scene_started === true;
+        simulation.runtime.sceneStarted = nextSceneStarted;
       }
       syncParticipantOccupancy(simulation.runtime, context.participants);
     }

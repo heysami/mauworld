@@ -2013,12 +2013,17 @@ export function installPrivateWorldStore(MauworldStore) {
       "Could not reset private world ready states",
     );
     const runtimeState = cloneJson(instance.runtime_state ?? {});
+    runtimeState.active_scene_id = world.default_scene_id;
     runtimeState.scene_started = false;
     runtimeState.started_at = null;
+    runtimeState.started_by_profile_id = null;
+    runtimeState.scene_elapsed_ms = 0;
+    runtimeState.tick = 0;
     const updated = await must(
       this.serviceClient
         .from("private_world_active_instances")
         .update({
+          active_scene_id: world.default_scene_id,
           status: "active",
           runtime_state: runtimeState,
           last_active_at: nowIso(),

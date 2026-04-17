@@ -174,6 +174,8 @@ const elements = {
   panelChatInput: document.querySelector("[data-private-chat-input]"),
   panelChatReactions: document.querySelector(".world-chat-reactions"),
   panelChatEmpty: document.querySelector("[data-private-chat-empty]"),
+  panelRuntimeActions: document.querySelector("[data-private-runtime-actions]"),
+  panelRuntimeNote: document.querySelector("[data-private-runtime-note]"),
   panelLiveSearchForm: document.querySelector("[data-private-live-search-form]"),
   panelLiveSearchInput: document.querySelector("[data-private-live-search-input]"),
   panelLiveStatus: document.querySelector("[data-private-live-status]"),
@@ -210,7 +212,6 @@ const elements = {
   panelEnter: document.querySelector("[data-private-panel-enter]"),
   panelLeave: document.querySelector("[data-private-panel-leave]"),
   panelReady: document.querySelector("[data-private-panel-ready]"),
-  panelStart: document.querySelector("[data-private-panel-start]"),
   panelRelease: document.querySelector("[data-private-panel-release]"),
   panelReset: document.querySelector("[data-private-panel-reset]"),
   worldMeta: document.querySelector("[data-world-meta]"),
@@ -250,7 +251,6 @@ const elements = {
   previewCanvas: document.querySelector("[data-preview-canvas]"),
   runtimeStatus: document.querySelector("[data-runtime-status]"),
   readyToggle: document.querySelector("[data-ready-toggle]"),
-  startScene: document.querySelector("[data-start-scene]"),
   releasePlayer: document.querySelector("[data-release-player]"),
   resetScene: document.querySelector("[data-reset-scene]"),
   collaboratorForm: document.querySelector("[data-collaborator-form]"),
@@ -304,6 +304,7 @@ const state = {
   worlds: [],
   selectedWorld: null,
   selectedSceneId: "",
+  buildReturnSceneId: "",
   selectedPrefabId: "",
   selectedScriptFunctionId: "",
   prefabQuery: "",
@@ -541,6 +542,10 @@ function normalizePrivatePanelTab(tab) {
 
 function setPrivatePanelTab(tab, options = {}) {
   const nextTab = normalizePrivatePanelTab(tab);
+  const syncMode = options.syncMode !== false;
+  if (syncMode && nextTab === "build" && state.mode !== "build" && isEditor()) {
+    setMode("build", { syncPanelTab: false });
+  }
   state.privatePanelTab = nextTab;
   if (nextTab !== "share" && state.browserOverlayOpen) {
     setPrivateBrowserOverlayOpen(false);
@@ -3730,6 +3735,14 @@ function getSelectedScene() {
   return state.selectedWorld?.scenes?.find((scene) => scene.id === state.selectedSceneId) ?? state.selectedWorld?.scenes?.[0] ?? null;
 }
 
+function getDefaultScene(world = state.selectedWorld) {
+  const scenes = world?.scenes ?? [];
+  return scenes.find((scene) => scene.id === world?.default_scene_id)
+    ?? scenes.find((scene) => scene.is_default === true)
+    ?? scenes[0]
+    ?? null;
+}
+
 function buildSceneEditorSnapshot(scene = getSelectedScene(), overrides = {}) {
   const sceneId = String(overrides.sceneId ?? scene?.id ?? state.selectedSceneId ?? "").trim();
   if (!sceneId || !elements.sceneForm?.elements) {
@@ -4125,6 +4138,8 @@ function getRenderableSceneDoc() {
 
 function setMode(mode, options = {}) {
   const nextMode = mode === "build" && isEditor() ? "build" : "play";
+  const previousMode = state.mode;
+  const syncPanelTab = options.syncPanelTab !== false;
   state.mode = nextMode;
   if (nextMode === "play") {
     state.buildModifierKeys.clear();
@@ -4133,10 +4148,22 @@ function setMode(mode, options = {}) {
     clearPlacementTool();
     writeBuilderSelection([]);
     state.sceneDrawerOpen = false;
+    if (syncPanelTab && state.privatePanelTab === "build") {
+      state.privatePanelTab = "chat";
+    }
   }
   if (nextMode === "build") {
+    if (previousMode === "play" && state.buildReturnSceneId) {
+      const returnScene = state.selectedWorld?.scenes?.find((scene) => scene.id === state.buildReturnSceneId) ?? null;
+      if (returnScene) {
+        state.selectedSceneId = returnScene.id;
+      }
+    }
     for (const key of ["q", "e", "shift"]) {
       privateInputState.keys.delete(key);
+    }
+    if (syncPanelTab && state.privatePanelTab !== "build") {
+      state.privatePanelTab = "build";
     }
   }
   document.body.classList.toggle("is-play-mode", nextMode === "play");
@@ -5201,7 +5228,16 @@ function renderBuildSummary() {
   const world = state.selectedWorld;
   const localParticipant = getLocalParticipant(world);
   const runtime = state.runtimeSnapshot ?? world?.active_instance?.runtime ?? null;
-  const activeSceneName = runtime?.scene_name || world?.active_instance?.active_scene_name || getSelectedScene()?.name || "Main Scene";
+  const defaultScene = getDefaultScene(world);
+  const editingScene = getSelectedScene();
+  const sceneLabel = state.mode === "build"
+    ? (editingScene?.name || defaultScene?.name || "Main Scene")
+    : (runtime?.scene_name || defaultScene?.name || "Main Scene");
+  const defaultSceneSuffix = defaultScene?.name && defaultScene.name !== sceneLabel
+    ? ` · default ${htmlEscape(defaultScene.name)}`
+    : defaultScene?.name
+      ? " · default"
+      : "";
   if (!world) {
     elements.panelBuildSummary.innerHTML = `
       <div class="pw-world-meta__row">
@@ -5218,7 +5254,7 @@ function renderBuildSummary() {
     </div>
     <div class="pw-world-meta__row">
       <strong>Scene</strong>
-      <span>${htmlEscape(activeSceneName)}</span>
+      <span>${htmlEscape(sceneLabel)}${defaultSceneSuffix}</span>
     </div>
     <div class="pw-world-meta__row">
       <strong>Status</strong>
@@ -5231,8 +5267,8 @@ function renderBuildSummary() {
     <div class="pw-world-meta__row">
       <strong>Controls</strong>
       <span>${state.mode === "build"
-        ? "Click to select. Hold Q to move, E to scale, R to rotate, Shift to grow a group, and T to delete."
-        : "WASD to move, hold Shift to sprint, Q/E to rise or drop, drag to look, wheel to zoom."}</span>
+        ? "Edit here, then use Play Default Scene to test the world's default scene from its real starting state."
+        : "WASD to move, hold Shift to sprint, Q/E to rise or drop, drag to look, and click a player capsule when you want to inhabit it."}</span>
     </div>
   `;
 }
@@ -5258,14 +5294,17 @@ function renderRuntimeStatus() {
     elements.runtimeStatus.innerHTML = "<div class=\"pw-world-meta__row\"><strong>Instance</strong><span>Inactive</span></div>";
     return;
   }
+  const world = state.selectedWorld;
   const participants = instance.participants ?? [];
   const runtime = state.runtimeSnapshot ?? instance.runtime ?? null;
   const runtimePlayers = runtime?.players ?? [];
   const runtimeObjects = runtime?.dynamic_objects ?? [];
+  const defaultScene = getDefaultScene(world);
+  const localParticipant = getLocalParticipant(world);
   elements.runtimeStatus.innerHTML = `
     <div class="pw-world-meta__row">
       <strong>Status</strong>
-      <span>${htmlEscape(runtime?.status || instance.status)} · scene ${htmlEscape(runtime?.scene_name || instance.active_scene_name || "unknown")}</span>
+      <span>${htmlEscape(runtime?.status || instance.status)} · scene ${htmlEscape(runtime?.scene_name || instance.active_scene_name || defaultScene?.name || "unknown")}</span>
     </div>
     <div class="pw-world-meta__row">
       <strong>Players</strong>
@@ -5277,11 +5316,9 @@ function renderRuntimeStatus() {
     </div>
     <div class="pw-world-meta__row">
       <strong>Controls</strong>
-      <span>${state.mode === "build" && isEditor()
-        ? "Build mode: click to select, hold Q to move, E to scale, R to rotate, Shift to build a group, and T to delete."
-        : getLocalParticipant()?.join_role === "player"
-          ? "WASD / Arrows to move, Space to jump, Release to return to viewer."
-          : "Viewer mode by default. WASD to move, hold Shift to sprint, Q/E to rise or drop, drag to look, wheel to zoom, then click a player capsule to possess it."}</span>
+      <span>${localParticipant?.join_role === "player"
+        ? "You are inside a player. Ready Up marks this player as prepared, and Leave Player returns to viewer mode."
+        : "Viewers can walk around immediately. Click a player capsule to inhabit it, then Ready Up appears for that player."}</span>
     </div>
     ${runtimePlayers.length > 0 ? `
       <div class="pw-world-meta__row">
@@ -5328,6 +5365,10 @@ function renderSelectedWorld() {
   state.joined = Boolean(localParticipant);
   state.joinedAsGuest = !state.session && localParticipant?.join_role === "guest";
   const joinedAsPlayer = localParticipant?.join_role === "player";
+  const showReadyControl = hasWorld && state.session && joinedAsPlayer;
+  const showReleaseControl = hasWorld && state.session && joinedAsPlayer;
+  const showResetControl = hasWorld && canEdit;
+  const readyLabel = localParticipant?.ready === true ? "Not Ready" : "Ready Up";
   if (!hasWorld || (state.privatePanelTab === "build" && !canEdit)) {
     state.privatePanelTab = "chat";
   } else {
@@ -5356,10 +5397,6 @@ function renderSelectedWorld() {
   if (elements.worldMenuToggle) {
     elements.worldMenuToggle.disabled = !hasWorld;
   }
-  elements.readyToggle.disabled = !hasWorld || !state.session || !joinedAsPlayer;
-  elements.startScene.disabled = !hasWorld || !state.session || !world.active_instance;
-  elements.releasePlayer.disabled = !hasWorld || !state.session || !joinedAsPlayer;
-  elements.resetScene.disabled = !hasWorld || !canEdit;
   elements.saveCollaborator.disabled = !hasWorld || !canEdit;
   elements.generateHtml.disabled = !hasWorld || !state.session;
   elements.generateScript.disabled = !hasWorld || !state.session;
@@ -5387,16 +5424,42 @@ function renderSelectedWorld() {
     elements.panelLeave.disabled = !hasWorld || !localParticipant;
   }
   if (elements.panelReady) {
-    elements.panelReady.disabled = !hasWorld || !state.session || !joinedAsPlayer;
-  }
-  if (elements.panelStart) {
-    elements.panelStart.disabled = !hasWorld || !state.session || !world.active_instance;
+    elements.panelReady.hidden = !showReadyControl;
+    elements.panelReady.disabled = !showReadyControl;
+    elements.panelReady.textContent = readyLabel;
   }
   if (elements.panelRelease) {
-    elements.panelRelease.disabled = !hasWorld || !state.session || !joinedAsPlayer;
+    elements.panelRelease.hidden = !showReleaseControl;
+    elements.panelRelease.disabled = !showReleaseControl;
   }
   if (elements.panelReset) {
-    elements.panelReset.disabled = !hasWorld || !canEdit;
+    elements.panelReset.hidden = !showResetControl;
+    elements.panelReset.disabled = !showResetControl;
+  }
+  if (elements.panelRuntimeActions) {
+    elements.panelRuntimeActions.hidden = !showReadyControl && !showReleaseControl && !showResetControl;
+  }
+  if (elements.panelRuntimeNote) {
+    elements.panelRuntimeNote.textContent = !hasWorld
+      ? "Open or create a world to enter."
+      : !localParticipant
+        ? "Enter the world to walk around. Click a player capsule when you want to inhabit it."
+        : joinedAsPlayer
+          ? `${readyLabel} changes this player's ready state. Leave Player returns you to viewer mode.${showResetControl ? " Reset Scene is editor-only." : ""}`
+          : `Click a player capsule to inhabit it. ${showResetControl ? "Reset Scene returns everyone to the world's default scene." : "Ready Up appears after you take a player."}`;
+  }
+  if (elements.readyToggle) {
+    elements.readyToggle.hidden = !showReadyControl;
+    elements.readyToggle.disabled = !showReadyControl;
+    elements.readyToggle.textContent = readyLabel;
+  }
+  if (elements.releasePlayer) {
+    elements.releasePlayer.hidden = !showReleaseControl;
+    elements.releasePlayer.disabled = !showReleaseControl;
+  }
+  if (elements.resetScene) {
+    elements.resetScene.hidden = !showResetControl;
+    elements.resetScene.disabled = !showResetControl;
   }
   if (elements.panelShareCopy) {
     elements.panelShareCopy.disabled = !hasWorld || !canCopyToClipboard();
@@ -8778,7 +8841,11 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   });
   const nextWorldKey = payload.world ? `${payload.world.world_id}:${payload.world.creator.username}` : "";
   state.selectedWorld = payload.world;
-  const defaultSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
+  const defaultSceneId = payload.world?.active_instance?.active_scene_id
+    || payload.world?.default_scene_id
+    || payload.world?.scenes?.find((scene) => scene.is_default === true)?.id
+    || payload.world?.scenes?.[0]?.id
+    || "";
   const canPreserveSceneSelection =
     previousWorldKey === nextWorldKey
     && state.mode === "build"
@@ -8796,6 +8863,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.sceneDrawerOpen = false;
   state.worldMenuOpen = false;
   if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
+    state.buildReturnSceneId = "";
     state.previewPointer.inside = false;
     clearPlacementTool();
     state.sceneDrafts.clear();
@@ -9191,37 +9259,37 @@ async function enterPlayMode() {
   if (!state.selectedWorld) {
     return;
   }
-  const keepPanelTab = state.privatePanelTab;
+  const keepPanelTab = "chat";
+  const previousBuildSceneId = state.selectedSceneId;
   if (isEditor() && getSelectedScene()) {
     await saveCurrentScene({
       pushEvent: false,
-      keepPanelTab,
+      keepPanelTab: state.privatePanelTab,
     });
+  }
+  const defaultScene = getDefaultScene(state.selectedWorld);
+  if (previousBuildSceneId) {
+    state.buildReturnSceneId = previousBuildSceneId;
+  }
+  if (defaultScene?.id) {
+    state.selectedSceneId = defaultScene.id;
   }
   if (!getLocalParticipant()) {
     await joinWorld({ switchPanelTab: false });
   }
   const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
-  const localParticipant = getLocalParticipant();
   const activeSceneId = runtime?.active_scene_id || state.selectedWorld?.active_instance?.active_scene_id || "";
-  const sceneAlreadyRunning = runtime?.scene_started === true && activeSceneId === state.selectedSceneId;
-  const occupiedPlayers = (state.selectedWorld?.active_instance?.participants ?? [])
-    .filter((entry) => entry.join_role === "player" && entry.player_entity_id);
-  if (localParticipant?.join_role === "player" && localParticipant.ready !== true && occupiedPlayers.length <= 1) {
-    await setReadyState(true, {
-      keepPanelTab,
-      pushEvent: false,
-    });
-  }
+  const targetSceneId = defaultScene?.id || state.selectedSceneId;
+  const sceneAlreadyRunning = runtime?.scene_started === true && activeSceneId === targetSceneId;
   if (state.session && isEditor() && !sceneAlreadyRunning) {
     await startScene({
-      sceneId: state.selectedSceneId,
+      sceneId: targetSceneId,
       keepPanelTab,
       pushEvent: false,
     });
   }
   state.privatePanelTab = keepPanelTab;
-  setMode("play", { syncPanelTab: false });
+  setMode("play");
   renderSelectedWorld();
 }
 
@@ -9971,9 +10039,6 @@ function bindEvents() {
   elements.panelReady?.addEventListener("click", () => {
     void setReady();
   });
-  elements.panelStart?.addEventListener("click", () => {
-    void startScene();
-  });
   elements.panelRelease?.addEventListener("click", () => {
     void releasePlayer();
   });
@@ -10334,16 +10399,13 @@ function bindEvents() {
     state.prefabQuery = elements.prefabSearch.value || "";
     renderSceneBuilder();
   });
-  elements.readyToggle.addEventListener("click", () => {
+  elements.readyToggle?.addEventListener("click", () => {
     void setReady();
   });
-  elements.startScene.addEventListener("click", () => {
-    void startScene();
-  });
-  elements.releasePlayer.addEventListener("click", () => {
+  elements.releasePlayer?.addEventListener("click", () => {
     void releasePlayer();
   });
-  elements.resetScene.addEventListener("click", () => {
+  elements.resetScene?.addEventListener("click", () => {
     void resetScene();
   });
   elements.collaboratorForm.addEventListener("submit", addCollaborator);
