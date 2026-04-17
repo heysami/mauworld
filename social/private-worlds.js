@@ -1016,6 +1016,27 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
   return null;
 }
 
+function getPrivateBrowserHostAnchorGroup(hostSessionId = "") {
+  const normalized = String(hostSessionId ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === getPrivateViewerSessionId()) {
+    const localGroup = state.preview?.viewerAvatar?.group ?? null;
+    return localGroup?.visible !== false ? localGroup : null;
+  }
+  const presenceGroup = state.preview?.presenceEntries?.get(normalized)?.group ?? null;
+  return presenceGroup?.visible !== false ? presenceGroup : null;
+}
+
+function setPrivateShareBubbleParent(entry, parent = null) {
+  const nextParent = parent ?? state.preview?.browserShares ?? null;
+  if (!entry?.group || !nextParent || entry.group.parent === nextParent) {
+    return;
+  }
+  nextParent.add(entry.group);
+}
+
 function getPrivateBrowserSessionShareKind(session = {}) {
   return normalizeBrowserShareKind(session?.shareKind, session?.sessionMode === "remote-browser" ? "browser" : "screen");
 }
@@ -1334,6 +1355,8 @@ function ensurePrivateShareBubbleEntry(session = {}) {
     renderOrder: 10,
     persistent: true,
   });
+  frame.frustumCulled = false;
+  frameShell.frustumCulled = false;
   group.add(frame);
   preview.browserShares.add(group);
   const entry = {
@@ -1460,13 +1483,20 @@ function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
     updatePrivateShareBubbleGeometry(entry);
     updatePrivateShareBubblePresentation(entry);
     const showingLiveMedia = isPrivateShareBubbleShowingLiveMedia(entry);
-    entry.targetPosition.copy(hostPosition);
-    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
-    entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
+    const hostAnchorGroup = getPrivateBrowserHostAnchorGroup(session.hostSessionId);
+    const offsetY = getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
+    setPrivateShareBubbleParent(entry, hostAnchorGroup);
     entry.group.visible = true;
-    entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);
-    entry.frame.quaternion.copy(preview.camera.quaternion);
+    if (hostAnchorGroup) {
+      entry.group.position.set(0, offsetY, 0);
+    } else {
+      entry.targetPosition.copy(hostPosition);
+      entry.targetPosition.y += offsetY;
+      entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
+      entry.group.position.copy(entry.position);
+    }
+    orientPrivateBillboardToCamera(entry.frame, preview.camera);
   }
 }
 
