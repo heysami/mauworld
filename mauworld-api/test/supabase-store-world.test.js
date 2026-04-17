@@ -15,6 +15,15 @@ function applyFilters(rows, filters, orFilters = []) {
       if (filter.type === "in") {
         return filter.values.includes(row[filter.column]);
       }
+      if (filter.type === "gt") {
+        return row[filter.column] > filter.value;
+      }
+      if (filter.type === "gte") {
+        return row[filter.column] >= filter.value;
+      }
+      if (filter.type === "lte") {
+        return row[filter.column] <= filter.value;
+      }
       if (filter.type === "lt") {
         return row[filter.column] < filter.value;
       }
@@ -69,6 +78,21 @@ class FakeQuery {
 
   in(column, values) {
     this.filters.push({ type: "in", column, values });
+    return this;
+  }
+
+  gt(column, value) {
+    this.filters.push({ type: "gt", column, value });
+    return this;
+  }
+
+  gte(column, value) {
+    this.filters.push({ type: "gte", column, value });
+    return this;
+  }
+
+  lte(column, value) {
+    this.filters.push({ type: "lte", column, value });
     return this;
   }
 
@@ -517,6 +541,147 @@ test("rebuildWorldSnapshotForVersion batches large post tag lookups", async () =
   assert.equal(failedSnapshotMarks, 0);
   assert.equal(result.worldSnapshot.status, "ready");
   assert.equal(state.tables.world_post_instances.length, postCount);
+});
+
+test("listPrivateWorldMiniaturesForSnapshot batches participant queries across active domes", async () => {
+  const state = {
+    tables: {
+      live_presence_sessions: [
+        {
+          id: "presence_1",
+          world_snapshot_id: "world_public",
+          viewer_session_id: "viewer_test",
+          position_x: 0,
+          position_y: 0,
+          position_z: 0,
+          expires_at: "9999-01-01T00:00:00.000Z",
+        },
+      ],
+      private_world_active_instances: [
+        {
+          id: "instance_a",
+          world_id: "world_row_a",
+          active_scene_id: "scene_a",
+          anchor_world_snapshot_id: "world_public",
+          anchor_position_x: 0,
+          anchor_position_y: 0,
+          anchor_position_z: 0,
+          anchor_cell_x: 0,
+          anchor_cell_z: 0,
+          miniature_width: 12,
+          miniature_length: 6,
+          miniature_height: 3,
+        },
+        {
+          id: "instance_b",
+          world_id: "world_row_b",
+          active_scene_id: "scene_b",
+          anchor_world_snapshot_id: "world_public",
+          anchor_position_x: 64,
+          anchor_position_y: 0,
+          anchor_position_z: 0,
+          anchor_cell_x: 1,
+          anchor_cell_z: 0,
+          miniature_width: 12,
+          miniature_length: 6,
+          miniature_height: 3,
+        },
+      ],
+      private_worlds: [
+        {
+          id: "world_row_a",
+          world_id: "mw_a",
+          creator_profile_id: "profile_a",
+          name: "World A",
+          about: "About A",
+          world_type: "room",
+          template_size: "medium",
+        },
+        {
+          id: "world_row_b",
+          world_id: "mw_b",
+          creator_profile_id: "profile_b",
+          name: "World B",
+          about: "About B",
+          world_type: "room",
+          template_size: "medium",
+        },
+      ],
+      private_world_scenes: [
+        {
+          id: "scene_a",
+          compiled_doc: {
+            miniature: {
+              static_voxels: [{ id: "vox_a" }],
+              screens: [],
+              players: [{ id: "player_a", position: { x: 1, y: 2, z: 3 } }],
+            },
+            stats: {},
+          },
+        },
+        {
+          id: "scene_b",
+          compiled_doc: {
+            miniature: {
+              static_voxels: [{ id: "vox_b" }],
+              screens: [],
+              players: [{ id: "player_b", position: { x: 4, y: 5, z: 6 } }],
+            },
+            stats: {},
+          },
+        },
+      ],
+      user_profiles: [
+        { id: "profile_a", username: "maker-a", display_name: "Maker A" },
+        { id: "profile_b", username: "maker-b", display_name: "Maker B" },
+        { id: "profile_viewer", username: "viewer", display_name: "Viewer" },
+      ],
+      private_world_participants: [
+        {
+          id: "participant_a",
+          instance_id: "instance_a",
+          profile_id: "profile_viewer",
+          player_entity_id: "player_a",
+          visible_to_others: true,
+        },
+        {
+          id: "participant_b",
+          instance_id: "instance_b",
+          profile_id: "profile_viewer",
+          player_entity_id: "player_b",
+          visible_to_others: true,
+        },
+      ],
+      private_world_ready_states: [],
+    },
+    queryLog: [],
+  };
+
+  const fakeStore = {
+    serviceClient: createFakeServiceClient(state),
+    privateWorldRuntime: {
+      getSnapshotByWorldRef() {
+        return null;
+      },
+    },
+  };
+
+  const result = await MauworldStore.prototype.listPrivateWorldMiniaturesForSnapshot.call(fakeStore, {
+    worldSnapshotId: "world_public",
+    viewerSessionId: "viewer_test",
+    cellXMin: -1,
+    cellXMax: 2,
+    cellZMin: -1,
+    cellZMax: 1,
+  });
+
+  assert.equal(result.length, 2);
+  assert.deepEqual(
+    state.queryLog
+      .filter((entry) => entry.table === "private_world_participants" && entry.action === "select")
+      .map((entry) => entry.filters.find((filter) => filter.column === "instance_id")?.type),
+    ["in"],
+  );
 });
 
 test("applyCurrentOrganizationAssignments batches post counter recomputes", async () => {

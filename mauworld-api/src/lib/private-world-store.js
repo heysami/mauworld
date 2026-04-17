@@ -418,7 +418,7 @@ async function loadInstanceParticipants(store, instanceId) {
 }
 
 async function loadInstanceParticipantsByIds(store, instanceIds, options = {}) {
-  const ids = dedupeStringList(instanceIds);
+  const ids = dedupe(instanceIds);
   if (ids.length === 0) {
     return new Map();
   }
