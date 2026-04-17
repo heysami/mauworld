@@ -15,6 +15,7 @@ import {
   getLocalDisplaySharePresentation,
   isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
   normalizeBrowserShareKind,
+  normalizeHostedBrowserSession,
   sanitizeBrowserShareTitle,
   updateChatBubbleGhosts,
 } from "./world-interactions.js";
@@ -2486,7 +2487,7 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
     return;
   }
   const previous = state.browserSessions.get(sessionId) ?? {};
-  const next = {
+  const next = normalizeHostedBrowserSession({
     ...previous,
     ...sessionPatch,
     deliveryMode: sessionPatch.deliveryMode ?? previous.deliveryMode ?? "placeholder",
@@ -2495,7 +2496,7 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
     lastFrameId: Number(sessionPatch.lastFrameId ?? previous.lastFrameId) || 0,
     sessionMode: sessionPatch.sessionMode ?? previous.sessionMode ?? "display-share",
     aspectRatio: Number(sessionPatch.aspectRatio ?? previous.aspectRatio) || PRIVATE_BROWSER_ASPECT_RATIO,
-  };
+  }, getPrivateViewerSessionId());
   state.browserSessions.set(sessionId, next);
   if (next.hasVideo === false) {
     clearPrivateShareBubbleVideo(next.sessionId);

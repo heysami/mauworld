@@ -13,6 +13,7 @@ import {
   getLocalDisplaySharePresentation,
   isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
   normalizeBrowserShareKind,
+  normalizeHostedBrowserSession,
   sanitizeBrowserShareTitle,
   updateChatBubbleGhosts,
 } from "./world-interactions.js";
@@ -7559,7 +7560,7 @@ function updateBrowserSessionState(sessionPatch) {
     return;
   }
   const previous = state.browserSessions.get(sessionPatch.sessionId) ?? {};
-  const next = {
+  const next = normalizeHostedBrowserSession({
     ...previous,
     ...sessionPatch,
     deliveryMode: sessionPatch.deliveryMode ?? previous.deliveryMode ?? "placeholder",
@@ -7568,7 +7569,7 @@ function updateBrowserSessionState(sessionPatch) {
     lastFrameId: sessionPatch.lastFrameId ?? previous.lastFrameId ?? 0,
     sessionMode: sessionPatch.sessionMode ?? previous.sessionMode ?? "remote-browser",
     aspectRatio: Number(sessionPatch.aspectRatio ?? previous.aspectRatio) || getInteractionConfig().browserAspectRatio,
-  };
+  }, state.viewerSessionId);
   state.browserSessions.set(next.sessionId, next);
   if (next.hasVideo === false) {
     clearBrowserScreenVideo(next.sessionId);

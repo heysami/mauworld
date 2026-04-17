@@ -102,6 +102,20 @@ export function getLocalDisplayShareDraft(options = {}) {
   };
 }
 
+export function normalizeHostedBrowserSession(session = {}, viewerSessionId = "") {
+  const normalizedViewerSessionId = String(viewerSessionId ?? "").trim();
+  if (!normalizedViewerSessionId) {
+    return session;
+  }
+  if (String(session?.hostSessionId ?? "").trim() !== normalizedViewerSessionId) {
+    return session;
+  }
+  return {
+    ...session,
+    deliveryMode: "full",
+  };
+}
+
 export function isEmojiOnlyChatText(value) {
   const trimmed = String(value ?? "").trim();
   if (!trimmed) {
