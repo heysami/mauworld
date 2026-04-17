@@ -5376,7 +5376,11 @@ function connectWorldSocket() {
     disconnectWorldSocket();
     return;
   }
-  const socketKey = `${world.world_id}:${String(world.creator.username ?? "").trim().toLowerCase()}`;
+  const socketKey = [
+    world.world_id,
+    String(world.creator.username ?? "").trim().toLowerCase(),
+    getPrivateViewerSessionId(),
+  ].join(":");
   if (
     state.worldSocket
     && state.worldSocket.readyState !== WebSocket.CLOSED
