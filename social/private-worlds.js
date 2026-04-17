@@ -110,6 +110,14 @@ const PRIVATE_CHAT_BUBBLE = SHARED_CHAT_BUBBLE_LAYOUT;
 const PRIVATE_BROWSER_SHARE = SHARED_BROWSER_SHARE_LAYOUT;
 const PRIVATE_BROWSER_RADIUS = PRIVATE_BROWSER_SHARE.radius;
 const PRIVATE_LOCAL_PREVIEW_SESSION_ID = "__private_local_preview__";
+const BUILD_PLACEMENT_SHORTCUTS = new Map([
+  ["1", "voxel"],
+  ["2", "primitive"],
+  ["3", "player"],
+  ["4", "screen"],
+  ["5", "text"],
+  ["6", "trigger"],
+]);
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
   fog: "#f4fbff",
@@ -270,6 +278,8 @@ const state = {
   selectedPrefabId: "",
   sceneDrafts: new Map(),
   sceneEditorSceneId: "",
+  placementTool: "",
+  placementShortcutTool: "",
   builderSelection: null,
   worldSocket: null,
   preview: null,
@@ -312,6 +322,14 @@ const state = {
   lastPresenceSentAt: 0,
   viewerSuppressClickAt: 0,
   buildDrag: null,
+  buildHover: null,
+  buildPlacementStroke: null,
+  previewPointer: {
+    clientX: 0,
+    clientY: 0,
+    pointerId: 0,
+    inside: false,
+  },
   launchHandled: false,
   launchRequestPromise: null,
   launchRequestQueued: false,
@@ -326,6 +344,7 @@ const privateInputState = {
   dragDistance: 0,
   lastPointerX: 0,
   lastPointerY: 0,
+  pointerId: 0,
   pointerMoved: false,
   yaw: 0,
   pitch: 0.66,
@@ -513,15 +532,30 @@ function setPrivatePanelTab(tab, options = {}) {
 }
 
 function updateShellState() {
+  const activePlacementTool = state.buildPlacementStroke?.toolKind || getActivePlacementTool();
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
   document.body.classList.toggle("is-world-menu-open", state.worldMenuOpen === true);
   document.body.classList.toggle("is-signed-in", Boolean(state.session));
   document.body.classList.toggle(
+    "has-placement-tool",
+    Boolean(activePlacementTool && canUsePlacementTools()),
+  );
+  document.body.classList.toggle(
     "has-selection",
     Boolean(state.builderSelection && state.mode === "build" && isEditor()),
   );
+  for (const kind of ["voxel", "primitive", "player", "screen", "text", "trigger"]) {
+    const button = getPlacementToolButton(kind);
+    if (!button) {
+      continue;
+    }
+    const active = kind === activePlacementTool && canUsePlacementTools();
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+    button.title = buildPlacementToolLabel(kind);
+  }
   setLauncherTab(state.launcherTab);
   setPrivatePanelTab(state.privatePanelTab, { syncMode: false });
 }
@@ -1913,6 +1947,121 @@ const PLAYER_CAMERA_MODES = ["third_person", "first_person", "top_down"];
 const PLAYER_BODY_MODES = ["rigid", "ghost"];
 const EFFECT_OPTIONS = ["", "sparkles", "smoke", "glow", "embers", "mist"];
 const TRAIL_OPTIONS = ["", "ribbon", "glow", "spark", "comet"];
+
+function isPlacementToolKind(kind) {
+  return kind === "voxel"
+    || kind === "primitive"
+    || kind === "player"
+    || kind === "screen"
+    || kind === "text"
+    || kind === "trigger";
+}
+
+function getPlacementToolButton(kind) {
+  if (kind === "voxel") {
+    return elements.addVoxel;
+  }
+  if (kind === "primitive") {
+    return elements.addPrimitive;
+  }
+  if (kind === "player") {
+    return elements.addPlayer;
+  }
+  if (kind === "screen") {
+    return elements.addScreen;
+  }
+  if (kind === "text") {
+    return elements.addText;
+  }
+  if (kind === "trigger") {
+    return elements.addTrigger;
+  }
+  return null;
+}
+
+function canUsePlacementTools() {
+  return Boolean(state.selectedWorld && isEditor() && state.mode === "build");
+}
+
+function getActivePlacementTool() {
+  const temporary = String(state.placementShortcutTool ?? "").trim();
+  if (isPlacementToolKind(temporary)) {
+    return temporary;
+  }
+  const persistent = String(state.placementTool ?? "").trim();
+  return isPlacementToolKind(persistent) ? persistent : "";
+}
+
+function clearPlacementTool(options = {}) {
+  const temporaryOnly = options.temporaryOnly === true;
+  if (temporaryOnly) {
+    state.placementShortcutTool = "";
+  } else {
+    state.placementShortcutTool = "";
+    state.placementTool = "";
+    state.buildPlacementStroke = null;
+  }
+  if (state.previewPointer.inside && canUsePlacementTools()) {
+    refreshBuildHoverFromStoredPointer();
+  } else {
+    state.buildHover = null;
+    syncBuildPlacementOverlay();
+  }
+  updateShellState();
+}
+
+function setPlacementTool(kind, options = {}) {
+  const normalized = isPlacementToolKind(kind) ? kind : "";
+  if (!canUsePlacementTools() && normalized) {
+    return;
+  }
+  if (options.temporary === true) {
+    state.placementShortcutTool = normalized;
+  } else {
+    state.placementTool = normalized && state.placementTool === normalized ? "" : normalized;
+  }
+  refreshBuildHoverFromStoredPointer();
+  syncBuildPlacementOverlay();
+  updateShellState();
+}
+
+function buildPlacementToolLabel(kind) {
+  const shortcut = [...BUILD_PLACEMENT_SHORTCUTS.entries()].find(([, value]) => value === kind)?.[0] || "";
+  if (kind === "voxel") {
+    return shortcut ? `Voxel (${shortcut})` : "Voxel";
+  }
+  if (kind === "primitive") {
+    return shortcut ? `Object (${shortcut})` : "Object";
+  }
+  if (kind === "player") {
+    return shortcut ? `Player (${shortcut})` : "Player";
+  }
+  if (kind === "screen") {
+    return shortcut ? `Screen (${shortcut})` : "Screen";
+  }
+  if (kind === "text") {
+    return shortcut ? `Text (${shortcut})` : "Text";
+  }
+  if (kind === "trigger") {
+    return shortcut ? `Trigger (${shortcut})` : "Trigger";
+  }
+  return "";
+}
+
+function getPlacementShortcutTool(event) {
+  const key = String(event?.key ?? "").trim();
+  if (BUILD_PLACEMENT_SHORTCUTS.has(key)) {
+    return BUILD_PLACEMENT_SHORTCUTS.get(key) || "";
+  }
+  const code = String(event?.code ?? "").trim();
+  if (code.startsWith("Digit")) {
+    return BUILD_PLACEMENT_SHORTCUTS.get(code.slice(5)) || "";
+  }
+  if (code.startsWith("Numpad")) {
+    return BUILD_PLACEMENT_SHORTCUTS.get(code.slice(6)) || "";
+  }
+  return "";
+}
 
 function getEntityCollection(key) {
   return ENTITY_COLLECTIONS.find((entry) => entry.key === key || entry.kind === key) ?? null;
@@ -3360,6 +3509,7 @@ function setMode(mode, options = {}) {
   const previousMode = state.mode;
   state.mode = nextMode;
   if (nextMode === "play") {
+    clearPlacementTool();
     state.builderSelection = null;
     state.sceneDrawerOpen = false;
     if (syncPanelTab && state.privatePanelTab === "build") {
@@ -3369,6 +3519,9 @@ function setMode(mode, options = {}) {
     state.privatePanelTab = "build";
   }
   document.body.classList.toggle("is-play-mode", nextMode === "play");
+  if (nextMode === "build") {
+    refreshBuildHoverFromStoredPointer();
+  }
   updateShellState();
   syncPrivatePreviewEnvironmentState();
   updatePreviewFromSelection();
@@ -4471,6 +4624,374 @@ function getDefaultVoxelPlacement(sceneDoc, world = state.selectedWorld) {
   };
 }
 
+function snapPlacementAxisToBlockGrid(value, axis, size = PRIVATE_WORLD_BLOCK_UNIT, world = state.selectedWorld) {
+  const bounds = getPrivateWorldBounds(world);
+  const minEdge = axis === "x" ? bounds.minX : bounds.minZ;
+  const maxEdge = axis === "x" ? bounds.maxX : bounds.maxZ;
+  const blockCenter = minEdge
+    + PRIVATE_WORLD_BLOCK_UNIT / 2
+    + Math.round(((Number(value) || 0) - minEdge - PRIVATE_WORLD_BLOCK_UNIT / 2) / PRIVATE_WORLD_BLOCK_UNIT) * PRIVATE_WORLD_BLOCK_UNIT;
+  const minCenter = minEdge + size / 2;
+  const maxCenter = maxEdge - size / 2;
+  return roundPrivateValue(clampNumber(blockCenter, blockCenter, minCenter, Math.max(minCenter, maxCenter)));
+}
+
+function clampPlacementCenterY(value, size, world = state.selectedWorld) {
+  const bounds = getPrivateWorldBounds(world);
+  const minCenter = size / 2;
+  const maxCenter = Math.max(minCenter, bounds.height - size / 2);
+  return roundPrivateValue(clampNumber(Number(value) || minCenter, value, minCenter, maxCenter));
+}
+
+function getToolPlacementDimensions(kind) {
+  if (kind === "voxel" || kind === "primitive") {
+    return { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT };
+  }
+  if (kind === "player") {
+    return {
+      x: PRIVATE_PLAYER_METRICS.width * PRIVATE_PLAYER_DEFAULT_SCALE,
+      y: PRIVATE_PLAYER_METRICS.height * PRIVATE_PLAYER_DEFAULT_SCALE,
+      z: PRIVATE_PLAYER_METRICS.width * PRIVATE_PLAYER_DEFAULT_SCALE,
+    };
+  }
+  if (kind === "screen") {
+    return { x: 4, y: 2.25, z: 0.2 };
+  }
+  if (kind === "text") {
+    return { x: PRIVATE_WORLD_BLOCK_UNIT, y: 3, z: PRIVATE_WORLD_BLOCK_UNIT };
+  }
+  if (kind === "trigger") {
+    return { x: 2, y: 2, z: 2 };
+  }
+  return { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT };
+}
+
+function getToolPlacementCenterYOffset(kind, supportTopY = 0) {
+  const dimensions = getToolPlacementDimensions(kind);
+  if (kind === "text") {
+    return clampPlacementCenterY(supportTopY + dimensions.y, dimensions.y);
+  }
+  if (kind === "trigger") {
+    return clampPlacementCenterY(supportTopY + 0.5, dimensions.y);
+  }
+  return clampPlacementCenterY(supportTopY + dimensions.y / 2, dimensions.y);
+}
+
+function getDominantHitNormal(hit) {
+  if (!hit?.face?.normal || !hit?.object) {
+    return null;
+  }
+  const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+  const absoluteX = Math.abs(normal.x);
+  const absoluteY = Math.abs(normal.y);
+  const absoluteZ = Math.abs(normal.z);
+  if (absoluteX >= absoluteY && absoluteX >= absoluteZ) {
+    return new THREE.Vector3(Math.sign(normal.x) || 1, 0, 0);
+  }
+  if (absoluteY >= absoluteX && absoluteY >= absoluteZ) {
+    return new THREE.Vector3(0, Math.sign(normal.y) || 1, 0);
+  }
+  return new THREE.Vector3(0, 0, Math.sign(normal.z) || 1);
+}
+
+function getPreviewPointerContext(pointerSource) {
+  const preview = ensurePreview();
+  const clientX = Number(pointerSource?.clientX);
+  const clientY = Number(pointerSource?.clientY);
+  if (!preview || !Number.isFinite(clientX) || !Number.isFinite(clientY) || !elements.previewCanvas) {
+    return null;
+  }
+  const rect = elements.previewCanvas.getBoundingClientRect();
+  const pointer = new THREE.Vector2(
+    ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+    -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
+  );
+  preview.raycaster.setFromCamera(pointer, preview.camera);
+  const hit = preview.raycaster.intersectObjects(preview.entityPickables, false)[0] ?? null;
+  const groundPoint = new THREE.Vector3();
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const hasGround = preview.raycaster.ray.intersectPlane(groundPlane, groundPoint);
+  return {
+    preview,
+    hit,
+    groundPoint: hasGround ? groundPoint.clone() : null,
+  };
+}
+
+function resolveBuildGridCell(context) {
+  if (!context?.groundPoint || !state.selectedWorld) {
+    return null;
+  }
+  return {
+    x: snapPlacementAxisToBlockGrid(context.groundPoint.x, "x"),
+    y: 0.06,
+    z: snapPlacementAxisToBlockGrid(context.groundPoint.z, "z"),
+  };
+}
+
+function resolvePlacementPreview(kind, sceneDoc, context) {
+  if (!isPlacementToolKind(kind) || !context || !state.selectedWorld) {
+    return null;
+  }
+  const dimensions = getToolPlacementDimensions(kind);
+  if (kind === "voxel") {
+    const dominantNormal = getDominantHitNormal(context.hit);
+    let position = null;
+    if (dominantNormal) {
+      position = snapVoxelPositionToGrid({
+        x: context.hit.point.x + dominantNormal.x * (dimensions.x / 2 + 0.05),
+        y: context.hit.point.y + dominantNormal.y * (dimensions.y / 2 + 0.05),
+        z: context.hit.point.z + dominantNormal.z * (dimensions.z / 2 + 0.05),
+      }, dimensions, state.selectedWorld);
+    } else if (context.groundPoint) {
+      position = snapVoxelPositionToGrid({
+        x: context.groundPoint.x,
+        y: dimensions.y / 2,
+        z: context.groundPoint.z,
+      }, dimensions, state.selectedWorld);
+    }
+    if (!position) {
+      return null;
+    }
+    const occupied = isVoxelPlacementOccupied(sceneDoc, position, dimensions);
+    return {
+      kind,
+      key: `${kind}:${position.x}:${position.y}:${position.z}`,
+      position,
+      rotation: { x: 0, y: 0, z: 0 },
+      dimensions,
+      valid: !occupied,
+      supportTopY: position.y - dimensions.y / 2,
+    };
+  }
+
+  const gridCell = resolveBuildGridCell(context);
+  if (!gridCell) {
+    return null;
+  }
+  let supportTopY = 0;
+  const dominantNormal = getDominantHitNormal(context.hit);
+  if (context.hit?.object && dominantNormal?.y > 0) {
+    const bounds = new THREE.Box3().setFromObject(context.hit.object);
+    supportTopY = Number(bounds.max.y ?? 0) || 0;
+  }
+  const position = {
+    x: snapPlacementAxisToBlockGrid(gridCell.x, "x", dimensions.x),
+    y: getToolPlacementCenterYOffset(kind, supportTopY),
+    z: snapPlacementAxisToBlockGrid(gridCell.z, "z", dimensions.z),
+  };
+  return {
+    kind,
+    key: `${kind}:${position.x}:${position.y}:${position.z}`,
+    position,
+    rotation: { x: 0, y: 0, z: 0 },
+    dimensions,
+    valid: true,
+    supportTopY,
+  };
+}
+
+function refreshBuildHoverFromPointer(pointerSource) {
+  if (!canUsePlacementTools() || !state.previewPointer.inside) {
+    state.buildHover = null;
+    syncBuildPlacementOverlay();
+    return null;
+  }
+  const context = getPreviewPointerContext(pointerSource);
+  if (!context) {
+    state.buildHover = null;
+    syncBuildPlacementOverlay();
+    return null;
+  }
+  const toolKind = state.buildPlacementStroke?.toolKind || getActivePlacementTool();
+  let sceneDoc = null;
+  if (toolKind) {
+    try {
+      sceneDoc = parseSceneTextarea();
+    } catch (_error) {
+      state.buildHover = null;
+      syncBuildPlacementOverlay();
+      return null;
+    }
+  }
+  state.buildHover = {
+    context,
+    gridCell: resolveBuildGridCell(context),
+    placement: toolKind ? resolvePlacementPreview(toolKind, sceneDoc, context) : null,
+  };
+  syncBuildPlacementOverlay();
+  return state.buildHover;
+}
+
+function refreshBuildHoverFromStoredPointer() {
+  if (!state.previewPointer.inside) {
+    state.buildHover = null;
+    syncBuildPlacementOverlay();
+    return null;
+  }
+  return refreshBuildHoverFromPointer(state.previewPointer);
+}
+
+function clearBuildPlacementOverlay(preview = state.preview) {
+  if (!preview?.buildOverlay) {
+    return;
+  }
+  for (const child of [...preview.buildOverlay.children]) {
+    preview.buildOverlay.remove(child);
+    child.traverse?.((node) => {
+      node.geometry?.dispose?.();
+      if (Array.isArray(node.material)) {
+        node.material.forEach((material) => material?.dispose?.());
+      } else {
+        node.material?.dispose?.();
+      }
+    });
+  }
+  preview.buildOverlayKey = "";
+}
+
+function buildPlacementGhost(preview, placement) {
+  if (!preview?.buildOverlay || !placement) {
+    return;
+  }
+  const accent = placement.kind === "voxel" ? "#85b84f" : "#4ca7ff";
+  const invalidAccent = "#ff5a7a";
+  const color = placement.valid ? accent : invalidAccent;
+  const dimensions = placement.dimensions || getToolPlacementDimensions(placement.kind);
+  const overlayOpacity = placement.valid ? 0.18 : 0.12;
+  const outlineOpacity = placement.valid ? 0.56 : 0.8;
+
+  const cellHighlight = new THREE.Mesh(
+    new THREE.BoxGeometry(PRIVATE_WORLD_BLOCK_UNIT, 0.08, PRIVATE_WORLD_BLOCK_UNIT),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(placement.valid ? "#7ce85b" : invalidAccent),
+      transparent: true,
+      opacity: 0.12,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  cellHighlight.position.set(
+    snapPlacementAxisToBlockGrid(placement.position.x, "x"),
+    placement.supportTopY + 0.08,
+    snapPlacementAxisToBlockGrid(placement.position.z, "z"),
+  );
+  preview.buildOverlay.add(cellHighlight);
+
+  let geometry = new THREE.BoxGeometry(1, 1, 1);
+  let scale = dimensions;
+  if (placement.kind === "player") {
+    geometry = new THREE.CapsuleGeometry(
+      PRIVATE_PLAYER_METRICS.width / 2,
+      PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
+      8,
+      16,
+    );
+    scale = {
+      x: PRIVATE_PLAYER_DEFAULT_SCALE,
+      y: PRIVATE_PLAYER_DEFAULT_SCALE,
+      z: PRIVATE_PLAYER_DEFAULT_SCALE,
+    };
+  } else if (placement.kind === "screen") {
+    geometry = new THREE.BoxGeometry(1, 1, 0.1);
+  } else if (placement.kind === "trigger") {
+    const wire = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(dimensions.x, dimensions.y, dimensions.z)),
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color(color),
+        transparent: true,
+        opacity: outlineOpacity,
+        fog: false,
+      }),
+    );
+    wire.position.set(placement.position.x, placement.position.y, placement.position.z);
+    preview.buildOverlay.add(wire);
+    return;
+  } else if (placement.kind === "text") {
+    geometry = new THREE.PlaneGeometry(4.5, 1.2);
+    scale = { x: 1, y: 1, z: 1 };
+  }
+
+  const ghost = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color),
+      transparent: true,
+      opacity: overlayOpacity,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  ghost.position.set(placement.position.x, placement.position.y, placement.position.z);
+  ghost.rotation.set(placement.rotation?.x || 0, placement.rotation?.y || 0, placement.rotation?.z || 0);
+  ghost.scale.set(scale.x || 1, scale.y || 1, scale.z || 1);
+  preview.buildOverlay.add(ghost);
+
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(
+      placement.kind === "text"
+        ? new THREE.BoxGeometry(4.5, 1.2, 0.12)
+        : placement.kind === "screen"
+          ? new THREE.BoxGeometry(dimensions.x, dimensions.y, Math.max(0.1, dimensions.z))
+          : placement.kind === "player"
+            ? new THREE.BoxGeometry(dimensions.x, dimensions.y, dimensions.z)
+            : new THREE.BoxGeometry(dimensions.x, dimensions.y, dimensions.z)
+    ),
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color(color),
+      transparent: true,
+      opacity: outlineOpacity,
+      fog: false,
+    }),
+  );
+  outline.position.copy(ghost.position);
+  outline.rotation.copy(ghost.rotation);
+  preview.buildOverlay.add(outline);
+}
+
+function syncBuildPlacementOverlay(preview = state.preview) {
+  if (!preview?.buildOverlay) {
+    return;
+  }
+  const buildMode = canUsePlacementTools();
+  const hover = buildMode ? state.buildHover : null;
+  const activeTool = buildMode ? (state.buildPlacementStroke?.toolKind || getActivePlacementTool()) : "";
+  const gridCell = hover?.gridCell ?? null;
+  const placement = hover?.placement ?? null;
+  const overlayKey = [
+    buildMode ? "build" : "idle",
+    activeTool || "none",
+    gridCell ? `${gridCell.x}:${gridCell.z}` : "nogrid",
+    placement ? `${placement.key}:${placement.valid ? "ok" : "blocked"}` : "noplacement",
+  ].join("|");
+  if (preview.buildOverlayKey === overlayKey) {
+    return;
+  }
+  clearBuildPlacementOverlay(preview);
+  preview.buildOverlay.visible = buildMode;
+  if (!buildMode) {
+    return;
+  }
+  if (gridCell) {
+    const cursor = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(PRIVATE_WORLD_BLOCK_UNIT, 0.04, PRIVATE_WORLD_BLOCK_UNIT)),
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color("#7fa7ff"),
+        transparent: true,
+        opacity: 0.4,
+        fog: false,
+      }),
+    );
+    cursor.position.set(gridCell.x, gridCell.y, gridCell.z);
+    preview.buildOverlay.add(cursor);
+  }
+  if (placement) {
+    buildPlacementGhost(preview, placement);
+  }
+  preview.buildOverlayKey = overlayKey;
+}
+
 function raycastPreviewPointer(event) {
   const preview = ensurePreview();
   if (!preview) {
@@ -4591,6 +5112,240 @@ function endBuildDrag(pointerId = 0) {
     return;
   }
   state.buildDrag = null;
+}
+
+function buildPlacementEntry(kind, sceneDoc, placement) {
+  if (!placement?.position) {
+    return null;
+  }
+  if (kind === "voxel") {
+    const nextId = `voxel_${(sceneDoc.voxels?.length ?? 0) + 1}`;
+    return {
+      kind,
+      id: nextId,
+      push() {
+        sceneDoc.voxels = sceneDoc.voxels || [];
+        sceneDoc.voxels.push({
+          id: nextId,
+          position: deepClone(placement.position),
+          scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
+          material: { color: "#85b84f", texture_preset: "grass" },
+        });
+      },
+    };
+  }
+  if (kind === "primitive") {
+    const nextId = `primitive_${(sceneDoc.primitives?.length ?? 0) + 1}`;
+    return {
+      kind,
+      id: nextId,
+      push() {
+        sceneDoc.primitives = sceneDoc.primitives || [];
+        sceneDoc.primitives.push({
+          id: nextId,
+          shape: "box",
+          position: deepClone(placement.position),
+          scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#d3d8e2", texture_preset: "stone" },
+          physics: { gravity_scale: 1, restitution: 0.2, friction: 0.7, mass: 1 },
+        });
+      },
+    };
+  }
+  if (kind === "player") {
+    const nextId = `player_${(sceneDoc.players?.length ?? 0) + 1}`;
+    return {
+      kind,
+      id: nextId,
+      push() {
+        sceneDoc.players = sceneDoc.players || [];
+        sceneDoc.players.push({
+          id: nextId,
+          label: `Player ${(sceneDoc.players?.length ?? 0) + 1}`,
+          position: deepClone(placement.position),
+          scale: PRIVATE_PLAYER_DEFAULT_SCALE,
+          camera_mode: "third_person",
+          body_mode: "rigid",
+        });
+      },
+    };
+  }
+  if (kind === "screen") {
+    const nextId = `screen_${(sceneDoc.screens?.length ?? 0) + 1}`;
+    return {
+      kind,
+      id: nextId,
+      push() {
+        sceneDoc.screens = sceneDoc.screens || [];
+        sceneDoc.screens.push({
+          id: nextId,
+          position: deepClone(placement.position),
+          scale: { x: 4, y: 2.25, z: 0.2 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#ffffff", texture_preset: "none" },
+          html: "<div style=\"padding:24px\"><h1>Hello world</h1><p>Static world screen.</p></div>",
+        });
+      },
+    };
+  }
+  if (kind === "text") {
+    const nextId = `text_${(sceneDoc.texts?.length ?? 0) + 1}`;
+    return {
+      kind,
+      id: nextId,
+      push() {
+        sceneDoc.texts = sceneDoc.texts || [];
+        sceneDoc.texts.push({
+          id: nextId,
+          value: "Welcome",
+          position: deepClone(placement.position),
+          scale: 1,
+          material: { color: "#ffffff", texture_preset: "none" },
+        });
+      },
+    };
+  }
+  if (kind === "trigger") {
+    const nextId = `trigger_${(sceneDoc.trigger_zones?.length ?? 0) + 1}`;
+    return {
+      kind,
+      id: nextId,
+      push() {
+        sceneDoc.trigger_zones = sceneDoc.trigger_zones || [];
+        sceneDoc.trigger_zones.push({
+          id: nextId,
+          label: "Start Zone",
+          position: deepClone(placement.position),
+          scale: { x: 2, y: 2, z: 2 },
+        });
+      },
+    };
+  }
+  return null;
+}
+
+function placeActiveTool(placement = state.buildHover?.placement, toolKind = getActivePlacementTool()) {
+  if (!toolKind || placement?.kind !== toolKind || placement?.valid === false) {
+    return false;
+  }
+  let placed = false;
+  void acquireSceneLock();
+  mutateSceneDoc((sceneDoc) => {
+    const nextEntry = buildPlacementEntry(toolKind, sceneDoc, placement);
+    if (!nextEntry) {
+      return;
+    }
+    nextEntry.push();
+    state.builderSelection = { kind: nextEntry.kind, id: nextEntry.id };
+    placed = true;
+  });
+  if (placed) {
+    refreshBuildHoverFromStoredPointer();
+  }
+  return placed;
+}
+
+function canPaintPlacementStep(fromPlacement, toPlacement) {
+  if (!fromPlacement?.position || !toPlacement?.position || fromPlacement.kind !== toPlacement.kind) {
+    return false;
+  }
+  const deltaX = Math.abs((toPlacement.position.x ?? 0) - (fromPlacement.position.x ?? 0));
+  const deltaY = Math.abs((toPlacement.position.y ?? 0) - (fromPlacement.position.y ?? 0));
+  const deltaZ = Math.abs((toPlacement.position.z ?? 0) - (fromPlacement.position.z ?? 0));
+  if (deltaX < 0.0001 && deltaY < 0.0001 && deltaZ < 0.0001) {
+    return false;
+  }
+  return (
+    deltaX <= PRIVATE_WORLD_BLOCK_UNIT + 0.001
+    && deltaY <= PRIVATE_WORLD_BLOCK_UNIT + 0.001
+    && deltaZ <= PRIVATE_WORLD_BLOCK_UNIT + 0.001
+  );
+}
+
+function beginBuildPlacementStroke(pointerSource, toolKind = getActivePlacementTool()) {
+  if (!toolKind || !canUsePlacementTools()) {
+    return false;
+  }
+  const hover = refreshBuildHoverFromPointer(pointerSource);
+  state.buildPlacementStroke = {
+    pointerId: Number(pointerSource?.pointerId ?? state.previewPointer.pointerId) || 0,
+    toolKind,
+    initialPlacement: hover?.placement ? deepClone(hover.placement) : null,
+    lastPlacedPlacement: null,
+    placedCount: 0,
+  };
+  return true;
+}
+
+function updateBuildPlacementStroke(pointerSource) {
+  if (!state.buildPlacementStroke) {
+    return false;
+  }
+  const hover = refreshBuildHoverFromPointer(pointerSource);
+  const currentPlacement = hover?.placement ?? null;
+  if (!currentPlacement?.valid || currentPlacement.kind !== state.buildPlacementStroke.toolKind) {
+    return true;
+  }
+  if (
+    state.buildPlacementStroke.placedCount === 0
+    && state.buildPlacementStroke.initialPlacement
+    && state.buildPlacementStroke.initialPlacement.key !== currentPlacement.key
+    && canPaintPlacementStep(state.buildPlacementStroke.initialPlacement, currentPlacement)
+  ) {
+    if (placeActiveTool(state.buildPlacementStroke.initialPlacement, state.buildPlacementStroke.toolKind)) {
+      state.buildPlacementStroke.lastPlacedPlacement = deepClone(state.buildPlacementStroke.initialPlacement);
+      state.buildPlacementStroke.placedCount += 1;
+    }
+  }
+  const lastPlacedPlacement = state.buildPlacementStroke.lastPlacedPlacement;
+  if (
+    lastPlacedPlacement
+    && lastPlacedPlacement.key !== currentPlacement.key
+    && canPaintPlacementStep(lastPlacedPlacement, currentPlacement)
+  ) {
+    if (placeActiveTool(currentPlacement, state.buildPlacementStroke.toolKind)) {
+      state.buildPlacementStroke.lastPlacedPlacement = deepClone(currentPlacement);
+      state.buildPlacementStroke.placedCount += 1;
+    }
+  }
+  return true;
+}
+
+function endBuildPlacementStroke(pointerId = 0) {
+  if (!state.buildPlacementStroke || (pointerId && state.buildPlacementStroke.pointerId && state.buildPlacementStroke.pointerId !== pointerId)) {
+    return false;
+  }
+  const stroke = state.buildPlacementStroke;
+  state.buildPlacementStroke = null;
+  if (stroke.placedCount > 0) {
+    state.viewerSuppressClickAt = performance.now();
+    return true;
+  }
+  const placement = state.buildHover?.placement ?? stroke.initialPlacement;
+  const placed = placeActiveTool(placement, stroke.toolKind);
+  if (placed) {
+    state.viewerSuppressClickAt = performance.now();
+  }
+  return placed;
+}
+
+function maybeTakeOverPlacementWhilePointerDown() {
+  if (!canUsePlacementTools() || !privateInputState.pointerDown || state.buildPlacementStroke || state.buildDrag) {
+    return false;
+  }
+  const toolKind = getActivePlacementTool();
+  if (!toolKind || !state.previewPointer.inside) {
+    return false;
+  }
+  privateInputState.pointerDown = false;
+  privateInputState.pointerMoved = false;
+  privateInputState.dragDistance = 0;
+  return beginBuildPlacementStroke({
+    clientX: state.previewPointer.clientX,
+    clientY: state.previewPointer.clientY,
+    pointerId: privateInputState.pointerId || state.previewPointer.pointerId,
+  }, toolKind);
 }
 
 function adjustSelectedEntityByWheel(event) {
@@ -5054,6 +5809,7 @@ function ensurePreview() {
     scene,
     camera,
     root: new THREE.Group(),
+    buildOverlay: new THREE.Group(),
     actors: new THREE.Group(),
     presence: new THREE.Group(),
     chatBubbleGhosts: new THREE.Group(),
@@ -5071,6 +5827,7 @@ function ensurePreview() {
   };
   buildPreviewEnvironment(state.preview);
   state.preview.scene.add(state.preview.root);
+  state.preview.scene.add(state.preview.buildOverlay);
   state.preview.scene.add(state.preview.actors);
   state.preview.scene.add(state.preview.presence);
   state.preview.scene.add(state.preview.browserShares);
@@ -5115,7 +5872,16 @@ function ensurePreview() {
 
   window.addEventListener("resize", render);
   elements.previewCanvas.addEventListener("pointerdown", (event) => {
+    state.previewPointer.clientX = event.clientX;
+    state.previewPointer.clientY = event.clientY;
+    state.previewPointer.pointerId = event.pointerId;
+    state.previewPointer.inside = true;
+    refreshBuildHoverFromPointer(event);
     if (state.mode === "build" && isEditor()) {
+      if (getActivePlacementTool() && beginBuildPlacementStroke(event)) {
+        elements.previewCanvas.setPointerCapture(event.pointerId);
+        return;
+      }
       if (beginBuildDrag(event)) {
         elements.previewCanvas.setPointerCapture(event.pointerId);
         return;
@@ -5127,11 +5893,24 @@ function ensurePreview() {
     privateInputState.pointerDown = true;
     privateInputState.dragDistance = 0;
     privateInputState.pointerMoved = false;
+    privateInputState.pointerId = event.pointerId;
     privateInputState.lastPointerX = event.clientX;
     privateInputState.lastPointerY = event.clientY;
     elements.previewCanvas.setPointerCapture(event.pointerId);
   });
   elements.previewCanvas.addEventListener("pointermove", (event) => {
+    state.previewPointer.clientX = event.clientX;
+    state.previewPointer.clientY = event.clientY;
+    state.previewPointer.pointerId = event.pointerId;
+    state.previewPointer.inside = true;
+    if (state.mode === "build" && isEditor()) {
+      refreshBuildHoverFromPointer(event);
+    }
+    if (state.buildPlacementStroke && state.buildPlacementStroke.pointerId === event.pointerId) {
+      event.preventDefault();
+      updateBuildPlacementStroke(event);
+      return;
+    }
     if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
       event.preventDefault();
       updateBuildDrag(event);
@@ -5156,6 +5935,16 @@ function ensurePreview() {
     syncPrivateCameraToFollowTarget(state.preview);
   });
   elements.previewCanvas.addEventListener("pointerup", (event) => {
+    state.previewPointer.clientX = event.clientX;
+    state.previewPointer.clientY = event.clientY;
+    state.previewPointer.pointerId = event.pointerId;
+    state.previewPointer.inside = true;
+    refreshBuildHoverFromPointer(event);
+    if (state.buildPlacementStroke && state.buildPlacementStroke.pointerId === event.pointerId) {
+      endBuildPlacementStroke(event.pointerId);
+      elements.previewCanvas.releasePointerCapture?.(event.pointerId);
+      return;
+    }
     if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
       endBuildDrag(event.pointerId);
       elements.previewCanvas.releasePointerCapture?.(event.pointerId);
@@ -5163,13 +5952,27 @@ function ensurePreview() {
     }
     state.viewerSuppressClickAt = privateInputState.pointerMoved ? performance.now() : 0;
     privateInputState.pointerDown = false;
+    privateInputState.pointerId = 0;
     elements.previewCanvas.releasePointerCapture?.(event.pointerId);
   });
   elements.previewCanvas.addEventListener("pointercancel", (event) => {
+    state.previewPointer.inside = false;
+    state.buildHover = null;
+    syncBuildPlacementOverlay();
+    state.buildPlacementStroke = null;
     endBuildDrag(event.pointerId);
     privateInputState.pointerDown = false;
     privateInputState.pointerMoved = false;
+    privateInputState.pointerId = 0;
     elements.previewCanvas.releasePointerCapture?.(event.pointerId);
+  });
+  elements.previewCanvas.addEventListener("pointerleave", () => {
+    if (privateInputState.pointerDown || state.buildPlacementStroke) {
+      return;
+    }
+    state.previewPointer.inside = false;
+    state.buildHover = null;
+    syncBuildPlacementOverlay();
   });
   elements.previewCanvas.addEventListener("wheel", (event) => {
     if (adjustSelectedEntityByWheel(event)) {
@@ -5190,6 +5993,9 @@ function ensurePreview() {
   }, { passive: false });
   elements.previewCanvas.addEventListener("click", (event) => {
     if (state.viewerSuppressClickAt && performance.now() - state.viewerSuppressClickAt < 240) {
+      return;
+    }
+    if (state.mode === "build" && getActivePlacementTool()) {
       return;
     }
     const hit = raycastPreviewPointer(event);
@@ -5726,6 +6532,7 @@ function updatePreviewFromSelection() {
   }
 
   preview.effectSystems = particleEffects;
+  syncBuildPlacementOverlay(preview);
 }
 
 function connectWorldSocket() {
@@ -5861,10 +6668,14 @@ async function openWorld(worldId, creatorUsername, includeContent = true) {
   state.selectedSceneId = payload.world?.active_instance?.active_scene_id || payload.world?.scenes?.[0]?.id || "";
   state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
   state.builderSelection = null;
+  state.buildPlacementStroke = null;
+  state.buildHover = null;
   state.launcherOpen = false;
   state.sceneDrawerOpen = false;
   state.worldMenuOpen = false;
   if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
+    state.previewPointer.inside = false;
+    clearPlacementTool();
     state.sceneDrafts.clear();
     state.sceneEditorSceneId = "";
     state.privateChatEntries = [];
@@ -6461,104 +7272,27 @@ async function removeCollaborator(username) {
 
 function attachQuickAddButtons() {
   elements.addVoxel.addEventListener("click", () => {
-    mutateSceneDoc((sceneDoc) => {
-      sceneDoc.voxels = sceneDoc.voxels || [];
-      const nextId = `voxel_${sceneDoc.voxels.length + 1}`;
-      const nextPosition = getDefaultVoxelPlacement(sceneDoc, state.selectedWorld);
-      sceneDoc.voxels.push({
-        id: nextId,
-        position: nextPosition,
-        scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
-        material: { color: "#85b84f", texture_preset: "grass" },
-      });
-      state.builderSelection = { kind: "voxel", id: nextId };
-    });
+    setPlacementTool("voxel");
   });
 
   elements.addPrimitive.addEventListener("click", () => {
-    mutateSceneDoc((sceneDoc) => {
-      sceneDoc.primitives = sceneDoc.primitives || [];
-      const nextId = `primitive_${sceneDoc.primitives.length + 1}`;
-      const scale = { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT };
-      sceneDoc.primitives.push({
-        id: nextId,
-        shape: "box",
-        position: {
-          x: PRIVATE_WORLD_BLOCK_UNIT / 2 + sceneDoc.primitives.length * PRIVATE_WORLD_BLOCK_UNIT * 2,
-          y: scale.y / 2,
-          z: -PRIVATE_WORLD_BLOCK_UNIT * 1.5,
-        },
-        scale,
-        rotation: { x: 0, y: 0, z: 0 },
-        material: { color: "#d3d8e2", texture_preset: "stone" },
-        physics: { gravity_scale: 1, restitution: 0.2, friction: 0.7, mass: 1 },
-      });
-      state.builderSelection = { kind: "primitive", id: nextId };
-    });
+    setPlacementTool("primitive");
   });
 
   elements.addPlayer.addEventListener("click", () => {
-    mutateSceneDoc((sceneDoc) => {
-      sceneDoc.players = sceneDoc.players || [];
-      const nextId = `player_${sceneDoc.players.length + 1}`;
-      sceneDoc.players.push({
-        id: nextId,
-        label: `Player ${sceneDoc.players.length + 1}`,
-        position: {
-          x: 0,
-          y: (PRIVATE_PLAYER_METRICS.height * PRIVATE_PLAYER_DEFAULT_SCALE) / 2,
-          z: sceneDoc.players.length * PRIVATE_WORLD_BLOCK_UNIT * 2,
-        },
-        scale: PRIVATE_PLAYER_DEFAULT_SCALE,
-        camera_mode: "third_person",
-        body_mode: "rigid",
-      });
-      state.builderSelection = { kind: "player", id: nextId };
-    });
+    setPlacementTool("player");
   });
 
   elements.addScreen.addEventListener("click", () => {
-    mutateSceneDoc((sceneDoc) => {
-      sceneDoc.screens = sceneDoc.screens || [];
-      const nextId = `screen_${sceneDoc.screens.length + 1}`;
-      sceneDoc.screens.push({
-        id: nextId,
-        position: { x: 0, y: 2.6, z: -4 - sceneDoc.screens.length },
-        scale: { x: 4, y: 2.25, z: 0.2 },
-        material: { color: "#ffffff", texture_preset: "none" },
-        html: "<div style=\"padding:24px\"><h1>Hello world</h1><p>Static world screen.</p></div>",
-      });
-      state.builderSelection = { kind: "screen", id: nextId };
-    });
+    setPlacementTool("screen");
   });
 
   elements.addText.addEventListener("click", () => {
-    mutateSceneDoc((sceneDoc) => {
-      sceneDoc.texts = sceneDoc.texts || [];
-      const nextId = `text_${sceneDoc.texts.length + 1}`;
-      sceneDoc.texts.push({
-        id: nextId,
-        value: "Welcome",
-        position: { x: 0, y: 3, z: 2 + sceneDoc.texts.length },
-        scale: 1,
-        material: { color: "#ffffff", texture_preset: "none" },
-      });
-      state.builderSelection = { kind: "text", id: nextId };
-    });
+    setPlacementTool("text");
   });
 
   elements.addTrigger.addEventListener("click", () => {
-    mutateSceneDoc((sceneDoc) => {
-      sceneDoc.trigger_zones = sceneDoc.trigger_zones || [];
-      const nextId = `trigger_${sceneDoc.trigger_zones.length + 1}`;
-      sceneDoc.trigger_zones.push({
-        id: nextId,
-        label: "Start Zone",
-        position: { x: 0, y: 0.5, z: 6 + sceneDoc.trigger_zones.length },
-        scale: { x: 2, y: 2, z: 2 },
-      });
-      state.builderSelection = { kind: "trigger", id: nextId };
-    });
+    setPlacementTool("trigger");
   });
 
   elements.addParticle.addEventListener("click", () => {
@@ -7055,6 +7789,21 @@ function bindEvents() {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
       return;
     }
+    const toolKind = getPlacementShortcutTool(event);
+    if (!toolKind || !canUsePlacementTools()) {
+      return;
+    }
+    event.preventDefault();
+    if (event.repeat && state.placementShortcutTool === toolKind) {
+      return;
+    }
+    setPlacementTool(toolKind, { temporary: true });
+    maybeTakeOverPlacementWhilePointerDown();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
+      return;
+    }
     const key = normalizeRuntimeKey(event);
     if (!RUNTIME_INPUT_KEYS.has(key)) {
       return;
@@ -7069,6 +7818,17 @@ function bindEvents() {
       return;
     }
     privateInputState.keys.add(key);
+  });
+  window.addEventListener("keyup", (event) => {
+    const toolKind = getPlacementShortcutTool(event);
+    if (!toolKind) {
+      return;
+    }
+    event.preventDefault();
+    if (state.placementShortcutTool === toolKind) {
+      clearPlacementTool({ temporaryOnly: true });
+      refreshBuildHoverFromStoredPointer();
+    }
   });
   window.addEventListener("keyup", (event) => {
     const key = normalizeRuntimeKey(event);
@@ -7089,9 +7849,14 @@ function bindEvents() {
     privateInputState.keys.clear();
     privateInputState.sprintHoldSeconds = 0;
     privateInputState.pointerDown = false;
+    privateInputState.pointerId = 0;
     privateInputState.pointerMoved = false;
     privateInputState.dragDistance = 0;
     state.viewerSuppressClickAt = 0;
+    state.buildPlacementStroke = null;
+    state.previewPointer.inside = false;
+    state.buildHover = null;
+    clearPlacementTool({ temporaryOnly: true });
     for (const key of keys) {
       void sendRuntimeInput(key, "up");
     }
@@ -7105,6 +7870,10 @@ function bindEvents() {
     }
     if (state.browserOverlayOpen) {
       setPrivateBrowserOverlayOpen(false);
+      return;
+    }
+    if (getActivePlacementTool()) {
+      clearPlacementTool();
       return;
     }
     if (state.builderSelection) {

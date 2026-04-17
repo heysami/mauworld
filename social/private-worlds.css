@@ -641,6 +641,14 @@ body.private-worlds-body:not(.has-world) .pw-panel-modes {
   transform: translateY(0);
 }
 
+.pw-tool.is-active {
+  border-color: rgba(255, 90, 122, 0.42);
+  background: rgba(255, 90, 122, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 14px 28px rgba(255, 90, 122, 0.16);
+}
+
 .pw-tool strong {
   font-size: 0.84rem;
 }
@@ -656,6 +664,10 @@ body.private-worlds-body:not(.has-world) .pw-toolbelt {
   opacity: 0;
   pointer-events: none;
   transform: translate3d(-12px, 0, 0);
+}
+
+body.private-worlds-body.has-placement-tool .pw-canvas {
+  cursor: crosshair;
 }
 
 .pw-inspector {
