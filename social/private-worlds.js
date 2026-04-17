@@ -2192,10 +2192,17 @@ function ensurePrivateBrowserVideoPlayback(element) {
   if (!element) {
     return;
   }
+  const localAudibleStream = state.localBrowserShare?.hasAudio
+    ? state.localBrowserShare.stream
+    : state.pendingBrowserShare?.hasAudio
+      ? state.pendingBrowserShare.stream
+      : null;
+  const shouldPlayAudio = Boolean(localAudibleStream && element.srcObject === localAudibleStream);
   element.autoplay = true;
   element.playsInline = true;
-  element.muted = true;
-  element.defaultMuted = true;
+  element.muted = !shouldPlayAudio;
+  element.defaultMuted = !shouldPlayAudio;
+  element.volume = shouldPlayAudio ? 1 : 0;
   const playPromise = element.play?.();
   playPromise?.then?.(() => {
     if (state.browserMediaState.lastPlayError) {

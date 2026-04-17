@@ -1346,14 +1346,25 @@ function ensureBrowserVideoPlayback(element) {
   if (!element) {
     return;
   }
+  const localAudibleStream = state.localBrowserShare?.hasAudio
+    ? state.localBrowserShare.stream
+    : state.pendingBrowserShare?.hasAudio
+      ? state.pendingBrowserShare.stream
+      : null;
+  const shouldPlayAudio = Boolean(localAudibleStream && element.srcObject === localAudibleStream);
   element.autoplay = true;
   element.playsInline = true;
   element.setAttribute("autoplay", "");
   element.setAttribute("playsinline", "true");
-  element.muted = true;
-  element.defaultMuted = true;
-  element.setAttribute("muted", "");
-  element.volume = 0;
+  element.muted = !shouldPlayAudio;
+  element.defaultMuted = !shouldPlayAudio;
+  if (shouldPlayAudio) {
+    element.removeAttribute("muted");
+    element.volume = 1;
+  } else {
+    element.setAttribute("muted", "");
+    element.volume = 0;
+  }
   const playPromise = element.play?.();
   playPromise?.then?.(() => {
     if (state.browserMediaState.lastPlayError) {
@@ -1407,6 +1418,7 @@ function mountBrowserStageVideoElement(videoElement) {
   videoElement.hidden = false;
   videoElement.muted = true;
   videoElement.defaultMuted = true;
+  videoElement.volume = 0;
   videoElement.autoplay = true;
   videoElement.playsInline = true;
   videoElement.setAttribute("data-world-browser-video", "");
@@ -1427,6 +1439,7 @@ function restoreBrowserStageVideoElement() {
   defaultBrowserStageVideoElement.hidden = Boolean(activeVideo?.hidden);
   defaultBrowserStageVideoElement.muted = true;
   defaultBrowserStageVideoElement.defaultMuted = true;
+  defaultBrowserStageVideoElement.volume = 0;
   defaultBrowserStageVideoElement.autoplay = true;
   defaultBrowserStageVideoElement.playsInline = true;
   defaultBrowserStageVideoElement.setAttribute("data-world-browser-video", "");
