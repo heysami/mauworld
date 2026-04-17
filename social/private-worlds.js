@@ -94,6 +94,8 @@ const PRIVATE_WORLD_STYLE = {
 };
 
 let privateToonGradientTexture = null;
+const privateBillboardParentQuaternion = new THREE.Quaternion();
+const privateBillboardCameraQuaternion = new THREE.Quaternion();
 
 const elements = {
   launcher: document.querySelector("[data-launcher]"),
@@ -684,6 +686,23 @@ function createPrivateActorBubbleState(color, options = {}) {
   };
 }
 
+function orientPrivateBillboardToCamera(mesh, camera) {
+  if (!mesh || !camera) {
+    return;
+  }
+  const parent = mesh.parent;
+  if (!parent) {
+    mesh.quaternion.copy(camera.quaternion);
+    return;
+  }
+  parent.updateWorldMatrix(true, false);
+  camera.updateWorldMatrix(true, false);
+  parent.getWorldQuaternion(privateBillboardParentQuaternion);
+  camera.getWorldQuaternion(privateBillboardCameraQuaternion);
+  privateBillboardParentQuaternion.invert();
+  mesh.quaternion.copy(privateBillboardParentQuaternion.multiply(privateBillboardCameraQuaternion));
+}
+
 function getPrivateChatBubbleTargetSize(texture, bubble) {
   const baseWidth = Number(bubble?.baseWidth) || PRIVATE_CHAT_BUBBLE_BASE_WIDTH;
   const baseHeight = Number(bubble?.baseHeight) || PRIVATE_CHAT_BUBBLE_BASE_HEIGHT;
@@ -785,7 +804,7 @@ function updatePrivateActorBubble(actorEntry, deltaSeconds, camera = state.previ
   );
   actorEntry.bubble.mesh.material.opacity = actorEntry.bubble.opacity * (actorEntry.opacity ?? 1);
   if (camera) {
-    actorEntry.bubble.mesh.quaternion.copy(camera.quaternion);
+    orientPrivateBillboardToCamera(actorEntry.bubble.mesh, camera);
   }
 }
 
