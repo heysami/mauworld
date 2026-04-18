@@ -4,6 +4,7 @@ import {
   findNearestOriginSession,
   getAnchorSessionId,
   isJoinedPersistentVoiceSession,
+  isListedLiveSession,
   isMemberSession,
   isOriginSession,
   isPersistentVoiceSession,
@@ -561,13 +562,9 @@ export class RealtimeGateway {
           ?? 20,
         ) || 20),
       );
-    const groupRole = isJoinedPersistentVoiceSession(rawSession)
-      ? "member"
-      : session.groupRole;
     return {
       ...session,
       sessionId: sessionId || session.sessionId,
-      groupRole,
       viewerCount,
       maxViewers,
     };
@@ -708,7 +705,7 @@ export class RealtimeGateway {
       : this.getNearestOriginSessionForClient(client, interactionSettings);
     if (
       !anchorSession
-      || !isOriginSession(anchorSession)
+      || !isListedLiveSession(anchorSession)
       || anchorSession.hostSessionId === client.viewerSessionId
       || !this.isClientWithinAnchorRadius(client, anchorSession, interactionSettings)
     ) {
@@ -800,7 +797,7 @@ export class RealtimeGateway {
     }
     this.pendingShareJoinRequests.delete(key);
     const anchorSession = this.browserManager.getSession(anchorSessionId);
-    if (!anchorSession || anchorSession.hostSessionId !== client.viewerSessionId || !isOriginSession(anchorSession)) {
+    if (!anchorSession || anchorSession.hostSessionId !== client.viewerSessionId || !isListedLiveSession(anchorSession)) {
       return;
     }
     const requesterClient = this.clients.get(requesterSessionId);
@@ -851,7 +848,7 @@ export class RealtimeGateway {
         hasVideo: false,
         hasAudio: true,
         aspectRatio: 1.2,
-        groupRole: "persistent-voice",
+        groupRole: "origin",
         sessionSlot: "persistent-voice",
         listedLive: false,
         movementLocked: false,
@@ -907,7 +904,7 @@ export class RealtimeGateway {
       return;
     }
     const anchorSession = this.browserManager.getSession(anchorSessionId);
-    if (!anchorSession || !isOriginSession(anchorSession)) {
+    if (!anchorSession || !isListedLiveSession(anchorSession)) {
       this.clearVoiceJoinOffer(voiceSession.id ?? voiceSession.sessionId);
       sendJson(client, {
         type: "voice:join-resolved",
@@ -938,7 +935,7 @@ export class RealtimeGateway {
       return;
     }
     const anchorSession = this.browserManager.getSession(anchorSessionId);
-    if (!anchorSession || !isOriginSession(anchorSession) || anchorSession.hostSessionId !== client.viewerSessionId) {
+    if (!anchorSession || !isListedLiveSession(anchorSession) || anchorSession.hostSessionId !== client.viewerSessionId) {
       return;
     }
     const requesterClient = this.clients.get(requesterSessionId);
@@ -1001,6 +998,9 @@ export class RealtimeGateway {
             : this.getNearestOriginSessionForClient(client, interactionSettings);
           if (anchorSession && !isOriginSession(anchorSession)) {
             anchorSession = this.getOriginSession(anchorSession);
+          }
+          if (anchorSession && !isListedLiveSession(anchorSession)) {
+            anchorSession = null;
           }
         }
         if (anchorSession && this.isClientWithinAnchorRadius(client, anchorSession, interactionSettings)) {
@@ -1132,7 +1132,7 @@ export class RealtimeGateway {
     if (!worldSnapshotId) {
       return;
     }
-    if (isOriginSession(payload)) {
+    if (isListedLiveSession(payload)) {
       for (const key of [...this.pendingShareJoinRequests.keys()]) {
         if (key.startsWith(`${payload.sessionId}:`)) {
           this.pendingShareJoinRequests.delete(key);

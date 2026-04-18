@@ -21,11 +21,14 @@ export function isMemberSession(session = {}) {
 }
 
 export function isPersistentVoiceSession(session = {}) {
-  return getSessionRole(session) === "persistent-voice";
+  return String(session.sessionSlot ?? "").trim().toLowerCase() === "persistent-voice"
+    || getSessionRole(session) === "persistent-voice";
 }
 
 export function isJoinedPersistentVoiceSession(session = {}) {
-  return isPersistentVoiceSession(session) && session.groupJoined === true && Boolean(getAnchorSessionId(session));
+  return isPersistentVoiceSession(session)
+    && session.groupJoined === true
+    && Boolean(String(session.anchorSessionId ?? "").trim());
 }
 
 export function isListedLiveSession(session = {}) {
@@ -33,6 +36,9 @@ export function isListedLiveSession(session = {}) {
 }
 
 export function getAnchorSessionId(session = {}) {
+  if (isPersistentVoiceSession(session) && session.groupJoined === true) {
+    return String(session.anchorSessionId ?? "").trim();
+  }
   if (isOriginSession(session)) {
     return getSessionId(session);
   }
@@ -40,6 +46,9 @@ export function getAnchorSessionId(session = {}) {
 }
 
 export function getAnchorHostSessionId(session = {}) {
+  if (isPersistentVoiceSession(session) && session.groupJoined === true) {
+    return String(session.anchorHostSessionId ?? "").trim();
+  }
   if (isOriginSession(session)) {
     return String(session.hostSessionId ?? "").trim();
   }
@@ -61,7 +70,7 @@ export function rankOriginSessionsForPosition(input = {}) {
   const sessions = Array.isArray(input.sessions) ? input.sessions : Array.from(input.sessions ?? []);
 
   return sessions
-    .filter((session) => isOriginSession(session))
+    .filter((session) => isListedLiveSession(session))
     .filter((session) => !excludeHostSessionId || String(session.hostSessionId ?? "").trim() !== excludeHostSessionId)
     .map((session) => ({
       session,

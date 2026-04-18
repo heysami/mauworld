@@ -2359,6 +2359,7 @@ function bindPanelPress(button, handler) {
 
 function updateVoicePanel() {
   const localVoiceSession = getLocalVoiceSession();
+  const localContributionSession = getLocalBrowserSession();
   if (!localVoiceSession && !state.pendingVoiceShare && state.voiceJoinOffer) {
     state.voiceJoinOffer = null;
   }
@@ -2376,7 +2377,11 @@ function updateVoicePanel() {
     } else if (state.pendingVoiceShare) {
       elements.voiceStatus.textContent = "Starting persistent voice chat...";
     } else if (localVoiceSession) {
-      elements.voiceStatus.textContent = isBrowserJoinedPersistentVoiceSession(localVoiceSession)
+      elements.voiceStatus.textContent = Boolean(
+        localContributionSession
+        && isBrowserMemberSession(localContributionSession)
+        && getBrowserSessionShareKind(localContributionSession) === "audio",
+      )
         ? "Persistent voice chat is joined to the nearby live group."
         : "Persistent voice chat is live nearby.";
     } else {

@@ -397,7 +397,80 @@ test("private pending nearby join requests can be cancelled", async () => {
   );
 });
 
-test("private member shares stop outside the anchor radius and persistent voice detaches on exit", async () => {
+test("private persistent voice stays unlisted and does not block a nearby origin share", async () => {
+  const gateway = createGateway();
+  const voiceHost = createClient({
+    viewerSessionId: "profile:voice",
+    displayName: "voice",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const nearbyHost = createClient({
+    viewerSessionId: "profile:nearby",
+    displayName: "nearby",
+    position: { x: 32, y: 0, z: 0 },
+  });
+  gateway.clients.add(voiceHost);
+  gateway.clients.add(nearbyHost);
+
+  let voiceSession = null;
+  let voiceStartInput = null;
+  let nearbyStartInput = null;
+  gateway.browserManager.getSessionByHost = (hostSessionId, options = {}) => {
+    if (hostSessionId === voiceHost.viewerSessionId && options.sessionSlot === "persistent-voice") {
+      return voiceSession;
+    }
+    return null;
+  };
+  gateway.browserManager.listSessionsForWorld = () => (voiceSession ? [voiceSession] : []);
+  gateway.browserManager.getSession = (sessionId) =>
+    voiceSession && sessionId === voiceSession.id ? voiceSession : null;
+  gateway.browserManager.startSession = async (input) => {
+    if (input.sessionSlot === "persistent-voice") {
+      voiceStartInput = { ...input };
+      voiceSession = {
+        sessionId: "voice_session",
+        id: "voice_session",
+        subscribers: new Set([voiceHost.viewerSessionId]),
+        ...input,
+      };
+      return voiceSession;
+    }
+    nearbyStartInput = { ...input };
+    return {
+      sessionId: "origin_session",
+      id: "origin_session",
+      subscribers: new Set([nearbyHost.viewerSessionId]),
+      ...input,
+    };
+  };
+  gateway.broadcastBrowserSession = async () => {};
+
+  await gateway.handleVoiceStart(voiceHost);
+
+  assert.equal(voiceStartInput?.groupRole, "origin");
+  assert.equal(voiceStartInput?.sessionSlot, "persistent-voice");
+  assert.equal(voiceStartInput?.shareKind, "audio");
+  assert.equal(voiceStartInput?.listedLive, false);
+  assert.equal(voiceStartInput?.movementLocked, false);
+
+  await gateway.handleBrowserStart(nearbyHost, {
+    mode: "display-share",
+    title: "Nearby live",
+    shareKind: "audio",
+    hasVideo: false,
+    hasAudio: true,
+  });
+
+  assert.equal(nearbyStartInput?.groupRole, "origin");
+  assert.equal(nearbyStartInput?.listedLive, true);
+  assert.equal(nearbyStartInput?.movementLocked, true);
+  assert.equal(
+    nearbyHost.socket.sent.some((message) => message.type === "share:join-required"),
+    false,
+  );
+});
+
+test("private member shares stop outside the anchor radius while persistent voice stays standalone", async () => {
   const gateway = createGateway();
   const host = createClient({
     viewerSessionId: "profile:host",
@@ -445,10 +518,13 @@ test("private member shares stop outside the anchor radius and persistent voice 
     hostSessionId: voiceHost.viewerSessionId,
     worldSnapshotId: host.browserWorldKey,
     sessionMode: "display-share",
-    groupRole: "persistent-voice",
-    groupJoined: true,
-    anchorSessionId: anchorSession.id,
-    anchorHostSessionId: host.viewerSessionId,
+    sessionSlot: "persistent-voice",
+    groupRole: "origin",
+    listedLive: false,
+    movementLocked: false,
+    groupJoined: false,
+    anchorSessionId: "",
+    anchorHostSessionId: "",
     subscribers: new Set([voiceHost.viewerSessionId]),
   };
   const sessions = [anchorSession, memberSession, voiceSession];
@@ -466,37 +542,12 @@ test("private member shares stop outside the anchor radius and persistent voice 
 
   await gateway.updatePersistentVoiceOffers(host.browserWorldKey);
 
-  assert.equal(voiceSession.groupJoined, false);
+  assert.equal(voiceSession.groupRole, "origin");
   assert.equal(voiceSession.anchorSessionId, "");
   assert.equal(
-    voiceHost.socket.sent.some((message) =>
-      message.type === "voice:join-resolved" && /standalone voice chat/i.test(String(message.message ?? ""))),
-    true,
+    voiceHost.socket.sent.some((message) => message.type === "voice:join-resolved"),
+    false,
   );
-});
-
-test("private joined persistent voice is exposed as a contributor session payload", async () => {
-  const gateway = createGateway();
-  const voiceSession = {
-    id: "voice_session",
-    sessionId: "voice_session",
-    hostSessionId: "profile:voice",
-    worldSnapshotId: "world_private",
-    sessionMode: "display-share",
-    sessionSlot: "persistent-voice",
-    groupRole: "persistent-voice",
-    groupJoined: true,
-    anchorSessionId: "anchor_session",
-    anchorHostSessionId: "profile:host",
-    subscribers: new Set(["profile:voice"]),
-  };
-  gateway.browserManager.getSession = () => voiceSession;
-
-  const payload = gateway.buildBrowserSessionPayload(voiceSession);
-
-  assert.equal(payload?.groupRole, "member");
-  assert.equal(payload?.sessionSlot, "persistent-voice");
-  assert.equal(payload?.groupJoined, true);
 });
 
 test("approved private persistent voice join grants a member audio share without mutating the voice session", async () => {
@@ -531,7 +582,9 @@ test("approved private persistent voice join grants a member audio share without
     worldSnapshotId: host.browserWorldKey,
     sessionMode: "display-share",
     sessionSlot: "persistent-voice",
-    groupRole: "persistent-voice",
+    groupRole: "origin",
+    listedLive: false,
+    movementLocked: false,
     groupJoined: false,
     anchorSessionId: "",
     anchorHostSessionId: "",
@@ -568,7 +621,7 @@ test("approved private persistent voice join grants a member audio share without
   });
 
   assert.equal(gateway.hasApprovedShareJoin(anchorSession.id, voiceHost.viewerSessionId), true);
-  assert.equal(voiceSession.groupJoined, false);
+  assert.equal(voiceSession.groupRole, "origin");
   assert.equal(voiceSession.anchorSessionId, "");
   assert.equal(broadcasted, false);
   assert.equal(

@@ -4567,6 +4567,7 @@ function bindPrivatePanelPress(button, handler) {
 
 function updatePrivateVoicePanel() {
   const localVoiceSession = getLocalPrivateVoiceSession();
+  const localContributionSession = getLocalPrivateBrowserSession();
   if (!localVoiceSession && !state.pendingVoiceShare && state.voiceJoinOffer) {
     state.voiceJoinOffer = null;
   }
@@ -4585,7 +4586,11 @@ function updatePrivateVoicePanel() {
     } else if (state.pendingVoiceShare) {
       elements.panelVoiceStatus.textContent = "Starting persistent voice chat...";
     } else if (localVoiceSession) {
-      elements.panelVoiceStatus.textContent = isPrivateJoinedPersistentVoiceSession(localVoiceSession)
+      elements.panelVoiceStatus.textContent = Boolean(
+        localContributionSession
+        && isPrivateBrowserMemberSession(localContributionSession)
+        && getPrivateBrowserSessionShareKind(localContributionSession) === "audio",
+      )
         ? "Persistent voice chat is joined to the nearby live group."
         : "Persistent voice chat is live nearby.";
     } else {

@@ -4,6 +4,7 @@ import {
   findNearestOriginSession,
   getAnchorSessionId,
   isJoinedPersistentVoiceSession,
+  isListedLiveSession,
   isMemberSession,
   isOriginSession,
   isPersistentVoiceSession,
@@ -439,13 +440,9 @@ export class PrivateWorldGateway {
       ? this.browserManager.toClientSession(rawSession)
       : { ...rawSession };
     const subscribers = rawSession.subscribers instanceof Set ? rawSession.subscribers : new Set();
-    const groupRole = isJoinedPersistentVoiceSession(rawSession)
-      ? "member"
-      : session.groupRole;
     return {
       ...session,
       sessionId: sessionId || session.sessionId,
-      groupRole,
       viewerCount: Math.max(0, [...subscribers].filter((viewerSessionId) => viewerSessionId !== session.hostSessionId).length),
       maxViewers: Math.max(1, Number(rawSession.maxViewers) || 20),
     };
@@ -536,7 +533,7 @@ export class PrivateWorldGateway {
       : this.getNearestOriginSessionForClient(client, client.browserWorldKey);
     if (
       !anchorSession
-      || !isOriginSession(anchorSession)
+      || !isListedLiveSession(anchorSession)
       || anchorSession.hostSessionId === client.viewerSessionId
       || !this.isClientWithinAnchorRadius(client, anchorSession)
     ) {
@@ -628,7 +625,7 @@ export class PrivateWorldGateway {
     }
     this.pendingShareJoinRequests.delete(key);
     const anchorSession = this.browserManager.getSession(anchorSessionId);
-    if (!anchorSession || anchorSession.hostSessionId !== client.viewerSessionId || !isOriginSession(anchorSession)) {
+    if (!anchorSession || anchorSession.hostSessionId !== client.viewerSessionId || !isListedLiveSession(anchorSession)) {
       return;
     }
     const requesterClient = this.findBrowserClient(client.browserWorldKey, requesterSessionId);
@@ -675,7 +672,7 @@ export class PrivateWorldGateway {
         hasVideo: false,
         hasAudio: true,
         aspectRatio: 1.2,
-        groupRole: "persistent-voice",
+        groupRole: "origin",
         sessionSlot: "persistent-voice",
         listedLive: false,
         movementLocked: false,
@@ -731,7 +728,7 @@ export class PrivateWorldGateway {
       return;
     }
     const anchorSession = this.browserManager.getSession(anchorSessionId);
-    if (!anchorSession || !isOriginSession(anchorSession)) {
+    if (!anchorSession || !isListedLiveSession(anchorSession)) {
       this.clearVoiceJoinOffer(voiceSession.id ?? voiceSession.sessionId);
       sendJson(client, {
         type: "voice:join-resolved",
@@ -762,7 +759,7 @@ export class PrivateWorldGateway {
       return;
     }
     const anchorSession = this.browserManager.getSession(anchorSessionId);
-    if (!anchorSession || !isOriginSession(anchorSession) || anchorSession.hostSessionId !== client.viewerSessionId) {
+    if (!anchorSession || !isListedLiveSession(anchorSession) || anchorSession.hostSessionId !== client.viewerSessionId) {
       return;
     }
     const requesterClient = this.findBrowserClient(client.browserWorldKey, requesterSessionId);
@@ -899,6 +896,9 @@ export class PrivateWorldGateway {
             : this.getNearestOriginSessionForClient(client, client.browserWorldKey);
           if (anchorSession && !isOriginSession(anchorSession)) {
             anchorSession = this.getOriginSession(anchorSession);
+          }
+          if (anchorSession && !isListedLiveSession(anchorSession)) {
+            anchorSession = null;
           }
         }
         if (anchorSession && this.isClientWithinAnchorRadius(client, anchorSession)) {
@@ -1212,7 +1212,7 @@ export class PrivateWorldGateway {
     if (!browserWorldKey) {
       return;
     }
-    if (isOriginSession(payload)) {
+    if (isListedLiveSession(payload)) {
       for (const key of [...this.pendingShareJoinRequests.keys()]) {
         if (key.startsWith(`${payload.sessionId}:`)) {
           this.pendingShareJoinRequests.delete(key);
