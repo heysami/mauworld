@@ -11173,38 +11173,53 @@ async function enterPlayMode() {
   if (!state.selectedWorld) {
     return;
   }
-  const keepPanelTab = "chat";
-  const previousBuildSceneId = state.selectedSceneId;
-  if (isEditor() && getSelectedScene()) {
-    await saveCurrentScene({
-      pushEvent: false,
-      keepPanelTab: state.privatePanelTab,
+  const showPlayLoading = state.entryLoading !== true;
+  if (showPlayLoading) {
+    setEntryLoading(true, {
+      title: "Starting play mode",
+      note: "Saving the scene and starting physics.",
     });
+    await waitForUiPaint();
   }
-  const defaultScene = getDefaultScene(state.selectedWorld);
-  if (previousBuildSceneId) {
-    state.buildReturnSceneId = previousBuildSceneId;
+  try {
+    const keepPanelTab = "chat";
+    const previousBuildSceneId = state.selectedSceneId;
+    if (isEditor() && getSelectedScene()) {
+      await saveCurrentScene({
+        pushEvent: false,
+        keepPanelTab: state.privatePanelTab,
+      });
+    }
+    const defaultScene = getDefaultScene(state.selectedWorld);
+    if (previousBuildSceneId) {
+      state.buildReturnSceneId = previousBuildSceneId;
+    }
+    if (defaultScene?.id) {
+      state.selectedSceneId = defaultScene.id;
+    }
+    if (!getLocalParticipant()) {
+      await joinWorld({ switchPanelTab: false });
+    }
+    const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+    const activeSceneId = runtime?.active_scene_id || state.selectedWorld?.active_instance?.active_scene_id || "";
+    const targetSceneId = defaultScene?.id || state.selectedSceneId;
+    const sceneAlreadyRunning = runtime?.scene_started === true && activeSceneId === targetSceneId;
+    if (state.session && isEditor() && !sceneAlreadyRunning) {
+      await startScene({
+        sceneId: targetSceneId,
+        keepPanelTab,
+        pushEvent: false,
+      });
+    }
+    state.privatePanelTab = keepPanelTab;
+    setMode("play");
+    renderSelectedWorld();
+    await waitForUiPaint();
+  } finally {
+    if (showPlayLoading) {
+      setEntryLoading(false);
+    }
   }
-  if (defaultScene?.id) {
-    state.selectedSceneId = defaultScene.id;
-  }
-  if (!getLocalParticipant()) {
-    await joinWorld({ switchPanelTab: false });
-  }
-  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
-  const activeSceneId = runtime?.active_scene_id || state.selectedWorld?.active_instance?.active_scene_id || "";
-  const targetSceneId = defaultScene?.id || state.selectedSceneId;
-  const sceneAlreadyRunning = runtime?.scene_started === true && activeSceneId === targetSceneId;
-  if (state.session && isEditor() && !sceneAlreadyRunning) {
-    await startScene({
-      sceneId: targetSceneId,
-      keepPanelTab,
-      pushEvent: false,
-    });
-  }
-  state.privatePanelTab = keepPanelTab;
-  setMode("play");
-  renderSelectedWorld();
 }
 
 async function sendRuntimeInput(key, runtimeState = "down") {
