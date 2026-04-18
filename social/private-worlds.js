@@ -486,7 +486,9 @@ const elements = {
   panelWorldMeta: document.querySelector("[data-private-panel-world-meta]"),
   panelModeBuild: document.querySelector("[data-private-panel-mode-build]"),
   panelModePlay: document.querySelector("[data-private-panel-mode-play]"),
-  panelScenes: document.querySelector("[data-private-panel-scenes]"),
+  buildScenePicker: document.querySelector("[data-private-build-scene-picker]"),
+  buildSceneSelect: document.querySelector("[data-private-build-scene-select]"),
+  panelLibrary: document.querySelector("[data-private-panel-library]"),
   panelExport: document.querySelector("[data-private-panel-export]"),
   panelEnter: document.querySelector("[data-private-panel-enter]"),
   panelLeave: document.querySelector("[data-private-panel-leave]"),
@@ -5268,6 +5270,24 @@ function renderSceneLibrary() {
   `).join("");
 }
 
+function buildQuickSceneOptionLabel(scene = {}) {
+  const status = getSceneStatusLabel(scene);
+  return `${scene.name || "Untitled Scene"}${status ? ` · ${status}` : ""}`;
+}
+
+function selectSceneForEditing(sceneId) {
+  const nextSceneId = String(sceneId ?? "").trim();
+  if (!nextSceneId || nextSceneId === state.selectedSceneId) {
+    return;
+  }
+  const scenes = state.selectedWorld?.scenes ?? [];
+  if (!scenes.some((scene) => scene.id === nextSceneId)) {
+    return;
+  }
+  state.selectedSceneId = nextSceneId;
+  renderSelectedWorld();
+}
+
 function buildOptions(options = [], selectedValue = "") {
   return options.map((value) => `
     <option value="${htmlEscape(value)}" ${String(selectedValue) === String(value) ? "selected" : ""}>${htmlEscape(value || "none")}</option>
@@ -6620,8 +6640,30 @@ function renderSelectedWorld() {
     elements.panelModePlay.disabled = !hasWorld;
     elements.panelModePlay.classList.toggle("is-active", state.mode === "play");
   }
-  if (elements.panelScenes) {
-    elements.panelScenes.disabled = !hasWorld || !canEdit || state.mode !== "build";
+  if (elements.buildScenePicker) {
+    const showBuildScenePicker = hasWorld && canEdit && state.mode === "build";
+    elements.buildScenePicker.hidden = !showBuildScenePicker;
+  }
+  if (elements.buildSceneSelect) {
+    const scenes = state.selectedWorld?.scenes ?? [];
+    const showBuildScenePicker = hasWorld && canEdit && state.mode === "build";
+    if (!showBuildScenePicker) {
+      elements.buildSceneSelect.innerHTML = "";
+      elements.buildSceneSelect.disabled = true;
+    } else if (!scenes.length) {
+      elements.buildSceneSelect.innerHTML = '<option value="">No scenes yet</option>';
+      elements.buildSceneSelect.disabled = true;
+    } else {
+      elements.buildSceneSelect.innerHTML = scenes.map((scene) => `
+        <option value="${htmlEscape(scene.id)}" ${scene.id === state.selectedSceneId ? "selected" : ""}>
+          ${htmlEscape(buildQuickSceneOptionLabel(scene))}
+        </option>
+      `).join("");
+      elements.buildSceneSelect.disabled = scenes.length <= 1;
+    }
+  }
+  if (elements.panelLibrary) {
+    elements.panelLibrary.disabled = !hasWorld || !canEdit || state.mode !== "build";
   }
   if (elements.panelExport) {
     elements.panelExport.disabled = !hasWorld || !state.session;
@@ -11958,9 +12000,8 @@ function bindEvents() {
       setStatus(error.message || "Could not enter play mode.");
     });
   });
-  elements.panelScenes?.addEventListener("click", () => {
+  elements.panelLibrary?.addEventListener("click", () => {
     if (state.selectedWorld && isEditor()) {
-      setSceneDrawerTab("scenes");
       setSceneDrawerOpen(true);
       setPrivatePanelTab("build");
     }
@@ -12117,8 +12158,10 @@ function bindEvents() {
     if (!button) {
       return;
     }
-    state.selectedSceneId = button.getAttribute("data-scene-library-id");
-    renderSelectedWorld();
+    selectSceneForEditing(button.getAttribute("data-scene-library-id"));
+  });
+  elements.buildSceneSelect?.addEventListener("change", () => {
+    selectSceneForEditing(elements.buildSceneSelect?.value);
   });
   for (const button of elements.sceneAddButtons ?? []) {
     button.addEventListener("click", () => {
