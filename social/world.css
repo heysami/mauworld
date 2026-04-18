@@ -795,7 +795,8 @@ body.is-world-loading .world-panel {
   gap: 8px;
 }
 
-.world-search-mode {
+.world-search-mode,
+.world-browser-share__modes button {
   min-height: 34px;
   padding: 0 12px;
   border: 1px solid var(--world-line);
@@ -808,7 +809,9 @@ body.is-world-loading .world-panel {
   cursor: pointer;
 }
 
-.world-search-mode.is-active {
+.world-search-mode.is-active,
+.world-browser-share__modes button.is-active,
+.world-browser-share__modes button[aria-pressed="true"] {
   border-color: rgba(255, 79, 168, 0.24);
   background: rgba(255, 79, 168, 0.12);
   color: var(--world-ink);
@@ -1026,26 +1029,6 @@ body.is-world-loading .world-panel {
   display: grid;
   gap: 6px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.world-browser-share__modes button {
-  min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid rgba(61, 87, 182, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.98);
-  color: var(--world-muted);
-  font: inherit;
-  font-size: 0.81rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.world-browser-share__modes button.is-active,
-.world-browser-share__modes button[aria-pressed="true"] {
-  border-color: rgba(45, 216, 255, 0.38);
-  background: rgba(45, 216, 255, 0.1);
-  color: var(--world-ink);
 }
 
 .world-browser-summary {
