@@ -9755,7 +9755,7 @@ function updatePreviewEffects(preview, elapsedSeconds) {
 function getRuntimeTransformMaps() {
   const runtime = state.runtimeSnapshot;
   const activeSceneId = runtime?.active_scene_id || state.selectedWorld?.active_instance?.active_scene_id || "";
-  if (!runtime || activeSceneId !== state.selectedSceneId) {
+  if (state.mode !== "play" || !runtime || activeSceneId !== state.selectedSceneId) {
     return {
       dynamicById: new Map(),
       dynamicObjects: [],
@@ -9893,7 +9893,7 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
 
 function syncPreviewRuntimeSnapshot(snapshot) {
   const preview = state.preview;
-  if (!preview || !snapshot) {
+  if (!preview || !snapshot || state.mode !== "play") {
     return false;
   }
   const activeSceneId = String(snapshot.active_scene_id ?? "").trim();
