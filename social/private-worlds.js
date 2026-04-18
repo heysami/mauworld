@@ -10804,7 +10804,7 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "", lockedHand
   }
 }
 
-function buildRotateHandles(preview, frame, hoveredHandleKey = "", lockedHandleKey = "") {
+function buildRotateHandles(preview, frame, hoveredHandleKey = "", lockedAxis = "") {
   if (!preview?.buildOverlay || !frame) {
     return;
   }
@@ -10815,7 +10815,8 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "", lockedHandleK
   const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
   const handleLength = clampNumber(maxSize * 0.3, 1.6, 1.05, 3.8);
   const dragHandleKey = state.buildDrag?.handle?.key ?? "";
-  const hasLockedHandle = Boolean(lockedHandleKey);
+  const dragHandleAxis = state.buildDrag?.handle?.axis ?? "";
+  const hasLockedAxis = Boolean(lockedAxis);
   const pickThickness = Math.max(handleThickness * 3.2, 2.3);
   const pickLength = Math.max(handleLength * 1.55, 3.1);
   const handleOffset = Math.max(0.18, handleThickness * 0.4);
@@ -10825,8 +10826,11 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "", lockedHandleK
     z: axis === "z" ? longSide : shortSide,
   });
   for (const handle of getRotateHandleSpecs(frame)) {
-    const isActive = handle.key === dragHandleKey;
-    const isLocked = !isActive && handle.key === lockedHandleKey;
+    const axisIsLocked = hasLockedAxis && handle.axis === lockedAxis;
+    const isActive = axisIsLocked
+      ? dragHandleAxis === lockedAxis && Boolean(state.buildDrag?.handle)
+      : handle.key === dragHandleKey;
+    const isLocked = !isActive && axisIsLocked;
     const isHovered = !isActive && !isLocked && handle.key === hoveredHandleKey;
     const outward = handle.position.clone();
     if (outward.lengthSq() < 0.0001) {
@@ -10851,7 +10855,7 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "", lockedHandleK
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(getTransformHandleColor(handle.axis)),
         transparent: true,
-        opacity: isActive ? 1 : isLocked ? 1 : isHovered ? 0.96 : hasLockedHandle ? 0.34 : 0.86,
+        opacity: isActive ? 1 : isLocked ? 1 : isHovered ? 0.96 : hasLockedAxis ? 0.34 : 0.86,
         depthWrite: false,
         fog: false,
       }),
@@ -11038,7 +11042,7 @@ function syncBuildPlacementOverlay(preview = state.preview) {
       buildTransformHandles(preview, groupFrame, displayedHandleKey, axisLock ? displayedHandleKey : "");
     }
   } else if (transformMode === "rotate" && groupFrame && canRotateSelection(selectedEntities)) {
-    buildRotateHandles(preview, groupFrame, displayedHandleKey, axisLock ? displayedHandleKey : "");
+    buildRotateHandles(preview, groupFrame, axisLock ? "" : displayedHandleKey, axisLock);
   }
   preview.buildOverlay.updateMatrixWorld(true);
   preview.buildOverlayKey = overlayKey;
