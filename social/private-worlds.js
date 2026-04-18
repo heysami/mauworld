@@ -567,6 +567,7 @@ const elements = {
   assetSearch: document.querySelector("[data-asset-search]"),
   assetTypeFilter: document.querySelector("[data-asset-type-filter]"),
   assetStatus: document.querySelector("[data-asset-status]"),
+  assetContext: document.querySelector("[data-asset-context]"),
   assetSections: document.querySelector("[data-asset-sections]"),
   assetGenerateTexture: document.querySelector("[data-asset-generate-texture]"),
   assetGenerateModel: document.querySelector("[data-asset-generate-model]"),
@@ -7658,9 +7659,35 @@ function buildVectorFields(label, basePath, value = {}) {
 function buildMaterialEditor(material = {}, options = {}) {
   const fieldPrefix = String(options.pathPrefix ?? "material.");
   const allowEmission = options.allowEmission === true;
-  const assetTextureLabel = material.texture_asset_id
-    ? `Asset texture: ${material.texture_asset_id}`
-    : "No asset texture linked";
+  const textureTargetKind = String(options.textureTargetKind ?? "").trim();
+  const textureTargetId = String(options.textureTargetId ?? "").trim();
+  const linkedTextureId = String(material.texture_asset_id ?? "").trim();
+  const linkedTexture = linkedTextureId ? getPrivateAssetById(linkedTextureId) : null;
+  const linkedTextureThumb = getPrivateAssetFile(linkedTexture, "base_color");
+  const canChooseTexture = Boolean(textureTargetKind && textureTargetId && canApplyTextureToRef(textureTargetKind, textureTargetId));
+  const textureActionsDisabled = !canChooseTexture || !state.session || !state.selectedWorld || !isEditor() || state.mode !== "build";
+  const textureTitle = linkedTexture?.name
+    || (linkedTextureId ? "Linked texture asset" : "No custom texture linked");
+  const textureSummary = linkedTexture
+    ? (linkedTexture.intended_use || linkedTexture.world_context_summary || buildAssetSummary(linkedTexture))
+    : linkedTextureId
+      ? `Texture asset ${linkedTextureId} is linked here, but it is not available in your library right now.`
+      : `Current pattern: ${material.texture_preset || "none"}. Choose a library texture or generate a new one with AI.`;
+  const textureIdNote = linkedTextureId
+    ? `<small class="pw-material-texture-card__id">${htmlEscape(linkedTextureId)}</small>`
+    : "";
+  const texturePreview = linkedTextureThumb?.url
+    ? `<img class="pw-material-texture-card__thumb" src="${htmlEscape(linkedTextureThumb.url)}" alt="${htmlEscape(textureTitle)} preview" />`
+    : `<div class="pw-material-texture-card__thumb pw-material-texture-card__thumb--empty" aria-hidden="true">${htmlEscape(material.texture_preset || "none")}</div>`;
+  const textureActions = canChooseTexture
+    ? `
+      <div class="pw-inline-actions pw-material-texture-card__actions">
+        <button type="button" data-open-texture-library ${textureActionsDisabled ? "disabled" : ""}>Choose from library</button>
+        <button type="button" class="is-muted" data-generate-texture-from-inspector ${textureActionsDisabled ? "disabled" : ""}>Generate with AI</button>
+        ${linkedTextureId ? `<button type="button" class="is-muted" data-clear-texture-asset-path="${htmlEscape(fieldPrefix)}" ${textureActionsDisabled ? "disabled" : ""}>Clear</button>` : ""}
+      </div>
+    `
+    : "";
   return `
     <div class="pw-inspector-grid pw-inspector-grid--2">
       <div>
@@ -7678,7 +7705,18 @@ function buildMaterialEditor(material = {}, options = {}) {
         </label>
       </div>
     </div>
-    <p class="pw-inspector-note">${htmlEscape(assetTextureLabel)}</p>
+    <section class="pw-material-texture-card">
+      <div class="pw-material-texture-card__row">
+        ${texturePreview}
+        <div class="pw-material-texture-card__body">
+          <span class="pw-material-texture-card__eyebrow">Texture</span>
+          <strong>${htmlEscape(textureTitle)}</strong>
+          <p class="pw-material-texture-card__summary">${htmlEscape(textureSummary)}</p>
+          ${textureIdNote}
+        </div>
+      </div>
+      ${textureActions}
+    </section>
     ${allowEmission ? `
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
@@ -7720,6 +7758,30 @@ function canApplyTextureToRef(targetKind = "", targetId = "") {
   }
 }
 
+function getSelectedTextureAttachTarget() {
+  const targetKind = String(state.builderSelection?.kind ?? "").trim();
+  const targetId = String(state.builderSelection?.id ?? "").trim();
+  if (!targetKind || !targetId || !MATERIALIZABLE_ENTITY_KINDS.has(targetKind)) {
+    return null;
+  }
+  try {
+    const sceneDoc = parseSceneTextarea();
+    const found = findEntityByRef(sceneDoc, { kind: targetKind, id: targetId });
+    if (!found?.entry) {
+      return null;
+    }
+    return {
+      kind: targetKind,
+      id: targetId,
+      entry: found.entry,
+      name: getDisplayNameForEntity(targetKind, found.entry, found.index),
+      summary: buildEntitySummary(targetKind, found.entry),
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
 function applyTextureAssetToSelection(assetId, options = {}) {
   const targetKind = String(options.targetKind ?? state.builderSelection?.kind ?? "").trim();
   const targetId = String(options.targetId ?? state.builderSelection?.id ?? "").trim();
@@ -7737,6 +7799,12 @@ function applyTextureAssetToSelection(assetId, options = {}) {
   });
   pushEvent("asset:texture-applied", assetId);
   return true;
+}
+
+function clearTextureAssetFromSelection(pathPrefix = "material.") {
+  const normalizedPrefix = String(pathPrefix ?? "material.").trim() || "material.";
+  updateSelectedEntityField(`${normalizedPrefix}texture_asset_id`, "", "text", { renderBuilder: false });
+  updateSelectedEntityField(`${normalizedPrefix}texture_preset`, "none", "text");
 }
 
 function placeModelAsset(assetId, options = {}) {
@@ -7817,19 +7885,70 @@ function openAssetAiDialog(kind = "texture") {
   });
 }
 
+function openTextureAssetLibrary(options = {}) {
+  const target = getSelectedTextureAttachTarget();
+  if (!target) {
+    setStatus("Select one item with a material first, then choose a texture for it.");
+    return false;
+  }
+  state.assetFilterType = "texture";
+  if (options.resetQuery !== false) {
+    state.assetQuery = "";
+  }
+  if (elements.assetTypeFilter) {
+    elements.assetTypeFilter.value = "texture";
+  }
+  if (elements.assetSearch) {
+    elements.assetSearch.value = state.assetQuery;
+  }
+  setSceneDrawerOpen(true);
+  setSceneDrawerTab("assets");
+  setStatus(`Choose a texture for ${target.name}.`);
+  void loadAssets();
+  window.requestAnimationFrame(() => {
+    elements.assetSearch?.focus?.();
+  });
+  return true;
+}
+
 function renderAssetsLibrary() {
   if (!elements.assetSections) {
     return;
+  }
+  const activeTextureTarget = getSelectedTextureAttachTarget();
+  const filterType = String(state.assetFilterType ?? "all").trim() || "all";
+  const showAssetContext = Boolean(activeTextureTarget && filterType !== "model");
+  if (elements.assetSearch && elements.assetSearch.value !== String(state.assetQuery ?? "")) {
+    elements.assetSearch.value = String(state.assetQuery ?? "");
+  }
+  if (elements.assetTypeFilter && elements.assetTypeFilter.value !== filterType) {
+    elements.assetTypeFilter.value = filterType;
+  }
+  if (elements.assetContext) {
+    if (showAssetContext) {
+      elements.assetContext.hidden = false;
+      elements.assetContext.innerHTML = `
+        <span>Texture target</span>
+        <strong>${htmlEscape(activeTextureTarget.name)}</strong>
+        <small>Choose a library texture to attach it here, or generate a new one for this item.</small>
+      `;
+    } else {
+      elements.assetContext.hidden = true;
+      elements.assetContext.innerHTML = "";
+    }
   }
   if (!state.session) {
     elements.assetSections.innerHTML = '<div class="pw-builder-group"><p class="pw-builder-empty">Sign in to use account assets.</p></div>';
     if (elements.assetStatus) {
       elements.assetStatus.textContent = "";
     }
+    if (elements.assetContext) {
+      elements.assetContext.hidden = true;
+      elements.assetContext.innerHTML = "";
+    }
     return;
   }
   const query = String(state.assetQuery ?? "").trim().toLowerCase();
-  const filterType = String(state.assetFilterType ?? "all").trim() || "all";
   const assets = (state.assets ?? [])
     .filter((asset) => filterType === "all" || asset.asset_type === filterType)
     .filter((asset) => {
@@ -7856,7 +7975,7 @@ function renderAssetsLibrary() {
   }
   elements.assetSections.innerHTML = assets.map((asset) => {
     const isReady = String(asset.status ?? "ready").trim().toLowerCase() === "ready";
-    const canApplyTexture = isReady && asset.asset_type === "texture" && canApplyTextureToRef(state.builderSelection?.kind, state.builderSelection?.id);
+    const canApplyTexture = isReady && asset.asset_type === "texture" && Boolean(activeTextureTarget);
     const thumbnail = getPrivateAssetFile(asset, asset.asset_type === "model" ? "thumbnail" : "base_color");
     return `
       <article class="pw-prefab-card">
@@ -7869,7 +7988,7 @@ function renderAssetsLibrary() {
         <small>${htmlEscape(asset.intended_use || asset.world_context_summary || "Ready across your private worlds.")}</small>
         <div class="pw-inline-actions">
           ${asset.asset_type === "texture"
-            ? `<button type="button" ${canApplyTexture ? `data-apply-texture-asset="${htmlEscape(asset.id)}"` : "disabled"}>${!isReady ? "Waiting for ready" : canApplyTexture ? "Apply to selection" : "Pick a material item"}</button>`
+            ? `<button type="button" ${canApplyTexture ? `data-apply-texture-asset="${htmlEscape(asset.id)}"` : "disabled"}>${!isReady ? "Waiting for ready" : canApplyTexture ? "Attach to selected item" : "Pick a material item"}</button>`
             : `<button type="button" ${isReady ? `data-place-model-asset="${htmlEscape(asset.id)}"` : "disabled"}>${isReady ? "Place in world" : "Waiting for ready"}</button>`}
         </div>
       </article>
@@ -8281,7 +8400,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
   if (kind === "voxel") {
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Solid static voxel. Pattern presets render directly in the preview. Invisible voxels stay translucent in Build mode so you can still grab and edit them.</p>
-      ${buildMaterialEditor(entry.material, { allowEmission: true })}
+      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
       <div class="pw-inspector-grid pw-inspector-grid--2">
@@ -8323,7 +8442,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
           </label>
         </div>
       </div>
-      ${buildMaterialEditor(entry.material, { allowEmission: true })}
+      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
@@ -8394,7 +8513,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <span>Asset ID</span>
         <input type="text" data-entity-field="asset_id" data-value-type="text" value="${htmlEscape(entry.asset_id || "")}" />
       </label>
-      ${buildMaterialEditor(entry.material, { allowEmission: true })}
+      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
@@ -8493,7 +8612,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const screenPrompt = getScreenAiPrompt(entry.id);
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Static HTML and CSS only. No custom JavaScript or remote resources. Width and height changes now reflow the HTML to match the new viewport instead of just stretching it.</p>
-      ${buildMaterialEditor(entry.material)}
+      ${buildMaterialEditor(entry.material, { textureTargetKind: kind, textureTargetId: entry.id })}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
@@ -8515,7 +8634,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
 
   if (kind === "text") {
     elements.entityEditor.innerHTML = `
-      ${buildMaterialEditor(entry.material)}
+      ${buildMaterialEditor(entry.material, { textureTargetKind: kind, textureTargetId: entry.id })}
       <label>
         <span>Text</span>
         <input type="text" data-entity-field="value" data-value-type="text" value="${htmlEscape(entry.value || "")}" />
@@ -16219,6 +16338,21 @@ function bindEvents() {
     );
   });
   elements.entityEditor.addEventListener("click", (event) => {
+    const openTextureLibraryButton = event.target.closest("[data-open-texture-library]");
+    if (openTextureLibraryButton) {
+      openTextureAssetLibrary();
+      return;
+    }
+    const generateTextureButton = event.target.closest("[data-generate-texture-from-inspector]");
+    if (generateTextureButton) {
+      openAssetAiDialog("texture");
+      return;
+    }
+    const clearTextureButton = event.target.closest("[data-clear-texture-asset-path]");
+    if (clearTextureButton) {
+      clearTextureAssetFromSelection(clearTextureButton.getAttribute("data-clear-texture-asset-path") || "material.");
+      return;
+    }
     const screenGenerateButton = event.target.closest("[data-screen-ai-generate]");
     if (screenGenerateButton) {
       openScreenAiDialog(screenGenerateButton.getAttribute("data-screen-ai-generate"));

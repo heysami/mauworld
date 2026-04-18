@@ -1829,6 +1829,93 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
   line-height: 1.5;
 }
 
+.pw-asset-context {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.pw-asset-context span,
+.pw-asset-context small {
+  color: var(--pw-muted);
+}
+
+.pw-asset-context span,
+.pw-material-texture-card__eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pw-asset-context strong {
+  line-height: 1.3;
+}
+
+.pw-material-texture-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.pw-material-texture-card__row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.pw-material-texture-card__thumb {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--pw-line);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.pw-material-texture-card__thumb--empty {
+  display: grid;
+  place-items: center;
+  color: var(--pw-muted);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  text-align: center;
+  padding: 8px;
+  overflow-wrap: anywhere;
+}
+
+.pw-material-texture-card__body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pw-material-texture-card__body strong,
+.pw-material-texture-card__summary {
+  margin: 0;
+}
+
+.pw-material-texture-card__summary,
+.pw-material-texture-card__id {
+  color: var(--pw-muted);
+  line-height: 1.45;
+}
+
+.pw-material-texture-card__id {
+  overflow-wrap: anywhere;
+}
+
+.pw-material-texture-card__actions {
+  align-items: stretch;
+}
+
 .pw-checkbox {
   display: flex;
   align-items: center;
@@ -2127,5 +2214,15 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
   .pw-inline-actions {
     grid-template-columns: 1fr;
     grid-auto-flow: row;
+  }
+
+  .pw-material-texture-card__row {
+    grid-template-columns: 1fr;
+  }
+
+  .pw-material-texture-card__thumb {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1.6;
   }
 }
