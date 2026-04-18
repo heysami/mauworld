@@ -1001,6 +1001,7 @@ function normalizePrivatePanelTab(tab) {
 function setPrivatePanelTab(tab, options = {}) {
   const nextTab = normalizePrivatePanelTab(tab);
   const syncMode = options.syncMode !== false;
+  const refreshWorld = options.refreshWorld === true;
   if (syncMode && nextTab === "build" && state.mode !== "build" && isEditor()) {
     setMode("build", { syncPanelTab: false });
   }
@@ -1022,6 +1023,9 @@ function setPrivatePanelTab(tab, options = {}) {
   }
   if (nextTab === "live") {
     renderPrivateLiveSharesList();
+  }
+  if (refreshWorld && state.selectedWorld) {
+    renderSelectedWorld();
   }
 }
 
@@ -11023,7 +11027,9 @@ function bindEvents() {
   });
   for (const button of elements.privatePanelTabButtons ?? []) {
     button.addEventListener("click", () => {
-      setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "build");
+      setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "build", {
+        refreshWorld: true,
+      });
     });
   }
   elements.panelOpenAccess?.addEventListener("click", () => {
