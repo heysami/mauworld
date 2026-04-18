@@ -2520,14 +2520,14 @@ function describeVector3(input = {}) {
 }
 
 const ENTITY_COLLECTIONS = [
-  { kind: "voxel", key: "voxels", label: "Voxels" },
-  { kind: "primitive", key: "primitives", label: "Objects" },
-  { kind: "player", key: "players", label: "Players" },
-  { kind: "screen", key: "screens", label: "Screens" },
-  { kind: "text", key: "texts", label: "3D Text" },
-  { kind: "trigger", key: "trigger_zones", label: "Trigger Zones" },
-  { kind: "particle", key: "particles", label: "Particles" },
-  { kind: "prefab_instance", key: "prefab_instances", label: "Prefab Instances" },
+  { kind: "voxel", key: "voxels", label: "Voxels", singular: "Voxel" },
+  { kind: "primitive", key: "primitives", label: "Objects", singular: "Object" },
+  { kind: "player", key: "players", label: "Players", singular: "Player" },
+  { kind: "screen", key: "screens", label: "Screens", singular: "Screen" },
+  { kind: "text", key: "texts", label: "3D Text", singular: "3D Text" },
+  { kind: "trigger", key: "trigger_zones", label: "Trigger Zones", singular: "Trigger Zone" },
+  { kind: "particle", key: "particles", label: "Particles", singular: "Particle" },
+  { kind: "prefab_instance", key: "prefab_instances", label: "Prefab Instances", singular: "Prefab Instance" },
 ];
 
 const MATERIAL_PRESET_OPTIONS = [
@@ -5376,9 +5376,31 @@ function renderEntitySections(sceneDoc, selected = null) {
     : selectedEntries.length === 1
       ? `${getDisplayNameForEntity(selectedEntries[0].kind, selectedEntries[0].entry, selectedEntries[0].index)} selected.`
       : `${selectedEntries.length} items selected together.`;
+  const typeCounts = ENTITY_COLLECTIONS.map((config) => ({
+    kind: config.kind,
+    label: config.label,
+    count: allEntries.filter((item) => item.config.kind === config.kind).length,
+  })).filter((entry) => entry.count > 0);
   const filterLabel = normalizedKind === "all"
     ? "All items"
     : getEntityCollection(normalizedKind)?.label || "Items";
+  const filterConfig = normalizedKind === "all" ? null : getEntityCollection(normalizedKind);
+  const scopedSceneCount = normalizedKind === "all"
+    ? totalCount
+    : (typeCounts.find((entry) => entry.kind === normalizedKind)?.count ?? 0);
+  const filterCountLabel = ((scopedSceneCount === 1 ? filterConfig?.singular : filterConfig?.label) || "item").toLowerCase();
+  const scopedSceneSummary = normalizedKind === "all"
+    ? `${totalCount} item${totalCount === 1 ? "" : "s"} in this scene.`
+    : `${scopedSceneCount} ${filterCountLabel} in this scene.`;
+  const breakdownMarkup = normalizedKind === "all" && typeCounts.length > 0
+    ? `
+      <div class="pw-item-summary__breakdown">
+        ${typeCounts.map((entry) => `
+          <span><strong>${htmlEscape(entry.count)}</strong> ${htmlEscape(entry.label)}</span>
+        `).join("")}
+      </div>
+    `
+    : "";
   if (elements.entitySearch) {
     elements.entitySearch.disabled = totalCount === 0;
   }
@@ -5399,7 +5421,8 @@ function renderEntitySections(sceneDoc, selected = null) {
           <strong>${htmlEscape(filterLabel)}</strong>
           <span>${visibleEntries.length} shown</span>
         </div>
-        <small>${htmlEscape(totalCount)} item${totalCount === 1 ? "" : "s"} in this scene.</small>
+        <small>${htmlEscape(scopedSceneSummary)}</small>
+        ${breakdownMarkup}
         <small>${htmlEscape(selectedSummary)}</small>
       </div>
     `;

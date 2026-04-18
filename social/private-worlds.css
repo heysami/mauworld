@@ -868,6 +868,22 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   line-height: 1.45;
 }
 
+.pw-item-summary__breakdown {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+
+.pw-item-summary__breakdown span {
+  color: var(--pw-muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.pw-item-summary__breakdown strong {
+  color: var(--pw-text);
+}
+
 .pw-script-list,
 .pw-prefab-list {
   max-height: min(48vh, 560px);
@@ -1740,6 +1756,10 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
 }
 
 @media (max-width: 720px) {
+  .pw-item-summary__breakdown {
+    grid-template-columns: 1fr;
+  }
+
   .pw-drawer__head {
     align-items: stretch;
   }
