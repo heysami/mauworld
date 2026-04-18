@@ -10113,6 +10113,9 @@ function refreshBuildHoverFromPointer(pointerSource) {
     ? getResolvedBuildTransformMode(getBuildTransformMode(), sceneDoc)
     : getBuildTransformMode();
   const transformHandleHit = transformMode ? getTransformHandleHit(pointerSource) : null;
+  const hoveredTransformHandle = transformHandleHit?.object?.userData?.privateWorldTransformHandle
+    ? { ...transformHandleHit.object.userData.privateWorldTransformHandle }
+    : null;
   state.buildHover = {
     context,
     gridCell: resolveBuildGridCell(context),
@@ -10121,10 +10124,8 @@ function refreshBuildHoverFromPointer(pointerSource) {
       : toolKind && sceneDoc
         ? resolvePlacementPreview(toolKind, sceneDoc, context)
         : null,
-    entityRef: getEntityRefFromHit(context.hit),
-    transformHandle: transformHandleHit?.object?.userData?.privateWorldTransformHandle
-      ? { ...transformHandleHit.object.userData.privateWorldTransformHandle }
-      : null,
+    entityRef: hoveredTransformHandle ? null : getEntityRefFromHit(context.hit),
+    transformHandle: hoveredTransformHandle,
   };
   syncBuildPlacementOverlay();
   return state.buildHover;
@@ -10273,7 +10274,7 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
   const size = frame.size;
   const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
   const handleSize = clampNumber(Math.max(size.x, size.y, size.z) * 0.12, 1.1, 0.6, 2.4);
-  const pickSize = Math.max(handleSize * 2.4, 1.6);
+  const pickSize = Math.max(handleSize * 3.4, 2.35);
   const handleOffset = Math.max(0.24, handleSize * 0.58);
   for (const handle of getTransformHandleSpecs(frame)) {
     const isHovered = handle.key === hoveredHandleKey;
@@ -10332,8 +10333,8 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
   const maxSize = Math.max(size.x, size.y, size.z);
   const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
   const handleLength = clampNumber(maxSize * 0.3, 1.6, 1.05, 3.8);
-  const pickThickness = Math.max(handleThickness * 2.8, 1.9);
-  const pickLength = Math.max(handleLength * 1.35, 2.4);
+  const pickThickness = Math.max(handleThickness * 3.8, 2.7);
+  const pickLength = Math.max(handleLength * 1.85, 3.5);
   const handleOffset = Math.max(0.18, handleThickness * 0.4);
   const buildDimensions = (axis, longSide, shortSide) => ({
     x: axis === "x" ? longSide : shortSide,
@@ -10806,6 +10807,7 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
   if (
     requestedTransformMode === transformMode
     && (transformMode === "move" || transformMode === "scale" || transformMode === "rotate")
+    && !hoveredHandle
     && hoveredEntityRef
     && !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id)
   ) {
@@ -11821,6 +11823,9 @@ function ensurePreview() {
         elements.previewCanvas.setPointerCapture(event.pointerId);
         return;
       }
+      if (state.buildHover?.transformHandle) {
+        return;
+      }
     }
     if (state.mode !== "play" && state.mode !== "build") {
       return;
@@ -11922,6 +11927,9 @@ function ensurePreview() {
     if (state.mode === "build" && (getActivePlacementTool() || getActivePrefabPlacementId())) {
       refreshBuildHoverFromPointer(event);
       placeActiveTool();
+      return;
+    }
+    if (state.mode === "build" && state.buildHover?.transformHandle) {
       return;
     }
     if (state.viewerSuppressClickAt && performance.now() - state.viewerSuppressClickAt < 240) {
