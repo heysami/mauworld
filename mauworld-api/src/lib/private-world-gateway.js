@@ -779,9 +779,9 @@ export class PrivateWorldGateway {
       && this.sessionHasCapacity(anchorSession);
     offer.state = approved ? "joined" : "denied";
     if (approved) {
-      voiceSession.groupJoined = true;
-      voiceSession.anchorSessionId = anchorSession.id;
-      voiceSession.anchorHostSessionId = anchorSession.hostSessionId;
+      this.grantApprovedShareJoin(anchorSessionId, requesterSessionId, "audio");
+    } else {
+      this.clearApprovedShareJoin(anchorSessionId, requesterSessionId);
     }
     sendJson(requesterClient, {
       type: "voice:join-resolved",
@@ -790,7 +790,6 @@ export class PrivateWorldGateway {
       anchorHostSessionId: anchorSession.hostSessionId,
       message: approved ? "Voice joined the nearby live group." : "Voice join request declined.",
     });
-    await this.broadcastBrowserSession(voiceSession);
   }
 
   buildPresencePayload(client) {

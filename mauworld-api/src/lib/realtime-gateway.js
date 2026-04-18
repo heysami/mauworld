@@ -956,9 +956,9 @@ export class RealtimeGateway {
       && this.sessionHasCapacity(anchorSession, interactionSettings);
     offer.state = approved ? "joined" : "denied";
     if (approved) {
-      voiceSession.groupJoined = true;
-      voiceSession.anchorSessionId = anchorSession.id;
-      voiceSession.anchorHostSessionId = anchorSession.hostSessionId;
+      this.grantApprovedShareJoin(anchorSessionId, requesterSessionId, "audio");
+    } else {
+      this.clearApprovedShareJoin(anchorSessionId, requesterSessionId);
     }
     sendJson(requesterClient, {
       type: "voice:join-resolved",
@@ -966,9 +966,6 @@ export class RealtimeGateway {
       anchorSessionId,
       anchorHostSessionId: anchorSession.hostSessionId,
       message: approved ? "Voice joined the nearby live group." : "Voice join request declined.",
-    });
-    await this.broadcastBrowserSession(voiceSession, {
-      interactionSettings,
     });
   }
 

@@ -498,3 +498,82 @@ test("private joined persistent voice is exposed as a contributor session payloa
   assert.equal(payload?.sessionSlot, "persistent-voice");
   assert.equal(payload?.groupJoined, true);
 });
+
+test("approved private persistent voice join grants a member audio share without mutating the voice session", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const voiceHost = createClient({
+    viewerSessionId: "profile:voice",
+    displayName: "voice",
+    position: { x: 24, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(voiceHost);
+
+  const anchorSession = {
+    id: "anchor_session",
+    sessionId: "anchor_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([host.viewerSessionId, voiceHost.viewerSessionId]),
+  };
+  const voiceSession = {
+    id: "voice_session",
+    sessionId: "voice_session",
+    hostSessionId: voiceHost.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    sessionSlot: "persistent-voice",
+    groupRole: "persistent-voice",
+    groupJoined: false,
+    anchorSessionId: "",
+    anchorHostSessionId: "",
+    subscribers: new Set([voiceHost.viewerSessionId]),
+  };
+  gateway.browserManager.getSession = (sessionId) => {
+    if (sessionId === anchorSession.id) {
+      return anchorSession;
+    }
+    if (sessionId === voiceSession.id) {
+      return voiceSession;
+    }
+    return null;
+  };
+  gateway.browserManager.getSessionByHost = (hostSessionId, options = {}) => {
+    if (hostSessionId === voiceHost.viewerSessionId && options.sessionSlot === "persistent-voice") {
+      return voiceSession;
+    }
+    return null;
+  };
+  gateway.voiceJoinOffers.set(voiceSession.id, {
+    anchorSessionId: anchorSession.id,
+    state: "pending-origin",
+  });
+  let broadcasted = false;
+  gateway.broadcastBrowserSession = async () => {
+    broadcasted = true;
+  };
+
+  await gateway.handleVoiceJoinDecision(host, {
+    anchorSessionId: anchorSession.id,
+    requesterSessionId: voiceHost.viewerSessionId,
+    approved: true,
+  });
+
+  assert.equal(gateway.hasApprovedShareJoin(anchorSession.id, voiceHost.viewerSessionId), true);
+  assert.equal(voiceSession.groupJoined, false);
+  assert.equal(voiceSession.anchorSessionId, "");
+  assert.equal(broadcasted, false);
+  assert.equal(
+    voiceHost.socket.sent.some((message) =>
+      message.type === "voice:join-resolved" && message.approved === true),
+    true,
+  );
+});

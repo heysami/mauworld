@@ -4308,7 +4308,7 @@ function releasePrivateBrowserShare(share, { stopTracks = false } = {}) {
     return;
   }
   share.observedTrack?.removeEventListener?.("ended", share.endedHandler);
-  if (stopTracks) {
+  if (stopTracks || share.stopTracksOnRelease === true) {
     stopMediaStream(share.stream);
   }
 }
@@ -4458,6 +4458,91 @@ function getPrivateVoiceShareActionLabel() {
     return "Starting...";
   }
   return localVoiceSession ? "Stop Persistent Voice Chat" : "Start Persistent Voice Chat";
+}
+
+function createPrivatePersistentVoiceContributionShare() {
+  const sourceStream = state.localVoiceShare?.stream ?? null;
+  const sourceAudioTrack = sourceStream?.getAudioTracks?.()[0] ?? null;
+  if (!sourceAudioTrack || String(sourceAudioTrack.readyState ?? "live") === "ended") {
+    return null;
+  }
+  const clonedStream = new MediaStream([sourceAudioTrack.clone()]);
+  const share = createLocalDisplayShare(clonedStream, {
+    title: "",
+    shareKind: "audio",
+    hasVideo: false,
+    hasAudio: true,
+    aspectRatio: 1.2,
+    fallbackWidth: 540,
+    fallbackHeight: 432,
+    isPendingShare: (candidate) => state.pendingBrowserShare?.stream === candidate.stream,
+    isLocalShare: (candidate) => state.localBrowserShare?.stream === candidate.stream,
+    onEndedWhilePending() {
+      clearPendingPrivateBrowserShare({ stopTracks: false });
+      updatePrivateBrowserPanel();
+    },
+    onEndedWhileLive() {
+      const sessionId = String(state.localBrowserShare?.sessionId ?? state.localBrowserSessionId ?? "").trim();
+      clearLocalPrivateBrowserShare({ stopTracks: false, sessionId });
+      dropLocalPrivateBrowserSession(sessionId);
+      if (sessionId) {
+        sendWorldSocketMessage({
+          type: "browser:stop",
+          sessionId,
+        });
+      }
+      updatePrivateBrowserPanel();
+    },
+  });
+  share.stopTracksOnRelease = true;
+  return share;
+}
+
+function startPrivatePersistentVoiceContribution(anchorSessionId) {
+  const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+  if (!normalizedAnchorSessionId) {
+    return false;
+  }
+  const existingLocalSession = getLocalPrivateBrowserSession();
+  if (existingLocalSession) {
+    const sameContribution = isPrivateBrowserMemberSession(existingLocalSession)
+      && getPrivateBrowserSessionShareKind(existingLocalSession) === "audio"
+      && getPrivateBrowserAnchorSessionId(existingLocalSession) === normalizedAnchorSessionId;
+    if (sameContribution) {
+      return true;
+    }
+    setPrivateBrowserStatus("Stop your current nearby share before joining with persistent voice.");
+    return false;
+  }
+  if (state.pendingBrowserShare) {
+    setPrivateBrowserStatus("Finish the current nearby share first.");
+    return false;
+  }
+  const share = createPrivatePersistentVoiceContributionShare();
+  if (!share) {
+    setPrivateBrowserStatus("Restart persistent voice chat, then try joining again.");
+    return false;
+  }
+  state.pendingBrowserShare = share;
+  setPrivateBrowserStatus("Adding your persistent voice to this nearby share...");
+  const sent = sendWorldSocketMessage({
+    type: "browser:start",
+    mode: "display-share",
+    title: "",
+    shareKind: "audio",
+    hasVideo: false,
+    hasAudio: true,
+    aspectRatio: share.aspectRatio,
+    anchorSessionId: normalizedAnchorSessionId,
+  });
+  if (!sent) {
+    clearPendingPrivateBrowserShare({ stopTracks: true });
+    updatePrivateBrowserPanel();
+    setPrivateBrowserStatus("Private world share is offline right now.");
+    return false;
+  }
+  updatePrivateBrowserPanel();
+  return true;
 }
 
 function bindPrivatePanelPress(button, handler) {
@@ -12472,9 +12557,19 @@ function connectWorldSocket() {
         ];
         renderPrivateVoiceJoinRequests();
       } else if (payload.type === "voice:join-resolved") {
+        const approved = payload.approved === true;
         state.voiceJoinOffer = null;
         updatePrivateVoicePanel();
         renderPrivateVoiceJoinOffers();
+        if (approved) {
+          const started = startPrivatePersistentVoiceContribution(payload.anchorSessionId);
+          if (!started) {
+            return;
+          }
+        }
+        if (payload.message) {
+          setPrivateBrowserStatus(payload.message);
+        }
       } else if (payload.type === "voice:error") {
         clearPendingPrivateVoiceShare({ stopTracks: true });
         updatePrivateVoicePanel();

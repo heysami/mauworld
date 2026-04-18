@@ -2167,7 +2167,7 @@ function releaseBrowserDisplayShare(share, { stopTracks = false } = {}) {
     return;
   }
   share.observedTrack?.removeEventListener?.("ended", share.endedHandler);
-  if (stopTracks) {
+  if (stopTracks || share.stopTracksOnRelease === true) {
     stopMediaStream(share.stream);
   }
 }
@@ -2848,6 +2848,87 @@ function stopPersistentVoiceChat() {
     return true;
   }
   return false;
+}
+
+function createPersistentVoiceContributionShare() {
+  const sourceStream = state.localVoiceShare?.stream ?? null;
+  const sourceAudioTrack = sourceStream?.getAudioTracks?.()[0] ?? null;
+  if (!sourceAudioTrack || String(sourceAudioTrack.readyState ?? "live") === "ended") {
+    return null;
+  }
+  const clonedStream = new MediaStream([sourceAudioTrack.clone()]);
+  const share = createLocalDisplayShare(clonedStream, {
+    title: "",
+    shareKind: "audio",
+    hasVideo: false,
+    hasAudio: true,
+    aspectRatio: 1.2,
+    fallbackWidth: 540,
+    fallbackHeight: 432,
+    isPendingShare: (candidate) => state.pendingBrowserShare?.stream === candidate.stream,
+    isLocalShare: (candidate) => state.localBrowserShare?.stream === candidate.stream,
+    onEndedWhilePending() {
+      clearPendingBrowserShare({ stopTracks: false });
+      updateBrowserPanel();
+    },
+    onEndedWhileLive() {
+      const sessionId = String(state.localBrowserShare?.sessionId ?? state.localBrowserSessionId ?? "").trim();
+      clearLocalBrowserShare({ stopTracks: false, sessionId });
+      dropLocalBrowserSession(sessionId);
+      if (sessionId) {
+        state.realtimeClient?.stopBrowser(sessionId);
+      }
+      updateBrowserPanel();
+    },
+  });
+  share.stopTracksOnRelease = true;
+  return share;
+}
+
+function startPersistentVoiceContribution(anchorSessionId) {
+  const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+  if (!normalizedAnchorSessionId) {
+    return false;
+  }
+  const existingLocalSession = getLocalBrowserSession();
+  if (existingLocalSession) {
+    const sameContribution = isBrowserMemberSession(existingLocalSession)
+      && getBrowserSessionShareKind(existingLocalSession) === "audio"
+      && getBrowserSessionAnchorSessionId(existingLocalSession) === normalizedAnchorSessionId;
+    if (sameContribution) {
+      return true;
+    }
+    showToast("Stop your current nearby share before joining with persistent voice.");
+    return false;
+  }
+  if (state.pendingBrowserShare) {
+    showToast("Finish the current nearby share first.");
+    return false;
+  }
+  const share = createPersistentVoiceContributionShare();
+  if (!share) {
+    showToast("Restart persistent voice chat, then try joining again.");
+    return false;
+  }
+  state.pendingBrowserShare = share;
+  setBrowserStatus("Adding your persistent voice to this nearby share...");
+  const started = state.realtimeClient?.startBrowser({
+    mode: "display-share",
+    title: "",
+    shareKind: "audio",
+    hasVideo: false,
+    hasAudio: true,
+    aspectRatio: share.aspectRatio,
+    anchorSessionId: normalizedAnchorSessionId,
+  }) === true;
+  if (!started) {
+    clearPendingBrowserShare({ stopTracks: true });
+    updateBrowserPanel();
+    showToast("Realtime share is offline.");
+    return false;
+  }
+  updateBrowserPanel();
+  return true;
 }
 
 function getBrowserMediaController() {
@@ -9421,9 +9502,16 @@ function handleRealtimeMessage(payload) {
     return;
   }
   if (payload.type === "voice:join-resolved") {
+    const approved = payload.approved === true;
     state.voiceJoinOffer = null;
     updateVoicePanel();
     renderVoiceJoinOffers();
+    if (approved) {
+      const started = startPersistentVoiceContribution(payload.anchorSessionId);
+      if (!started) {
+        return;
+      }
+    }
     if (payload.message) {
       showToast(payload.message);
     }
