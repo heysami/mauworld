@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418m" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418n" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -683,22 +683,26 @@
             <div class="pw-prefab-detail-stack" data-prefab-detail></div>
           </section>
 
-          <section class="pw-drawer-view" data-scene-drawer-view="logic" role="tabpanel" hidden>
-            <section class="pw-builder-panel">
-              <div class="pw-panel__header">
-                <h3>Scene logic</h3>
-                <div class="pw-inline-actions">
-                  <button type="button" class="is-muted" data-script-function-open-generate disabled>Generate</button>
-                  <button type="button" class="is-muted" data-script-function-new disabled>New function</button>
+          <section class="pw-drawer-view pw-drawer-view--logic" data-scene-drawer-view="logic" role="tabpanel" hidden>
+            <div class="pw-script-sidebar">
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Function library</h3>
+                  <div class="pw-inline-actions">
+                    <button type="button" class="is-muted" data-script-function-open-generate disabled>Generate</button>
+                    <button type="button" class="is-muted" data-script-function-new disabled>New function</button>
+                  </div>
                 </div>
-              </div>
-              <textarea name="scriptDsl" hidden aria-hidden="true"></textarea>
-              <label class="pw-script-search">
-                <span>Find function</span>
-                <input type="search" data-script-function-search placeholder="Search scene logic" />
-              </label>
-              <p class="pw-script-search__hint" data-script-function-search-hint>Functions compile into one scene script behind the scenes.</p>
-              <div class="pw-script-list" data-script-function-list></div>
+                <textarea name="scriptDsl" hidden aria-hidden="true"></textarea>
+                <label class="pw-script-search">
+                  <span>Find function</span>
+                  <input type="search" data-script-function-search placeholder="Search scene logic" />
+                </label>
+                <p class="pw-script-search__hint" data-script-function-search-hint>Functions compile into one scene script behind the scenes.</p>
+                <div class="pw-script-list" data-script-function-list></div>
+              </section>
+            </div>
+            <div class="pw-script-detail-stack">
               <section class="pw-script-editor" data-script-function-editor>
                 <p class="pw-builder-empty" data-script-function-empty>Select a function to edit its rules.</p>
                 <div class="pw-script-editor__fields" data-script-function-fields hidden>
@@ -731,7 +735,7 @@
                   <textarea name="sceneDoc" rows="14" spellcheck="false"></textarea>
                 </label>
               </details>
-            </section>
+            </div>
           </section>
 
           <div class="pw-inline-actions pw-scene-form__actions">
@@ -746,6 +750,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418m"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418n"></script>
   </body>
 </html>

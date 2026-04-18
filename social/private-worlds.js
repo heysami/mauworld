@@ -4840,6 +4840,7 @@ function renderSceneLogicLibrary() {
     state.selectedScriptFunctionId = visibleFunctions[0].id;
   }
   const selectedFunction = ensureSelectedScriptFunction(functions);
+  const editorFunction = hasScene && visibleFunctions.length ? selectedFunction : null;
   if (elements.scriptFunctionSearch && elements.scriptFunctionSearch.value !== String(state.scriptFunctionQuery ?? "")) {
     elements.scriptFunctionSearch.value = String(state.scriptFunctionQuery ?? "");
   }
@@ -4853,7 +4854,7 @@ function renderSceneLogicLibrary() {
     elements.scriptFunctionOpenGenerate.disabled = !canEdit || !state.selectedWorld || !state.session;
   }
   if (elements.scriptFunctionDelete) {
-    elements.scriptFunctionDelete.disabled = !canEdit || !selectedFunction;
+    elements.scriptFunctionDelete.disabled = !canEdit || !editorFunction;
   }
   if (elements.scriptFunctionGenerate) {
     elements.scriptFunctionGenerate.disabled = !canEdit || !state.selectedWorld || !state.session;
@@ -4895,17 +4896,21 @@ function renderSceneLogicLibrary() {
     }).join("");
   }
 
-  const showEditor = Boolean(selectedFunction);
+  const showEditor = Boolean(editorFunction);
   if (elements.scriptFunctionEmpty) {
     elements.scriptFunctionEmpty.hidden = showEditor;
-    elements.scriptFunctionEmpty.textContent = functions.length
-      ? "Select a function to edit its rules."
-      : "Add a function to start shaping scene logic.";
+    elements.scriptFunctionEmpty.textContent = !hasScene
+      ? "Open a scene to start shaping scene logic."
+      : !functions.length
+        ? "Add a function to start shaping scene logic."
+        : !visibleFunctions.length
+          ? "No function matches the current search."
+          : "Select a function to edit its rules.";
   }
   if (elements.scriptFunctionFields) {
     elements.scriptFunctionFields.hidden = !showEditor;
   }
-  if (!selectedFunction) {
+  if (!editorFunction) {
     if (elements.scriptFunctionName) {
       elements.scriptFunctionName.value = "";
       elements.scriptFunctionName.disabled = true;
@@ -4922,17 +4927,17 @@ function renderSceneLogicLibrary() {
     }
     return;
   }
-  const summary = buildScriptFunctionSummary(selectedFunction);
+  const summary = buildScriptFunctionSummary(editorFunction);
   if (elements.scriptFunctionName) {
     elements.scriptFunctionName.disabled = !canEdit;
-    if (elements.scriptFunctionName.value !== selectedFunction.name) {
-      elements.scriptFunctionName.value = selectedFunction.name;
+    if (elements.scriptFunctionName.value !== editorFunction.name) {
+      elements.scriptFunctionName.value = editorFunction.name;
     }
   }
   if (elements.scriptFunctionBody) {
     elements.scriptFunctionBody.disabled = !canEdit;
-    if (elements.scriptFunctionBody.value !== selectedFunction.body) {
-      elements.scriptFunctionBody.value = selectedFunction.body;
+    if (elements.scriptFunctionBody.value !== editorFunction.body) {
+      elements.scriptFunctionBody.value = editorFunction.body;
     }
   }
   if (elements.scriptFunctionPrompt) {
