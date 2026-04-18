@@ -510,6 +510,51 @@ body.private-worlds-body.is-auth-gated .pw-launcher {
   line-height: 1.2;
 }
 
+.pw-drawer__head-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pw-drawer__scene-indicator {
+  display: grid;
+  gap: 2px;
+  min-width: min(280px, 42vw);
+  padding: 8px 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+  text-align: right;
+}
+
+.pw-drawer__scene-indicator span,
+.pw-drawer__scene-indicator small {
+  color: var(--pw-muted);
+}
+
+.pw-drawer__scene-indicator span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pw-drawer__scene-indicator strong,
+.pw-drawer__scene-indicator small {
+  margin: 0;
+}
+
+.pw-drawer__scene-indicator strong {
+  line-height: 1.25;
+}
+
+.pw-drawer__scene-indicator small {
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .pw-drawer__close {
   min-height: 38px;
   padding: 0 12px;
@@ -1695,6 +1740,21 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
 }
 
 @media (max-width: 720px) {
+  .pw-drawer__head {
+    align-items: stretch;
+  }
+
+  .pw-drawer__head-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .pw-drawer__scene-indicator {
+    min-width: 0;
+    flex: 1 1 180px;
+    text-align: left;
+  }
+
   .pw-mau-panel .world-panel__tabs {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

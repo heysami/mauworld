@@ -499,6 +499,7 @@ const elements = {
   sceneLibraryHint: document.querySelector("[data-scene-library-hint]"),
   sceneLibraryList: document.querySelector("[data-scene-library-list]"),
   sceneFocusSummary: document.querySelector("[data-scene-focus-summary]"),
+  sceneDrawerSceneIndicator: document.querySelector("[data-scene-drawer-scene-indicator]"),
   sceneForm: document.querySelector("[data-scene-form]"),
   sceneEnvironmentHint: document.querySelector("[data-scene-environment-hint]"),
   saveScene: document.querySelector("[data-save-scene]"),
@@ -5174,6 +5175,51 @@ function buildSceneLibrarySummary(scene = {}) {
   return meta.join(" · ");
 }
 
+function getSceneStatusLabel(scene = getSelectedScene()) {
+  if (!scene) {
+    return "none";
+  }
+  const activeRuntimeSceneId = state.selectedWorld?.active_instance?.active_scene_id || "";
+  if (scene.id === activeRuntimeSceneId) {
+    return "live";
+  }
+  if (scene.id === state.selectedSceneId) {
+    return "editing";
+  }
+  if (scene.is_default) {
+    return "default";
+  }
+  return "saved";
+}
+
+function renderSceneDrawerSceneIndicator(scene = getSelectedScene()) {
+  if (!elements.sceneDrawerSceneIndicator) {
+    return;
+  }
+  if (!scene) {
+    elements.sceneDrawerSceneIndicator.innerHTML = `
+      <span>Selected Scene</span>
+      <strong>No scene selected</strong>
+      <small>Open a scene from the Scenes tab.</small>
+    `;
+    return;
+  }
+  const activeRuntimeSceneId = String(state.selectedWorld?.active_instance?.active_scene_id ?? "").trim();
+  const activeRuntimeScene = activeRuntimeSceneId
+    ? (state.selectedWorld?.scenes ?? []).find((entry) => entry.id === activeRuntimeSceneId) ?? null
+    : null;
+  const status = getSceneStatusLabel(scene);
+  const liveNote = activeRuntimeScene && activeRuntimeScene.id !== scene.id
+    ? `Live now: ${activeRuntimeScene.name || "Untitled Scene"}`
+    : buildSceneLibrarySummary(scene);
+  elements.sceneDrawerSceneIndicator.innerHTML = `
+    <span>Selected Scene</span>
+    <strong>${htmlEscape(scene.name || "Untitled Scene")}</strong>
+    <small>${htmlEscape(status)} · ${htmlEscape(buildSceneLibrarySummary(scene))}</small>
+    ${liveNote !== buildSceneLibrarySummary(scene) ? `<small>${htmlEscape(liveNote)}</small>` : ""}
+  `;
+}
+
 function renderSceneFocusSummary(scene = getSelectedScene()) {
   if (!elements.sceneFocusSummary) {
     return;
@@ -5182,14 +5228,7 @@ function renderSceneFocusSummary(scene = getSelectedScene()) {
     elements.sceneFocusSummary.innerHTML = '<p class="pw-builder-empty">Pick a scene to edit its setup.</p>';
     return;
   }
-  const activeRuntimeSceneId = state.selectedWorld?.active_instance?.active_scene_id || "";
-  const status = scene.id === activeRuntimeSceneId
-    ? "live"
-    : scene.id === state.selectedSceneId
-      ? "editing"
-    : scene.is_default
-      ? "default"
-      : "saved";
+  const status = getSceneStatusLabel(scene);
   elements.sceneFocusSummary.innerHTML = `
     <div class="pw-scene-focus__head">
       <strong>${htmlEscape(scene.name || "Untitled Scene")}</strong>
@@ -6481,6 +6520,7 @@ function renderSelectedWorld() {
   renderWorldMeta();
   renderSceneLibrary();
   renderSceneDrawerTabs();
+  renderSceneDrawerSceneIndicator();
   renderSceneEditor();
   renderCollaborators();
   renderPrivateShare();
