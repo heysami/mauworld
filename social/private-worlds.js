@@ -726,6 +726,7 @@ const state = {
   authConfig: null,
   supabase: null,
   session: null,
+  authReady: false,
   profile: null,
   publicWorlds: [],
   worlds: [],
@@ -1028,7 +1029,7 @@ function updateShellState() {
   const activePlacementTool = getActivePlacementTool();
   const activePrefabPlacementId = getActivePrefabPlacementId();
   const buildTransformMode = getResolvedBuildTransformMode();
-  const authGated = !state.session;
+  const authGated = state.authReady === true && !state.session;
   document.body.classList.toggle("has-world", Boolean(state.selectedWorld));
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
   document.body.classList.toggle("is-auth-gated", authGated);
@@ -4139,14 +4140,25 @@ async function apiFetch(path, options = {}) {
 }
 
 async function fetchAuthConfig() {
-  state.authConfig = await apiFetch("/public/auth/config");
-  state.supabase = createClient(state.authConfig.supabaseUrl, state.authConfig.supabaseAnonKey);
-  const { data } = await state.supabase.auth.getSession();
-  state.session = data.session;
-  state.supabase.auth.onAuthStateChange((_event, session) => {
-    state.session = session;
-    void refreshAuthState();
-  });
+  state.authReady = false;
+  renderSessionSummary();
+  renderAccessSection();
+  updateShellState();
+  try {
+    state.authConfig = await apiFetch("/public/auth/config");
+    state.supabase = createClient(state.authConfig.supabaseUrl, state.authConfig.supabaseAnonKey);
+    const { data } = await state.supabase.auth.getSession();
+    state.session = data.session;
+    state.supabase.auth.onAuthStateChange((_event, session) => {
+      state.session = session;
+      void refreshAuthState();
+    });
+  } finally {
+    state.authReady = true;
+    renderSessionSummary();
+    renderAccessSection();
+    updateShellState();
+  }
 }
 
 async function runRefreshAuthState() {
@@ -4236,7 +4248,7 @@ async function refreshAuthState() {
 }
 
 function renderProfile() {
-  if (!state.session || !state.profile) {
+  if (!state.authReady || !state.session || !state.profile) {
     elements.profileForm.hidden = true;
     return;
   }
@@ -4246,7 +4258,26 @@ function renderProfile() {
 }
 
 function renderAccessSection() {
+  const authReady = state.authReady === true;
   const signedIn = Boolean(state.session);
+  if (!authReady) {
+    if (elements.accessHeading) {
+      elements.accessHeading.textContent = "Checking account";
+    }
+    if (elements.accessNote) {
+      elements.accessNote.textContent = "Loading your account before this private world opens.";
+    }
+    if (elements.authForm) {
+      elements.authForm.hidden = true;
+    }
+    if (elements.profileForm) {
+      elements.profileForm.hidden = true;
+    }
+    if (elements.accountActions) {
+      elements.accountActions.hidden = true;
+    }
+    return;
+  }
   if (elements.accessHeading) {
     elements.accessHeading.textContent = signedIn ? "Account" : "Sign in";
   }
@@ -4270,6 +4301,13 @@ function renderSessionSummary() {
   if (!elements.panelSessionLabel || !elements.panelOpenAccess) {
     return;
   }
+  if (!state.authReady) {
+    elements.panelSessionLabel.textContent = "Checking your account.";
+    elements.panelOpenAccess.textContent = "Loading";
+    elements.panelOpenAccess.disabled = true;
+    return;
+  }
+  elements.panelOpenAccess.disabled = false;
   if (state.session && state.profile) {
     elements.panelSessionLabel.textContent = `Signed in as @${state.profile.username || "user"}.`;
     elements.panelOpenAccess.textContent = "Account";
@@ -11758,6 +11796,13 @@ async function init() {
   renderPrivateChat();
   renderPrivateShare();
   updatePrivateBrowserPanel();
+  const launch = getLaunchRequest();
+  if (launch.worldId && launch.creatorUsername) {
+    setEntryLoading(true, {
+      title: "Opening private world",
+      note: "Checking your account before the scene opens.",
+    });
+  }
   renderSessionSummary();
   renderAccessSection();
   ensurePreview();
@@ -11771,6 +11816,10 @@ async function init() {
 }
 
 void init().catch((error) => {
+  setEntryLoading(false);
+  renderSessionSummary();
+  renderAccessSection();
+  updateShellState();
   setStatus(error.message || "Could not initialize private worlds page");
   pushEvent("init:error", error.message || "Unknown initialization failure");
 });

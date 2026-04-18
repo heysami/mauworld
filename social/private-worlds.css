@@ -485,6 +485,12 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   display: none;
 }
 
+.pw-auth-form[hidden],
+.pw-profile-form[hidden],
+.pw-account-actions[hidden] {
+  display: none !important;
+}
+
 .pw-panel,
 .pw-builder-panel,
 .pw-world-card,
