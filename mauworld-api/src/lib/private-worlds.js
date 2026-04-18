@@ -38,7 +38,7 @@ export const PRIVATE_WORLD_TYPE_DEFINITIONS = {
 const ALLOWED_WORLD_TYPES = new Set(Object.keys(PRIVATE_WORLD_TYPE_DEFINITIONS));
 const ALLOWED_TEMPLATE_SIZES = new Set(["small", "medium", "large"]);
 const ALLOWED_TEXTURE_PRESETS = new Set(["none", "grass", "wood", "wall", "floor", "stone", "glass", "metal", "fabric"]);
-const ALLOWED_PRIMITIVE_SHAPES = new Set(["box", "sphere", "capsule", "cylinder", "cone", "plane"]);
+const ALLOWED_PRIMITIVE_SHAPES = new Set(["box", "sphere", "capsule", "cylinder", "cone", "plane", "panel"]);
 const ALLOWED_PLAYER_CAMERA_MODES = new Set(["first_person", "third_person", "top_down"]);
 const ALLOWED_PLAYER_BODY_MODES = new Set(["rigid", "ghost"]);
 const ALLOWED_FACING_MODES = new Set(["fixed", "billboard", "upright_billboard"]);
@@ -295,6 +295,7 @@ function sanitizePrimitiveEntry(entry = {}, index = 0) {
     rigid_mode: String(entry.rigid_mode ?? entry.rigidMode ?? (entry.rigid === false ? "ghost" : "rigid")).trim().toLowerCase() === "ghost"
       ? "ghost"
       : "rigid",
+    facing_mode: sanitizeFacingMode(entry.facing_mode ?? entry.facingMode, "fixed"),
     invisible: entry.invisible === true,
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
     particle_effect: String(entry.particle_effect ?? entry.particleEffect ?? "").trim() || null,

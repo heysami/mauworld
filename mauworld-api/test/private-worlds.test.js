@@ -154,6 +154,21 @@ test("normalizeSceneDoc preserves texture asset ids on materials", () => {
   assert.equal(scene.primitives[0].material.texture_preset, "none");
 });
 
+test("normalizeSceneDoc keeps object panel shapes and facing modes", () => {
+  const scene = normalizeSceneDoc({
+    primitives: [
+      {
+        id: "poster",
+        shape: "panel",
+        facing_mode: "billboard",
+      },
+    ],
+  });
+
+  assert.equal(scene.primitives[0].shape, "panel");
+  assert.equal(scene.primitives[0].facing_mode, "billboard");
+});
+
 test("normalizeSceneDoc keeps panels and facing modes for flat authored surfaces", () => {
   const scene = normalizeSceneDoc({
     panels: [
