@@ -444,6 +444,7 @@ const elements = {
   worldList: document.querySelector("[data-world-list]"),
   importForm: document.querySelector("[data-import-form]"),
   resolveForm: document.querySelector("[data-resolve-form]"),
+  panelRoot: document.querySelector("[data-private-panel]"),
   panelTitle: document.querySelector("[data-private-panel-title]"),
   panelSubtitle: document.querySelector("[data-private-panel-subtitle]"),
   panelSessionLabel: document.querySelector("[data-private-session-label]"),
@@ -488,6 +489,7 @@ const elements = {
   panelReady: document.querySelector("[data-private-panel-ready]"),
   panelRelease: document.querySelector("[data-private-panel-release]"),
   panelReset: document.querySelector("[data-private-panel-reset]"),
+  sceneDrawer: document.querySelector("[data-scene-drawer]"),
   sceneDrawerTabButtons: [...document.querySelectorAll("[data-scene-drawer-tab]")],
   sceneDrawerViews: [...document.querySelectorAll("[data-scene-drawer-view]")],
   sceneLibraryHint: document.querySelector("[data-scene-library-hint]"),
@@ -1023,13 +1025,18 @@ function renderSceneDrawerTabs() {
     button.setAttribute("aria-selected", String(isActive));
   }
   for (const view of elements.sceneDrawerViews ?? []) {
-    view.hidden = view.getAttribute("data-scene-drawer-view") !== activeTab;
+    const isActive = view.getAttribute("data-scene-drawer-view") === activeTab;
+    view.hidden = !isActive;
+    view.setAttribute("aria-hidden", String(!isActive));
   }
 }
 
 function setSceneDrawerTab(tab) {
   state.sceneDrawerTab = normalizeSceneDrawerTab(tab);
   renderSceneDrawerTabs();
+  if (elements.sceneDrawer) {
+    elements.sceneDrawer.scrollTop = 0;
+  }
 }
 
 function setPrivatePanelTab(tab, options = {}) {
@@ -1065,6 +1072,9 @@ function setPrivatePanelTab(tab, options = {}) {
   }
   if (refreshWorld && state.selectedWorld) {
     renderSelectedWorld();
+  }
+  if (elements.panelRoot) {
+    elements.panelRoot.scrollLeft = 0;
   }
 }
 
@@ -6293,6 +6303,9 @@ function renderSelectedWorld() {
     elements.panelSubtitle.textContent = world
       ? `${world.creator.username} · ${world.world_type}${world.active_instance ? ` · ${world.active_instance.status}` : ""}`
       : "Open or create a world to enter the scene.";
+  }
+  if (elements.panelRoot) {
+    elements.panelRoot.scrollLeft = 0;
   }
   renderWorldMeta();
   renderSceneLibrary();
