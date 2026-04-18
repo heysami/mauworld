@@ -10259,7 +10259,7 @@ function getTransformHandleHit(pointerSource) {
     .sort((left, right) =>
       left.screenDistance - right.screenDistance
       || left.depth - right.depth
-    )[0] ?? null;
+    );
   const pickableByHandleKey = new Map();
   for (const object of preview.transformPickables) {
     const handleKey = object?.userData?.privateWorldTransformHandle?.key;
@@ -10277,21 +10277,15 @@ function getTransformHandleHit(pointerSource) {
       getSelectionOutlinePadding(selectionRefs.length),
     )
     : null;
-  const projectedFrameRect = baseSelectionFrame
-    ? getOverlayFrameProjectedRect(baseSelectionFrame, preview, rect)
-    : null;
-  const pointerIsOutsideProjectedFrame = Boolean(
-    projectedFrameRect
-    && (
-      pointerX < projectedFrameRect.minX
-      || pointerX > projectedFrameRect.maxX
-      || pointerY < projectedFrameRect.minY
-      || pointerY > projectedFrameRect.maxY
-    )
-  );
   const handleType = preview.transformPickables[0]?.userData?.privateWorldTransformHandle?.type ?? "";
   preview.raycaster.setFromCamera(pointer, preview.camera);
-  if (handleSelectionFrame && pointerIsOutsideProjectedFrame) {
+  const hoveredEntityHit = getFirstPreviewEntityHit(preview.raycaster.intersectObjects(preview.entityPickables, false));
+  const hoveredEntityRef = getEntityRefFromHit(hoveredEntityHit);
+  const pointerIsOverSelection = Boolean(
+    hoveredEntityRef
+    && selectionRefs.some((ref) => isSameEntityRef(ref, hoveredEntityRef))
+  );
+  if (handleSelectionFrame && !pointerIsOverSelection) {
     const outsideCandidates = handleType === "rotate"
       ? getRotateHandleSpecs(handleSelectionFrame).map((handle) => {
         const object = pickableByHandleKey.get(handle.key);
@@ -10325,7 +10319,17 @@ function getTransformHandleHit(pointerSource) {
           screenDistance: Math.hypot(screenPoint.x - pointerX, screenPoint.y - pointerY),
         };
       });
-    const outsideCandidate = chooseOutsideCandidate(outsideCandidates);
+    const rankedOutsideCandidates = chooseOutsideCandidate(outsideCandidates);
+    const bestOutsideCandidate = rankedOutsideCandidates[0] ?? null;
+    const stickyOutsideCandidate = hoveredHandleKey
+      ? rankedOutsideCandidates.find((candidate) => candidate.handle?.key === hoveredHandleKey)
+      : null;
+    const outsideCandidate = stickyOutsideCandidate
+      && bestOutsideCandidate
+      && bestOutsideCandidate.handle?.key !== stickyOutsideCandidate.handle?.key
+      && bestOutsideCandidate.screenDistance + 14 >= stickyOutsideCandidate.screenDistance
+      ? stickyOutsideCandidate
+      : bestOutsideCandidate;
     if (outsideCandidate) {
       return {
         object: outsideCandidate.object,
