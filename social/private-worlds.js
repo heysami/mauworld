@@ -144,6 +144,11 @@ const BUILD_TRANSFORM_SHORTCUTS = new Map([
   ["r", "rotate"],
   ["t", "delete"],
 ]);
+const BUILD_TRANSFORM_AXIS_SHORTCUTS = new Map([
+  ["1", "x"],
+  ["2", "z"],
+  ["3", "y"],
+]);
 const TOOL_PRESET_KINDS = ["voxel", "primitive", "player", "screen", "text", "trigger"];
 const AI_PROVIDER_SESSION_KEYS = {
   reasoning: AI_REASONING_STORAGE_KEY,
@@ -3261,6 +3266,21 @@ function getPlacementShortcutTool(event) {
   return "";
 }
 
+function getBuildTransformAxisShortcut(event) {
+  const key = String(event?.key ?? "").trim();
+  if (BUILD_TRANSFORM_AXIS_SHORTCUTS.has(key)) {
+    return BUILD_TRANSFORM_AXIS_SHORTCUTS.get(key) || "";
+  }
+  const code = String(event?.code ?? "").trim();
+  if (code.startsWith("Digit")) {
+    return BUILD_TRANSFORM_AXIS_SHORTCUTS.get(code.slice(5)) || "";
+  }
+  if (code.startsWith("Numpad")) {
+    return BUILD_TRANSFORM_AXIS_SHORTCUTS.get(code.slice(6)) || "";
+  }
+  return "";
+}
+
 function createEntityRef(kind, id) {
   const normalizedKind = String(kind ?? "").trim();
   const normalizedId = String(id ?? "").trim();
@@ -3409,6 +3429,24 @@ function isEntitySelected(kind, id) {
 
 function getBuildTransformShortcut(event) {
   return BUILD_TRANSFORM_SHORTCUTS.get(normalizeRuntimeKey(event)) || "";
+}
+
+function hasBuildTransformAxisModifier() {
+  return state.buildModifierKeys.has("q")
+    || state.buildModifierKeys.has("e")
+    || state.buildModifierKeys.has("r");
+}
+
+function getBuildTransformAxisLock(transformMode = getBuildTransformMode()) {
+  if (transformMode !== "move" && transformMode !== "scale" && transformMode !== "rotate") {
+    return "";
+  }
+  for (const key of ["1", "2", "3"]) {
+    if (state.buildModifierKeys.has(key)) {
+      return BUILD_TRANSFORM_AXIS_SHORTCUTS.get(key) || "";
+    }
+  }
+  return "";
 }
 
 function canUseBuildTransformShortcuts() {
@@ -9123,7 +9161,7 @@ function renderSelectedWorld() {
     elements.panelModeNote.textContent = !hasWorld
       ? "Open a world to switch modes."
       : state.mode === "build"
-        ? "Place and edit things here. Physics is paused."
+        ? "Place and edit things here. Physics is paused. Hold Q/E/R, then 1 red X, 2 blue Z, 3 green Y."
         : "Walk the scene here. Physics and scripts run live.";
   }
   if (elements.sceneModeBadge) {
@@ -10278,7 +10316,57 @@ function getTransformHandleHit(pointerSource) {
     )
     : null;
   const handleType = preview.transformPickables[0]?.userData?.privateWorldTransformHandle?.type ?? "";
+  const resolvedTransformMode = getResolvedBuildTransformMode();
+  const axisLock = getBuildTransformAxisLock(resolvedTransformMode);
   preview.raycaster.setFromCamera(pointer, preview.camera);
+  if (handleSelectionFrame && axisLock) {
+    const lockedCandidates = (handleType === "rotate"
+      ? getRotateHandleSpecs(handleSelectionFrame)
+      : getTransformHandleSpecs(handleSelectionFrame)
+    )
+      .filter((handle) => handle.axis === axisLock)
+      .map((handle) => {
+        const object = pickableByHandleKey.get(handle.key);
+        if (!object) {
+          return null;
+        }
+        const screenPoint = projectWorldPoint(
+          handleType === "rotate"
+            ? getRotateHandleWorldPosition(handleSelectionFrame, handle)
+            : getTransformHandleWorldPosition(handleSelectionFrame, handle),
+        );
+        if (!screenPoint) {
+          return null;
+        }
+        return {
+          handle: object.userData.privateWorldTransformHandle,
+          object,
+          depth: screenPoint.depth,
+          screenDistance: Math.hypot(screenPoint.x - pointerX, screenPoint.y - pointerY),
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) =>
+        left.screenDistance - right.screenDistance
+        || left.depth - right.depth
+      );
+    const bestLockedCandidate = lockedCandidates[0] ?? null;
+    const stickyLockedCandidate = hoveredHandleKey
+      ? lockedCandidates.find((candidate) => candidate.handle?.key === hoveredHandleKey)
+      : null;
+    const lockedCandidate = stickyLockedCandidate
+      && bestLockedCandidate
+      && bestLockedCandidate.handle?.key !== stickyLockedCandidate.handle?.key
+      && bestLockedCandidate.screenDistance + 14 >= stickyLockedCandidate.screenDistance
+      ? stickyLockedCandidate
+      : bestLockedCandidate;
+    if (lockedCandidate) {
+      return {
+        object: lockedCandidate.object,
+        distance: lockedCandidate.depth,
+      };
+    }
+  }
   const hoveredEntityHit = getFirstPreviewEntityHit(preview.raycaster.intersectObjects(preview.entityPickables, false));
   const hoveredEntityRef = getEntityRefFromHit(hoveredEntityHit);
   const pointerIsOverSelection = Boolean(
@@ -11336,9 +11424,9 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
   if (!requestedTransformMode || requestedTransformMode === "delete") {
     return false;
   }
-  const directHandleHit = getTransformHandleHit(event);
+  let directHandleHit = getTransformHandleHit(event);
   const hoveredEntityRef = state.buildHover?.entityRef ?? getEntityRefFromHit(hit);
-  const hoveredHandle = directHandleHit?.object?.userData?.privateWorldTransformHandle
+  let hoveredHandle = directHandleHit?.object?.userData?.privateWorldTransformHandle
     ? { ...directHandleHit.object.userData.privateWorldTransformHandle }
     : (state.buildHover?.transformHandle ?? null);
   let sceneDoc = null;
@@ -11366,6 +11454,10 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
     } catch (_error) {
       return false;
     }
+    directHandleHit = getTransformHandleHit(event);
+    hoveredHandle = directHandleHit?.object?.userData?.privateWorldTransformHandle
+      ? { ...directHandleHit.object.userData.privateWorldTransformHandle }
+      : hoveredHandle;
   }
   if (!selectedEntities.length) {
     return false;
@@ -16225,13 +16317,40 @@ function bindEvents() {
       return;
     }
     const buildShortcut = getBuildTransformShortcut(event);
-    if (!buildShortcut || !canUsePlacementTools()) {
+    const axisShortcut = getBuildTransformAxisShortcut(event);
+    if ((!buildShortcut && !axisShortcut) || !canUsePlacementTools()) {
       return;
     }
-    event.preventDefault();
     const buildKey = normalizeRuntimeKey(event);
+    const axisModifierActive = hasBuildTransformAxisModifier();
+    const activatingAxisShortcut = Boolean(
+      axisShortcut
+      && (
+        axisModifierActive
+        || buildShortcut === "move"
+        || buildShortcut === "scale"
+        || buildShortcut === "rotate"
+      ),
+    );
+    if (buildShortcut || activatingAxisShortcut) {
+      event.preventDefault();
+    }
     state.buildModifierKeys.add(buildKey);
     privateInputState.keys.delete(buildKey);
+    if (
+      state.placementShortcutTool
+      && getBuildTransformAxisLock(
+        buildShortcut === "move" || buildShortcut === "scale" || buildShortcut === "rotate"
+          ? buildShortcut
+          : getResolvedBuildTransformMode()
+      )
+    ) {
+      clearPlacementTool({ temporaryOnly: true });
+      return;
+    }
+    if (!buildShortcut && !activatingAxisShortcut) {
+      return;
+    }
     refreshBuildHoverFromStoredPointer();
     updateShellState();
   });
@@ -16240,6 +16359,9 @@ function bindEvents() {
       return;
     }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
+      return;
+    }
+    if (event.defaultPrevented && getBuildTransformAxisShortcut(event)) {
       return;
     }
     const toolKind = getPlacementShortcutTool(event);
@@ -16282,10 +16404,21 @@ function bindEvents() {
       return;
     }
     const buildShortcut = getBuildTransformShortcut(event);
+    const axisShortcut = getBuildTransformAxisShortcut(event);
     const buildKey = normalizeRuntimeKey(event);
-    if (buildShortcut && (canUsePlacementTools() || state.buildModifierKeys.has(buildKey))) {
-      event.preventDefault();
+    const axisShortcutActive = Boolean(
+      axisShortcut
+      && (
+        hasBuildTransformAxisModifier()
+        || state.buildDrag?.handle
+        || getBuildTransformAxisLock(getResolvedBuildTransformMode())
+      ),
+    );
+    if ((buildShortcut || axisShortcut) && (canUsePlacementTools() || state.buildModifierKeys.has(buildKey))) {
       state.buildModifierKeys.delete(buildKey);
+    }
+    if (buildShortcut || axisShortcutActive) {
+      event.preventDefault();
       endBuildDrag();
       refreshBuildHoverFromStoredPointer();
       updateShellState();
@@ -16294,6 +16427,9 @@ function bindEvents() {
   });
   window.addEventListener("keyup", (event) => {
     if (state.aiDialog.open) {
+      return;
+    }
+    if (event.defaultPrevented && getBuildTransformAxisShortcut(event)) {
       return;
     }
     const toolKind = getPlacementShortcutTool(event);
