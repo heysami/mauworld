@@ -10714,7 +10714,7 @@ function buildPlacementGhost(preview, placement) {
   preview.buildOverlay.add(outline);
 }
 
-function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
+function buildTransformHandles(preview, frame, hoveredHandleKey = "", lockedHandleKey = "") {
   if (!preview?.buildOverlay || !frame) {
     return;
   }
@@ -10722,24 +10722,26 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
   const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
   const handleSize = clampNumber(Math.max(size.x, size.y, size.z) * 0.12, 1.1, 0.6, 2.4);
   const dragHandleKey = state.buildDrag?.handle?.key ?? "";
+  const hasLockedHandle = Boolean(lockedHandleKey);
   const pickSize = Math.max(handleSize * 3.2, 2.2);
   const handleOffset = Math.max(0.24, handleSize * 0.58);
   for (const handle of getTransformHandleSpecs(frame)) {
     const isActive = handle.key === dragHandleKey;
-    const isHovered = handle.key === hoveredHandleKey;
+    const isLocked = !isActive && handle.key === lockedHandleKey;
+    const isHovered = !isActive && !isLocked && handle.key === hoveredHandleKey;
     const axisVector = getBuildDragAxisVector(handle.axis, frame);
     const handlePosition = handle.position
       .clone()
       .applyQuaternion(frameQuaternion)
       .add(frame.center)
       .addScaledVector(axisVector, handle.direction * handleOffset);
-    const visualSize = handleSize * (isActive ? 1.24 : isHovered ? 1.12 : 1);
+    const visualSize = handleSize * (isActive ? 1.28 : isLocked ? 1.2 : isHovered ? 1.12 : 1);
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(visualSize, visualSize, visualSize),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(getTransformHandleColor(handle.axis)),
         transparent: true,
-        opacity: isActive ? 1 : isHovered ? 0.96 : 0.82,
+        opacity: isActive ? 1 : isLocked ? 1 : isHovered ? 0.96 : hasLockedHandle ? 0.32 : 0.82,
         depthWrite: false,
         fog: false,
       }),
@@ -10747,13 +10749,13 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
     mesh.position.copy(handlePosition);
     mesh.quaternion.copy(frameQuaternion);
     preview.buildOverlay.add(mesh);
-    if (isHovered || isActive) {
+    if (isHovered || isActive || isLocked) {
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.BoxGeometry(visualSize * 1.18, visualSize * 1.18, visualSize * 1.18)),
         new THREE.LineBasicMaterial({
-          color: new THREE.Color(isActive ? "#ffffff" : getTransformHandleColor(handle.axis)),
+          color: new THREE.Color(isActive || isLocked ? "#ffffff" : getTransformHandleColor(handle.axis)),
           transparent: true,
-          opacity: isActive ? 0.94 : 0.62,
+          opacity: isActive ? 0.94 : isLocked ? 0.98 : 0.62,
           depthTest: false,
           fog: false,
         }),
@@ -10761,6 +10763,21 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
       outline.position.copy(handlePosition);
       outline.quaternion.copy(frameQuaternion);
       preview.buildOverlay.add(outline);
+      if (isLocked) {
+        const accentOutline = new THREE.LineSegments(
+          new THREE.EdgesGeometry(new THREE.BoxGeometry(visualSize * 1.34, visualSize * 1.34, visualSize * 1.34)),
+          new THREE.LineBasicMaterial({
+            color: new THREE.Color(getTransformHandleColor(handle.axis)),
+            transparent: true,
+            opacity: 0.82,
+            depthTest: false,
+            fog: false,
+          }),
+        );
+        accentOutline.position.copy(handlePosition);
+        accentOutline.quaternion.copy(frameQuaternion);
+        preview.buildOverlay.add(accentOutline);
+      }
     }
 
     const pickMesh = new THREE.Mesh(
@@ -10787,7 +10804,7 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
   }
 }
 
-function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
+function buildRotateHandles(preview, frame, hoveredHandleKey = "", lockedHandleKey = "") {
   if (!preview?.buildOverlay || !frame) {
     return;
   }
@@ -10798,6 +10815,7 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
   const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
   const handleLength = clampNumber(maxSize * 0.3, 1.6, 1.05, 3.8);
   const dragHandleKey = state.buildDrag?.handle?.key ?? "";
+  const hasLockedHandle = Boolean(lockedHandleKey);
   const pickThickness = Math.max(handleThickness * 3.2, 2.3);
   const pickLength = Math.max(handleLength * 1.55, 3.1);
   const handleOffset = Math.max(0.18, handleThickness * 0.4);
@@ -10808,7 +10826,8 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
   });
   for (const handle of getRotateHandleSpecs(frame)) {
     const isActive = handle.key === dragHandleKey;
-    const isHovered = handle.key === hoveredHandleKey;
+    const isLocked = !isActive && handle.key === lockedHandleKey;
+    const isHovered = !isActive && !isLocked && handle.key === hoveredHandleKey;
     const outward = handle.position.clone();
     if (outward.lengthSq() < 0.0001) {
       outward.copy(getBuildDragAxisVector(handle.axis, frame));
@@ -10822,8 +10841,8 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
       .addScaledVector(outward, handleOffset);
     const visibleDimensions = buildDimensions(
       handle.axis,
-      handleLength * (isActive ? 1.18 : isHovered ? 1.08 : 1),
-      handleThickness * (isActive ? 1.28 : isHovered ? 1.12 : 1),
+      handleLength * (isActive ? 1.22 : isLocked ? 1.14 : isHovered ? 1.08 : 1),
+      handleThickness * (isActive ? 1.32 : isLocked ? 1.18 : isHovered ? 1.12 : 1),
     );
     const pickDimensions = buildDimensions(handle.axis, pickLength, pickThickness);
 
@@ -10832,7 +10851,7 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(getTransformHandleColor(handle.axis)),
         transparent: true,
-        opacity: isActive ? 1 : isHovered ? 0.96 : 0.86,
+        opacity: isActive ? 1 : isLocked ? 1 : isHovered ? 0.96 : hasLockedHandle ? 0.34 : 0.86,
         depthWrite: false,
         fog: false,
       }),
@@ -10840,7 +10859,7 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
     mesh.position.copy(handlePosition);
     mesh.quaternion.copy(frameQuaternion);
     preview.buildOverlay.add(mesh);
-    if (isHovered || isActive) {
+    if (isHovered || isActive || isLocked) {
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.BoxGeometry(
           visibleDimensions.x * 1.14,
@@ -10848,9 +10867,9 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
           visibleDimensions.z * 1.14,
         )),
         new THREE.LineBasicMaterial({
-          color: new THREE.Color(isActive ? "#ffffff" : getTransformHandleColor(handle.axis)),
+          color: new THREE.Color(isActive || isLocked ? "#ffffff" : getTransformHandleColor(handle.axis)),
           transparent: true,
-          opacity: isActive ? 0.9 : 0.58,
+          opacity: isActive ? 0.9 : isLocked ? 0.98 : 0.58,
           depthTest: false,
           fog: false,
         }),
@@ -10858,6 +10877,25 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
       outline.position.copy(handlePosition);
       outline.quaternion.copy(frameQuaternion);
       preview.buildOverlay.add(outline);
+      if (isLocked) {
+        const accentOutline = new THREE.LineSegments(
+          new THREE.EdgesGeometry(new THREE.BoxGeometry(
+            visibleDimensions.x * 1.28,
+            visibleDimensions.y * 1.28,
+            visibleDimensions.z * 1.28,
+          )),
+          new THREE.LineBasicMaterial({
+            color: new THREE.Color(getTransformHandleColor(handle.axis)),
+            transparent: true,
+            opacity: 0.8,
+            depthTest: false,
+            fog: false,
+          }),
+        );
+        accentOutline.position.copy(handlePosition);
+        accentOutline.quaternion.copy(frameQuaternion);
+        preview.buildOverlay.add(accentOutline);
+      }
     }
 
     const pickMesh = new THREE.Mesh(
@@ -10911,11 +10949,13 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   const transformMode = buildMode
     ? getResolvedBuildTransformMode(requestedTransformMode, selectedEntities)
     : "";
+  const axisLock = buildMode ? getBuildTransformAxisLock(transformMode) : "";
   const selectionFrame = selectionRefs.length ? getOverlayFrameForRefs(preview, selectionRefs) : null;
   const overlayKey = [
     buildMode ? "build" : "idle",
     activePrefabPlacementId ? `prefab:${activePrefabPlacementId}` : activeTool || "none",
     transformMode || "none",
+    axisLock || "noaxislock",
     selectionRefs.map((entry) => `${entry.kind}:${entry.id}`).join(",") || "noselection",
     getOverlayFrameSignature(selectionFrame),
     hoveredEntityRef ? `${hoveredEntityRef.kind}:${hoveredEntityRef.id}` : "nohover",
@@ -10992,13 +11032,13 @@ function syncBuildPlacementOverlay(preview = state.preview) {
     });
   }
   if ((transformMode === "move" || transformMode === "multi") && groupFrame) {
-    buildTransformHandles(preview, groupFrame, displayedHandleKey);
+    buildTransformHandles(preview, groupFrame, displayedHandleKey, axisLock ? displayedHandleKey : "");
   } else if (transformMode === "scale" && groupFrame && canScaleSelection(selectedEntities)) {
     if (canAxisScaleSelection(selectedEntities)) {
-      buildTransformHandles(preview, groupFrame, displayedHandleKey);
+      buildTransformHandles(preview, groupFrame, displayedHandleKey, axisLock ? displayedHandleKey : "");
     }
   } else if (transformMode === "rotate" && groupFrame && canRotateSelection(selectedEntities)) {
-    buildRotateHandles(preview, groupFrame, displayedHandleKey);
+    buildRotateHandles(preview, groupFrame, displayedHandleKey, axisLock ? displayedHandleKey : "");
   }
   preview.buildOverlay.updateMatrixWorld(true);
   preview.buildOverlayKey = overlayKey;
