@@ -135,6 +135,8 @@ body.private-worlds-body.is-world-entry-loading .pw-inspector {
   max-height: calc(100dvh - 36px);
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
 }
 
 .pw-mau-panel > * {

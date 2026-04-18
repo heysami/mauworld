@@ -1039,6 +1039,28 @@ function setSceneDrawerTab(tab) {
   }
 }
 
+function resetHorizontalScroll(element) {
+  if (!element) {
+    return;
+  }
+  if (element.scrollLeft !== 0) {
+    element.scrollLeft = 0;
+  }
+}
+
+function settleHorizontalScroll(element) {
+  if (!element) {
+    return;
+  }
+  resetHorizontalScroll(element);
+  window.requestAnimationFrame(() => {
+    resetHorizontalScroll(element);
+  });
+  window.setTimeout(() => {
+    resetHorizontalScroll(element);
+  }, 32);
+}
+
 function setPrivatePanelTab(tab, options = {}) {
   const nextTab = normalizePrivatePanelTab(tab);
   const syncMode = options.syncMode !== false;
@@ -1073,9 +1095,7 @@ function setPrivatePanelTab(tab, options = {}) {
   if (refreshWorld && state.selectedWorld) {
     renderSelectedWorld();
   }
-  if (elements.panelRoot) {
-    elements.panelRoot.scrollLeft = 0;
-  }
+  settleHorizontalScroll(elements.panelRoot);
 }
 
 function updateShellState() {
@@ -6304,9 +6324,7 @@ function renderSelectedWorld() {
       ? `${world.creator.username} · ${world.world_type}${world.active_instance ? ` · ${world.active_instance.status}` : ""}`
       : "Open or create a world to enter the scene.";
   }
-  if (elements.panelRoot) {
-    elements.panelRoot.scrollLeft = 0;
-  }
+  settleHorizontalScroll(elements.panelRoot);
   renderWorldMeta();
   renderSceneLibrary();
   renderSceneDrawerTabs();
@@ -11361,6 +11379,9 @@ function bindEvents() {
       });
     });
   }
+  elements.panelRoot?.addEventListener("scroll", () => {
+    resetHorizontalScroll(elements.panelRoot);
+  }, { passive: true });
   elements.panelOpenAccess?.addEventListener("click", () => {
     setLauncherTab("access");
     setLauncherOpen(true);
