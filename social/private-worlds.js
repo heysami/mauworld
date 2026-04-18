@@ -10184,15 +10184,16 @@ function refreshBuildHoverFromPointer(pointerSource) {
   const hoveredTransformHandle = transformHandleHit?.object?.userData?.privateWorldTransformHandle
     ? { ...transformHandleHit.object.userData.privateWorldTransformHandle }
     : null;
+  const placementArmed = Boolean(prefabPlacementId || toolKind);
   state.buildHover = {
     context,
-    gridCell: resolveBuildGridCell(context),
-    placement: prefabPlacementId && sceneDoc
+    gridCell: placementArmed ? resolveBuildGridCell(context) : null,
+    placement: placementArmed && prefabPlacementId && sceneDoc
       ? resolvePrefabPlacementPreview(prefabPlacementId, sceneDoc, context)
-      : toolKind && sceneDoc
+      : placementArmed && toolKind && sceneDoc
         ? resolvePlacementPreview(toolKind, sceneDoc, context)
         : null,
-    entityRef: getEntityRefFromHit(context.hit),
+    entityRef: hoveredTransformHandle ? null : getEntityRefFromHit(context.hit),
     transformHandle: hoveredTransformHandle,
   };
   syncBuildPlacementOverlay();
@@ -10469,11 +10470,12 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   const hover = buildMode ? state.buildHover : null;
   const activeTool = buildMode ? getActivePlacementTool() : "";
   const activePrefabPlacementId = buildMode ? getActivePrefabPlacementId() : "";
+  const placementArmed = Boolean(activeTool || activePrefabPlacementId);
   const requestedTransformMode = buildMode ? getBuildTransformMode() : "";
-  const gridCell = hover?.gridCell ?? null;
-  const placement = hover?.placement ?? null;
-  const hoveredEntityRef = hover?.entityRef ?? null;
   const hoveredHandleKey = hover?.transformHandle?.key ?? "";
+  const gridCell = placementArmed ? hover?.gridCell ?? null : null;
+  const placement = placementArmed ? hover?.placement ?? null : null;
+  const hoveredEntityRef = hoveredHandleKey ? null : hover?.entityRef ?? null;
   const selectionRefs = buildMode ? getBuilderSelectionRefs() : [];
   let selectedEntities = [];
   if (selectionRefs.length) {
