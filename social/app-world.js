@@ -4885,12 +4885,9 @@ function buildPrivateWorldMiniatureObject(entry) {
   }
 
   for (const screen of (entry.compiled?.miniature?.screens ?? []).slice(0, 16)) {
-    const screenMaterial = new THREE.MeshStandardMaterial({
-        color: "#f8fbff",
-        emissive: "#5f7ca0",
-        emissiveIntensity: 0.22,
-        roughness: 0.42,
-        metalness: 0.08,
+    const screenMaterial = new THREE.MeshBasicMaterial({
+        color: screen.material?.color || "#ffffff",
+        toneMapped: false,
       });
     const screenMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.08), screenMaterial);
     const screenScale = screen.scale ?? { x: 4, y: 2.25, z: 0.2 };
@@ -4909,7 +4906,7 @@ function buildPrivateWorldMiniatureObject(entry) {
         return;
       }
       screenMaterial.map = texture;
-      screenMaterial.emissiveIntensity = 0.06;
+      screenMaterial.color.set("#ffffff");
       screenMaterial.needsUpdate = true;
     }).catch(() => {
       // keep emissive placeholder if html rasterization is not ready

@@ -9468,12 +9468,9 @@ function updatePreviewFromSelection() {
     for (const [index, screen] of (prefabDoc.screens ?? []).entries()) {
       renderedAny = true;
       const resolvedMaterial = getMergedMaterial(screen.material);
-      const material = new THREE.MeshStandardMaterial({
+      const material = new THREE.MeshBasicMaterial({
         color: resolvedMaterial?.color || "#ffffff",
-        roughness: 0.42,
-        metalness: 0.08,
-        emissive: "#4f6d8f",
-        emissiveIntensity: selected ? 0.24 : 0.2,
+        toneMapped: false,
       });
       const mesh = addPrefabMesh(
         parent,
@@ -9493,7 +9490,7 @@ function updatePreviewFromSelection() {
           return;
         }
         material.map = texture;
-        material.emissiveIntensity = selected ? 0.16 : 0.06;
+        material.color.set("#ffffff");
         material.needsUpdate = true;
       }).catch(() => {
         // ignore transient screen texture failures
@@ -9768,12 +9765,9 @@ function updatePreviewFromSelection() {
   }
 
   for (const screen of sceneDoc.screens ?? []) {
-    const material = new THREE.MeshStandardMaterial({
+    const material = new THREE.MeshBasicMaterial({
       color: screen.material?.color || "#ffffff",
-      roughness: 0.42,
-      metalness: 0.08,
-      emissive: "#4f6d8f",
-      emissiveIntensity: 0.2,
+      toneMapped: false,
     });
     const mesh = addMesh(
       new THREE.BoxGeometry(1, 1, 0.1),
@@ -9783,10 +9777,6 @@ function updatePreviewFromSelection() {
       screen.scale || { x: 4, y: 2, z: 0.1 },
       { id: screen.id, kind: "screen" },
     );
-    if (isSelected("screen", screen.id)) {
-      material.emissive = new THREE.Color("#355f9b");
-      material.emissiveIntensity = 0.24;
-    }
     const textureViewport = getScreenTextureRenderSize(screen);
     void renderScreenHtmlTexture(THREE, screen, {
       width: textureViewport.width,
@@ -9796,7 +9786,7 @@ function updatePreviewFromSelection() {
         return;
       }
       material.map = texture;
-      material.emissiveIntensity = 0.06;
+      material.color.set("#ffffff");
       material.needsUpdate = true;
     }).catch(() => {
       // ignore transient screen texture failures
