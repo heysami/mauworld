@@ -1002,10 +1002,15 @@ function setPrivatePanelTab(tab, options = {}) {
   const nextTab = normalizePrivatePanelTab(tab);
   const syncMode = options.syncMode !== false;
   const refreshWorld = options.refreshWorld === true;
-  if (syncMode && nextTab === "build" && state.mode !== "build" && isEditor()) {
+  const enterBuildMode = syncMode && nextTab === "build" && state.mode !== "build" && isEditor();
+  const exitBuildMode = syncMode && nextTab !== "build" && state.mode === "build";
+  state.privatePanelTab = nextTab;
+  if (enterBuildMode) {
     setMode("build", { syncPanelTab: false });
   }
-  state.privatePanelTab = nextTab;
+  if (exitBuildMode) {
+    setMode("play", { syncPanelTab: false });
+  }
   if (nextTab !== "share" && state.browserOverlayOpen) {
     setPrivateBrowserOverlayOpen(false);
   }
@@ -10198,6 +10203,7 @@ async function joinWorld(options = {}) {
   if (!state.selectedWorld) {
     return;
   }
+  const showJoinLoading = state.entryLoading !== true;
   const localParticipant = getLocalParticipant(state.selectedWorld);
   if (localParticipant) {
     state.joined = true;
@@ -10214,28 +10220,41 @@ async function joinWorld(options = {}) {
     setStatus("Sign in to enter this private world.");
     return;
   }
-  const anchor = getJoinAnchorPayload();
-  const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/join`, {
-    method: "POST",
-    body: {
-      creatorUsername: state.selectedWorld.creator.username,
-      guestSessionId: undefined,
-      displayName: getPrivateDisplayName(),
-      joinRole: "viewer",
-      publicWorldSnapshotId: anchor.publicWorldSnapshotId,
-      position_x: anchor.position_x,
-      position_y: anchor.position_y,
-      position_z: anchor.position_z,
-    },
-  });
-  state.joined = true;
-  state.joinedAsGuest = !state.session;
-  state.selectedWorld = payload.world;
-  renderSelectedWorld();
-  if (options.switchPanelTab !== false) {
-    setPrivatePanelTab("chat");
+  if (showJoinLoading) {
+    setEntryLoading(true, {
+      title: "Entering private world",
+      note: "Stepping into the scene.",
+    });
+    await waitForUiPaint();
   }
-  pushEvent("world:joined", `${payload.world.name}`);
+  try {
+    const anchor = getJoinAnchorPayload();
+    const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/join`, {
+      method: "POST",
+      body: {
+        creatorUsername: state.selectedWorld.creator.username,
+        guestSessionId: undefined,
+        displayName: getPrivateDisplayName(),
+        joinRole: "viewer",
+        publicWorldSnapshotId: anchor.publicWorldSnapshotId,
+        position_x: anchor.position_x,
+        position_y: anchor.position_y,
+        position_z: anchor.position_z,
+      },
+    });
+    state.joined = true;
+    state.joinedAsGuest = !state.session;
+    state.selectedWorld = payload.world;
+    renderSelectedWorld();
+    if (options.switchPanelTab !== false) {
+      setPrivatePanelTab("chat");
+    }
+    pushEvent("world:joined", `${payload.world.name}`);
+  } finally {
+    if (showJoinLoading) {
+      setEntryLoading(false);
+    }
+  }
 }
 
 async function occupyPlayer(playerEntityId) {
@@ -10272,30 +10291,45 @@ async function leaveWorld() {
   if (!state.selectedWorld) {
     return;
   }
-  await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/leave`, {
-    method: "POST",
-    body: {
-      creatorUsername: state.selectedWorld.creator.username,
-      guestSessionId: state.joinedAsGuest ? getGuestSessionId() : undefined,
-    },
-  });
-  state.joined = false;
-  state.joinedAsGuest = false;
-  state.activeChats.clear();
-  state.livePresence.clear();
-  reconcilePrivatePresenceScene();
-  state.pressedRuntimeKeys.clear();
-  privateInputState.keys.clear();
-  privateInputState.sprintHoldSeconds = 0;
-  privateInputState.pointerDown = false;
-  privateInputState.pointerMoved = false;
-  privateInputState.dragDistance = 0;
-  state.viewerSuppressClickAt = 0;
-  state.buildSuppressedClick = null;
-  pushEvent("world:left", state.selectedWorld.name);
-  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true, {
-    autoJoin: false,
-  });
+  const showLeaveLoading = state.entryLoading !== true;
+  if (showLeaveLoading) {
+    setEntryLoading(true, {
+      title: "Leaving private world",
+      note: "Updating your viewer state.",
+    });
+    await waitForUiPaint();
+  }
+  try {
+    await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/leave`, {
+      method: "POST",
+      body: {
+        creatorUsername: state.selectedWorld.creator.username,
+        guestSessionId: state.joinedAsGuest ? getGuestSessionId() : undefined,
+      },
+    });
+    state.joined = false;
+    state.joinedAsGuest = false;
+    state.activeChats.clear();
+    state.livePresence.clear();
+    reconcilePrivatePresenceScene();
+    state.pressedRuntimeKeys.clear();
+    privateInputState.keys.clear();
+    privateInputState.sprintHoldSeconds = 0;
+    privateInputState.pointerDown = false;
+    privateInputState.pointerMoved = false;
+    privateInputState.dragDistance = 0;
+    state.viewerSuppressClickAt = 0;
+    state.buildSuppressedClick = null;
+    pushEvent("world:left", state.selectedWorld.name);
+    await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true, {
+      autoJoin: false,
+      entryLoading: false,
+    });
+  } finally {
+    if (showLeaveLoading) {
+      setEntryLoading(false);
+    }
+  }
 }
 
 async function setReadyState(nextReady, options = {}) {
