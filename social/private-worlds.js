@@ -6128,6 +6128,9 @@ function renderCollaborators() {
 }
 
 function renderRuntimeStatus() {
+  if (!elements.runtimeStatus) {
+    return;
+  }
   const instance = state.selectedWorld?.active_instance;
   if (!instance) {
     elements.runtimeStatus.innerHTML = "<div class=\"pw-world-meta__row\"><strong>Instance</strong><span>Inactive</span></div>";
@@ -6192,7 +6195,6 @@ function renderSelectedWorld() {
   renderSceneLibrary();
   renderSceneEditor();
   renderCollaborators();
-  renderRuntimeStatus();
   renderPrivateShare();
   updatePrivateBrowserPanel();
 
@@ -9791,7 +9793,6 @@ function connectWorldSocket() {
           state.selectedWorld.active_instance.active_scene_id = payload.snapshot.active_scene_id;
           state.selectedSceneId = payload.snapshot.active_scene_id;
         }
-        renderRuntimeStatus();
         updatePreviewFromSelection();
       } else if (payload.type === "world:error") {
         pushEvent("world:error", payload.message || "Unknown world socket error");
