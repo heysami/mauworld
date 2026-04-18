@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418n" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418o" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -655,14 +655,42 @@
             </div>
           </section>
 
-          <section class="pw-drawer-view" data-scene-drawer-view="items" role="tabpanel" hidden>
-            <section class="pw-builder-panel">
-              <div class="pw-panel__header">
-                <h3>Scene items</h3>
-              </div>
-              <p class="pw-builder-empty">Select from this list when the world gets crowded.</p>
-              <div class="pw-builder-list" data-entity-sections></div>
-            </section>
+          <section class="pw-drawer-view pw-drawer-view--items" data-scene-drawer-view="items" role="tabpanel" hidden>
+            <div class="pw-item-sidebar">
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Item library</h3>
+                </div>
+                <label class="pw-entity-search">
+                  <span>Find item</span>
+                  <input type="search" data-entity-search placeholder="Search scene items" />
+                </label>
+                <label class="pw-entity-filter">
+                  <span>Type</span>
+                  <select data-entity-filter>
+                    <option value="all">All items</option>
+                    <option value="voxel">Voxels</option>
+                    <option value="primitive">Objects</option>
+                    <option value="player">Players</option>
+                    <option value="screen">Screens</option>
+                    <option value="text">3D Text</option>
+                    <option value="trigger">Trigger Zones</option>
+                    <option value="particle">Particles</option>
+                    <option value="prefab_instance">Prefab Instances</option>
+                  </select>
+                </label>
+                <p class="pw-entity-search__hint" data-entity-search-hint>Search and filter items when the scene gets crowded.</p>
+                <div class="pw-item-summary" data-entity-library-summary></div>
+              </section>
+            </div>
+            <div class="pw-item-list-stack">
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Scene items</h3>
+                </div>
+                <div class="pw-builder-list pw-builder-list--items" data-entity-sections></div>
+              </section>
+            </div>
           </section>
 
           <section class="pw-drawer-view pw-drawer-view--prefabs" data-scene-drawer-view="prefabs" role="tabpanel" hidden>
@@ -750,6 +778,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418n"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418o"></script>
   </body>
 </html>

@@ -518,6 +518,10 @@ const elements = {
   scriptFunctionDelete: document.querySelector("[data-script-function-delete]"),
   scriptFunctionGenerate: document.querySelector("[data-script-function-generate]"),
   entitySections: document.querySelector("[data-entity-sections]"),
+  entitySearch: document.querySelector("[data-entity-search]"),
+  entitySearchHint: document.querySelector("[data-entity-search-hint]"),
+  entityFilter: document.querySelector("[data-entity-filter]"),
+  entityLibrarySummary: document.querySelector("[data-entity-library-summary]"),
   entityEditor: document.querySelector("[data-entity-editor]"),
   entityEmpty: document.querySelector("[data-entity-empty]"),
   selectionLabel: document.querySelector("[data-selection-label]"),
@@ -758,6 +762,8 @@ const state = {
   prefabQuery: "",
   prefabPlacementId: "",
   scriptFunctionQuery: "",
+  entityQuery: "",
+  entityFilterKind: "all",
   sceneDrafts: new Map(),
   screenAiPromptDrafts: new Map(),
   sceneEditorSceneId: "",
@@ -5266,6 +5272,9 @@ function renderSceneBuilder() {
     writeBuilderSelection([]);
     updateShellState();
     elements.entitySections.innerHTML = '<div class="pw-builder-group"><p class="pw-builder-empty">Fix the scene JSON to continue editing.</p></div>';
+    if (elements.entityLibrarySummary) {
+      elements.entityLibrarySummary.innerHTML = "";
+    }
     elements.entityEditor.innerHTML = "";
     elements.prefabList.innerHTML = "";
     elements.prefabDetail.innerHTML = "";
@@ -5273,6 +5282,12 @@ function renderSceneBuilder() {
   }
   const selected = ensureBuilderSelection(sceneDoc);
   updateShellState();
+  if (elements.entitySearch && elements.entitySearch.value !== String(state.entityQuery ?? "")) {
+    elements.entitySearch.value = String(state.entityQuery ?? "");
+  }
+  if (elements.entityFilter && elements.entityFilter.value !== String(state.entityFilterKind ?? "all")) {
+    elements.entityFilter.value = String(state.entityFilterKind ?? "all");
+  }
   if (elements.prefabSearch && elements.prefabSearch.value !== String(state.prefabQuery ?? "")) {
     elements.prefabSearch.value = String(state.prefabQuery ?? "");
   }
@@ -5287,32 +5302,92 @@ function renderSceneBuilder() {
 }
 
 function renderEntitySections(sceneDoc, selected = null) {
-  elements.entitySections.innerHTML = ENTITY_COLLECTIONS.map((config) => {
-    const entries = getEntityArray(sceneDoc, config.key);
-    return `
-      <section class="pw-builder-group">
-        <div class="pw-builder-group__header">
-          <strong>${htmlEscape(config.label)}</strong>
-          <span>${entries.length}</span>
+  const normalizedQuery = String(state.entityQuery ?? "").trim().toLowerCase();
+  const normalizedKind = String(state.entityFilterKind ?? "all").trim() || "all";
+  const allEntries = ENTITY_COLLECTIONS.flatMap((config) => getEntityArray(sceneDoc, config.key).map((entry, index) => {
+    const name = getDisplayNameForEntity(config.kind, entry, index);
+    const summary = buildEntitySummary(config.kind, entry);
+    return {
+      config,
+      entry,
+      index,
+      name,
+      summary,
+      searchText: [config.label, entry.id, name, summary, entry.label, entry.value, entry.effect, entry.prefab_id].filter(Boolean).join(" ").toLowerCase(),
+    };
+  }));
+  const totalCount = allEntries.length;
+  const visibleEntries = allEntries
+    .filter((item) => (normalizedKind === "all" || item.config.kind === normalizedKind) && (!normalizedQuery || item.searchText.includes(normalizedQuery)))
+    .sort((left, right) => {
+      const leftSelected = isEntitySelected(left.config.kind, left.entry.id) ? 1 : 0;
+      const rightSelected = isEntitySelected(right.config.kind, right.entry.id) ? 1 : 0;
+      if (leftSelected !== rightSelected) {
+        return rightSelected - leftSelected;
+      }
+      const kindCompare = left.config.label.localeCompare(right.config.label);
+      if (kindCompare !== 0) {
+        return kindCompare;
+      }
+      return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+    });
+  const selectedEntries = getSelectedEntities(sceneDoc);
+  const selectedSummary = !selectedEntries.length
+    ? "No item selected."
+    : selectedEntries.length === 1
+      ? `${getDisplayNameForEntity(selectedEntries[0].kind, selectedEntries[0].entry, selectedEntries[0].index)} selected.`
+      : `${selectedEntries.length} items selected together.`;
+  const filterLabel = normalizedKind === "all"
+    ? "All items"
+    : getEntityCollection(normalizedKind)?.label || "Items";
+  if (elements.entitySearch) {
+    elements.entitySearch.disabled = totalCount === 0;
+  }
+  if (elements.entityFilter) {
+    elements.entityFilter.disabled = totalCount === 0;
+  }
+  if (elements.entitySearchHint) {
+    elements.entitySearchHint.textContent = totalCount === 0
+      ? "Add items to this scene, then browse them here when the world gets crowded."
+      : !visibleEntries.length
+        ? "No items match this search or type filter."
+        : `${visibleEntries.length} item${visibleEntries.length === 1 ? "" : "s"} shown. Click one to select it and edit it in the inspector.`;
+  }
+  if (elements.entityLibrarySummary) {
+    elements.entityLibrarySummary.innerHTML = `
+      <div class="pw-scene-focus">
+        <div class="pw-scene-focus__head">
+          <strong>${htmlEscape(filterLabel)}</strong>
+          <span>${visibleEntries.length} shown</span>
         </div>
-        <div class="pw-builder-group__items">
-          ${entries.length > 0
-    ? entries.map((entry, index) => `
-                <button
-                  type="button"
-                  class="pw-builder-item ${isEntitySelected(config.kind, entry.id) ? "is-active" : ""}"
-                  data-select-kind="${htmlEscape(config.kind)}"
-                  data-select-id="${htmlEscape(entry.id)}"
-                >
-                  <strong>${htmlEscape(getDisplayNameForEntity(config.kind, entry, index))}</strong>
-                  <small>${htmlEscape(buildEntitySummary(config.kind, entry))}</small>
-                </button>
-              `).join("")
-    : '<p class="pw-builder-empty">Nothing here yet.</p>'}
-        </div>
-      </section>
+        <small>${htmlEscape(totalCount)} item${totalCount === 1 ? "" : "s"} in this scene.</small>
+        <small>${htmlEscape(selectedSummary)}</small>
+      </div>
     `;
-  }).join("");
+  }
+  if (!totalCount) {
+    elements.entitySections.innerHTML = '<div class="pw-builder-group"><p class="pw-builder-empty">No items in this scene yet.</p></div>';
+    return;
+  }
+  if (!visibleEntries.length) {
+    elements.entitySections.innerHTML = '<div class="pw-builder-group"><p class="pw-builder-empty">No items match that search yet.</p></div>';
+    return;
+  }
+  elements.entitySections.innerHTML = visibleEntries.map((item) => `
+    <button
+      type="button"
+      class="pw-scene-library-item pw-entity-row ${isEntitySelected(item.config.kind, item.entry.id) ? "is-active" : ""}"
+      data-select-kind="${htmlEscape(item.config.kind)}"
+      data-select-id="${htmlEscape(item.entry.id)}"
+    >
+      <div class="pw-scene-library-item__head">
+        <strong>${htmlEscape(item.name)}</strong>
+        <span>${htmlEscape(item.config.label)}</span>
+      </div>
+      <small>${htmlEscape(item.summary)}</small>
+      ${item.entry.id && item.entry.id !== item.name ? `<small>${htmlEscape(item.entry.id)}</small>` : ""}
+    </button>
+  `).join("");
 }
 
 function buildVectorFields(label, basePath, value = {}) {
@@ -12017,6 +12092,14 @@ function bindEvents() {
   elements.scriptFunctionSearch?.addEventListener("input", () => {
     state.scriptFunctionQuery = elements.scriptFunctionSearch.value || "";
     renderSceneLogicLibrary();
+  });
+  elements.entitySearch?.addEventListener("input", () => {
+    state.entityQuery = elements.entitySearch.value || "";
+    renderSceneBuilder();
+  });
+  elements.entityFilter?.addEventListener("change", () => {
+    state.entityFilterKind = elements.entityFilter.value || "all";
+    renderSceneBuilder();
   });
   elements.scriptFunctionList?.addEventListener("click", (event) => {
     const card = event.target.closest("[data-script-function-id]");
