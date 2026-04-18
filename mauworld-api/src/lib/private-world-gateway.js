@@ -35,6 +35,26 @@ function parseJson(buffer) {
   }
 }
 
+function buildPrivateViewerSessionId(profile, guestSessionId = "", requestedViewerSessionId = "") {
+  const requested = String(requestedViewerSessionId ?? "").trim();
+  const guestId = String(guestSessionId ?? "").trim();
+  if (profile?.id) {
+    const prefix = `profile:${String(profile.id).trim()}:`;
+    if (requested.startsWith(prefix)) {
+      return requested;
+    }
+    return `${prefix}${Math.random().toString(36).slice(2, 10)}`;
+  }
+  if (guestId) {
+    const prefix = `guest:${guestId}:`;
+    if (requested.startsWith(prefix)) {
+      return requested;
+    }
+    return `${prefix}${Math.random().toString(36).slice(2, 10)}`;
+  }
+  return requested || `guest:${Math.random().toString(36).slice(2, 10)}:${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function sendJson(client, payload) {
   if (!client?.socket || client.socket.readyState !== WebSocket.OPEN) {
     return false;
@@ -115,6 +135,7 @@ export class PrivateWorldGateway {
     const creatorUsername = String(requestUrl.searchParams.get("creatorUsername") ?? "").trim();
     const accessToken = String(requestUrl.searchParams.get("accessToken") ?? "").trim();
     const guestSessionId = String(requestUrl.searchParams.get("guestSessionId") ?? "").trim();
+    const requestedViewerSessionId = String(requestUrl.searchParams.get("viewerSessionId") ?? "").trim();
     if (!worldId || !creatorUsername) {
       socket.close(1008, "worldId and creatorUsername are required");
       return;
@@ -145,7 +166,7 @@ export class PrivateWorldGateway {
         browserWorldKey: buildPrivateBrowserWorldKey(worldId, creatorUsername),
         profile: auth?.profile ?? null,
         guestSessionId: guestSessionId || null,
-        viewerSessionId: auth?.profile?.id ? `profile:${auth.profile.id}` : (guestSessionId || `guest:${Math.random().toString(36).slice(2, 10)}`),
+        viewerSessionId: buildPrivateViewerSessionId(auth?.profile ?? null, guestSessionId, requestedViewerSessionId),
         displayName: auth?.profile?.display_name || auth?.profile?.username || "guest viewer",
         presence: null,
         position: null,

@@ -200,6 +200,42 @@ test("private world disconnect cleans up the participant in the store", async ()
   assert.equal(leaves[0].profile.id, client.profile.id);
 });
 
+test("private world connection preserves a per-client viewer session id for authenticated users", async () => {
+  const gateway = createGateway({
+    async verifyUserAccessToken() {
+      return {
+        profile: {
+          id: "profile_host",
+          username: "host",
+          display_name: "Host",
+        },
+      };
+    },
+    async getPrivateWorldDetail() {
+      return {
+        world: {
+          world_id: "world_test",
+          creator: { username: "creator" },
+          active_instance: { participants: [] },
+        },
+      };
+    },
+  });
+  gateway.rebalanceBrowserSessions = async () => {};
+  gateway.sendExistingBrowserSessions = () => {};
+  gateway.sendExistingPresence = () => {};
+
+  const socket = createFakeSocket();
+  const requestUrl = new URL(
+    "http://localhost/api/ws/private/worlds?worldId=world_test&creatorUsername=creator&accessToken=test-token&viewerSessionId=profile:profile_host:viewer_abc123",
+  );
+
+  await gateway.handleConnection(socket, requestUrl);
+
+  const client = [...gateway.clients][0];
+  assert.equal(client?.viewerSessionId, "profile:profile_host:viewer_abc123");
+});
+
 test("private nearby share starts as an origin when no anchor is nearby", async () => {
   const gateway = createGateway();
   const host = createClient({

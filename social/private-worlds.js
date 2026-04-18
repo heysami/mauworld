@@ -4060,6 +4060,7 @@ function buildSocketUrl(worldId, creatorUsername) {
       worldId,
       creatorUsername,
       accessToken: state.session?.access_token || "",
+      viewerSessionId: getPrivateViewerSessionId(),
       guestSessionId: state.session ? "" : getGuestSessionId(),
     }),
   );
