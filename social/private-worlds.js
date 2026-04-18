@@ -11340,7 +11340,7 @@ function applyRotationToEntity(selection, entry, axis, angle, pivot, axisVectorO
   if (!canRotateEntityKind(selection.kind) || !pivot) {
     return;
   }
-  const axisVector = axisVectorOverride?.clone?.() ?? getBuildDragAxisVector(axis);
+  const axisVector = (axisVectorOverride?.clone?.() ?? getBuildDragAxisVector(axis)).normalize();
   const startPosition = selection.startPosition ?? { x: 0, y: 0, z: 0 };
   const nextPosition = new THREE.Vector3(
     Number(startPosition.x ?? 0) || 0,
@@ -11352,15 +11352,27 @@ function applyRotationToEntity(selection, entry, axis, angle, pivot, axisVectorO
   }
   entry.rotation = entry.rotation || { x: 0, y: 0, z: 0 };
   const startRotation = selection.startRotation ?? { x: 0, y: 0, z: 0 };
-  entry.rotation.x = Number(startRotation.x ?? 0) || 0;
-  entry.rotation.y = Number(startRotation.y ?? 0) || 0;
-  entry.rotation.z = Number(startRotation.z ?? 0) || 0;
-  entry.rotation[axis] = roundPrivateValue(clampNumber(
-    (Number(startRotation[axis] ?? 0) || 0) + angle,
-    Number(startRotation[axis] ?? 0) || 0,
-    -Math.PI * 16,
-    Math.PI * 16,
-  ));
+  const startEuler = new THREE.Euler(
+    Number(startRotation.x ?? 0) || 0,
+    Number(startRotation.y ?? 0) || 0,
+    Number(startRotation.z ?? 0) || 0,
+    "XYZ",
+  );
+  const startQuaternion = new THREE.Quaternion().setFromEuler(startEuler);
+  const localAxis = getBaseBuildAxisVector(axis).normalize();
+  const localWorldAxis = localAxis.clone().applyQuaternion(startQuaternion).normalize();
+  const rotateInLocalSpace = !axisVectorOverride || localWorldAxis.dot(axisVector) > 0.999;
+  const deltaQuaternion = new THREE.Quaternion().setFromAxisAngle(
+    rotateInLocalSpace ? localAxis : axisVector,
+    angle,
+  );
+  const nextQuaternion = rotateInLocalSpace
+    ? startQuaternion.clone().multiply(deltaQuaternion)
+    : deltaQuaternion.clone().multiply(startQuaternion);
+  const nextEuler = new THREE.Euler().setFromQuaternion(nextQuaternion.normalize(), "XYZ");
+  entry.rotation.x = roundPrivateValue(nextEuler.x);
+  entry.rotation.y = roundPrivateValue(nextEuler.y);
+  entry.rotation.z = roundPrivateValue(nextEuler.z);
 }
 
 function applyFreeMoveToEntity(selection, entry, delta) {
