@@ -449,6 +449,8 @@ const elements = {
   panelSubtitle: document.querySelector("[data-private-panel-subtitle]"),
   panelModeLabel: document.querySelector("[data-private-panel-mode-label]"),
   panelModeNote: document.querySelector("[data-private-panel-mode-note]"),
+  sceneModeBadge: document.querySelector("[data-private-scene-mode-badge]"),
+  sceneModeBadgeLabel: document.querySelector("[data-private-scene-mode-badge-label]"),
   panelSessionLabel: document.querySelector("[data-private-session-label]"),
   panelOpenAccess: document.querySelector("[data-private-open-access]"),
   panelChatComposer: document.querySelector("[data-private-chat-composer]"),
@@ -5037,6 +5039,7 @@ function setMode(mode, options = {}) {
     }
   }
   document.body.classList.toggle("is-play-mode", nextMode === "play");
+  document.body.classList.toggle("is-build-mode", nextMode === "build");
   if (nextMode === "build") {
     refreshBuildHoverFromStoredPointer();
   }
@@ -6351,6 +6354,18 @@ function renderSelectedWorld() {
       : state.mode === "build"
         ? "Place and edit things here. Physics is paused."
         : "Walk the scene here. Physics and scripts run live.";
+  }
+  if (elements.sceneModeBadge) {
+    const badgeMode = !hasWorld ? "none" : state.mode;
+    elements.sceneModeBadge.dataset.mode = badgeMode;
+    elements.sceneModeBadge.hidden = false;
+  }
+  if (elements.sceneModeBadgeLabel) {
+    elements.sceneModeBadgeLabel.textContent = !hasWorld
+      ? "No world"
+      : state.mode === "build"
+        ? "Build"
+        : "Play";
   }
   state.joined = Boolean(localParticipant);
   state.joinedAsGuest = !state.session && localParticipant?.join_role === "guest";
