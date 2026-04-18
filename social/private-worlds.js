@@ -431,6 +431,7 @@ const elements = {
   launcher: document.querySelector("[data-launcher]"),
   launcherToggle: document.querySelector("[data-launcher-toggle]"),
   launcherClose: document.querySelector("[data-launcher-close]"),
+  launcherTitle: document.querySelector("[data-launcher-title]"),
   sceneDrawer: document.querySelector("[data-scene-drawer]"),
   sceneToolsToggle: document.querySelector("[data-scene-tools-toggle]"),
   sceneToolsClose: document.querySelector("[data-scene-tools-close]"),
@@ -2387,6 +2388,22 @@ function getPreferredLauncherTab() {
   return state.session ? "worlds" : "access";
 }
 
+function getLauncherTitle() {
+  if (state.launcherTab === "access") {
+    if (!state.authReady) {
+      return "Checking Account";
+    }
+    return state.session ? "Account" : "Sign In";
+  }
+  return "Select Worlds";
+}
+
+function renderLauncherTitle() {
+  if (elements.launcherTitle) {
+    elements.launcherTitle.textContent = getLauncherTitle();
+  }
+}
+
 function normalizeLauncherWorldTab(tab) {
   return LAUNCHER_WORLD_BROWSER_TABS.has(tab) ? tab : "mine";
 }
@@ -2443,6 +2460,7 @@ function setLauncherTab(tab) {
     section.hidden = !active;
     section.classList.toggle("is-active", active);
   }
+  renderLauncherTitle();
   renderLauncherWorldTabs();
 }
 
@@ -4997,6 +5015,7 @@ function renderAccessSection() {
     if (elements.accountActions) {
       elements.accountActions.hidden = true;
     }
+    renderLauncherTitle();
     return;
   }
   if (elements.accessHeading) {
@@ -5016,6 +5035,7 @@ function renderAccessSection() {
   if (elements.accountActions) {
     elements.accountActions.hidden = !signedIn;
   }
+  renderLauncherTitle();
 }
 
 function renderSessionSummary() {
