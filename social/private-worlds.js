@@ -38,6 +38,7 @@ const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "ar
 const LAUNCHER_TABS = new Set(["worlds", "access"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
 const SCENE_DRAWER_TABS = new Set(["scenes", "items", "prefabs", "logic"]);
+const WORLD_PANEL_SECTIONS = new Set(["overview", "ai", "editors", "feed"]);
 const PRIVATE_CAMERA = {
   minY: 0,
   maxY: 360,
@@ -833,6 +834,7 @@ const state = {
   pressedRuntimeKeys: new Set(),
   launcherTab: "access",
   privatePanelTab: "chat",
+  worldPanelSection: "overview",
   mode: "play",
   lockHeartbeatTimer: 0,
   privateChatEntries: [],
@@ -1069,8 +1071,50 @@ function normalizePrivatePanelTab(tab) {
   return PRIVATE_PANEL_TABS.has(tab) ? tab : "chat";
 }
 
+function normalizeWorldPanelSection(section) {
+  return WORLD_PANEL_SECTIONS.has(section) ? section : "overview";
+}
+
 function normalizeSceneDrawerTab(tab) {
   return SCENE_DRAWER_TABS.has(tab) ? tab : "scenes";
+}
+
+function renderWorldPanelSections(options = {}) {
+  const activeSection = normalizeWorldPanelSection(state.worldPanelSection);
+  state.worldPanelSection = activeSection;
+  const hasWorld = Boolean(state.selectedWorld);
+  for (const button of elements.worldSectionJumpButtons ?? []) {
+    const sectionName = normalizeWorldPanelSection(button.getAttribute("data-world-section-jump") || "");
+    const isActive = hasWorld && sectionName === activeSection;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+    button.tabIndex = isActive ? 0 : -1;
+  }
+  for (const section of elements.worldSections ?? []) {
+    const sectionName = normalizeWorldPanelSection(section.getAttribute("data-world-section") || "");
+    const isActive = hasWorld && sectionName === activeSection;
+    section.hidden = !isActive;
+    section.setAttribute("aria-hidden", String(!isActive));
+  }
+  const fieldName = String(options.fieldName || "").trim();
+  if (!fieldName || !hasWorld || state.privatePanelTab !== "world" || activeSection !== "ai") {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    const field = elements.aiForm?.elements?.[fieldName];
+    field?.focus?.();
+    if (fieldName === "apiKey" && typeof field?.select === "function") {
+      field.select();
+    }
+  });
+}
+
+function setWorldPanelSection(section, options = {}) {
+  state.worldPanelSection = normalizeWorldPanelSection(String(section ?? "").trim().toLowerCase());
+  if (options.openWorldPanel !== false && state.selectedWorld) {
+    setPrivatePanelTab("world");
+  }
+  renderWorldPanelSections(options);
 }
 
 function renderSceneDrawerTabs() {
@@ -1156,6 +1200,7 @@ function setPrivatePanelTab(tab, options = {}) {
   for (const view of elements.privatePanelViews ?? []) {
     view.hidden = view.getAttribute("data-private-panel-view") !== nextTab;
   }
+  renderWorldPanelSections();
   if (nextTab === "live") {
     renderPrivateLiveSharesList();
   }
@@ -3627,41 +3672,8 @@ function applyAiDialogResult() {
   renderAiDialog();
 }
 
-function getWorldSectionElement(sectionName) {
-  const normalized = String(sectionName ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  return elements.worldSections.find((section) => section.getAttribute("data-world-section") === normalized) || null;
-}
-
-function scrollWorldSectionIntoView(sectionName, options = {}) {
-  const target = getWorldSectionElement(sectionName);
-  if (!target) {
-    return;
-  }
-  if (state.selectedWorld) {
-    setPrivatePanelTab("world");
-  }
-  const fieldName = options.fieldName || "";
-  window.setTimeout(() => {
-    target.scrollIntoView?.({
-      block: "start",
-      behavior: options.behavior || "smooth",
-    });
-    if (!fieldName) {
-      return;
-    }
-    const field = elements.aiForm?.elements?.[fieldName];
-    field?.focus?.();
-    if (fieldName === "apiKey" && typeof field?.select === "function") {
-      field.select();
-    }
-  }, 0);
-}
-
 function focusAiBuilder(fieldName = "apiKey") {
-  scrollWorldSectionIntoView("ai", { fieldName });
+  setWorldPanelSection("ai", { fieldName });
 }
 
 function promptForAiBuilder(message, options = {}) {
@@ -7327,6 +7339,7 @@ function renderSelectedWorld() {
   for (const button of elements.worldSectionJumpButtons ?? []) {
     button.disabled = !hasWorld;
   }
+  renderWorldPanelSections();
   refreshAiBuilderStatus();
   if (elements.panelModeBuild) {
     elements.panelModeBuild.disabled = !hasWorld || !canEdit;
@@ -13172,7 +13185,7 @@ function bindEvents() {
   for (const button of elements.worldSectionJumpButtons ?? []) {
     button.addEventListener("click", () => {
       const sectionName = button.getAttribute("data-world-section-jump") || "";
-      scrollWorldSectionIntoView(sectionName);
+      setWorldPanelSection(sectionName);
     });
   }
   elements.aiDialogBackdrop?.addEventListener("click", () => {

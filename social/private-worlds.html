@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418z" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418aa" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -240,14 +240,14 @@
         </section>
 
         <section class="world-panel__view" data-private-panel-view="world" role="tabpanel" hidden>
-          <div class="pw-world-nav" aria-label="World tools">
-            <button type="button" data-world-section-jump="overview">Overview</button>
-            <button type="button" data-world-section-jump="ai">AI Builder</button>
-            <button type="button" data-world-section-jump="editors">Editors</button>
-            <button type="button" data-world-section-jump="feed">Live feed</button>
+          <div class="pw-world-nav" aria-label="World tools" role="tablist">
+            <button type="button" class="is-active" data-world-section-jump="overview" role="tab" aria-selected="true" aria-controls="pw-world-section-overview">Overview</button>
+            <button type="button" data-world-section-jump="ai" role="tab" aria-selected="false" tabindex="-1" aria-controls="pw-world-section-ai">AI Builder</button>
+            <button type="button" data-world-section-jump="editors" role="tab" aria-selected="false" tabindex="-1" aria-controls="pw-world-section-editors">Editors</button>
+            <button type="button" data-world-section-jump="feed" role="tab" aria-selected="false" tabindex="-1" aria-controls="pw-world-section-feed">Live feed</button>
           </div>
 
-          <section class="pw-world-section" data-world-section="overview">
+          <section class="pw-world-section" id="pw-world-section-overview" data-world-section="overview" role="tabpanel">
             <div class="pw-action-grid pw-action-grid--world">
               <button type="button" data-private-copy-link disabled>Copy Entry</button>
               <button type="button" data-private-native-share disabled>Share Entry</button>
@@ -256,7 +256,7 @@
             <div class="pw-world-meta" data-private-panel-world-meta></div>
           </section>
 
-          <section class="pw-panel pw-panel--compact pw-world-section" data-world-section="ai">
+          <section class="pw-panel pw-panel--compact pw-world-section" id="pw-world-section-ai" data-world-section="ai" role="tabpanel" hidden>
             <div class="pw-panel__header">
               <div>
                 <h2>AI Builder</h2>
@@ -299,7 +299,7 @@
             </label>
           </section>
 
-          <section class="pw-panel pw-panel--compact pw-world-section" data-world-section="editors">
+          <section class="pw-panel pw-panel--compact pw-world-section" id="pw-world-section-editors" data-world-section="editors" role="tabpanel" hidden>
             <div class="pw-panel__header">
               <div>
                 <h2>Editors</h2>
@@ -324,7 +324,7 @@
             <div class="pw-collaborator-list" data-collaborator-list></div>
           </section>
 
-          <section class="pw-panel pw-panel--compact pw-world-section" data-world-section="feed">
+          <section class="pw-panel pw-panel--compact pw-world-section" id="pw-world-section-feed" data-world-section="feed" role="tabpanel" hidden>
             <div class="pw-panel__header">
               <div>
                 <h2>Live feed</h2>
@@ -851,6 +851,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418z"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418aa"></script>
   </body>
 </html>
