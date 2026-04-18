@@ -2277,10 +2277,11 @@ function updatePrivateBrowserAnchorGeometry(entry) {
   if (Math.abs((entry.radius ?? 0) - PRIVATE_BROWSER_RADIUS) < 0.01) {
     return;
   }
+  const ringInnerRadius = Math.max(0.1, PRIVATE_BROWSER_RADIUS - 2.2);
   entry.fill.geometry.dispose();
   entry.fill.geometry = new THREE.CircleGeometry(PRIVATE_BROWSER_RADIUS, 96);
   entry.ring.geometry.dispose();
-  entry.ring.geometry = new THREE.RingGeometry(Math.max(0.1, PRIVATE_BROWSER_RADIUS - 0.8), PRIVATE_BROWSER_RADIUS, 96);
+  entry.ring.geometry = new THREE.RingGeometry(ringInnerRadius, PRIVATE_BROWSER_RADIUS, 96);
   entry.radius = PRIVATE_BROWSER_RADIUS;
 }
 
@@ -2303,27 +2304,31 @@ function ensurePrivateBrowserAnchorEntry(session = {}) {
   const fill = new THREE.Mesh(
     new THREE.CircleGeometry(PRIVATE_BROWSER_RADIUS, 96),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.accents[1]),
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.accents[0]),
       transparent: true,
-      opacity: 0.08,
+      opacity: 0.12,
       side: THREE.DoubleSide,
+      depthTest: false,
       depthWrite: false,
       fog: false,
     }),
   );
   fill.rotation.x = -Math.PI / 2;
+  fill.renderOrder = 3;
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(Math.max(0.1, PRIVATE_BROWSER_RADIUS - 0.8), PRIVATE_BROWSER_RADIUS, 96),
+    new THREE.RingGeometry(Math.max(0.1, PRIVATE_BROWSER_RADIUS - 2.2), PRIVATE_BROWSER_RADIUS, 96),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(PRIVATE_WORLD_STYLE.accents[1]),
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.accents[0]),
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.72,
       side: THREE.DoubleSide,
+      depthTest: false,
       depthWrite: false,
       fog: false,
     }),
   );
   ring.rotation.x = -Math.PI / 2;
+  ring.renderOrder = 4;
   const group = new THREE.Group();
   group.add(fill);
   group.add(ring);
@@ -2373,6 +2378,9 @@ function updatePrivateBrowserAnchors() {
     return;
   }
   reconcilePrivateBrowserAnchors();
+  if (preview.browserAnchors) {
+    preview.browserAnchors.visible = true;
+  }
   for (const entry of preview.browserAnchorEntries.values()) {
     const hostPosition = getPrivateBrowserHostPosition(entry.hostSessionId);
     if (!hostPosition) {
@@ -2381,7 +2389,7 @@ function updatePrivateBrowserAnchors() {
     }
     updatePrivateBrowserAnchorGeometry(entry);
     entry.group.visible = true;
-    entry.group.position.set(hostPosition.x, hostPosition.y + 0.08, hostPosition.z);
+    entry.group.position.set(hostPosition.x, hostPosition.y + 0.12, hostPosition.z);
   }
 }
 
@@ -12803,12 +12811,15 @@ async function startScene(options = {}) {
     return;
   }
   const keepPanelTab = options.keepPanelTab ?? state.privatePanelTab;
+  const body = {
+    creatorUsername: state.selectedWorld.creator.username,
+  };
+  if (options.sceneId !== undefined) {
+    body.sceneId = options.sceneId;
+  }
   await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/start-scene`, {
     method: "POST",
-    body: {
-      creatorUsername: state.selectedWorld.creator.username,
-      sceneId: options.sceneId ?? state.selectedSceneId,
-    },
+    body,
   });
   if (options.pushEvent !== false) {
     pushEvent("scene:started", state.selectedWorld.name);
@@ -12816,6 +12827,28 @@ async function startScene(options = {}) {
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
   state.privatePanelTab = keepPanelTab;
   renderSelectedWorld();
+}
+
+async function ensurePlayRuntimeStarted(options = {}) {
+  if (!state.selectedWorld || !state.session) {
+    return false;
+  }
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld.active_instance?.runtime ?? null;
+  const activeSceneId = String(runtime?.active_scene_id || state.selectedWorld.active_instance?.active_scene_id || "").trim();
+  const targetSceneId = String(options.sceneId ?? activeSceneId || getDefaultScene(state.selectedWorld)?.id || state.selectedSceneId || "").trim();
+  const sceneAlreadyRunning = runtime?.scene_started === true && (!targetSceneId || activeSceneId === targetSceneId);
+  if (sceneAlreadyRunning) {
+    return false;
+  }
+  const startOptions = {
+    keepPanelTab: options.keepPanelTab ?? state.privatePanelTab,
+    pushEvent: options.pushEvent ?? false,
+  };
+  if (options.sceneId !== undefined) {
+    startOptions.sceneId = options.sceneId;
+  }
+  await startScene(startOptions);
+  return true;
 }
 
 async function resetScene() {

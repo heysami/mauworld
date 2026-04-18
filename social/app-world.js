@@ -6380,10 +6380,11 @@ function updateBrowserAnchorGeometry(entry, radius = getInteractionConfig().brow
   if (Math.abs((entry.radius ?? 0) - nextRadius) < 0.01) {
     return;
   }
+  const ringInnerRadius = Math.max(0.1, nextRadius - 2.2);
   entry.fill.geometry.dispose();
   entry.fill.geometry = new THREE.CircleGeometry(nextRadius, 96);
   entry.ring.geometry.dispose();
-  entry.ring.geometry = new THREE.RingGeometry(Math.max(0.1, nextRadius - 0.8), nextRadius, 96);
+  entry.ring.geometry = new THREE.RingGeometry(ringInnerRadius, nextRadius, 96);
   entry.radius = nextRadius;
 }
 
@@ -6403,27 +6404,31 @@ function ensureBrowserAnchorEntry(session = {}) {
   const fill = new THREE.Mesh(
     new THREE.CircleGeometry(radius, 96),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(WORLD_STYLE.accents[1]),
+      color: new THREE.Color(WORLD_STYLE.accents[0]),
       transparent: true,
-      opacity: 0.08,
+      opacity: 0.12,
       side: THREE.DoubleSide,
+      depthTest: false,
       depthWrite: false,
       fog: false,
     }),
   );
   fill.rotation.x = -Math.PI / 2;
+  fill.renderOrder = 3;
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(Math.max(0.1, radius - 0.8), radius, 96),
+    new THREE.RingGeometry(Math.max(0.1, radius - 2.2), radius, 96),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(WORLD_STYLE.accents[1]),
+      color: new THREE.Color(WORLD_STYLE.accents[0]),
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.72,
       side: THREE.DoubleSide,
+      depthTest: false,
       depthWrite: false,
       fog: false,
     }),
   );
   ring.rotation.x = -Math.PI / 2;
+  ring.renderOrder = 4;
   const group = new THREE.Group();
   group.add(fill);
   group.add(ring);
@@ -6465,6 +6470,9 @@ function reconcileBrowserAnchorEntries() {
 
 function updateBrowserAnchorEntries() {
   reconcileBrowserAnchorEntries();
+  if (sceneState.browserAnchors) {
+    sceneState.browserAnchors.visible = true;
+  }
   for (const entry of sceneState.browserAnchorEntries.values()) {
     const hostPosition = getBrowserHostPosition(entry.hostSessionId);
     if (!hostPosition) {
@@ -6473,7 +6481,7 @@ function updateBrowserAnchorEntries() {
     }
     updateBrowserAnchorGeometry(entry);
     entry.group.visible = true;
-    entry.group.position.set(hostPosition.x, hostPosition.y + 0.08, hostPosition.z);
+    entry.group.position.set(hostPosition.x, hostPosition.y + 0.12, hostPosition.z);
   }
 }
 
