@@ -4545,6 +4545,26 @@ function getSelectedScene() {
   return state.selectedWorld?.scenes?.find((scene) => scene.id === state.selectedSceneId) ?? state.selectedWorld?.scenes?.[0] ?? null;
 }
 
+function resolvePreferredSelectedSceneId(world = state.selectedWorld, options = {}) {
+  const scenes = Array.isArray(world?.scenes) ? world.scenes : [];
+  if (!scenes.length) {
+    return "";
+  }
+  const previousSelectedSceneId = String(options.previousSelectedSceneId ?? state.selectedSceneId ?? "").trim();
+  const activeSceneId = String(world?.active_instance?.active_scene_id ?? "").trim();
+  const defaultSceneId = activeSceneId
+    || String(world?.default_scene_id ?? "").trim()
+    || scenes.find((scene) => scene.is_default === true)?.id
+    || scenes[0]?.id
+    || "";
+  const canPreserveSelection =
+    options.preferSelected !== false
+    && state.mode === "build"
+    && world?.permissions?.can_edit === true
+    && scenes.some((scene) => scene.id === previousSelectedSceneId);
+  return canPreserveSelection ? previousSelectedSceneId : defaultSceneId;
+}
+
 function getDefaultScene(world = state.selectedWorld) {
   const scenes = world?.scenes ?? [];
   return scenes.find((scene) => scene.id === world?.default_scene_id)
@@ -5153,6 +5173,8 @@ function renderSceneFocusSummary(scene = getSelectedScene()) {
   const activeRuntimeSceneId = state.selectedWorld?.active_instance?.active_scene_id || "";
   const status = scene.id === activeRuntimeSceneId
     ? "live"
+    : scene.id === state.selectedSceneId
+      ? "editing"
     : scene.is_default
       ? "default"
       : "saved";
@@ -10331,7 +10353,9 @@ function connectWorldSocket() {
         }
         if (state.selectedWorld?.active_instance && payload.snapshot?.active_scene_id) {
           state.selectedWorld.active_instance.active_scene_id = payload.snapshot.active_scene_id;
-          state.selectedSceneId = payload.snapshot.active_scene_id;
+          state.selectedSceneId = resolvePreferredSelectedSceneId(state.selectedWorld, {
+            previousSelectedSceneId: state.selectedSceneId,
+          });
         }
         renderRuntimeStatus();
         const activeSceneChanged = String(previousRuntime?.active_scene_id ?? "") !== String(payload.snapshot?.active_scene_id ?? "");
@@ -10382,8 +10406,11 @@ function connectWorldSocket() {
         updatePrivateBrowserPanel();
       } else if (payload.type === "world:snapshot") {
         if (payload.world?.world_id === state.selectedWorld?.world_id) {
+          const previousSelectedSceneId = state.selectedSceneId;
           state.selectedWorld = payload.world;
-          state.selectedSceneId = payload.world?.active_instance?.active_scene_id || getSelectedScene()?.id || payload.world?.scenes?.[0]?.id || "";
+          state.selectedSceneId = resolvePreferredSelectedSceneId(payload.world, {
+            previousSelectedSceneId,
+          });
           syncRuntimeFromWorld(payload.world);
           renderSelectedWorld();
         }
@@ -10444,17 +10471,14 @@ async function openWorld(worldId, creatorUsername, includeContent = true, option
       ? `${payload.world.world_id}:${String(payload.world.creator?.username ?? "").trim().toLowerCase()}`
       : "";
     state.selectedWorld = payload.world;
-    const defaultSceneId = payload.world?.active_instance?.active_scene_id
-      || payload.world?.default_scene_id
-      || payload.world?.scenes?.find((scene) => scene.is_default === true)?.id
-      || payload.world?.scenes?.[0]?.id
-      || "";
-    const canPreserveSceneSelection =
-      previousWorldKey === nextWorldKey
-      && state.mode === "build"
-      && payload.world?.permissions?.can_edit === true
-      && (payload.world?.scenes ?? []).some((scene) => scene.id === previousSelectedSceneId);
-    state.selectedSceneId = canPreserveSceneSelection ? previousSelectedSceneId : defaultSceneId;
+    state.selectedSceneId = previousWorldKey === nextWorldKey
+      ? resolvePreferredSelectedSceneId(payload.world, {
+        previousSelectedSceneId,
+      })
+      : resolvePreferredSelectedSceneId(payload.world, {
+        previousSelectedSceneId: "",
+        preferSelected: false,
+      });
     state.selectedPrefabId = payload.world?.prefabs?.[0]?.id || "";
     state.selectedScriptFunctionId = "";
     writeBuilderSelection([]);
