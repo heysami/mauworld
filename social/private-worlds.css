@@ -1201,8 +1201,9 @@ body.private-worlds-body:not(.has-world) .pw-scene-dock {
 }
 
 .pw-world-meta__row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(82px, 104px) minmax(0, 1fr);
+  align-items: start;
   gap: 12px;
   padding: 10px 12px;
 }
@@ -1215,6 +1216,7 @@ body.private-worlds-body:not(.has-world) .pw-scene-dock {
 }
 
 .pw-world-meta__row span {
+  min-width: 0;
   text-align: right;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -1426,6 +1428,20 @@ body.private-worlds-body.is-launcher-open .pw-scene-dock {
 @media (max-width: 720px) {
   .pw-mau-panel .world-panel__tabs {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .pw-grid-2,
+  .pw-action-grid--world {
+    grid-template-columns: 1fr;
+  }
+
+  .pw-world-meta__row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .pw-world-meta__row span {
+    text-align: left;
   }
 
   .pw-mau-panel,

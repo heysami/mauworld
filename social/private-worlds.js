@@ -4409,18 +4409,53 @@ function buildMetaRows(world) {
   if (!world) {
     return [];
   }
-  const isActive = Boolean(world.active_instance);
+  const creatorUsername = String(world.creator?.username ?? world.creator_username ?? "").trim();
+  const creatorDisplayName = String(world.creator?.display_name ?? world.creator_display_name ?? creatorUsername).trim();
+  const dimensions = [world.width, world.length, world.height]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const sizeLabel = dimensions.length === 3
+    ? `${dimensions[0]} × ${dimensions[1]} × ${dimensions[2]}`
+    : "Not set";
+  const typeParts = [
+    String(world.world_type ?? "").trim(),
+    String(world.template_size ?? "").trim(),
+  ].filter(Boolean);
+  const viewerCount = Number(world.active_instance?.viewer_count);
+  const maxViewers = Number(world.max_viewers);
+  const viewerLabel = Number.isFinite(viewerCount) && Number.isFinite(maxViewers) && maxViewers > 0
+    ? `${Math.max(0, viewerCount)} inside now · ${Math.max(1, maxViewers)} max`
+    : Number.isFinite(viewerCount)
+      ? `${Math.max(0, viewerCount)} inside now`
+      : Number.isFinite(maxViewers) && maxViewers > 0
+        ? `${Math.max(1, maxViewers)} max`
+        : "No live occupancy";
+  const lineageImported = Boolean(
+    world.lineage?.is_imported
+    || world.origin_world_id
+    || world.origin_creator_username
+    || world.origin_world_name,
+  );
+  const lineageWorld = String(world.lineage?.origin_world_name ?? world.lineage?.origin_world_id ?? world.origin_world_name ?? world.origin_world_id ?? "").trim();
+  const lineageCreator = String(world.lineage?.origin_creator_username ?? world.origin_creator_username ?? "").trim();
+  const creatorLabel = creatorDisplayName && creatorUsername && creatorDisplayName.toLowerCase() !== creatorUsername.toLowerCase()
+    ? `${creatorDisplayName} (@${creatorUsername})`
+    : creatorUsername
+      ? `@${creatorUsername}`
+      : creatorDisplayName || "Unknown creator";
+  const activeStatus = String(world.active_instance?.status ?? "").trim().toLowerCase();
+  const isActive = activeStatus === "active";
   return [
-    { label: "World ID", value: world.world_id },
-    { label: "Creator", value: `${world.creator.display_name || world.creator.username} (@${world.creator.username})` },
-    { label: "Size", value: `${world.width} × ${world.length} × ${world.height}` },
-    { label: "Type", value: `${world.world_type} · ${world.template_size}` },
-    { label: "Viewers", value: `${world.active_instance?.viewer_count ?? 0} / ${world.max_viewers}` },
-    { label: "Entry", value: isActive ? "Direct autojoin link ready" : "Resolve link ready" },
+    { label: "World ID", value: String(world.world_id ?? "").trim() || "Not set" },
+    { label: "Creator", value: creatorLabel },
+    { label: "Size", value: sizeLabel },
+    { label: "Type", value: typeParts.join(" · ") || "Not set" },
+    { label: "Viewers", value: viewerLabel },
+    { label: "Entry", value: isActive ? "Copy Entry above to jump straight in." : "Inactive right now. The entry link still resolves it." },
     {
       label: "Lineage",
-      value: world.lineage?.is_imported
-        ? `Forked from ${world.lineage.origin_world_id} by @${world.lineage.origin_creator_username}`
+      value: lineageImported
+        ? `Forked from ${lineageWorld || "another world"}${lineageCreator ? ` by @${lineageCreator}` : ""}`
         : "Original world",
     },
   ];
@@ -4444,7 +4479,7 @@ function renderMetaRows(target, rows) {
   target.innerHTML = rows.map((row) => `
     <div class="pw-world-meta__row">
       <strong>${htmlEscape(row.label)}</strong>
-      <span>${htmlEscape(row.value)}</span>
+      <span>${htmlEscape(String(row.value ?? "").trim() || "Not set")}</span>
     </div>
   `).join("");
 }
