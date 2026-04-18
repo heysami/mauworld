@@ -447,6 +447,8 @@ const elements = {
   panelRoot: document.querySelector("[data-private-panel]"),
   panelTitle: document.querySelector("[data-private-panel-title]"),
   panelSubtitle: document.querySelector("[data-private-panel-subtitle]"),
+  panelModeLabel: document.querySelector("[data-private-panel-mode-label]"),
+  panelModeNote: document.querySelector("[data-private-panel-mode-note]"),
   panelSessionLabel: document.querySelector("[data-private-session-label]"),
   panelOpenAccess: document.querySelector("[data-private-open-access]"),
   panelChatComposer: document.querySelector("[data-private-chat-composer]"),
@@ -6336,6 +6338,20 @@ function renderSelectedWorld() {
   const hasWorld = Boolean(world);
   const canEdit = isEditor();
   const localParticipant = getLocalParticipant(world);
+  if (elements.panelModeLabel) {
+    elements.panelModeLabel.textContent = !hasWorld
+      ? "No world open"
+      : state.mode === "build"
+        ? "Build mode"
+        : "Play mode";
+  }
+  if (elements.panelModeNote) {
+    elements.panelModeNote.textContent = !hasWorld
+      ? "Open a world to switch modes."
+      : state.mode === "build"
+        ? "Place and edit things here. Physics is paused."
+        : "Walk the scene here. Physics and scripts run live.";
+  }
   state.joined = Boolean(localParticipant);
   state.joinedAsGuest = !state.session && localParticipant?.join_role === "guest";
   const joinedAsPlayer = localParticipant?.join_role === "player";

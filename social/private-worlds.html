@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418h" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418i" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -67,7 +67,7 @@
             data-private-panel-tab="build"
             role="tab"
             aria-selected="false"
-          >Build</button>
+          >Edit</button>
           <button
             type="button"
             class="world-panel__tab"
@@ -90,6 +90,18 @@
             aria-selected="false"
           >Live</button>
         </div>
+
+        <section class="pw-mode-strip" aria-label="World mode">
+          <div class="pw-mode-strip__copy">
+            <span class="pw-mode-strip__eyebrow">Current mode</span>
+            <strong data-private-panel-mode-label>Play mode</strong>
+            <p data-private-panel-mode-note>Open a world to switch modes.</p>
+          </div>
+          <div class="pw-action-grid pw-action-grid--mode">
+            <button type="button" data-private-panel-mode-build>Build Mode</button>
+            <button type="button" data-private-panel-mode-play>Play Mode</button>
+          </div>
+        </section>
 
         <section class="world-panel__view" data-private-panel-view="chat" role="tabpanel">
           <form class="world-panel-chat" data-private-chat-composer>
@@ -211,7 +223,6 @@
 
         <section class="world-panel__view" data-private-panel-view="build" role="tabpanel" hidden>
           <div class="pw-action-grid">
-            <button type="button" data-private-panel-mode-play>Play Default Scene</button>
             <button type="button" data-private-panel-scenes>Scenes</button>
             <button type="button" data-private-panel-export>Export</button>
           </div>
@@ -723,6 +734,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418h"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418i"></script>
   </body>
 </html>
