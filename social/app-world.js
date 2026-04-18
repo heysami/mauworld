@@ -307,6 +307,7 @@ const state = {
     remoteVideoWidth: 0,
     remoteVideoHeight: 0,
     remoteVideoPaused: true,
+    remoteAudioBySession: new Map(),
     remoteAudioSessionId: "",
     remoteAudioAvailable: false,
     remoteAudioBlocked: false,
@@ -949,6 +950,7 @@ function resetPublicBrowserState({ disconnectMediaController = false, stopTracks
   state.browserMediaState.connected = false;
   state.browserMediaState.canPublish = false;
   state.browserMediaState.remoteVideoSessionId = "";
+  state.browserMediaState.remoteAudioBySession = new Map();
   state.browserMediaState.remoteAudioSessionId = "";
   state.browserMediaState.remoteAudioAvailable = false;
   state.browserMediaState.remoteAudioBlocked = false;
@@ -2236,6 +2238,8 @@ function dropLocalBrowserSession(sessionId, { unpublish = true } = {}) {
   if (state.localVoiceSessionId === normalized) {
     state.localVoiceSessionId = "";
   }
+  ensureBrowserRemoteAudioStateMap().delete(normalized);
+  syncRemoteBrowserAudioState();
   return true;
 }
 
@@ -2263,6 +2267,66 @@ function getBrowserShareMissingAudioMessage(share) {
 
 function getLocalVoiceSession() {
   return state.localVoiceSessionId ? state.browserSessions.get(state.localVoiceSessionId) ?? null : null;
+}
+
+function ensureBrowserRemoteAudioStateMap() {
+  if (!(state.browserMediaState.remoteAudioBySession instanceof Map)) {
+    state.browserMediaState.remoteAudioBySession = new Map();
+  }
+  return state.browserMediaState.remoteAudioBySession;
+}
+
+function isRemoteBrowserPanelSessionCandidate(session = {}) {
+  return Boolean(
+    session
+    && session.hostSessionId !== state.viewerSessionId
+    && session.deliveryMode === "full"
+    && session.hasVideo !== false
+    && !isBrowserPersistentVoiceSession(session),
+  );
+}
+
+function getRemoteBrowserPanelSessionId(preferredSessionId = "") {
+  const currentSessionId = String(state.browserPanelRemoteSessionId ?? "").trim();
+  if (currentSessionId && isRemoteBrowserPanelSessionCandidate(state.browserSessions.get(currentSessionId))) {
+    return currentSessionId;
+  }
+  const normalizedPreferredSessionId = String(preferredSessionId ?? "").trim();
+  const candidates = [...state.browserSessions.values()]
+    .filter((session) => isRemoteBrowserPanelSessionCandidate(session))
+    .sort((left, right) =>
+      Number(isBrowserOriginSession(right)) - Number(isBrowserOriginSession(left))
+      || Number(String(right.sessionId ?? "").trim() === normalizedPreferredSessionId)
+        - Number(String(left.sessionId ?? "").trim() === normalizedPreferredSessionId)
+      || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
+      || String(left.sessionId ?? "").localeCompare(String(right.sessionId ?? "")));
+  return String(candidates[0]?.sessionId ?? "").trim();
+}
+
+function syncRemoteBrowserAudioState(preferredSessionId = "") {
+  const audioStates = ensureBrowserRemoteAudioStateMap();
+  const normalizedPreferredSessionId = String(preferredSessionId ?? "").trim();
+  const selectedSessionId = normalizedPreferredSessionId || String(state.browserPanelRemoteSessionId ?? "").trim();
+  let resolvedSessionId = "";
+  let resolvedState = null;
+  if (selectedSessionId) {
+    const selectedState = audioStates.get(selectedSessionId) ?? null;
+    if (selectedState?.available === true) {
+      resolvedSessionId = selectedSessionId;
+      resolvedState = selectedState;
+    }
+  }
+  if (!resolvedState) {
+    const fallbackEntry = [...audioStates.entries()].find(([, entry]) => entry?.available === true) ?? null;
+    if (fallbackEntry) {
+      resolvedSessionId = String(fallbackEntry[0] ?? "").trim();
+      resolvedState = fallbackEntry[1];
+    }
+  }
+  state.browserMediaState.remoteAudioSessionId = resolvedSessionId;
+  state.browserMediaState.remoteAudioAvailable = resolvedState?.available === true;
+  state.browserMediaState.remoteAudioBlocked = resolvedState?.blocked === true;
+  state.browserMediaState.remoteAudioError = String(resolvedState?.error ?? "").trim();
 }
 
 function getVoiceShareActionLabel() {
@@ -2793,8 +2857,11 @@ function getBrowserMediaController() {
   state.browserMediaController = createBrowserMediaController({
     fetchToken: ({ canPublish = false } = {}) => fetchBrowserMediaToken({ canPublish }),
     onRemoteTrack: ({ sessionId, track, element }) => {
-      if (!state.localBrowserShare && elements.browserVideo) {
-        state.browserPanelRemoteSessionId = sessionId;
+      const nextPanelSessionId = getRemoteBrowserPanelSessionId(sessionId);
+      if (!state.localBrowserShare && elements.browserVideo && nextPanelSessionId) {
+        state.browserPanelRemoteSessionId = nextPanelSessionId;
+      }
+      if (!state.localBrowserShare && elements.browserVideo && nextPanelSessionId === sessionId) {
         state.browserMediaState.remoteVideoSessionId = sessionId;
         restoreBrowserStageVideoElement();
         track.attach(elements.browserVideo);
@@ -2825,10 +2892,21 @@ function getBrowserMediaController() {
       updateBrowserPanel();
     },
     onRemoteAudioState: ({ sessionId, available, blocked, error }) => {
-      state.browserMediaState.remoteAudioSessionId = available ? String(sessionId ?? "").trim() : "";
-      state.browserMediaState.remoteAudioAvailable = available === true;
-      state.browserMediaState.remoteAudioBlocked = blocked === true;
-      state.browserMediaState.remoteAudioError = String(error ?? "").trim();
+      const normalizedSessionId = String(sessionId ?? "").trim();
+      if (!normalizedSessionId) {
+        return;
+      }
+      const audioStates = ensureBrowserRemoteAudioStateMap();
+      if (available === true) {
+        audioStates.set(normalizedSessionId, {
+          available: true,
+          blocked: blocked === true,
+          error: String(error ?? "").trim(),
+        });
+      } else {
+        audioStates.delete(normalizedSessionId);
+      }
+      syncRemoteBrowserAudioState(normalizedSessionId);
       updateBrowserPanel();
     },
     onStatus: ({ enabled, transport, connected, roomName, canPublish }) => {

@@ -775,6 +775,7 @@ function createEmptyPrivateBrowserMediaState() {
     roomName: "",
     canPublish: false,
     remoteVideoSessionId: "",
+    remoteAudioBySession: new Map(),
     remoteAudioSessionId: "",
     remoteAudioAvailable: false,
     remoteAudioBlocked: false,
@@ -4361,12 +4362,74 @@ function dropLocalPrivateBrowserSession(sessionId, { unpublish = true } = {}) {
       setPrivateBrowserPreviewStream(null);
     }
   }
+  ensurePrivateRemoteAudioStateMap().delete(normalized);
+  syncPrivateRemoteAudioState();
   removePrivateShareBubbleEntry(normalized);
   return true;
 }
 
 function getLocalPrivateVoiceSession() {
   return state.localVoiceSessionId ? state.browserSessions.get(state.localVoiceSessionId) ?? null : null;
+}
+
+function ensurePrivateRemoteAudioStateMap() {
+  if (!(state.browserMediaState.remoteAudioBySession instanceof Map)) {
+    state.browserMediaState.remoteAudioBySession = new Map();
+  }
+  return state.browserMediaState.remoteAudioBySession;
+}
+
+function isPrivateRemotePanelSessionCandidate(session = {}) {
+  return Boolean(
+    session
+    && session.hostSessionId !== getPrivateViewerSessionId()
+    && session.deliveryMode === "full"
+    && session.hasVideo !== false
+    && !isPrivatePersistentVoiceSession(session),
+  );
+}
+
+function getPrivateRemotePanelSessionId(preferredSessionId = "") {
+  const currentSessionId = String(state.browserPanelRemoteSessionId ?? "").trim();
+  if (currentSessionId && isPrivateRemotePanelSessionCandidate(state.browserSessions.get(currentSessionId))) {
+    return currentSessionId;
+  }
+  const normalizedPreferredSessionId = String(preferredSessionId ?? "").trim();
+  const candidates = [...state.browserSessions.values()]
+    .filter((session) => isPrivateRemotePanelSessionCandidate(session))
+    .sort((left, right) =>
+      Number(isPrivateBrowserOriginSession(right)) - Number(isPrivateBrowserOriginSession(left))
+      || Number(String(right.sessionId ?? "").trim() === normalizedPreferredSessionId)
+        - Number(String(left.sessionId ?? "").trim() === normalizedPreferredSessionId)
+      || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
+      || String(left.sessionId ?? "").localeCompare(String(right.sessionId ?? "")));
+  return String(candidates[0]?.sessionId ?? "").trim();
+}
+
+function syncPrivateRemoteAudioState(preferredSessionId = "") {
+  const audioStates = ensurePrivateRemoteAudioStateMap();
+  const normalizedPreferredSessionId = String(preferredSessionId ?? "").trim();
+  const selectedSessionId = normalizedPreferredSessionId || String(state.browserPanelRemoteSessionId ?? "").trim();
+  let resolvedSessionId = "";
+  let resolvedState = null;
+  if (selectedSessionId) {
+    const selectedState = audioStates.get(selectedSessionId) ?? null;
+    if (selectedState?.available === true) {
+      resolvedSessionId = selectedSessionId;
+      resolvedState = selectedState;
+    }
+  }
+  if (!resolvedState) {
+    const fallbackEntry = [...audioStates.entries()].find(([, entry]) => entry?.available === true) ?? null;
+    if (fallbackEntry) {
+      resolvedSessionId = String(fallbackEntry[0] ?? "").trim();
+      resolvedState = fallbackEntry[1];
+    }
+  }
+  state.browserMediaState.remoteAudioSessionId = resolvedSessionId;
+  state.browserMediaState.remoteAudioAvailable = resolvedState?.available === true;
+  state.browserMediaState.remoteAudioBlocked = resolvedState?.blocked === true;
+  state.browserMediaState.remoteAudioError = String(resolvedState?.error ?? "").trim();
 }
 
 function clearPendingPrivateVoiceShare({ stopTracks = false } = {}) {
@@ -4831,8 +4894,11 @@ function getPrivateBrowserMediaController() {
         ...existing,
         _remoteElement: element ?? existing._remoteElement ?? null,
       });
-      if (!state.localBrowserShare && elements.panelBrowserVideo) {
-        state.browserPanelRemoteSessionId = sessionId;
+      const nextPanelSessionId = getPrivateRemotePanelSessionId(sessionId);
+      if (!state.localBrowserShare && elements.panelBrowserVideo && nextPanelSessionId) {
+        state.browserPanelRemoteSessionId = nextPanelSessionId;
+      }
+      if (!state.localBrowserShare && elements.panelBrowserVideo && nextPanelSessionId === sessionId) {
         state.browserMediaState.remoteVideoSessionId = sessionId;
         track.attach(elements.panelBrowserVideo);
         elements.panelBrowserVideo.hidden = false;
@@ -4865,10 +4931,21 @@ function getPrivateBrowserMediaController() {
       updatePrivateBrowserPanel();
     },
     onRemoteAudioState: ({ sessionId, available, blocked, error }) => {
-      state.browserMediaState.remoteAudioSessionId = available ? String(sessionId ?? "").trim() : "";
-      state.browserMediaState.remoteAudioAvailable = available === true;
-      state.browserMediaState.remoteAudioBlocked = blocked === true;
-      state.browserMediaState.remoteAudioError = String(error ?? "").trim();
+      const normalizedSessionId = String(sessionId ?? "").trim();
+      if (!normalizedSessionId) {
+        return;
+      }
+      const audioStates = ensurePrivateRemoteAudioStateMap();
+      if (available === true) {
+        audioStates.set(normalizedSessionId, {
+          available: true,
+          blocked: blocked === true,
+          error: String(error ?? "").trim(),
+        });
+      } else {
+        audioStates.delete(normalizedSessionId);
+      }
+      syncPrivateRemoteAudioState(normalizedSessionId);
       updatePrivateBrowserPanel();
     },
     onStatus: ({ enabled, transport, connected, roomName, canPublish }) => {
