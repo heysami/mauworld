@@ -501,7 +501,6 @@ const elements = {
   sceneDrawerViews: [...document.querySelectorAll("[data-scene-drawer-view]")],
   sceneLibraryHint: document.querySelector("[data-scene-library-hint]"),
   sceneLibraryList: document.querySelector("[data-scene-library-list]"),
-  sceneFocusSummary: document.querySelector("[data-scene-focus-summary]"),
   sceneSwitchButton: document.querySelector("[data-scene-switch-button]"),
   sceneDrawerSceneIndicator: document.querySelector("[data-scene-drawer-scene-indicator]"),
   sceneForm: document.querySelector("[data-scene-form]"),
@@ -5800,7 +5799,6 @@ function renderSceneEditor() {
   } catch (_error) {
     sceneDocForControls = scene?.scene_doc ?? buildEmptySceneDoc();
   }
-  renderSceneFocusSummary(scene);
   if (elements.sceneSwitchButton) {
     const canSwitchScene = Boolean(scene) && canEdit && buildMode && !isFocusedSceneActive;
     elements.sceneSwitchButton.hidden = !scene;
@@ -5893,27 +5891,6 @@ function renderSceneDrawerSceneIndicator(scene = getSceneDrawerFocusedScene()) {
     <small>${htmlEscape(status)} · ${htmlEscape(buildSceneLibrarySummary(scene))}</small>
     ${statusNote !== buildSceneLibrarySummary(scene) ? `<small>${htmlEscape(statusNote)}</small>` : ""}
     ${editingNote ? `<small>${htmlEscape(editingNote)}</small>` : ""}
-  `;
-}
-
-function renderSceneFocusSummary(scene = getSceneEditorScene()) {
-  if (!elements.sceneFocusSummary) {
-    return;
-  }
-  if (!scene) {
-    elements.sceneFocusSummary.innerHTML = '<p class="pw-builder-empty">Pick a scene to review its setup.</p>';
-    return;
-  }
-  const selectedScene = getSelectedScene();
-  const viewingOnly = selectedScene && selectedScene.id !== scene.id;
-  const status = getSceneStatusLabel(scene);
-  elements.sceneFocusSummary.innerHTML = `
-    <div class="pw-scene-focus__head">
-      <strong>${htmlEscape(scene.name || "Untitled Scene")}</strong>
-      <span>${htmlEscape(status)}</span>
-    </div>
-    <small>${htmlEscape(buildSceneLibrarySummary(scene))}</small>
-    ${viewingOnly ? `<small>${htmlEscape(`Viewing details only. Active build scene: ${selectedScene.name || "Untitled Scene"}`)}</small>` : ""}
   `;
 }
 
