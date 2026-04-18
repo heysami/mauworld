@@ -6966,6 +6966,16 @@ function canAxisScaleSelection(selections = []) {
     && selections.every((selection) => canAxisScaleEntity(selection));
 }
 
+function getBaseBuildAxisVector(axis) {
+  if (axis === "x") {
+    return new THREE.Vector3(1, 0, 0);
+  }
+  if (axis === "y") {
+    return new THREE.Vector3(0, 1, 0);
+  }
+  return new THREE.Vector3(0, 0, 1);
+}
+
 function getOverlayBoundsForRefs(preview, refs = []) {
   if (!preview || !refs.length) {
     return null;
@@ -6992,6 +7002,112 @@ function getOverlayBoundsForRefs(preview, refs = []) {
   return hasBounds ? box : null;
 }
 
+function getObjectLocalBounds(object) {
+  if (!object) {
+    return null;
+  }
+  object.updateWorldMatrix(true, true);
+  const inverseWorld = object.matrixWorld.clone().invert();
+  const box = new THREE.Box3();
+  let hasBounds = false;
+  object.traverse((node) => {
+    if (!node?.geometry) {
+      return;
+    }
+    const geometry = node.geometry;
+    geometry.computeBoundingBox?.();
+    if (!geometry.boundingBox) {
+      return;
+    }
+    const localMatrix = new THREE.Matrix4().copy(inverseWorld).multiply(node.matrixWorld);
+    const nextBox = geometry.boundingBox.clone().applyMatrix4(localMatrix);
+    if (!Number.isFinite(nextBox.min.x) || !Number.isFinite(nextBox.max.x)) {
+      return;
+    }
+    if (!hasBounds) {
+      box.copy(nextBox);
+      hasBounds = true;
+    } else {
+      box.union(nextBox);
+    }
+  });
+  return hasBounds ? box : null;
+}
+
+function createOverlayFrame(center, size, quaternion = new THREE.Quaternion(), oriented = false) {
+  return {
+    center,
+    size: new THREE.Vector3(
+      Math.max(0.12, Number(size?.x ?? 0.12) || 0.12),
+      Math.max(0.12, Number(size?.y ?? 0.12) || 0.12),
+      Math.max(0.12, Number(size?.z ?? 0.12) || 0.12),
+    ),
+    quaternion,
+    oriented,
+  };
+}
+
+function getOverlayFrameFromBox(box) {
+  if (!box) {
+    return null;
+  }
+  return createOverlayFrame(
+    box.getCenter(new THREE.Vector3()),
+    box.getSize(new THREE.Vector3()),
+    new THREE.Quaternion(),
+    false,
+  );
+}
+
+function getOverlayFrameForObject(object) {
+  if (!object) {
+    return null;
+  }
+  const localBounds = getObjectLocalBounds(object);
+  if (!localBounds) {
+    return null;
+  }
+  const worldScale = new THREE.Vector3();
+  const worldQuaternion = new THREE.Quaternion();
+  object.getWorldScale(worldScale);
+  object.getWorldQuaternion(worldQuaternion);
+  const localSize = localBounds.getSize(new THREE.Vector3());
+  const worldSize = new THREE.Vector3(
+    Math.abs(localSize.x * worldScale.x),
+    Math.abs(localSize.y * worldScale.y),
+    Math.abs(localSize.z * worldScale.z),
+  );
+  const worldCenter = localBounds.getCenter(new THREE.Vector3()).applyMatrix4(object.matrixWorld);
+  return createOverlayFrame(worldCenter, worldSize, worldQuaternion, true);
+}
+
+function getOverlayFrameForRefs(preview, refs = []) {
+  if (!preview || !refs.length) {
+    return null;
+  }
+  if (refs.length === 1) {
+    const object = preview.entityMeshes.get(refs[0].id);
+    const frame = getOverlayFrameForObject(object);
+    if (frame) {
+      return frame;
+    }
+  }
+  return getOverlayFrameFromBox(getOverlayBoundsForRefs(preview, refs));
+}
+
+function expandOverlayFrame(frame, padding = 0) {
+  if (!frame) {
+    return null;
+  }
+  const size = frame.size.clone().addScalar(Math.max(0, Number(padding) || 0) * 2);
+  return createOverlayFrame(
+    frame.center.clone(),
+    size,
+    frame.quaternion?.clone?.() ?? new THREE.Quaternion(),
+    frame.oriented === true,
+  );
+}
+
 function getSelectionOutlinePadding(count = 1) {
   if (count <= 1) {
     return 0.18;
@@ -6999,16 +7115,14 @@ function getSelectionOutlinePadding(count = 1) {
   return Math.min(PRIVATE_WORLD_BLOCK_UNIT * 0.35, 0.18 + (count - 1) * PRIVATE_WORLD_BLOCK_UNIT * 0.05);
 }
 
-function buildOverlayOutline(preview, box, options = {}) {
-  if (!preview?.buildOverlay || !box) {
+function buildOverlayOutline(preview, frame, options = {}) {
+  if (!preview?.buildOverlay || !frame) {
     return null;
   }
-  const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3());
   const geometry = new THREE.BoxGeometry(
-    Math.max(0.12, size.x),
-    Math.max(0.12, size.y),
-    Math.max(0.12, size.z),
+    Math.max(0.12, frame.size.x),
+    Math.max(0.12, frame.size.y),
+    Math.max(0.12, frame.size.z),
   );
   const outline = new THREE.LineSegments(
     new THREE.EdgesGeometry(geometry),
@@ -7019,44 +7133,45 @@ function buildOverlayOutline(preview, box, options = {}) {
       fog: false,
     }),
   );
-  outline.position.copy(center);
+  outline.position.copy(frame.center);
+  outline.quaternion.copy(frame.quaternion ?? new THREE.Quaternion());
   preview.buildOverlay.add(outline);
   return outline;
 }
 
-function getTransformHandleSpecs(box) {
-  if (!box) {
+function getTransformHandleSpecs(frame) {
+  if (!frame) {
     return [];
   }
-  const center = box.getCenter(new THREE.Vector3());
+  const halfSize = frame.size.clone().multiplyScalar(0.5);
   return [
-    { axis: "x", direction: -1, key: "x:-1", position: new THREE.Vector3(box.min.x, center.y, center.z) },
-    { axis: "x", direction: 1, key: "x:1", position: new THREE.Vector3(box.max.x, center.y, center.z) },
-    { axis: "y", direction: -1, key: "y:-1", position: new THREE.Vector3(center.x, box.min.y, center.z) },
-    { axis: "y", direction: 1, key: "y:1", position: new THREE.Vector3(center.x, box.max.y, center.z) },
-    { axis: "z", direction: -1, key: "z:-1", position: new THREE.Vector3(center.x, center.y, box.min.z) },
-    { axis: "z", direction: 1, key: "z:1", position: new THREE.Vector3(center.x, center.y, box.max.z) },
+    { axis: "x", direction: -1, key: "x:-1", position: new THREE.Vector3(-halfSize.x, 0, 0) },
+    { axis: "x", direction: 1, key: "x:1", position: new THREE.Vector3(halfSize.x, 0, 0) },
+    { axis: "y", direction: -1, key: "y:-1", position: new THREE.Vector3(0, -halfSize.y, 0) },
+    { axis: "y", direction: 1, key: "y:1", position: new THREE.Vector3(0, halfSize.y, 0) },
+    { axis: "z", direction: -1, key: "z:-1", position: new THREE.Vector3(0, 0, -halfSize.z) },
+    { axis: "z", direction: 1, key: "z:1", position: new THREE.Vector3(0, 0, halfSize.z) },
   ];
 }
 
-function getRotateHandleSpecs(box) {
-  if (!box) {
+function getRotateHandleSpecs(frame) {
+  if (!frame) {
     return [];
   }
-  const center = box.getCenter(new THREE.Vector3());
+  const halfSize = frame.size.clone().multiplyScalar(0.5);
   return [
-    { axis: "x", key: "rx:-1:-1", position: new THREE.Vector3(center.x, box.min.y, box.min.z) },
-    { axis: "x", key: "rx:-1:1", position: new THREE.Vector3(center.x, box.min.y, box.max.z) },
-    { axis: "x", key: "rx:1:-1", position: new THREE.Vector3(center.x, box.max.y, box.min.z) },
-    { axis: "x", key: "rx:1:1", position: new THREE.Vector3(center.x, box.max.y, box.max.z) },
-    { axis: "y", key: "ry:-1:-1", position: new THREE.Vector3(box.min.x, center.y, box.min.z) },
-    { axis: "y", key: "ry:-1:1", position: new THREE.Vector3(box.min.x, center.y, box.max.z) },
-    { axis: "y", key: "ry:1:-1", position: new THREE.Vector3(box.max.x, center.y, box.min.z) },
-    { axis: "y", key: "ry:1:1", position: new THREE.Vector3(box.max.x, center.y, box.max.z) },
-    { axis: "z", key: "rz:-1:-1", position: new THREE.Vector3(box.min.x, box.min.y, center.z) },
-    { axis: "z", key: "rz:-1:1", position: new THREE.Vector3(box.min.x, box.max.y, center.z) },
-    { axis: "z", key: "rz:1:-1", position: new THREE.Vector3(box.max.x, box.min.y, center.z) },
-    { axis: "z", key: "rz:1:1", position: new THREE.Vector3(box.max.x, box.max.y, center.z) },
+    { axis: "x", key: "rx:-1:-1", position: new THREE.Vector3(0, -halfSize.y, -halfSize.z) },
+    { axis: "x", key: "rx:-1:1", position: new THREE.Vector3(0, -halfSize.y, halfSize.z) },
+    { axis: "x", key: "rx:1:-1", position: new THREE.Vector3(0, halfSize.y, -halfSize.z) },
+    { axis: "x", key: "rx:1:1", position: new THREE.Vector3(0, halfSize.y, halfSize.z) },
+    { axis: "y", key: "ry:-1:-1", position: new THREE.Vector3(-halfSize.x, 0, -halfSize.z) },
+    { axis: "y", key: "ry:-1:1", position: new THREE.Vector3(-halfSize.x, 0, halfSize.z) },
+    { axis: "y", key: "ry:1:-1", position: new THREE.Vector3(halfSize.x, 0, -halfSize.z) },
+    { axis: "y", key: "ry:1:1", position: new THREE.Vector3(halfSize.x, 0, halfSize.z) },
+    { axis: "z", key: "rz:-1:-1", position: new THREE.Vector3(-halfSize.x, -halfSize.y, 0) },
+    { axis: "z", key: "rz:-1:1", position: new THREE.Vector3(-halfSize.x, halfSize.y, 0) },
+    { axis: "z", key: "rz:1:-1", position: new THREE.Vector3(halfSize.x, -halfSize.y, 0) },
+    { axis: "z", key: "rz:1:1", position: new THREE.Vector3(halfSize.x, halfSize.y, 0) },
   ];
 }
 
@@ -7100,6 +7215,26 @@ function getOverlayBoundsSignature(box) {
     box.max.x,
     box.max.y,
     box.max.z,
+  ].map((value) => roundPrivateValue(value, 3)).join(":");
+}
+
+function getOverlayFrameSignature(frame) {
+  if (!frame) {
+    return "none";
+  }
+  const quaternion = frame.quaternion ?? new THREE.Quaternion();
+  return [
+    frame.center?.x,
+    frame.center?.y,
+    frame.center?.z,
+    frame.size?.x,
+    frame.size?.y,
+    frame.size?.z,
+    quaternion.x,
+    quaternion.y,
+    quaternion.z,
+    quaternion.w,
+    frame.oriented ? 1 : 0,
   ].map((value) => roundPrivateValue(value, 3)).join(":");
 }
 
@@ -7308,18 +7443,23 @@ function buildPlacementGhost(preview, placement) {
   preview.buildOverlay.add(outline);
 }
 
-function buildTransformHandles(preview, box, hoveredHandleKey = "") {
-  if (!preview?.buildOverlay || !box) {
+function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
+  if (!preview?.buildOverlay || !frame) {
     return;
   }
-  const size = box.getSize(new THREE.Vector3());
+  const size = frame.size;
+  const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
   const handleSize = clampNumber(Math.max(size.x, size.y, size.z) * 0.12, 1.1, 0.6, 2.4);
   const pickSize = Math.max(handleSize * 2.4, 1.6);
   const handleOffset = Math.max(0.24, handleSize * 0.58);
-  for (const handle of getTransformHandleSpecs(box)) {
+  for (const handle of getTransformHandleSpecs(frame)) {
     const isHovered = handle.key === hoveredHandleKey;
-    const axisVector = getBuildDragAxisVector(handle.axis);
-    const handlePosition = handle.position.clone().addScaledVector(axisVector, handle.direction * handleOffset);
+    const axisVector = getBuildDragAxisVector(handle.axis, frame);
+    const handlePosition = handle.position
+      .clone()
+      .applyQuaternion(frameQuaternion)
+      .add(frame.center)
+      .addScaledVector(axisVector, handle.direction * handleOffset);
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(handleSize, handleSize, handleSize),
       new THREE.MeshBasicMaterial({
@@ -7331,6 +7471,7 @@ function buildTransformHandles(preview, box, hoveredHandleKey = "") {
       }),
     );
     mesh.position.copy(handlePosition);
+    mesh.quaternion.copy(frameQuaternion);
     mesh.scale.setScalar(isHovered ? 1.22 : 1);
     preview.buildOverlay.add(mesh);
 
@@ -7346,6 +7487,7 @@ function buildTransformHandles(preview, box, hoveredHandleKey = "") {
       }),
     );
     pickMesh.position.copy(handlePosition);
+    pickMesh.quaternion.copy(frameQuaternion);
     pickMesh.userData.privateWorldTransformHandle = {
       type: "translate-scale",
       axis: handle.axis,
@@ -7357,12 +7499,13 @@ function buildTransformHandles(preview, box, hoveredHandleKey = "") {
   }
 }
 
-function buildRotateHandles(preview, box, hoveredHandleKey = "") {
-  if (!preview?.buildOverlay || !box) {
+function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
+  if (!preview?.buildOverlay || !frame) {
     return;
   }
-  const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3());
+  const center = frame.center;
+  const size = frame.size;
+  const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
   const maxSize = Math.max(size.x, size.y, size.z);
   const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
   const handleLength = clampNumber(maxSize * 0.3, 1.6, 1.05, 3.8);
@@ -7374,15 +7517,19 @@ function buildRotateHandles(preview, box, hoveredHandleKey = "") {
     y: axis === "y" ? longSide : shortSide,
     z: axis === "z" ? longSide : shortSide,
   });
-  for (const handle of getRotateHandleSpecs(box)) {
+  for (const handle of getRotateHandleSpecs(frame)) {
     const isHovered = handle.key === hoveredHandleKey;
-    const outward = handle.position.clone().sub(center);
+    const outward = handle.position.clone();
     if (outward.lengthSq() < 0.0001) {
-      outward.copy(getBuildDragAxisVector(handle.axis));
+      outward.copy(getBuildDragAxisVector(handle.axis, frame));
     } else {
-      outward.normalize();
+      outward.applyQuaternion(frameQuaternion).normalize();
     }
-    const handlePosition = handle.position.clone().addScaledVector(outward, handleOffset);
+    const handlePosition = handle.position
+      .clone()
+      .applyQuaternion(frameQuaternion)
+      .add(center)
+      .addScaledVector(outward, handleOffset);
     const visibleDimensions = buildDimensions(handle.axis, handleLength, handleThickness);
     const pickDimensions = buildDimensions(handle.axis, pickLength, pickThickness);
 
@@ -7397,6 +7544,7 @@ function buildRotateHandles(preview, box, hoveredHandleKey = "") {
       }),
     );
     mesh.position.copy(handlePosition);
+    mesh.quaternion.copy(frameQuaternion);
     mesh.scale.setScalar(isHovered ? 1.16 : 1);
     preview.buildOverlay.add(mesh);
 
@@ -7412,6 +7560,7 @@ function buildRotateHandles(preview, box, hoveredHandleKey = "") {
       }),
     );
     pickMesh.position.copy(handlePosition);
+    pickMesh.quaternion.copy(frameQuaternion);
     pickMesh.userData.privateWorldTransformHandle = {
       type: "rotate",
       axis: handle.axis,
@@ -7447,13 +7596,13 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   const transformMode = buildMode
     ? getResolvedBuildTransformMode(requestedTransformMode, selectedEntities)
     : "";
-  const selectionBounds = selectionRefs.length ? getOverlayBoundsForRefs(preview, selectionRefs) : null;
+  const selectionFrame = selectionRefs.length ? getOverlayFrameForRefs(preview, selectionRefs) : null;
   const overlayKey = [
     buildMode ? "build" : "idle",
     activePrefabPlacementId ? `prefab:${activePrefabPlacementId}` : activeTool || "none",
     transformMode || "none",
     selectionRefs.map((entry) => `${entry.kind}:${entry.id}`).join(",") || "noselection",
-    getOverlayBoundsSignature(selectionBounds),
+    getOverlayFrameSignature(selectionFrame),
     hoveredEntityRef ? `${hoveredEntityRef.kind}:${hoveredEntityRef.id}` : "nohover",
     hoveredHandleKey || "nohandle",
     gridCell ? `${gridCell.x}:${gridCell.z}` : "nogrid",
@@ -7484,16 +7633,16 @@ function syncBuildPlacementOverlay(preview = state.preview) {
     buildPlacementGhost(preview, placement);
   }
   const drawSelectionOutline = (refs, options = {}) => {
-    const rawBounds = getOverlayBoundsForRefs(preview, refs);
-    if (!rawBounds) {
+    const rawFrame = getOverlayFrameForRefs(preview, refs);
+    if (!rawFrame) {
       return null;
     }
-    const paddedBounds = rawBounds.clone().expandByScalar(options.padding ?? getSelectionOutlinePadding(refs.length));
-    buildOverlayOutline(preview, paddedBounds, {
+    const paddedFrame = expandOverlayFrame(rawFrame, options.padding ?? getSelectionOutlinePadding(refs.length));
+    buildOverlayOutline(preview, paddedFrame, {
       color: options.color,
       opacity: options.opacity,
     });
-    return paddedBounds;
+    return paddedFrame;
   };
   if (selectionRefs.length > 1) {
     for (const ref of selectionRefs) {
@@ -7504,7 +7653,7 @@ function syncBuildPlacementOverlay(preview = state.preview) {
       });
     }
   }
-  const groupBounds = selectionRefs.length
+  const groupFrame = selectionRefs.length
     ? drawSelectionOutline(selectionRefs, {
       color: transformMode === "delete" ? "#ff6a86" : "#5da5ff",
       opacity: selectionRefs.length > 1 ? 0.6 : 0.44,
@@ -7524,14 +7673,14 @@ function syncBuildPlacementOverlay(preview = state.preview) {
       padding: 0.1,
     });
   }
-  if ((transformMode === "move" || transformMode === "multi") && groupBounds) {
-    buildTransformHandles(preview, groupBounds, hoveredHandleKey);
-  } else if (transformMode === "scale" && groupBounds && canScaleSelection(selectedEntities)) {
+  if ((transformMode === "move" || transformMode === "multi") && groupFrame) {
+    buildTransformHandles(preview, groupFrame, hoveredHandleKey);
+  } else if (transformMode === "scale" && groupFrame && canScaleSelection(selectedEntities)) {
     if (canAxisScaleSelection(selectedEntities)) {
-      buildTransformHandles(preview, groupBounds, hoveredHandleKey);
+      buildTransformHandles(preview, groupFrame, hoveredHandleKey);
     }
-  } else if (transformMode === "rotate" && groupBounds && canRotateSelection(selectedEntities)) {
-    buildRotateHandles(preview, groupBounds, hoveredHandleKey);
+  } else if (transformMode === "rotate" && groupFrame && canRotateSelection(selectedEntities)) {
+    buildRotateHandles(preview, groupFrame, hoveredHandleKey);
   }
   preview.buildOverlayKey = overlayKey;
 }
@@ -7565,21 +7714,19 @@ function getBuildDragPoint(event, plane) {
   return preview.raycaster.ray.intersectPlane(plane, point) ? point : null;
 }
 
-function getBuildDragAxisVector(axis) {
-  if (axis === "x") {
-    return new THREE.Vector3(1, 0, 0);
+function getBuildDragAxisVector(axis, frame = null) {
+  const vector = getBaseBuildAxisVector(axis);
+  if (frame?.oriented && frame.quaternion) {
+    vector.applyQuaternion(frame.quaternion).normalize();
   }
-  if (axis === "y") {
-    return new THREE.Vector3(0, 1, 0);
-  }
-  return new THREE.Vector3(0, 0, 1);
+  return vector;
 }
 
-function getBuildDragAxisPlane(axis, origin, preview = state.preview) {
+function getBuildDragAxisPlane(axis, origin, preview = state.preview, axisVectorOverride = null) {
   if (!preview?.camera) {
     return null;
   }
-  const axisVector = getBuildDragAxisVector(axis);
+  const axisVector = axisVectorOverride?.clone?.() ?? getBuildDragAxisVector(axis);
   const cameraDirection = new THREE.Vector3();
   preview.camera.getWorldDirection(cameraDirection);
   let tangent = new THREE.Vector3().crossVectors(cameraDirection, axisVector);
@@ -7670,11 +7817,11 @@ function getSignedAngleAroundAxis(startVector, currentVector, axisVector) {
   return Math.atan2(cross.dot(axisVector), start.dot(current));
 }
 
-function applyRotationToEntity(selection, entry, axis, angle, pivot) {
+function applyRotationToEntity(selection, entry, axis, angle, pivot, axisVectorOverride = null) {
   if (!canRotateEntityKind(selection.kind) || !pivot) {
     return;
   }
-  const axisVector = getBuildDragAxisVector(axis);
+  const axisVector = axisVectorOverride?.clone?.() ?? getBuildDragAxisVector(axis);
   const startPosition = selection.startPosition ?? { x: 0, y: 0, z: 0 };
   const nextPosition = new THREE.Vector3(
     Number(startPosition.x ?? 0) || 0,
@@ -7721,7 +7868,7 @@ function applyFreeMoveToEntity(selection, entry, delta) {
   entry.position.y = startPosition.y;
 }
 
-function applyAxisMoveToEntity(selection, entry, axis, amount) {
+function applyAxisMoveToEntity(selection, entry, axis, amount, axisVector = null) {
   const startPosition = selection.startPosition ?? { x: 0, y: 0, z: 0 };
   entry.position = entry.position || { x: 0, y: 0, z: 0 };
   entry.position.x = startPosition.x;
@@ -7739,6 +7886,17 @@ function applyAxisMoveToEntity(selection, entry, axis, amount) {
     return;
   }
   const step = getBuildMoveStep(selection.kind);
+  if (axisVector?.lengthSq?.() > 0.0001) {
+    const nextPosition = new THREE.Vector3(
+      Number(startPosition.x ?? 0) || 0,
+      Number(startPosition.y ?? 0) || 0,
+      Number(startPosition.z ?? 0) || 0,
+    ).addScaledVector(axisVector, amount);
+    entry.position.x = snapBuildValue(nextPosition.x, step);
+    entry.position.y = snapBuildValue(nextPosition.y, step);
+    entry.position.z = snapBuildValue(nextPosition.z, step);
+    return;
+  }
   entry.position[axis] = snapBuildValue(startPosition[axis] + amount, step);
 }
 
@@ -7768,7 +7926,7 @@ function applyUniformScaleToEntity(selection, entry, factor) {
   }
 }
 
-function applyAxisScaleToEntity(selection, entry, axis, direction, amount) {
+function applyAxisScaleToEntity(selection, entry, axis, direction, amount, axisVector = null) {
   if (typeof selection.startScale !== "object") {
     return;
   }
@@ -7786,6 +7944,18 @@ function applyAxisScaleToEntity(selection, entry, axis, direction, amount) {
   );
   const appliedDelta = (nextSize - startSize) * direction;
   entry.scale[axis] = nextSize;
+  if (axisVector?.lengthSq?.() > 0.0001) {
+    const nextPosition = new THREE.Vector3(
+      Number(selection.startPosition?.x ?? 0) || 0,
+      Number(selection.startPosition?.y ?? 0) || 0,
+      Number(selection.startPosition?.z ?? 0) || 0,
+    ).addScaledVector(axisVector, appliedDelta / 2);
+    const step = getBuildMoveStep(selection.kind);
+    entry.position.x = snapBuildValue(nextPosition.x, step);
+    entry.position.y = snapBuildValue(nextPosition.y, step);
+    entry.position.z = snapBuildValue(nextPosition.z, step);
+    return;
+  }
   entry.position[axis] = snapBuildValue(
     (selection.startPosition?.[axis] ?? 0) + appliedDelta / 2,
     getBuildMoveStep(selection.kind),
@@ -7833,23 +8003,25 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
   if (transformMode === "rotate" && !canRotateSelection(selectedEntities)) {
     return false;
   }
-  const selectionBounds = getOverlayBoundsForRefs(state.preview, getBuilderSelectionRefs());
-  if (!selectionBounds) {
+  const selectionFrame = getOverlayFrameForRefs(state.preview, getBuilderSelectionRefs());
+  if (!selectionFrame) {
     return false;
   }
-  const pivot = selectionBounds.getCenter(new THREE.Vector3());
+  const pivot = selectionFrame.center.clone();
   let plane = null;
   let startPoint = null;
   let axis = null;
+  let axisVector = null;
   let direction = 0;
   let dragType = transformMode === "scale" ? "scale-uniform" : "move-plane";
   if (hoveredHandle) {
     axis = hoveredHandle.axis;
+    axisVector = getBuildDragAxisVector(axis, selectionFrame);
     if (transformMode === "rotate") {
       if (hoveredHandle.type !== "rotate") {
         return false;
       }
-      plane = new THREE.Plane().setFromNormalAndCoplanarPoint(getBuildDragAxisVector(axis), pivot);
+      plane = new THREE.Plane().setFromNormalAndCoplanarPoint(axisVector, pivot);
       startPoint = getBuildDragPoint(event, plane);
       if (!startPoint) {
         return false;
@@ -7860,7 +8032,7 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
         return false;
       }
       direction = hoveredHandle.direction;
-      plane = getBuildDragAxisPlane(axis, pivot);
+      plane = getBuildDragAxisPlane(axis, pivot, state.preview, axisVector);
       startPoint = getBuildDragPoint(event, plane);
       if (!startPoint) {
         return false;
@@ -7889,13 +8061,14 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
     type: dragType,
     plane,
     axis,
+    axisVector: axisVector?.clone?.() ?? null,
     direction,
     pivot: { x: pivot.x, y: pivot.y, z: pivot.z },
     startPoint: startPoint?.clone?.() ?? null,
     startVector: dragType === "rotate-axis"
       ? startPoint.clone().sub(pivot)
       : null,
-    startBoundsSize: selectionBounds.getSize(new THREE.Vector3()),
+    startBoundsSize: selectionFrame.size.clone(),
     startClientX: event.clientX,
     startClientY: event.clientY,
     selection: selectedEntities.map((selection) => ({
@@ -7930,6 +8103,8 @@ function updateBuildDrag(event) {
       return false;
     }
     const delta = new THREE.Vector3().subVectors(point, state.buildDrag.startPoint);
+    const axisVector = state.buildDrag.axisVector?.clone?.()
+      ?? getBuildDragAxisVector(state.buildDrag.axis);
     if (state.buildDrag.type === "move-plane") {
       amount = 0;
       state.buildDrag.delta = delta;
@@ -7945,10 +8120,10 @@ function updateBuildDrag(event) {
       if (!startVector) {
         return false;
       }
-      angle = getSignedAngleAroundAxis(startVector, currentVector, getBuildDragAxisVector(state.buildDrag.axis));
+      angle = getSignedAngleAroundAxis(startVector, currentVector, axisVector);
       state.buildDrag.moved = state.buildDrag.moved || Math.abs(angle) > 0.01;
     } else {
-      amount = delta.dot(getBuildDragAxisVector(state.buildDrag.axis));
+      amount = delta.dot(axisVector);
       state.buildDrag.moved = state.buildDrag.moved || Math.abs(amount) > 0.02;
     }
   } else if (state.buildDrag.type === "scale-uniform") {
@@ -7979,12 +8154,19 @@ function updateBuildDrag(event) {
       if (state.buildDrag.type === "move-plane") {
         applyFreeMoveToEntity(selection, current.entry, state.buildDrag.delta ?? new THREE.Vector3());
       } else if (state.buildDrag.type === "move-axis") {
-        applyAxisMoveToEntity(selection, current.entry, state.buildDrag.axis, amount);
+        applyAxisMoveToEntity(selection, current.entry, state.buildDrag.axis, amount, state.buildDrag.axisVector);
       } else if (state.buildDrag.type === "scale-axis") {
         if (isGroupSelection) {
           applyGroupAxisScaleToEntity(selection, current.entry, state.buildDrag.axis, axisFactor, pivot);
         } else {
-          applyAxisScaleToEntity(selection, current.entry, state.buildDrag.axis, state.buildDrag.direction, amount);
+          applyAxisScaleToEntity(
+            selection,
+            current.entry,
+            state.buildDrag.axis,
+            state.buildDrag.direction,
+            amount,
+            state.buildDrag.axisVector,
+          );
         }
       } else if (state.buildDrag.type === "scale-uniform") {
         if (isGroupSelection) {
@@ -7993,7 +8175,14 @@ function updateBuildDrag(event) {
           applyUniformScaleToEntity(selection, current.entry, factor);
         }
       } else if (state.buildDrag.type === "rotate-axis") {
-        applyRotationToEntity(selection, current.entry, state.buildDrag.axis, angle, pivot);
+        applyRotationToEntity(
+          selection,
+          current.entry,
+          state.buildDrag.axis,
+          angle,
+          pivot,
+          state.buildDrag.axisVector,
+        );
       }
     }
   });
