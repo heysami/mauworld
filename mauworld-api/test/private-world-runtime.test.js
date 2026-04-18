@@ -174,3 +174,36 @@ test("key press rules remain repeatable and can reapply force", () => {
   assert.ok(firstVelocity > 0);
   assert.ok(simulation.runtime.dynamicObjects[0].velocity.y > firstVelocity);
 });
+
+test("runtime snapshots preserve authored player and object scale", () => {
+  const simulation = buildSimulation({
+    participants: [],
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 0, y: 8, z: 0 },
+          scale: { x: 6, y: 4, z: 3 },
+          rotation: { x: 0.2, y: 0.4, z: 0.1 },
+          material: { color: "#88aadd", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: { gravity_scale: 1, restitution: 0, friction: 0.4, mass: 1 },
+        },
+      ],
+      screens: [],
+      players: [{ id: "player_one", label: "Player One", position: { x: 0, y: 4.5, z: 0 }, scale: 5, body_mode: "rigid", camera_mode: "third_person" }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.equal(snapshot.players[0].scale, 5);
+  assert.deepEqual(snapshot.dynamic_objects[0].scale, { x: 6, y: 4, z: 3 });
+});

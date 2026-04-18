@@ -5,7 +5,7 @@ import { normalizeSceneDoc } from "./private-worlds.js";
 await RAPIER.init({});
 
 const DEFAULT_TICK_MS = 50;
-const DEFAULT_BROADCAST_MS = 250;
+const DEFAULT_BROADCAST_MS = 50;
 const PRIVATE_WORLD_BLOCK_UNIT = 5;
 const PLAYER_DIMENSIONS = {
   width: 0.6,
@@ -907,6 +907,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     players: runtime.players.map((entry) => ({
       id: entry.id,
       label: entry.label,
+      scale: entry.scale,
       position: cloneJson(entry.position),
       rotation: cloneJson(entry.rotation),
       velocity: cloneJson(entry.velocity),
@@ -924,6 +925,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     dynamic_objects: runtime.dynamicObjects.map((entry) => ({
       id: entry.id,
       shape: entry.shape,
+      scale: cloneJson(entry.scale),
       position: cloneJson(entry.position),
       rotation: cloneJson(entry.rotation),
       velocity: cloneJson(entry.velocity),

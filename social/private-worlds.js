@@ -4989,6 +4989,9 @@ function getRenderableSceneDoc() {
   if (!scene) {
     return null;
   }
+  if (state.mode === "play") {
+    return scene.compiled_doc?.runtime?.resolved_scene_doc ?? scene.scene_doc ?? null;
+  }
   if (isEditor() && state.sceneEditorSceneId === String(scene.id ?? "").trim()) {
     try {
       return parseSceneTextarea();
@@ -4997,9 +5000,6 @@ function getRenderableSceneDoc() {
         throw error;
       }
     }
-  }
-  if (state.mode === "play") {
-    return scene.compiled_doc?.runtime?.resolved_scene_doc ?? scene.scene_doc ?? null;
   }
   return parseSceneTextarea();
 }
@@ -9510,13 +9510,102 @@ function getRuntimeTransformMaps() {
   if (!runtime || activeSceneId !== state.selectedSceneId) {
     return {
       dynamicById: new Map(),
+      dynamicObjects: [],
       playerById: new Map(),
+      players: [],
     };
   }
   return {
     dynamicById: new Map((runtime.dynamic_objects ?? []).map((entry) => [entry.id, entry])),
+    dynamicObjects: runtime.dynamic_objects ?? [],
     playerById: new Map((runtime.players ?? []).map((entry) => [entry.id, entry])),
+    players: runtime.players ?? [],
   };
+}
+
+function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
+  if (!mesh || !runtimeEntry) {
+    return;
+  }
+  const position = runtimeEntry.position ?? {};
+  const rotation = runtimeEntry.rotation ?? {};
+  mesh.position.set(
+    clampNumber(position.x, mesh.position.x, -4096, 4096),
+    clampNumber(position.y, mesh.position.y, -4096, 4096),
+    clampNumber(position.z, mesh.position.z, -4096, 4096),
+  );
+  mesh.rotation.set(
+    clampNumber(rotation.x, mesh.rotation.x, -Math.PI * 4, Math.PI * 4),
+    clampNumber(rotation.y, mesh.rotation.y, -Math.PI * 4, Math.PI * 4),
+    clampNumber(rotation.z, mesh.rotation.z, -Math.PI * 4, Math.PI * 4),
+  );
+  const scale = typeof runtimeEntry.scale === "number"
+    ? { x: runtimeEntry.scale, y: runtimeEntry.scale, z: runtimeEntry.scale }
+    : (runtimeEntry.scale ?? options.fallbackScale ?? null);
+  if (scale) {
+    mesh.scale.set(
+      clampNumber(scale.x, mesh.scale.x, 0.01, 4096),
+      clampNumber(scale.y, mesh.scale.y, 0.01, 4096),
+      clampNumber(scale.z, mesh.scale.z, 0.01, 4096),
+    );
+  }
+  applyRenderableVisibility(mesh, {
+    runtimeVisible: runtimeEntry.visible !== false,
+  });
+
+  const runtimeMaterial = runtimeEntry.material_override
+    ? { ...(runtimeEntry.material ?? {}), ...runtimeEntry.material_override }
+    : runtimeEntry.material ?? null;
+  if (runtimeMaterial?.color) {
+    for (const material of getObjectMaterials(mesh)) {
+      material.color?.set?.(runtimeMaterial.color);
+      if (material.emissiveIntensity !== undefined) {
+        material.emissiveIntensity = Math.max(
+          Number(material.emissiveIntensity || 0),
+          Math.max(0, Number(runtimeMaterial.emissive_intensity ?? runtimeMaterial.emissiveIntensity ?? 0) || 0),
+        );
+      }
+      material.needsUpdate = true;
+    }
+  }
+  if (options.playerColor) {
+    for (const material of getObjectMaterials(mesh)) {
+      material.color?.set?.(options.playerColor);
+      material.needsUpdate = true;
+    }
+  }
+}
+
+function syncPreviewRuntimeSnapshot(snapshot) {
+  const preview = state.preview;
+  if (!preview || !snapshot) {
+    return false;
+  }
+  const activeSceneId = String(snapshot.active_scene_id ?? "").trim();
+  if (!activeSceneId || activeSceneId !== state.selectedSceneId) {
+    return false;
+  }
+  const dynamicObjects = Array.isArray(snapshot.dynamic_objects) ? snapshot.dynamic_objects : [];
+  const players = Array.isArray(snapshot.players) ? snapshot.players : [];
+  for (const entry of [...dynamicObjects, ...players]) {
+    if (!preview.entityMeshes.has(entry.id)) {
+      return false;
+    }
+  }
+  for (const runtimePrimitive of dynamicObjects) {
+    applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePrimitive.id), runtimePrimitive);
+  }
+  for (const runtimePlayer of players) {
+    applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePlayer.id), runtimePlayer, {
+      fallbackScale: runtimePlayer?.scale
+        ? { x: runtimePlayer.scale, y: runtimePlayer.scale, z: runtimePlayer.scale }
+        : null,
+      playerColor: runtimePlayer?.occupied_by_username
+        ? "#ff5a6f"
+        : (runtimePlayer?.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f"),
+    });
+  }
+  return true;
 }
 
 function updatePreviewFromSelection() {
@@ -9798,30 +9887,22 @@ function updatePreviewFromSelection() {
 
   for (const primitive of sceneDoc.primitives ?? []) {
     const runtimePrimitive = runtimeTransforms.dynamicById.get(primitive.id);
-    let geometry = new THREE.BoxGeometry(1, 1, 1);
-    if (primitive.shape === "sphere") {
-      geometry = new THREE.SphereGeometry(0.5, 24, 24);
-    } else if (primitive.shape === "cylinder") {
-      geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 20);
-    } else if (primitive.shape === "cone") {
-      geometry = new THREE.ConeGeometry(0.5, 1, 20);
-    } else if (primitive.shape === "plane") {
-      geometry = new THREE.BoxGeometry(1, 0.1, 1);
-    }
+    const resolvedPrimitiveScale = runtimePrimitive?.scale || primitive.scale || { x: 1, y: 1, z: 1 };
+    const resolvedPrimitiveMaterial = runtimePrimitive?.material_override
+      ? { ...(runtimePrimitive.material ?? primitive.material ?? {}), ...runtimePrimitive.material_override }
+      : (runtimePrimitive?.material ?? primitive.material);
     const mesh = addMesh(
-      geometry,
+      getPrimitiveGeometry(runtimePrimitive ?? primitive),
       makeMaterial(
-        runtimePrimitive?.material_override
-          ? { ...primitive.material, ...runtimePrimitive.material_override }
-          : primitive.material,
-        primitive.scale,
+        resolvedPrimitiveMaterial,
+        resolvedPrimitiveScale,
         {
           selected: isSelected("primitive", primitive.id),
         },
       ),
       runtimePrimitive?.position || primitive.position || { x: 0, y: 1, z: 0 },
       runtimePrimitive?.rotation || primitive.rotation || { x: 0, y: 0, z: 0 },
-      primitive.scale || { x: 1, y: 1, z: 1 },
+      resolvedPrimitiveScale,
       { id: primitive.id, kind: "primitive" },
     );
     applyRenderableVisibility(mesh, {
@@ -9830,10 +9911,8 @@ function updatePreviewFromSelection() {
     });
     attachEmissionLight(
       mesh,
-      runtimePrimitive?.material_override
-        ? { ...primitive.material, ...runtimePrimitive.material_override }
-        : primitive.material,
-      primitive.scale || { x: 1, y: 1, z: 1 },
+      resolvedPrimitiveMaterial,
+      resolvedPrimitiveScale,
       {
         runtimeVisible: runtimePrimitive?.visible !== false,
       },
@@ -9851,6 +9930,7 @@ function updatePreviewFromSelection() {
 
   for (const player of sceneDoc.players ?? []) {
     const runtimePlayer = runtimeTransforms.playerById.get(player.id);
+    const resolvedPlayerScale = runtimePlayer?.scale || player.scale || 1;
     const mesh = addMesh(
       new THREE.CapsuleGeometry(
         PRIVATE_PLAYER_METRICS.width / 2,
@@ -9860,20 +9940,24 @@ function updatePreviewFromSelection() {
       ),
       makeMaterial(
         { color: runtimePlayer?.occupied_by_username ? "#ff5a6f" : (player.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f"), texture_preset: "none" },
-        { x: player.scale || 1, y: player.scale || 1, z: player.scale || 1 },
+        { x: resolvedPlayerScale, y: resolvedPlayerScale, z: resolvedPlayerScale },
         {
           selected: isSelected("player", player.id),
         },
       ),
       runtimePlayer?.position || player.position || { x: 0, y: 1, z: 0 },
       runtimePlayer?.rotation || player.rotation || { x: 0, y: 0, z: 0 },
-      { x: player.scale || 1, y: player.scale || 1, z: player.scale || 1 },
+      { x: resolvedPlayerScale, y: resolvedPlayerScale, z: resolvedPlayerScale },
       { id: player.id, kind: "player" },
     );
+    applyRenderableVisibility(mesh, {
+      runtimeVisible: runtimePlayer?.visible !== false,
+    });
     mesh.userData.privateWorldPlayerId = player.id;
   }
 
-  for (const [playerId, runtimePlayer] of runtimeTransforms.playerById.entries()) {
+  for (const runtimePlayer of runtimeTransforms.players) {
+    const playerId = runtimePlayer.id;
     if ((sceneDoc.players ?? []).some((entry) => entry.id === playerId)) {
       continue;
     }
@@ -9885,7 +9969,7 @@ function updatePreviewFromSelection() {
         16,
       ),
       makeMaterial(
-        { color: runtimePlayer?.occupied_by_username ? "#ff5a6f" : "#ff8e4f", texture_preset: "none" },
+        { color: runtimePlayer?.occupied_by_username ? "#ff5a6f" : (runtimePlayer?.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f"), texture_preset: "none" },
         {
           x: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
           y: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
@@ -9901,6 +9985,9 @@ function updatePreviewFromSelection() {
       },
       { id: playerId, kind: "player" },
     );
+    applyRenderableVisibility(mesh, {
+      runtimeVisible: runtimePlayer?.visible !== false,
+    });
     mesh.userData.privateWorldPlayerId = playerId;
   }
 
@@ -9987,16 +10074,21 @@ function updatePreviewFromSelection() {
     });
   }
 
-  for (const [objectId, runtimePrimitive] of runtimeTransforms.dynamicById.entries()) {
+  for (const runtimePrimitive of runtimeTransforms.dynamicObjects) {
+    const objectId = runtimePrimitive.id;
     if ((sceneDoc.primitives ?? []).some((entry) => entry.id === objectId)) {
       continue;
     }
+    const resolvedPrimitiveScale = runtimePrimitive?.scale || { x: 1, y: 1, z: 1 };
+    const resolvedPrimitiveMaterial = runtimePrimitive?.material_override
+      ? { ...(runtimePrimitive.material ?? {}), ...runtimePrimitive.material_override }
+      : (runtimePrimitive?.material ?? { color: "#edf2f8", texture_preset: "none" });
     const mesh = addMesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      makeMaterial(runtimePrimitive?.material_override ?? { color: "#edf2f8", texture_preset: "none" }),
+      getPrimitiveGeometry(runtimePrimitive),
+      makeMaterial(resolvedPrimitiveMaterial, resolvedPrimitiveScale),
       runtimePrimitive.position || { x: 0, y: 1, z: 0 },
       runtimePrimitive.rotation || { x: 0, y: 0, z: 0 },
-      { x: 1, y: 1, z: 1 },
+      resolvedPrimitiveScale,
       { id: objectId, kind: "primitive" },
     );
     applyRenderableVisibility(mesh, {
@@ -10004,8 +10096,8 @@ function updatePreviewFromSelection() {
     });
     attachEmissionLight(
       mesh,
-      runtimePrimitive?.material_override ?? runtimePrimitive?.material ?? { color: "#edf2f8", texture_preset: "none" },
-      { x: 1, y: 1, z: 1 },
+      resolvedPrimitiveMaterial,
+      resolvedPrimitiveScale,
       {
         runtimeVisible: runtimePrimitive?.visible !== false,
       },
@@ -10099,12 +10191,23 @@ function connectWorldSocket() {
           void openWorld(world.world_id, world.creator.username, true);
         }
       } else if (payload.type === "world:runtime") {
+        const previousRuntime = state.runtimeSnapshot;
         state.runtimeSnapshot = payload.snapshot ?? null;
+        if (state.selectedWorld?.active_instance) {
+          state.selectedWorld.active_instance.runtime = payload.snapshot ?? null;
+          if (payload.snapshot?.status) {
+            state.selectedWorld.active_instance.status = payload.snapshot.status;
+          }
+        }
         if (state.selectedWorld?.active_instance && payload.snapshot?.active_scene_id) {
           state.selectedWorld.active_instance.active_scene_id = payload.snapshot.active_scene_id;
           state.selectedSceneId = payload.snapshot.active_scene_id;
         }
-        updatePreviewFromSelection();
+        renderRuntimeStatus();
+        const activeSceneChanged = String(previousRuntime?.active_scene_id ?? "") !== String(payload.snapshot?.active_scene_id ?? "");
+        if (activeSceneChanged || !syncPreviewRuntimeSnapshot(payload.snapshot)) {
+          updatePreviewFromSelection();
+        }
       } else if (payload.type === "world:error") {
         pushEvent("world:error", payload.message || "Unknown world socket error");
       } else if (payload.type === "presence:snapshot") {
