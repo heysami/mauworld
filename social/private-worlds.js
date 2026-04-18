@@ -7,7 +7,9 @@ import {
   createChatBubbleState,
   createChatBubbleRenderer,
   createChatFeature,
+  createLocalDisplayShare,
   createNearbyDisplayShareFeature,
+  launchNearbyDisplayShare,
   getBrowserShareKindLabel,
   getDisplayShareStageLayout,
   getDisplayShareStagePlaceholderText,
@@ -466,6 +468,10 @@ const elements = {
   panelChatInput: document.querySelector("[data-private-chat-input]"),
   panelChatReactions: document.querySelector(".world-chat-reactions"),
   panelChatEmpty: document.querySelector("[data-private-chat-empty]"),
+  panelVoiceToggle: document.querySelector("[data-private-voice-toggle]"),
+  panelVoiceStatus: document.querySelector("[data-private-voice-status]"),
+  panelVoiceOfferStack: document.querySelector("[data-private-voice-offer-stack]"),
+  panelVoiceRequestStack: document.querySelector("[data-private-voice-request-stack]"),
   panelRuntimeActions: document.querySelector("[data-private-runtime-actions]"),
   panelLiveSearchForm: document.querySelector("[data-private-live-search-form]"),
   panelLiveSearchInput: document.querySelector("[data-private-live-search-input]"),
@@ -475,6 +481,7 @@ const elements = {
   panelShareCopy: document.querySelector("[data-private-copy-link]"),
   panelShareNative: document.querySelector("[data-private-native-share]"),
   panelBrowserPanel: document.querySelector("[data-private-browser-panel]"),
+  panelBrowserShare: document.querySelector("[data-private-browser-panel] .world-browser-share"),
   panelBrowserDock: document.querySelector("[data-private-browser-dock]"),
   panelBrowserOverlayRoot: document.querySelector("[data-private-browser-overlay-root]"),
   panelBrowserBackdrop: document.querySelector("[data-private-browser-backdrop]"),
@@ -491,6 +498,8 @@ const elements = {
   panelBrowserFrame: document.querySelector("[data-private-browser-frame]"),
   panelBrowserPlaceholder: document.querySelector("[data-private-browser-placeholder]"),
   panelBrowserResume: document.querySelector("[data-private-browser-resume]"),
+  panelShareRequestStack: document.querySelector("[data-private-share-request-stack]"),
+  panelShareGroupSummary: document.querySelector("[data-private-share-group-summary]"),
   panelWorldMeta: document.querySelector("[data-private-panel-world-meta]"),
   panelModeBuild: document.querySelector("[data-private-panel-mode-build]"),
   panelModePlay: document.querySelector("[data-private-panel-mode-play]"),
@@ -852,12 +861,19 @@ const state = {
   activeChats: new Map(),
   browserSessions: new Map(),
   localBrowserSessionId: "",
+  localVoiceSessionId: "",
   browserMediaController: null,
   pendingBrowserShare: null,
   localBrowserShare: null,
+  pendingVoiceShare: null,
+  localVoiceShare: null,
   localBrowserPreviewStream: null,
   browserShareMode: "screen",
   browserPanelRemoteSessionId: "",
+  pendingShareJoin: null,
+  incomingShareJoinRequests: [],
+  voiceJoinOffer: null,
+  incomingVoiceJoinRequests: [],
   browserOverlayOpen: false,
   browserMediaState: createEmptyPrivateBrowserMediaState(),
   browserMediaCanvas: null,
@@ -1655,6 +1671,21 @@ function getPrivatePresenceDisplayName(entry = {}) {
   return "viewer";
 }
 
+function getPrivateDisplayNameForSessionId(viewerSessionId = "") {
+  const normalized = String(viewerSessionId ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === getPrivateViewerSessionId()) {
+    return getPrivateDisplayName();
+  }
+  const presenceEntry = state.livePresence.get(normalized);
+  if (presenceEntry) {
+    return getPrivatePresenceDisplayName(presenceEntry);
+  }
+  return "viewer";
+}
+
 function buildPrivatePresenceObject(entry) {
   const presenceId = getPrivatePresenceEntryId(entry);
   const displayName = getPrivatePresenceDisplayName(entry);
@@ -1815,14 +1846,14 @@ function getPrivateBrowserPlaceholderBadge(session = {}) {
   if (viewerCount < maxViewers) {
     return "";
   }
-  const hostPosition = getPrivateBrowserHostPosition(session.hostSessionId);
-  if (!hostPosition) {
+  const spatialCenter = getPrivateBrowserSpatialCenter(session);
+  if (!spatialCenter) {
     return "";
   }
   const listenerPosition = getPrivatePresencePosition();
   const planarDistance = Math.hypot(
-    listenerPosition.x - hostPosition.x,
-    listenerPosition.z - hostPosition.z,
+    listenerPosition.x - spatialCenter.x,
+    listenerPosition.z - spatialCenter.z,
   );
   if (planarDistance > Math.max(16, PRIVATE_BROWSER_RADIUS)) {
     return "";
@@ -1834,14 +1865,14 @@ function computePrivateRemoteBrowserAudioVolume(session) {
   if (!session || session.hostSessionId === getPrivateViewerSessionId() || session.deliveryMode !== "full") {
     return 0;
   }
-  const hostPosition = getPrivateBrowserHostPosition(session.hostSessionId);
-  if (!hostPosition) {
+  const spatialCenter = getPrivateBrowserSpatialCenter(session);
+  if (!spatialCenter) {
     return 0;
   }
   const listenerPosition = getPrivatePresencePosition();
   const planarDistance = Math.hypot(
-    listenerPosition.x - hostPosition.x,
-    listenerPosition.z - hostPosition.z,
+    listenerPosition.x - spatialCenter.x,
+    listenerPosition.z - spatialCenter.z,
   );
   const maxDistance = Math.max(16, PRIVATE_BROWSER_RADIUS);
   const fullVolumeDistance = Math.min(8, Math.max(5, maxDistance * 0.08));
@@ -2218,12 +2249,149 @@ function reconcilePrivateShareBubbles() {
   }
 }
 
+function removePrivateBrowserAnchorEntry(anchorSessionId = "") {
+  const preview = state.preview;
+  const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+  const entry = preview?.browserAnchorEntries?.get(normalizedAnchorSessionId);
+  if (!entry) {
+    return;
+  }
+  preview.browserAnchorEntries.delete(normalizedAnchorSessionId);
+  entry.group.parent?.remove(entry.group);
+  entry.group.traverse((node) => {
+    if (node.geometry) {
+      node.geometry.dispose();
+    }
+    if (Array.isArray(node.material)) {
+      node.material.forEach(disposeMaterial);
+    } else {
+      disposeMaterial(node.material);
+    }
+  });
+}
+
+function updatePrivateBrowserAnchorGeometry(entry) {
+  if (!entry?.fill || !entry?.ring) {
+    return;
+  }
+  if (Math.abs((entry.radius ?? 0) - PRIVATE_BROWSER_RADIUS) < 0.01) {
+    return;
+  }
+  entry.fill.geometry.dispose();
+  entry.fill.geometry = new THREE.CircleGeometry(PRIVATE_BROWSER_RADIUS, 96);
+  entry.ring.geometry.dispose();
+  entry.ring.geometry = new THREE.RingGeometry(Math.max(0.1, PRIVATE_BROWSER_RADIUS - 0.8), PRIVATE_BROWSER_RADIUS, 96);
+  entry.radius = PRIVATE_BROWSER_RADIUS;
+}
+
+function ensurePrivateBrowserAnchorEntry(session = {}) {
+  const preview = state.preview;
+  if (!preview?.browserAnchors) {
+    return null;
+  }
+  const anchorSessionId = String(session.sessionId ?? "").trim();
+  if (!anchorSessionId) {
+    return null;
+  }
+  const existing = preview.browserAnchorEntries.get(anchorSessionId);
+  if (existing) {
+    existing.session = session;
+    existing.hostSessionId = String(session.hostSessionId ?? existing.hostSessionId ?? "").trim();
+    updatePrivateBrowserAnchorGeometry(existing);
+    return existing;
+  }
+  const fill = new THREE.Mesh(
+    new THREE.CircleGeometry(PRIVATE_BROWSER_RADIUS, 96),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.accents[1]),
+      transparent: true,
+      opacity: 0.08,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  fill.rotation.x = -Math.PI / 2;
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(Math.max(0.1, PRIVATE_BROWSER_RADIUS - 0.8), PRIVATE_BROWSER_RADIUS, 96),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_WORLD_STYLE.accents[1]),
+      transparent: true,
+      opacity: 0.34,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  const group = new THREE.Group();
+  group.add(fill);
+  group.add(ring);
+  preview.browserAnchors.add(group);
+  const entry = {
+    session,
+    hostSessionId: String(session.hostSessionId ?? "").trim(),
+    group,
+    fill,
+    ring,
+    radius: PRIVATE_BROWSER_RADIUS,
+  };
+  preview.browserAnchorEntries.set(anchorSessionId, entry);
+  return entry;
+}
+
+function reconcilePrivateBrowserAnchors() {
+  const preview = state.preview;
+  if (!preview?.browserAnchorEntries) {
+    return;
+  }
+  const activeAnchorIds = new Set(
+    [...state.browserSessions.values()]
+      .filter((session) =>
+        isPrivateBrowserOriginSession(session)
+        && session?.movementLocked === true
+        && String(session?.sessionMode ?? "").trim() === "display-share")
+      .map((session) => String(session.sessionId ?? "").trim())
+      .filter(Boolean),
+  );
+  for (const anchorSessionId of [...preview.browserAnchorEntries.keys()]) {
+    if (!activeAnchorIds.has(anchorSessionId)) {
+      removePrivateBrowserAnchorEntry(anchorSessionId);
+    }
+  }
+  for (const session of state.browserSessions.values()) {
+    if (!activeAnchorIds.has(String(session.sessionId ?? "").trim())) {
+      continue;
+    }
+    ensurePrivateBrowserAnchorEntry(session);
+  }
+}
+
+function updatePrivateBrowserAnchors() {
+  const preview = state.preview;
+  if (!preview?.browserAnchorEntries) {
+    return;
+  }
+  reconcilePrivateBrowserAnchors();
+  for (const entry of preview.browserAnchorEntries.values()) {
+    const hostPosition = getPrivateBrowserHostPosition(entry.hostSessionId);
+    if (!hostPosition) {
+      entry.group.visible = false;
+      continue;
+    }
+    updatePrivateBrowserAnchorGeometry(entry);
+    entry.group.visible = true;
+    entry.group.position.set(hostPosition.x, hostPosition.y + 0.08, hostPosition.z);
+  }
+}
+
 function updatePrivateShareBubbles(deltaSeconds, elapsedSeconds) {
   const preview = state.preview;
   if (!preview?.camera) {
     return;
   }
   reconcilePrivateShareBubbles();
+  updatePrivateBrowserAnchors();
   const bubbleSessions = getPrivateShareBubbleSessions();
   if (bubbleSessions.length === 0) {
     return;
@@ -4175,6 +4343,9 @@ function dropLocalPrivateBrowserSession(sessionId, { unpublish = true } = {}) {
   if (state.localBrowserSessionId === normalized) {
     state.localBrowserSessionId = "";
   }
+  if (state.localVoiceSessionId === normalized) {
+    state.localVoiceSessionId = "";
+  }
   if (state.browserPanelRemoteSessionId === normalized) {
     state.browserPanelRemoteSessionId = "";
     if (!state.localBrowserShare) {
@@ -4182,6 +4353,257 @@ function dropLocalPrivateBrowserSession(sessionId, { unpublish = true } = {}) {
     }
   }
   removePrivateShareBubbleEntry(normalized);
+  return true;
+}
+
+function getLocalPrivateVoiceSession() {
+  return state.localVoiceSessionId ? state.browserSessions.get(state.localVoiceSessionId) ?? null : null;
+}
+
+function clearPendingPrivateVoiceShare({ stopTracks = false } = {}) {
+  if (!state.pendingVoiceShare) {
+    return;
+  }
+  releasePrivateBrowserShare(state.pendingVoiceShare, { stopTracks });
+  state.pendingVoiceShare = null;
+}
+
+function clearLocalPrivateVoiceShare({ stopTracks = false, sessionId = "" } = {}) {
+  const activeShare = state.localVoiceShare;
+  if (!activeShare) {
+    return;
+  }
+  if (sessionId && activeShare.sessionId && activeShare.sessionId !== sessionId) {
+    return;
+  }
+  releasePrivateBrowserShare(activeShare, { stopTracks });
+  state.localVoiceShare = null;
+}
+
+function getPrivateVoiceShareActionLabel() {
+  const localVoiceSession = getLocalPrivateVoiceSession();
+  if (state.pendingVoiceShare) {
+    return "Starting...";
+  }
+  return localVoiceSession ? "Stop Persistent Voice Chat" : "Start Persistent Voice Chat";
+}
+
+function updatePrivateVoicePanel() {
+  const localVoiceSession = getLocalPrivateVoiceSession();
+  const canToggle = Boolean(state.session && isPrivateWorldReadyForShare());
+  if (elements.panelVoiceToggle) {
+    elements.panelVoiceToggle.disabled = !canToggle && !localVoiceSession && !state.pendingVoiceShare;
+    elements.panelVoiceToggle.textContent = getPrivateVoiceShareActionLabel();
+  }
+  if (elements.panelVoiceStatus) {
+    if (!state.session) {
+      elements.panelVoiceStatus.textContent = "Sign in to keep a nearby voice channel open.";
+    } else if (!state.selectedWorld) {
+      elements.panelVoiceStatus.textContent = "Open a private world to use persistent voice chat.";
+    } else if (!getLocalParticipant()) {
+      elements.panelVoiceStatus.textContent = "Enter this private world to use persistent voice chat.";
+    } else if (state.pendingVoiceShare) {
+      elements.panelVoiceStatus.textContent = "Starting persistent voice chat...";
+    } else if (localVoiceSession) {
+      elements.panelVoiceStatus.textContent = isPrivateJoinedPersistentVoiceSession(localVoiceSession)
+        ? "Persistent voice chat is joined to the nearby live group."
+        : "Persistent voice chat is live nearby.";
+    } else {
+      elements.panelVoiceStatus.textContent = "Keep your mic nearby without showing up in What's Live.";
+    }
+  }
+}
+
+function renderPrivateShareJoinRequests() {
+  if (!elements.panelShareRequestStack) {
+    return;
+  }
+  if (state.incomingShareJoinRequests.length === 0) {
+    elements.panelShareRequestStack.innerHTML = "";
+    elements.panelShareRequestStack.hidden = true;
+    return;
+  }
+  elements.panelShareRequestStack.hidden = false;
+  elements.panelShareRequestStack.innerHTML = state.incomingShareJoinRequests.map((request) => `
+    <div class="world-request-card">
+      <div class="world-request-card__title">${htmlEscape(request.requesterDisplayName || "Nearby visitor")}</div>
+      <div class="world-request-card__body">Wants to join with ${htmlEscape(getBrowserShareKindLabel(request.shareKind || "screen").toLowerCase())}.</div>
+      <div class="world-request-card__actions">
+        <button type="button" data-private-share-join-decision="approve" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Approve</button>
+        <button type="button" data-private-share-join-decision="decline" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Decline</button>
+      </div>
+    </div>
+  `).join("");
+  for (const button of elements.panelShareRequestStack.querySelectorAll("[data-private-share-join-decision]")) {
+    button.addEventListener("click", () => {
+      const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
+      const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
+      const approved = button.getAttribute("data-private-share-join-decision") === "approve";
+      state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) =>
+        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+      updatePrivateBrowserPanel();
+      sendWorldSocketMessage({
+        type: "share:join-decision",
+        anchorSessionId,
+        requesterSessionId,
+        approved,
+      });
+    });
+  }
+}
+
+function renderPrivateVoiceJoinOffers() {
+  if (!elements.panelVoiceOfferStack) {
+    return;
+  }
+  const offer = state.voiceJoinOffer;
+  if (!offer?.anchorSessionId) {
+    elements.panelVoiceOfferStack.innerHTML = "";
+    elements.panelVoiceOfferStack.hidden = true;
+    return;
+  }
+  const title = offer.anchorSession?.title
+    ? `"${offer.anchorSession.title}"`
+    : "this nearby live share";
+  elements.panelVoiceOfferStack.hidden = false;
+  elements.panelVoiceOfferStack.innerHTML = `
+    <div class="world-request-card">
+      <div class="world-request-card__title">Join Nearby Voice Group?</div>
+      <div class="world-request-card__body">Your persistent voice can join ${htmlEscape(title)} after approval.</div>
+      <div class="world-request-card__actions">
+        <button type="button" data-private-voice-offer-decision="accept">Join</button>
+        <button type="button" data-private-voice-offer-decision="decline">Stay Nearby</button>
+      </div>
+    </div>
+  `;
+  for (const button of elements.panelVoiceOfferStack.querySelectorAll("[data-private-voice-offer-decision]")) {
+    button.addEventListener("click", () => {
+      const accepted = button.getAttribute("data-private-voice-offer-decision") === "accept";
+      sendWorldSocketMessage({
+        type: "voice:join-offer-response",
+        anchorSessionId: offer.anchorSessionId,
+        accepted,
+      });
+      if (!accepted) {
+        state.voiceJoinOffer = null;
+        updatePrivateVoicePanel();
+        renderPrivateVoiceJoinOffers();
+      }
+    });
+  }
+}
+
+function renderPrivateVoiceJoinRequests() {
+  if (!elements.panelVoiceRequestStack) {
+    return;
+  }
+  if (state.incomingVoiceJoinRequests.length === 0) {
+    elements.panelVoiceRequestStack.innerHTML = "";
+    elements.panelVoiceRequestStack.hidden = true;
+    return;
+  }
+  elements.panelVoiceRequestStack.hidden = false;
+  elements.panelVoiceRequestStack.innerHTML = state.incomingVoiceJoinRequests.map((request) => `
+    <div class="world-request-card">
+      <div class="world-request-card__title">${htmlEscape(request.requesterDisplayName || "Nearby visitor")}</div>
+      <div class="world-request-card__body">Wants their persistent voice chat heard in your live group.</div>
+      <div class="world-request-card__actions">
+        <button type="button" data-private-voice-join-decision="approve" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Approve</button>
+        <button type="button" data-private-voice-join-decision="decline" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Decline</button>
+      </div>
+    </div>
+  `).join("");
+  for (const button of elements.panelVoiceRequestStack.querySelectorAll("[data-private-voice-join-decision]")) {
+    button.addEventListener("click", () => {
+      const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
+      const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
+      const approved = button.getAttribute("data-private-voice-join-decision") === "approve";
+      state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
+        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+      renderPrivateVoiceJoinRequests();
+      sendWorldSocketMessage({
+        type: "voice:join-decision",
+        anchorSessionId,
+        requesterSessionId,
+        approved,
+      });
+    });
+  }
+}
+
+function renderPrivateShareGroupSummary() {
+  if (!elements.panelShareGroupSummary) {
+    return;
+  }
+  const localSession = getLocalPrivateBrowserSession();
+  const anchorSession = getPrivateShareJoinTarget();
+  if (!anchorSession) {
+    elements.panelShareGroupSummary.innerHTML = "";
+    elements.panelShareGroupSummary.hidden = true;
+    return;
+  }
+  const memberNames = getPrivateShareGroupSessions(anchorSession.sessionId)
+    .filter((session) => isPrivateBrowserMemberSession(session))
+    .map((session) => getPrivateDisplayNameForSessionId(session.hostSessionId) || session.hostSessionId)
+    .filter(Boolean);
+  const hostName = getPrivateDisplayNameForSessionId(anchorSession.hostSessionId) || "Nearby host";
+  const viewerCount = Math.min(getPrivateBrowserSessionViewerCount(anchorSession), getPrivateBrowserSessionMaxViewers(anchorSession));
+  const maxViewers = getPrivateBrowserSessionMaxViewers(anchorSession);
+  const pendingState = state.pendingShareJoin?.anchorSessionId === anchorSession.sessionId
+    ? (state.pendingShareJoin.approved ? "Approved. Choose what to share." : "Waiting for approval.")
+    : "";
+  const summaryCopy = localSession
+    ? isPrivateBrowserOriginSession(localSession)
+      ? "You are the anchor for this nearby share group. Movement stays locked while it is live."
+      : "You are contributing inside this nearby share group. Leaving the circle will stop your share."
+    : `Join ${hostName}'s nearby share group without creating another live row.`;
+  elements.panelShareGroupSummary.hidden = false;
+  elements.panelShareGroupSummary.innerHTML = `
+    <div class="world-group-summary__title">${htmlEscape(getPrivateBrowserSessionTitle(anchorSession))}</div>
+    <div class="world-group-summary__meta">
+      <span>${htmlEscape(hostName)}</span>
+      <span>${viewerCount}/${maxViewers} viewers</span>
+      <span>${memberNames.length} contributor${memberNames.length === 1 ? "" : "s"}</span>
+    </div>
+    <div class="world-group-summary__body">${htmlEscape(summaryCopy)}</div>
+    ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
+    ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
+  `;
+}
+
+async function handlePrivateNearbyShareLaunch({ defaultLaunch, getLocalSession, getSelectedMode }) {
+  const localSession = getLocalSession();
+  if (localSession) {
+    return defaultLaunch();
+  }
+  const joinTarget = getPrivateShareJoinTarget();
+  const approvedJoin = state.pendingShareJoin?.approved === true ? state.pendingShareJoin : null;
+  if (!joinTarget || (approvedJoin && approvedJoin.anchorSessionId === joinTarget.sessionId)) {
+    return defaultLaunch();
+  }
+  if (!isPrivateWorldReadyForShare()) {
+    updatePrivateBrowserPanel();
+    return true;
+  }
+  const shareKind = normalizeBrowserShareKind(getSelectedMode?.(), state.browserShareMode);
+  state.pendingShareJoin = {
+    anchorSessionId: joinTarget.sessionId,
+    anchorHostSessionId: joinTarget.hostSessionId,
+    shareKind,
+    approved: false,
+  };
+  const sent = sendWorldSocketMessage({
+    type: "share:join-request",
+    anchorSessionId: joinTarget.sessionId,
+    shareKind,
+  });
+  if (!sent) {
+    state.pendingShareJoin = null;
+    updatePrivateBrowserPanel();
+    return true;
+  }
+  updatePrivateBrowserPanel();
+  setPrivateBrowserStatus(`Asked ${getPrivateDisplayNameForSessionId(joinTarget.hostSessionId) || "the nearby host"} to join.`);
   return true;
 }
 
@@ -4197,6 +4619,7 @@ const privateBrowserShareFeature = createNearbyDisplayShareFeature({
   onModeChanged() {
     updatePrivateBrowserPanel();
   },
+  handleLaunch: handlePrivateNearbyShareLaunch,
   getTitleInputValue: () => elements.panelBrowserShareTitle?.value ?? "",
   getSessionShareKind: getPrivateBrowserSessionShareKind,
   getPendingShare: () => state.pendingBrowserShare,
@@ -4264,15 +4687,21 @@ function startLocalPrivateNearbyShare(share) {
   state.pendingBrowserShare = share;
   setLocalPrivateBrowserPreviewStream(share.hasVideo ? share.stream : null);
   setPrivateBrowserStatus("Starting nearby share...");
+  const existingLocalSession = getLocalPrivateBrowserSession();
+  const approvedJoin = state.pendingShareJoin?.approved === true ? state.pendingShareJoin : null;
+  const anchorSessionId = approvedJoin?.anchorSessionId
+    || (isPrivateBrowserMemberSession(existingLocalSession) ? getPrivateBrowserAnchorSessionId(existingLocalSession) : "");
+  const memberShare = Boolean(anchorSessionId);
   const sent = sendWorldSocketMessage({
     type: "browser:start",
     mode: "display-share",
-    title: share.title,
+    title: memberShare ? "" : share.title,
     shareKind: share.shareKind,
     hasVideo: share.hasVideo,
     hasAudio: share.hasAudio,
     aspectRatio: share.aspectRatio,
     displaySurface: share.displaySurface,
+    anchorSessionId,
   });
   if (!sent) {
     clearPendingPrivateBrowserShare({ stopTracks: true });
@@ -4438,6 +4867,124 @@ function attachLocalPrivateBrowserShare(sessionId, share) {
   });
 }
 
+function attachLocalPrivateVoiceShare(sessionId, share) {
+  if (!share || !sessionId || !getPrivateBrowserWorldKey()) {
+    return;
+  }
+  clearLocalPrivateVoiceShare({ stopTracks: true });
+  state.localVoiceShare = {
+    ...share,
+    sessionId,
+  };
+  void getPrivateBrowserMediaController().publishStream({
+    sessionId,
+    stream: share.stream,
+    viewerSessionId: getPrivateViewerSessionId(),
+    worldSnapshotId: getPrivateBrowserWorldKey(),
+  }).then((published) => {
+    if (!published) {
+      clearLocalPrivateVoiceShare({ stopTracks: true, sessionId });
+      dropLocalPrivateBrowserSession(sessionId);
+      sendWorldSocketMessage({
+        type: "voice:stop",
+        sessionId,
+      });
+      updatePrivateVoicePanel();
+    }
+  }).catch(() => {
+    clearLocalPrivateVoiceShare({ stopTracks: true, sessionId });
+    dropLocalPrivateBrowserSession(sessionId);
+    sendWorldSocketMessage({
+      type: "voice:stop",
+      sessionId,
+    });
+    updatePrivateVoicePanel();
+  });
+}
+
+async function startPrivatePersistentVoiceChat() {
+  if (!isPrivateWorldReadyForShare()) {
+    updatePrivateBrowserPanel();
+    return false;
+  }
+  clearPendingPrivateVoiceShare({ stopTracks: true });
+  const started = await launchNearbyDisplayShare({
+    shareKind: "audio",
+    getRequestedTitle: () => "",
+    createShare: (stream, shareOptions = {}) => createLocalDisplayShare(stream, {
+      ...shareOptions,
+      title: "",
+      shareKind: "audio",
+      hasVideo: false,
+      hasAudio: true,
+      aspectRatio: 1.2,
+      fallbackWidth: 540,
+      fallbackHeight: 432,
+      isPendingShare: (candidate) => state.pendingVoiceShare?.stream === candidate.stream,
+      isLocalShare: (candidate) => state.localVoiceShare?.stream === candidate.stream,
+      onEndedWhilePending() {
+        clearPendingPrivateVoiceShare({ stopTracks: false });
+        updatePrivateVoicePanel();
+      },
+      onEndedWhileLive() {
+        const sessionId = String(state.localVoiceShare?.sessionId ?? state.localVoiceSessionId ?? "").trim();
+        clearLocalPrivateVoiceShare({ stopTracks: false, sessionId });
+        dropLocalPrivateBrowserSession(sessionId);
+        if (sessionId) {
+          sendWorldSocketMessage({
+            type: "voice:stop",
+            sessionId,
+          });
+        }
+        updatePrivateVoicePanel();
+      },
+    }),
+    startShare(share) {
+      state.pendingVoiceShare = share;
+      const sent = sendWorldSocketMessage({
+        type: "voice:start",
+      });
+      if (!sent) {
+        clearPendingPrivateVoiceShare({ stopTracks: true });
+        updatePrivateVoicePanel();
+        return false;
+      }
+      updatePrivateVoicePanel();
+      return true;
+    },
+    onUnsupported(message) {
+      setPrivateBrowserStatus(message);
+    },
+    onError(message, error) {
+      setPrivateBrowserStatus(error?.message || message);
+    },
+    unsupportedMessages: {
+      audio: "This browser does not support voice sharing.",
+    },
+    failureMessages: {
+      audio: "Could not start voice sharing.",
+    },
+  });
+  updatePrivateVoicePanel();
+  return started;
+}
+
+function stopPrivatePersistentVoiceChat() {
+  const localVoiceSession = getLocalPrivateVoiceSession();
+  if (localVoiceSession) {
+    return sendWorldSocketMessage({
+      type: "voice:stop",
+      sessionId: localVoiceSession.sessionId,
+    });
+  }
+  if (state.pendingVoiceShare) {
+    clearPendingPrivateVoiceShare({ stopTracks: true });
+    updatePrivateVoicePanel();
+    return true;
+  }
+  return false;
+}
+
 function updatePrivateBrowserSessionState(sessionPatch = {}) {
   const sessionId = String(sessionPatch.sessionId ?? "").trim();
   if (!sessionId) {
@@ -4460,7 +5007,11 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
   }
 
   if (next.hostSessionId === getPrivateViewerSessionId()) {
-    state.localBrowserSessionId = next.sessionId;
+    if (isPrivatePersistentVoiceSession(next)) {
+      state.localVoiceSessionId = next.sessionId;
+    } else {
+      state.localBrowserSessionId = next.sessionId;
+    }
     if (isLiveKitBrowserTransport(next.frameTransport) && getPrivateBrowserWorldKey()) {
       void getPrivateBrowserMediaController().connect({
         viewerSessionId: getPrivateViewerSessionId(),
@@ -4468,14 +5019,22 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
         canPublish: true,
       });
     }
-    if (next.sessionMode === "display-share" && state.pendingBrowserShare?.stream) {
+    if (isPrivatePersistentVoiceSession(next) && state.pendingVoiceShare?.stream) {
+      const pendingVoiceShare = state.pendingVoiceShare;
+      state.pendingVoiceShare = null;
+      attachLocalPrivateVoiceShare(next.sessionId, pendingVoiceShare);
+    } else if (next.sessionMode === "display-share" && state.pendingBrowserShare?.stream) {
       const pendingShare = state.pendingBrowserShare;
       state.pendingBrowserShare = null;
       attachLocalPrivateBrowserShare(next.sessionId, pendingShare);
     }
+    if (isPrivateBrowserMemberSession(next)) {
+      state.pendingShareJoin = null;
+    }
   }
 
   reconcilePrivateShareBubbles();
+  reconcilePrivateBrowserAnchors();
   if (
     next.hostSessionId === getPrivateViewerSessionId()
     && state.localBrowserShare?.sessionId === next.sessionId
@@ -4523,12 +5082,24 @@ function handlePrivateBrowserStop(payload = {}) {
   if (!sessionId) {
     return;
   }
-  if (hostSessionId && hostSessionId === getPrivateViewerSessionId()) {
+  if (hostSessionId && hostSessionId === getPrivateViewerSessionId() && sessionId === state.localVoiceSessionId) {
+    clearPendingPrivateVoiceShare();
+  } else if (hostSessionId && hostSessionId === getPrivateViewerSessionId()) {
     clearPendingPrivateBrowserShare();
   }
   clearLocalPrivateBrowserShare({ sessionId });
+  clearLocalPrivateVoiceShare({ sessionId });
   dropLocalPrivateBrowserSession(sessionId);
+  if (state.pendingShareJoin?.anchorSessionId === sessionId) {
+    state.pendingShareJoin = null;
+  }
+  if (state.voiceJoinOffer?.anchorSessionId === sessionId) {
+    state.voiceJoinOffer = null;
+  }
+  state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) => request.anchorSessionId !== sessionId);
+  state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) => request.anchorSessionId !== sessionId);
   reconcilePrivateShareBubbles();
+  reconcilePrivateBrowserAnchors();
   updatePrivateBrowserPanel();
   renderPrivateLiveSharesList();
 }
@@ -4539,12 +5110,19 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
   }
   clearPendingPrivateBrowserShare({ stopTracks });
   clearLocalPrivateBrowserShare({ stopTracks });
+  clearPendingPrivateVoiceShare({ stopTracks });
+  clearLocalPrivateVoiceShare({ stopTracks });
   for (const sessionId of state.browserSessions.keys()) {
     state.browserMediaController?.removeSession?.(sessionId);
   }
   state.browserSessions = new Map();
   state.localBrowserSessionId = "";
+  state.localVoiceSessionId = "";
   state.browserPanelRemoteSessionId = "";
+  state.pendingShareJoin = null;
+  state.incomingShareJoinRequests = [];
+  state.voiceJoinOffer = null;
+  state.incomingVoiceJoinRequests = [];
   state.browserMediaState = createEmptyPrivateBrowserMediaState();
   setLocalPrivateBrowserPreviewStream(null);
   if (elements.panelBrowserFrame) {
@@ -4556,6 +5134,7 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
     state.browserMediaController = null;
   }
   reconcilePrivateShareBubbles();
+  reconcilePrivateBrowserAnchors();
   updatePrivateBrowserPanel();
   renderPrivateLiveSharesList();
 }
@@ -4572,9 +5151,24 @@ function updatePrivateBrowserPanel() {
       });
     }
   }
+  if (state.localVoiceShare && !isLocalDisplayShareActive(state.localVoiceShare)) {
+    const endedVoiceSessionId = String(state.localVoiceShare.sessionId ?? state.localVoiceSessionId ?? "").trim();
+    clearLocalPrivateVoiceShare({ stopTracks: false, sessionId: endedVoiceSessionId });
+    dropLocalPrivateBrowserSession(endedVoiceSessionId);
+    if (endedVoiceSessionId) {
+      sendWorldSocketMessage({
+        type: "voice:stop",
+        sessionId: endedVoiceSessionId,
+      });
+    }
+  }
   const world = state.selectedWorld;
   const localParticipant = getLocalParticipant();
   const localSession = getLocalPrivateBrowserSession();
+  const localVoiceSession = getLocalPrivateVoiceSession();
+  const joinTarget = getPrivateShareJoinTarget();
+  const joinMode = Boolean(!localSession && joinTarget);
+  const titleLocked = joinMode || isPrivateBrowserMemberSession(localSession);
   const draft = privateBrowserShareFeature.getDraft(localSession);
   if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
     state.browserPanelRemoteSessionId = "";
@@ -4587,7 +5181,10 @@ function updatePrivateBrowserPanel() {
     : localSession
       ? null
       : [...state.browserSessions.values()].find(
-        (session) => session.hostSessionId !== getPrivateViewerSessionId() && session.deliveryMode === "full",
+        (session) =>
+          session.hostSessionId !== getPrivateViewerSessionId()
+          && session.deliveryMode === "full"
+          && !isPrivatePersistentVoiceSession(session),
       ) ?? null;
   const canShare = Boolean(state.session && world && localParticipant && mediaAvailable && socketReady && authStable);
   const previewStream = state.pendingBrowserShare?.hasVideo
@@ -4634,8 +5231,17 @@ function updatePrivateBrowserPanel() {
     elements.panelBrowserStage.setAttribute("aria-hidden", stageLayout.collapseDockedStage ? "true" : "false");
   }
   if (elements.panelBrowserShareTitle) {
-    elements.panelBrowserShareTitle.disabled = !canShare;
+    elements.panelBrowserShareTitle.disabled = !canShare || titleLocked;
+    if (titleLocked && document.activeElement !== elements.panelBrowserShareTitle) {
+      elements.panelBrowserShareTitle.value = "";
+    }
   }
+  elements.panelBrowserShare?.classList.toggle("is-join-mode", titleLocked);
+  renderPrivateShareJoinRequests();
+  renderPrivateShareGroupSummary();
+  updatePrivateVoicePanel();
+  renderPrivateVoiceJoinOffers();
+  renderPrivateVoiceJoinRequests();
   const launchState = getDisplayShareLaunchState({
     canShare,
     pending: Boolean(state.pendingBrowserShare),
@@ -4648,6 +5254,17 @@ function updatePrivateBrowserPanel() {
     launchState,
     showStop: Boolean(localSession),
   });
+  if (!localSession && joinMode && elements.panelBrowserLaunch) {
+    const joinStateMatches = state.pendingShareJoin?.anchorSessionId === joinTarget?.sessionId;
+    const waitingForApproval = joinStateMatches && state.pendingShareJoin.approved !== true;
+    const joinApproved = joinStateMatches && state.pendingShareJoin.approved === true;
+    elements.panelBrowserLaunch.textContent = waitingForApproval
+      ? "Waiting..."
+      : joinApproved
+        ? `Start ${getBrowserShareKindLabel(state.browserShareMode)}`
+        : `Request ${getBrowserShareKindLabel(state.browserShareMode)}`;
+    elements.panelBrowserLaunch.disabled = !canShare || waitingForApproval || Boolean(state.pendingBrowserShare);
+  }
   syncDisplayShareExpandButton(elements.panelBrowserExpand, state.browserOverlayOpen);
 
   if (!world) {
@@ -4667,6 +5284,15 @@ function updatePrivateBrowserPanel() {
       hint: state.pendingBrowserShare.title
         ? `"${state.pendingBrowserShare.title}" will go live after the permission prompt finishes.`
         : "Finish the permission prompt to go live.",
+    });
+  } else if (state.pendingShareJoin?.anchorSessionId && state.pendingShareJoin.approved !== true) {
+    const hostName = getPrivateDisplayNameForSessionId(state.pendingShareJoin.anchorHostSessionId) || "nearby host";
+    setPrivateBrowserStatus(`Waiting for ${hostName} to approve your nearby share request...`);
+    updatePrivateBrowserSummary({
+      state: "starting",
+      badge: "Waiting",
+      current: `Requested ${getBrowserShareKindLabel(state.pendingShareJoin.shareKind || state.browserShareMode)}`,
+      hint: "Once approved, you can choose your screen, video, or voice and it will stay attached to this anchor group.",
     });
   } else if (remoteSession) {
     const shareKind = getBrowserShareKindLabel(remoteSession.shareKind || "screen");
@@ -4693,6 +5319,15 @@ function updatePrivateBrowserPanel() {
       current: "Sign in to go live",
       hint: "Signed-in participants can share screen, video, or voice.",
     });
+  } else if (!localSession && localParticipant && joinTarget) {
+    const hostName = getPrivateDisplayNameForSessionId(joinTarget.hostSessionId) || "Nearby host";
+    setPrivateBrowserStatus(`Join ${hostName}'s nearby share group after approval.`);
+    updatePrivateBrowserSummary({
+      state: "draft",
+      badge: "Join",
+      current: getPrivateBrowserSessionTitle(joinTarget),
+      hint: "Choose Screen, Video, or Voice to request access. Contributor shares stay above your own character and stay out of What's Live.",
+    });
   } else if (!localParticipant) {
     setPrivateBrowserStatus("Enter this world to start a live share.");
     updatePrivateBrowserSummary({
@@ -4700,6 +5335,21 @@ function updatePrivateBrowserPanel() {
       badge: "Idle",
       current: "Enter to share",
       hint: "Join this private world first.",
+    });
+  } else if (isPrivateBrowserMemberSession(localSession)) {
+    const anchorSession = resolvePrivateOriginSession(localSession);
+    const anchorHostName = getPrivateDisplayNameForSessionId(anchorSession?.hostSessionId) || "nearby host";
+    const shareKind = getBrowserShareKindLabel(getPrivateBrowserSessionShareKind(localSession));
+    setPrivateBrowserStatus(
+      state.localBrowserShare?.sessionId === localSession.sessionId
+        ? `Sharing ${shareKind.toLowerCase()} inside ${anchorHostName}'s nearby group.`
+        : `Allow ${shareKind.toLowerCase()} access to contribute inside ${anchorHostName}'s nearby group.`,
+    );
+    updatePrivateBrowserSummary({
+      state: "live",
+      badge: "Group",
+      current: `${shareKind} contributor`,
+      hint: "You can move while sharing, but leaving the anchor circle stops this contributor share.",
     });
   } else if (localSession?.sessionMode === "display-share") {
     const presentation = getLocalDisplaySharePresentation({
@@ -4710,6 +5360,9 @@ function updatePrivateBrowserPanel() {
       screenPrompt: "Share a tab or window to start the live stream.",
     });
     if (presentation) {
+      if (localSession.movementLocked === true) {
+        presentation.hint = `${presentation.hint} Movement stays locked while this anchor share is live.`;
+      }
       if (!authStable || !socketReady) {
         presentation.hint = "This private world is reconnecting, but your live share is still on.";
       } else if (!mediaAvailable) {
@@ -4808,6 +5461,9 @@ function updatePrivateBrowserPanel() {
   if (elements.panelBrowserResume) {
     elements.panelBrowserResume.hidden = !stageLayout.needsPermissionAction;
     elements.panelBrowserResume.textContent = needsPlaybackStart ? "Start Stream" : "Enable Sound";
+  }
+  if (!localVoiceSession && !state.pendingVoiceShare) {
+    state.voiceJoinOffer = state.voiceJoinOffer?.anchorSessionId ? state.voiceJoinOffer : null;
   }
 }
 
@@ -7109,9 +7765,142 @@ function getPrivateBrowserSessionMaxViewers(session = {}) {
   return 20;
 }
 
+function getPrivateBrowserSessionRole(session = {}) {
+  const explicitRole = String(session?.groupRole ?? "").trim().toLowerCase();
+  if (explicitRole === "origin" || explicitRole === "member" || explicitRole === "persistent-voice") {
+    return explicitRole;
+  }
+  if (String(session?.sessionSlot ?? "").trim().toLowerCase() === "persistent-voice") {
+    return "persistent-voice";
+  }
+  if (String(session?.sessionMode ?? "").trim().toLowerCase() === "display-share") {
+    return "origin";
+  }
+  return "";
+}
+
+function isPrivateBrowserOriginSession(session = {}) {
+  return getPrivateBrowserSessionRole(session) === "origin";
+}
+
+function isPrivateBrowserMemberSession(session = {}) {
+  return getPrivateBrowserSessionRole(session) === "member";
+}
+
+function isPrivatePersistentVoiceSession(session = {}) {
+  return getPrivateBrowserSessionRole(session) === "persistent-voice";
+}
+
+function getPrivateBrowserAnchorSessionId(session = {}) {
+  if (isPrivateBrowserOriginSession(session)) {
+    return String(session?.sessionId ?? "").trim();
+  }
+  return String(session?.anchorSessionId ?? "").trim();
+}
+
+function getPrivateBrowserAnchorHostSessionId(session = {}) {
+  if (isPrivateBrowserOriginSession(session)) {
+    return String(session?.hostSessionId ?? "").trim();
+  }
+  return String(session?.anchorHostSessionId ?? "").trim();
+}
+
+function isPrivateJoinedPersistentVoiceSession(session = {}) {
+  return isPrivatePersistentVoiceSession(session)
+    && session?.groupJoined === true
+    && Boolean(getPrivateBrowserAnchorSessionId(session));
+}
+
+function resolvePrivateOriginSession(session = {}) {
+  const anchorSessionId = getPrivateBrowserAnchorSessionId(session);
+  if (!anchorSessionId) {
+    return null;
+  }
+  if (String(session?.sessionId ?? "").trim() === anchorSessionId && isPrivateBrowserOriginSession(session)) {
+    return session;
+  }
+  return state.browserSessions.get(anchorSessionId) ?? null;
+}
+
+function isPrivateListedLiveSession(session = {}) {
+  return String(session?.sessionMode ?? "").trim() === "display-share"
+    && isPrivateBrowserOriginSession(session)
+    && !isPrivatePersistentVoiceSession(session)
+    && session?.listedLive !== false;
+}
+
+function getPrivateBrowserSpatialCenter(session = {}) {
+  const anchorHostSessionId =
+    isPrivateBrowserMemberSession(session) || isPrivateJoinedPersistentVoiceSession(session)
+      ? getPrivateBrowserAnchorHostSessionId(session)
+      : "";
+  const hostSessionId = anchorHostSessionId || String(session?.hostSessionId ?? "").trim();
+  return getPrivateBrowserHostPosition(hostSessionId);
+}
+
+function getNearbyPrivateOriginSession(excludeHostSessionId = getPrivateViewerSessionId()) {
+  const viewerPosition = getPrivatePresencePosition();
+  let bestSession = null;
+  let bestDistanceSquared = Infinity;
+  for (const session of state.browserSessions.values()) {
+    if (!isPrivateListedLiveSession(session)) {
+      continue;
+    }
+    if (excludeHostSessionId && String(session.hostSessionId ?? "").trim() === String(excludeHostSessionId ?? "").trim()) {
+      continue;
+    }
+    const hostPosition = getPrivateBrowserHostPosition(session.hostSessionId);
+    if (!hostPosition) {
+      continue;
+    }
+    const dx = viewerPosition.x - hostPosition.x;
+    const dz = viewerPosition.z - hostPosition.z;
+    const distanceSquared = dx * dx + dz * dz;
+    if (distanceSquared > PRIVATE_BROWSER_RADIUS * PRIVATE_BROWSER_RADIUS || distanceSquared >= bestDistanceSquared) {
+      continue;
+    }
+    bestSession = session;
+    bestDistanceSquared = distanceSquared;
+  }
+  return bestSession;
+}
+
+function getPrivateShareGroupSessions(anchorSessionId = "") {
+  const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+  if (!normalizedAnchorSessionId) {
+    return [];
+  }
+  return [...state.browserSessions.values()]
+    .filter((session) =>
+      (isPrivateBrowserOriginSession(session) && String(session.sessionId ?? "").trim() === normalizedAnchorSessionId)
+      || getPrivateBrowserAnchorSessionId(session) === normalizedAnchorSessionId)
+    .sort((left, right) =>
+      Number(isPrivateBrowserOriginSession(right)) - Number(isPrivateBrowserOriginSession(left))
+      || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
+      || String(left.hostSessionId ?? "").localeCompare(String(right.hostSessionId ?? "")));
+}
+
+function getPrivateShareJoinTarget() {
+  const localSession = getLocalPrivateBrowserSession();
+  if (localSession) {
+    return resolvePrivateOriginSession(localSession);
+  }
+  const pendingAnchorSessionId = String(state.pendingShareJoin?.anchorSessionId ?? "").trim();
+  if (pendingAnchorSessionId) {
+    return state.browserSessions.get(pendingAnchorSessionId) ?? null;
+  }
+  return getNearbyPrivateOriginSession();
+}
+
+function isPrivateOriginShareLocked() {
+  const localSession = getLocalPrivateBrowserSession();
+  return Boolean(localSession && isPrivateBrowserOriginSession(localSession) && localSession.movementLocked === true);
+}
+
 function getPrivateLiveShareSessions(query = "") {
   const normalizedQuery = String(query ?? "").trim().toLowerCase();
   return [...state.browserSessions.values()]
+    .filter((session) => isPrivateListedLiveSession(session))
     .filter((session) => {
       if (!normalizedQuery) {
         return true;
@@ -7170,6 +7959,7 @@ function renderPrivateLiveSharesList() {
     const shareKindLabel = getBrowserShareKindLabel(session.shareKind || "screen");
     const viewerCount = Math.min(getPrivateBrowserSessionViewerCount(session), getPrivateBrowserSessionMaxViewers(session));
     const maxViewers = getPrivateBrowserSessionMaxViewers(session);
+    const contributorCount = Math.max(0, getPrivateShareGroupSessions(session.sessionId).filter((entry) => isPrivateBrowserMemberSession(entry)).length);
     const isOwn = session.hostSessionId === getPrivateViewerSessionId();
     const isActive =
       session.sessionId === state.browserPanelRemoteSessionId
@@ -7187,6 +7977,7 @@ function renderPrivateLiveSharesList() {
         <div class="world-live-result__meta">
           <span class="world-live-result__badge">${htmlEscape(shareKindLabel)}</span>
           <span>${isOwn ? "You are sharing this now." : "Someone here is sharing now."}</span>
+          ${contributorCount > 0 ? `<span>${contributorCount} contributor${contributorCount === 1 ? "" : "s"}</span>` : ""}
         </div>
       </button>
     `;
@@ -9476,6 +10267,10 @@ function updatePrivateMovement(preview, deltaSeconds) {
     return;
   }
 
+  if (isPrivateOriginShareLocked()) {
+    return;
+  }
+
   const previousPosition = state.viewerPosition.clone();
   const { forward, right } = getPrivateCameraMovementBasis(preview);
   const velocity = new THREE.Vector3();
@@ -9933,6 +10728,7 @@ function ensurePreview() {
     actors: new THREE.Group(),
     presence: new THREE.Group(),
     chatBubbleGhosts: new THREE.Group(),
+    browserAnchors: new THREE.Group(),
     browserShares: new THREE.Group(),
     trails: new THREE.Group(),
     raycaster: new THREE.Raycaster(),
@@ -9943,6 +10739,7 @@ function ensurePreview() {
     animatedChatBubbleGhosts: [],
     trailPuffs: [],
     presenceEntries: new Map(),
+    browserAnchorEntries: new Map(),
     browserShareEntries: new Map(),
     lastFrameAt: performance.now(),
     viewportWidth: Math.round(initialWidth),
@@ -9955,6 +10752,7 @@ function ensurePreview() {
   state.preview.scene.add(state.preview.buildOverlay);
   state.preview.scene.add(state.preview.actors);
   state.preview.scene.add(state.preview.presence);
+  state.preview.scene.add(state.preview.browserAnchors);
   state.preview.scene.add(state.preview.browserShares);
   state.preview.scene.add(state.preview.trails);
   state.preview.scene.add(state.preview.chatBubbleGhosts);
@@ -11363,6 +12161,52 @@ function connectWorldSocket() {
         pushEvent("chat:error", payload.message || "Could not send chat");
       } else if (payload.type === "browser:session") {
         updatePrivateBrowserSessionState(payload.session ?? {});
+      } else if (payload.type === "share:join-required") {
+        clearPendingPrivateBrowserShare({ stopTracks: true });
+        state.pendingShareJoin = {
+          anchorSessionId: String(payload.anchorSessionId ?? payload.anchorSession?.sessionId ?? "").trim(),
+          anchorHostSessionId: String(payload.anchorHostSessionId ?? payload.anchorSession?.hostSessionId ?? "").trim(),
+          shareKind: normalizeBrowserShareKind(payload.shareKind, state.browserShareMode),
+          approved: false,
+        };
+        updatePrivateBrowserPanel();
+      } else if (payload.type === "share:join-request") {
+        const requestKey = `${String(payload.anchorSessionId ?? "").trim()}:${String(payload.requesterSessionId ?? "").trim()}`;
+        state.incomingShareJoinRequests = [
+          ...state.incomingShareJoinRequests.filter((request) =>
+            `${request.anchorSessionId}:${request.requesterSessionId}` !== requestKey),
+          {
+            anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+            requesterSessionId: String(payload.requesterSessionId ?? "").trim(),
+            requesterDisplayName: String(payload.requesterDisplayName ?? "").trim(),
+            shareKind: normalizeBrowserShareKind(payload.shareKind, "screen"),
+            anchorSession: payload.anchorSession ?? null,
+          },
+        ];
+        updatePrivateBrowserPanel();
+      } else if (payload.type === "share:join-requested") {
+        state.pendingShareJoin = {
+          ...(state.pendingShareJoin ?? {}),
+          anchorSessionId: String(payload.anchorSessionId ?? state.pendingShareJoin?.anchorSessionId ?? "").trim(),
+          anchorHostSessionId: String(payload.anchorHostSessionId ?? state.pendingShareJoin?.anchorHostSessionId ?? "").trim(),
+          shareKind: normalizeBrowserShareKind(state.pendingShareJoin?.shareKind, state.browserShareMode),
+          approved: false,
+        };
+        updatePrivateBrowserPanel();
+      } else if (payload.type === "share:join-resolved") {
+        if (payload.approved !== true) {
+          state.pendingShareJoin = null;
+          updatePrivateBrowserPanel();
+        } else {
+          state.pendingShareJoin = {
+            anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+            anchorHostSessionId: String(payload.anchorHostSessionId ?? "").trim(),
+            shareKind: normalizeBrowserShareKind(state.pendingShareJoin?.shareKind, state.browserShareMode),
+            approved: true,
+          };
+          updatePrivateBrowserPanel();
+          void privateBrowserShareFeature.launch();
+        }
       } else if (payload.type === "browser:subscribe") {
         updatePrivateBrowserSessionState({
           ...(state.browserSessions.get(payload.sessionId) ?? {}),
@@ -11387,8 +12231,40 @@ function connectWorldSocket() {
         handlePrivateBrowserFrame(payload);
       } else if (payload.type === "browser:stop") {
         handlePrivateBrowserStop(payload);
+      } else if (payload.type === "voice:join-offer") {
+        state.voiceJoinOffer = {
+          sessionId: String(payload.sessionId ?? "").trim(),
+          anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+          anchorHostSessionId: String(payload.anchorHostSessionId ?? "").trim(),
+          anchorSession: payload.anchorSession ?? null,
+        };
+        updatePrivateVoicePanel();
+        renderPrivateVoiceJoinOffers();
+      } else if (payload.type === "voice:join-request") {
+        const requestKey = `${String(payload.anchorSessionId ?? "").trim()}:${String(payload.requesterSessionId ?? "").trim()}`;
+        state.incomingVoiceJoinRequests = [
+          ...state.incomingVoiceJoinRequests.filter((request) =>
+            `${request.anchorSessionId}:${request.requesterSessionId}` !== requestKey),
+          {
+            anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+            requesterSessionId: String(payload.requesterSessionId ?? "").trim(),
+            requesterDisplayName: String(payload.requesterDisplayName ?? "").trim(),
+            sessionId: String(payload.sessionId ?? "").trim(),
+          },
+        ];
+        renderPrivateVoiceJoinRequests();
+      } else if (payload.type === "voice:join-resolved") {
+        state.voiceJoinOffer = null;
+        updatePrivateVoicePanel();
+        renderPrivateVoiceJoinOffers();
+      } else if (payload.type === "voice:error") {
+        clearPendingPrivateVoiceShare({ stopTracks: true });
+        updatePrivateVoicePanel();
       } else if (payload.type === "browser:error") {
         clearPendingPrivateBrowserShare({ stopTracks: true });
+        if (state.pendingShareJoin?.approved === true) {
+          state.pendingShareJoin = null;
+        }
         setPrivateBrowserStatus(payload.message || "Live share failed.");
         updatePrivateBrowserPanel();
       } else if (payload.type === "world:snapshot") {
@@ -12728,6 +13604,14 @@ function bindEvents() {
       type: "browser:stop",
       sessionId,
     });
+  });
+  elements.panelVoiceToggle?.addEventListener("click", () => {
+    if (getLocalPrivateVoiceSession() || state.pendingVoiceShare) {
+      stopPrivatePersistentVoiceChat();
+      updatePrivateVoicePanel();
+      return;
+    }
+    void startPrivatePersistentVoiceChat();
   });
   elements.panelBrowserResume?.addEventListener("click", () => {
     resumePrivateBrowserMediaPlayback();

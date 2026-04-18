@@ -34,6 +34,25 @@ function normalizeSessionMode(rawMode) {
   return String(rawMode ?? "").trim() === "display-share" ? "display-share" : "remote-browser";
 }
 
+function normalizeGroupRole(rawRole, sessionMode = "remote-browser") {
+  const value = String(rawRole ?? "").trim().toLowerCase();
+  if (value === "member" || value === "persistent-voice" || value === "origin") {
+    return value;
+  }
+  return sessionMode === "display-share" ? "origin" : "origin";
+}
+
+function normalizeSessionSlot(rawSlot, sessionMode = "remote-browser", groupRole = "origin") {
+  const value = String(rawSlot ?? "").trim().toLowerCase();
+  if (value) {
+    return value;
+  }
+  if (groupRole === "persistent-voice") {
+    return "persistent-voice";
+  }
+  return sessionMode === "display-share" ? "display-share" : "remote-browser";
+}
+
 function normalizeShareKind(rawKind, sessionMode = "remote-browser") {
   const value = String(rawKind ?? "").trim().toLowerCase();
   if (sessionMode === "display-share") {
@@ -137,6 +156,32 @@ function installLocalPlaywrightBrowser() {
   });
 }
 
+function applySessionGroupMetadata(session, input = {}) {
+  const sessionMode = normalizeSessionMode(input.mode ?? session.sessionMode);
+  const groupRole = normalizeGroupRole(input.groupRole ?? session.groupRole, sessionMode);
+  const sessionSlot = normalizeSessionSlot(input.sessionSlot ?? session.sessionSlot, sessionMode, groupRole);
+  const listedLive = input.listedLive == null ? groupRole === "origin" : input.listedLive === true;
+  const movementLocked = input.movementLocked == null ? groupRole === "origin" : input.movementLocked === true;
+  const groupJoined = input.groupJoined === true;
+  const anchorSessionId = String(
+    input.anchorSessionId
+    ?? (groupRole === "origin" ? session.id : session.anchorSessionId ?? ""),
+  ).trim();
+  const anchorHostSessionId = String(
+    input.anchorHostSessionId
+    ?? (groupRole === "origin" ? session.hostSessionId : session.anchorHostSessionId ?? ""),
+  ).trim();
+
+  session.sessionMode = sessionMode;
+  session.groupRole = groupRole;
+  session.sessionSlot = sessionSlot;
+  session.listedLive = listedLive;
+  session.movementLocked = movementLocked;
+  session.groupJoined = groupJoined;
+  session.anchorSessionId = groupRole === "origin" ? session.id : anchorSessionId;
+  session.anchorHostSessionId = groupRole === "origin" ? session.hostSessionId : anchorHostSessionId;
+}
+
 export class BrowserSessionManager extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -163,8 +208,19 @@ export class BrowserSessionManager extends EventEmitter {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  getSessionByHost(hostSessionId) {
-    return [...this.sessions.values()].find((session) => session.hostSessionId === hostSessionId) ?? null;
+  listSessionsForHost(hostSessionId, options = {}) {
+    const normalizedHostSessionId = String(hostSessionId ?? "").trim();
+    if (!normalizedHostSessionId) {
+      return [];
+    }
+    const sessionSlot = String(options.sessionSlot ?? "").trim().toLowerCase();
+    return [...this.sessions.values()].filter((session) =>
+      session.hostSessionId === normalizedHostSessionId
+      && (!sessionSlot || String(session.sessionSlot ?? "").trim().toLowerCase() === sessionSlot));
+  }
+
+  getSessionByHost(hostSessionId, options = {}) {
+    return this.listSessionsForHost(hostSessionId, options)[0] ?? null;
   }
 
   async ensureBrowser(kind = "chromium") {
@@ -222,6 +278,13 @@ export class BrowserSessionManager extends EventEmitter {
       hasAudio: session.hasAudio === true,
       viewerCount: Math.max(0, Number(session.viewerCount) || 0),
       maxViewers: Math.max(0, Number(session.maxViewers) || 0),
+      sessionSlot: session.sessionSlot || normalizeSessionSlot("", session.sessionMode, session.groupRole),
+      groupRole: normalizeGroupRole(session.groupRole, session.sessionMode),
+      listedLive: session.listedLive !== false,
+      movementLocked: session.movementLocked === true,
+      groupJoined: session.groupJoined === true,
+      anchorSessionId: String(session.anchorSessionId ?? "").trim(),
+      anchorHostSessionId: String(session.anchorHostSessionId ?? "").trim(),
     };
   }
 
@@ -305,7 +368,9 @@ export class BrowserSessionManager extends EventEmitter {
 
     const sessionMode = normalizeSessionMode(input.mode);
     const shareKind = normalizeShareKind(input.shareKind, sessionMode);
-    const existing = this.getSessionByHost(hostSessionId);
+    const groupRole = normalizeGroupRole(input.groupRole, sessionMode);
+    const sessionSlot = normalizeSessionSlot(input.sessionSlot, sessionMode, groupRole);
+    const existing = this.getSessionByHost(hostSessionId, { sessionSlot });
     if (existing && existing.sessionMode !== sessionMode) {
       await this.stopSession(existing.id);
     }
@@ -328,6 +393,12 @@ export class BrowserSessionManager extends EventEmitter {
         existing.shareKind = shareKind;
         existing.hasVideo = hasVideo;
         existing.hasAudio = hasAudio;
+        applySessionGroupMetadata(existing, {
+          ...input,
+          mode: sessionMode,
+          groupRole,
+          sessionSlot,
+        });
         this.emit("session", this.toClientSession(existing));
         return this.toClientSession(existing);
       }
@@ -355,7 +426,20 @@ export class BrowserSessionManager extends EventEmitter {
         shareKind,
         hasVideo,
         hasAudio,
+        sessionSlot,
+        groupRole,
+        listedLive: groupRole === "origin",
+        movementLocked: groupRole === "origin",
+        groupJoined: input.groupJoined === true,
+        anchorSessionId: "",
+        anchorHostSessionId: "",
       };
+      applySessionGroupMetadata(session, {
+        ...input,
+        mode: sessionMode,
+        groupRole,
+        sessionSlot,
+      });
       this.sessions.set(session.id, session);
       this.emit("session", this.toClientSession(session));
       return this.toClientSession(session);
@@ -368,6 +452,12 @@ export class BrowserSessionManager extends EventEmitter {
       existing.shareKind = "browser";
       existing.hasVideo = true;
       existing.hasAudio = Boolean(existing.audioRelayReady);
+      applySessionGroupMetadata(existing, {
+        ...input,
+        mode: sessionMode,
+        groupRole,
+        sessionSlot,
+      });
       await existing.page.goto(targetUrl, NAVIGATION_OPTIONS);
       existing.url = existing.page.url();
       existing.title = await existing.page.title().catch(() => existing.title);
@@ -408,7 +498,20 @@ export class BrowserSessionManager extends EventEmitter {
       shareKind: "browser",
       hasVideo: true,
       hasAudio: false,
+      sessionSlot,
+      groupRole,
+      listedLive: groupRole === "origin",
+      movementLocked: groupRole === "origin",
+      groupJoined: input.groupJoined === true,
+      anchorSessionId: "",
+      anchorHostSessionId: "",
     };
+    applySessionGroupMetadata(session, {
+      ...input,
+      mode: sessionMode,
+      groupRole,
+      sessionSlot,
+    });
     this.sessions.set(session.id, session);
     this.bindSessionPageEvents(session);
 
@@ -618,6 +721,12 @@ export class BrowserSessionManager extends EventEmitter {
         sessionId: session.id,
         hostSessionId: session.hostSessionId,
         worldSnapshotId: session.worldSnapshotId,
+        groupRole: session.groupRole,
+        sessionSlot: session.sessionSlot,
+        anchorSessionId: session.anchorSessionId,
+        anchorHostSessionId: session.anchorHostSessionId,
+        listedLive: session.listedLive !== false,
+        groupJoined: session.groupJoined === true,
       });
     }
   }

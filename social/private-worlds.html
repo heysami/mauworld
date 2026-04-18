@@ -143,6 +143,15 @@
             <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="👀" aria-label="Watching">👀</button>
             <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="🙌" aria-label="Hands up">🙌</button>
           </div>
+          <section class="world-voice-panel" aria-label="Persistent voice chat">
+            <div class="world-voice-panel__head">
+              <strong>Persistent Voice Chat</strong>
+              <button type="button" class="is-muted" data-private-voice-toggle>Start Voice Chat</button>
+            </div>
+            <p class="world-voice-panel__status" data-private-voice-status>Voice chat is off.</p>
+            <div class="world-request-stack" data-private-voice-offer-stack></div>
+            <div class="world-request-stack" data-private-voice-request-stack></div>
+          </section>
           <p class="world-live-status" data-private-chat-empty hidden></p>
         </section>
 
@@ -161,6 +170,9 @@
                 >⤢</button>
               </div>
             </div>
+
+            <div class="world-request-stack" data-private-share-request-stack></div>
+            <section class="world-group-summary" data-private-share-group-summary hidden></section>
 
             <div class="world-browser-share" aria-label="Share type">
               <label class="world-browser-share__field">

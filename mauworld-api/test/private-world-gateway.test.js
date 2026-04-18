@@ -199,3 +199,223 @@ test("private world disconnect cleans up the participant in the store", async ()
   assert.equal(leaves[0].creatorUsername, "creator");
   assert.equal(leaves[0].profile.id, client.profile.id);
 });
+
+test("private nearby share starts as an origin when no anchor is nearby", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+
+  let capturedStart = null;
+  gateway.browserManager.listSessionsForWorld = () => [];
+  gateway.browserManager.startSession = async (input) => {
+    capturedStart = { ...input };
+    return {
+      sessionId: "origin_session",
+      id: "origin_session",
+      subscribers: new Set([host.viewerSessionId]),
+      ...input,
+    };
+  };
+  gateway.browserManager.getSession = (sessionId) => sessionId === "origin_session"
+    ? { sessionId: "origin_session", id: "origin_session", subscribers: new Set([host.viewerSessionId]), ...capturedStart }
+    : null;
+  gateway.broadcastBrowserSession = async () => {};
+
+  await gateway.handleBrowserStart(host, {
+    mode: "display-share",
+    title: "Host live",
+    shareKind: "screen",
+    hasVideo: true,
+    hasAudio: true,
+  });
+
+  assert.equal(capturedStart?.groupRole, "origin");
+  assert.equal(capturedStart?.movementLocked, true);
+  assert.equal(capturedStart?.listedLive, true);
+});
+
+test("private nearby share inside an existing anchor returns join-required", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const requester = createClient({
+    viewerSessionId: "profile:requester",
+    displayName: "requester",
+    position: { x: 32, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(requester);
+
+  const anchorSession = {
+    id: "anchor_session",
+    sessionId: "anchor_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([host.viewerSessionId]),
+  };
+  gateway.browserManager.listSessionsForWorld = () => [anchorSession];
+  gateway.browserManager.getSession = (sessionId) => sessionId === anchorSession.id ? anchorSession : null;
+  let started = false;
+  gateway.browserManager.startSession = async () => {
+    started = true;
+    return null;
+  };
+
+  await gateway.handleBrowserStart(requester, {
+    mode: "display-share",
+    shareKind: "camera",
+  });
+
+  assert.equal(started, false);
+  assert.equal(
+    requester.socket.sent.some((message) =>
+      message.type === "share:join-required" && message.anchorSessionId === anchorSession.id),
+    true,
+  );
+});
+
+test("approved private nearby join creates a member share linked to the anchor", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const requester = createClient({
+    viewerSessionId: "profile:requester",
+    displayName: "requester",
+    position: { x: 36, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(requester);
+
+  const anchorSession = {
+    id: "anchor_session",
+    sessionId: "anchor_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([host.viewerSessionId]),
+  };
+  gateway.browserManager.listSessionsForWorld = () => [anchorSession];
+  gateway.browserManager.getSession = (sessionId) => sessionId === anchorSession.id ? anchorSession : null;
+  gateway.grantApprovedShareJoin(anchorSession.id, requester.viewerSessionId, "screen");
+
+  let capturedStart = null;
+  gateway.browserManager.startSession = async (input) => {
+    capturedStart = { ...input };
+    return {
+      sessionId: "member_session",
+      id: "member_session",
+      subscribers: new Set([requester.viewerSessionId]),
+      ...input,
+    };
+  };
+  gateway.broadcastBrowserSession = async () => {};
+
+  await gateway.handleBrowserStart(requester, {
+    mode: "display-share",
+    anchorSessionId: anchorSession.id,
+    title: "Should be ignored",
+    shareKind: "screen",
+    hasVideo: true,
+    hasAudio: true,
+  });
+
+  assert.equal(capturedStart?.groupRole, "member");
+  assert.equal(capturedStart?.anchorSessionId, anchorSession.id);
+  assert.equal(capturedStart?.anchorHostSessionId, host.viewerSessionId);
+  assert.equal(capturedStart?.listedLive, false);
+  assert.equal(capturedStart?.movementLocked, false);
+  assert.equal(capturedStart?.title, "");
+});
+
+test("private member shares stop outside the anchor radius and persistent voice detaches on exit", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const memberHost = createClient({
+    viewerSessionId: "profile:member",
+    displayName: "member",
+    position: { x: 260, y: 0, z: 0 },
+  });
+  const voiceHost = createClient({
+    viewerSessionId: "profile:voice",
+    displayName: "voice",
+    position: { x: 280, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(memberHost);
+  gateway.clients.add(voiceHost);
+
+  const anchorSession = {
+    id: "anchor_session",
+    sessionId: "anchor_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([host.viewerSessionId]),
+  };
+  const memberSession = {
+    id: "member_session",
+    sessionId: "member_session",
+    hostSessionId: memberHost.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "member",
+    anchorSessionId: anchorSession.id,
+    anchorHostSessionId: host.viewerSessionId,
+    subscribers: new Set([memberHost.viewerSessionId]),
+  };
+  const voiceSession = {
+    id: "voice_session",
+    sessionId: "voice_session",
+    hostSessionId: voiceHost.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "persistent-voice",
+    groupJoined: true,
+    anchorSessionId: anchorSession.id,
+    anchorHostSessionId: host.viewerSessionId,
+    subscribers: new Set([voiceHost.viewerSessionId]),
+  };
+  const sessions = [anchorSession, memberSession, voiceSession];
+  gateway.browserManager.listSessionsForWorld = () => sessions;
+  gateway.browserManager.getSession = (sessionId) => sessions.find((session) => session.id === sessionId) ?? null;
+  const stoppedSessionIds = [];
+  gateway.browserManager.stopSession = async (sessionId) => {
+    stoppedSessionIds.push(sessionId);
+  };
+  gateway.broadcastBrowserSession = async () => {};
+
+  await gateway.rebalanceBrowserSessions(host.browserWorldKey);
+
+  assert.deepEqual(stoppedSessionIds, ["member_session"]);
+
+  await gateway.updatePersistentVoiceOffers(host.browserWorldKey);
+
+  assert.equal(voiceSession.groupJoined, false);
+  assert.equal(voiceSession.anchorSessionId, "");
+  assert.equal(
+    voiceHost.socket.sent.some((message) =>
+      message.type === "voice:join-resolved" && /standalone voice chat/i.test(String(message.message ?? ""))),
+    true,
+  );
+});

@@ -155,6 +155,28 @@ export function createWorldRealtimeClient(options = {}) {
     stopBrowser(sessionId) {
       return send("browser:stop", { sessionId });
     },
+    requestShareJoin(anchorSessionId, shareKind) {
+      return send("share:join-request", { anchorSessionId, shareKind });
+    },
+    decideShareJoin(anchorSessionId, requesterSessionId, approved) {
+      return send("share:join-decision", { anchorSessionId, requesterSessionId, approved });
+    },
+    startVoice(input = {}) {
+      const payload =
+        typeof input === "object" && input
+          ? input
+          : {};
+      return send("voice:start", payload);
+    },
+    stopVoice(sessionId) {
+      return send("voice:stop", { sessionId });
+    },
+    respondVoiceJoinOffer(anchorSessionId, accepted) {
+      return send("voice:join-offer-response", { anchorSessionId, accepted });
+    },
+    decideVoiceJoin(anchorSessionId, requesterSessionId, approved) {
+      return send("voice:join-decision", { anchorSessionId, requesterSessionId, approved });
+    },
     sendBrowserInput(sessionId, input) {
       return send("browser:input", { sessionId, input });
     },

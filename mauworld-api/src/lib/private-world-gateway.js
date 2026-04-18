@@ -1,5 +1,14 @@
 import { WebSocket, WebSocketServer } from "ws";
 import { BrowserSessionManager } from "./browser-session-manager.js";
+import {
+  findNearestOriginSession,
+  getAnchorSessionId,
+  isJoinedPersistentVoiceSession,
+  isMemberSession,
+  isOriginSession,
+  isPersistentVoiceSession,
+  isWithinRadius,
+} from "./browser-share-groups.js";
 import { checkChatRateLimit, sanitizeChatText, selectNearestRecipients } from "./realtime-state.js";
 
 const PRIVATE_WORLD_REALTIME_PATH = "/api/ws/private/worlds";
@@ -56,6 +65,9 @@ export class PrivateWorldGateway {
     this.config = options.config ?? {};
     this.store = options.store;
     this.clients = new Set();
+    this.pendingShareJoinRequests = new Map();
+    this.approvedShareJoins = new Map();
+    this.voiceJoinOffers = new Map();
     this.browserManager = new BrowserSessionManager({
       allowedHosts: options.config?.sharedBrowserAllowedHosts,
       viewport: {
@@ -73,7 +85,7 @@ export class PrivateWorldGateway {
       this.broadcastBrowserSession(session);
     });
     this.browserManager.on("stop", (payload) => {
-      this.broadcastBrowserStop(payload);
+      void this.broadcastBrowserStop(payload);
     });
     this.browserManager.on("error", (payload) => {
       this.notifyBrowserError(payload);
@@ -203,6 +215,30 @@ export class PrivateWorldGateway {
       await this.handleBrowserStop(client, message);
       return;
     }
+    if (type === "share:join-request") {
+      await this.handleShareJoinRequest(client, message);
+      return;
+    }
+    if (type === "share:join-decision") {
+      await this.handleShareJoinDecision(client, message);
+      return;
+    }
+    if (type === "voice:start") {
+      await this.handleVoiceStart(client, message);
+      return;
+    }
+    if (type === "voice:stop") {
+      await this.handleVoiceStop(client, message);
+      return;
+    }
+    if (type === "voice:join-offer-response") {
+      await this.handleVoiceJoinOfferResponse(client, message);
+      return;
+    }
+    if (type === "voice:join-decision") {
+      await this.handleVoiceJoinDecision(client, message);
+      return;
+    }
     if (type === "browser:input") {
       await this.handleBrowserInput(client, message);
     }
@@ -225,6 +261,156 @@ export class PrivateWorldGateway {
       return null;
     }
     return this.getBrowserWorldClients(browserWorldKey).find((client) => client.viewerSessionId === target) ?? null;
+  }
+
+  getHostedDisplaySession(viewerSessionId) {
+    return this.browserManager.getSessionByHost(viewerSessionId, { sessionSlot: "display-share" });
+  }
+
+  getHostedPersistentVoiceSession(viewerSessionId) {
+    return this.browserManager.getSessionByHost(viewerSessionId, { sessionSlot: "persistent-voice" });
+  }
+
+  async stopHostedSessions(viewerSessionId) {
+    for (const session of this.browserManager.listSessionsForHost(viewerSessionId)) {
+      await this.browserManager.stopSession(session.id ?? session.sessionId);
+    }
+  }
+
+  getSessionHostClient(sessionLike) {
+    const hostSessionId = typeof sessionLike === "string"
+      ? String(sessionLike ?? "").trim()
+      : String(sessionLike?.hostSessionId ?? "").trim();
+    const browserWorldKey = typeof sessionLike === "string"
+      ? ""
+      : String(sessionLike?.worldSnapshotId ?? "").trim();
+    if (!hostSessionId) {
+      return null;
+    }
+    if (browserWorldKey) {
+      return this.findBrowserClient(browserWorldKey, hostSessionId);
+    }
+    return [...this.clients].find((entry) => entry.viewerSessionId === hostSessionId) ?? null;
+  }
+
+  getSessionHostPosition(sessionLike) {
+    return positionFromPrivateClient(this.getSessionHostClient(sessionLike));
+  }
+
+  getOriginSession(sessionLike) {
+    if (!sessionLike) {
+      return null;
+    }
+    if (isOriginSession(sessionLike)) {
+      return sessionLike;
+    }
+    const anchorSessionId = getAnchorSessionId(sessionLike);
+    return anchorSessionId ? this.browserManager.getSession(anchorSessionId) ?? null : null;
+  }
+
+  getNearestOriginSessionForClient(client, browserWorldKey, excludeHostSessionId = client?.viewerSessionId) {
+    return findNearestOriginSession({
+      requesterPosition: positionFromPrivateClient(client),
+      sessions: this.browserManager.listSessionsForWorld(browserWorldKey),
+      resolveSessionPosition: (session) => this.getSessionHostPosition(session),
+      radius: PRIVATE_WORLD_BROWSER_RADIUS,
+      excludeHostSessionId,
+    });
+  }
+
+  isClientWithinAnchorRadius(client, anchorSession) {
+    return isWithinRadius(
+      positionFromPrivateClient(client),
+      this.getSessionHostPosition(anchorSession),
+      PRIVATE_WORLD_BROWSER_RADIUS,
+    );
+  }
+
+  getShareJoinKey(anchorSessionId, requesterSessionId) {
+    return `${String(anchorSessionId ?? "").trim()}:${String(requesterSessionId ?? "").trim()}`;
+  }
+
+  pruneShareJoinApprovals() {
+    const now = Date.now();
+    for (const [key, entry] of this.approvedShareJoins.entries()) {
+      if (Number(entry.expiresAt ?? 0) <= now) {
+        this.approvedShareJoins.delete(key);
+      }
+    }
+  }
+
+  grantApprovedShareJoin(anchorSessionId, requesterSessionId, shareKind = "") {
+    this.approvedShareJoins.set(this.getShareJoinKey(anchorSessionId, requesterSessionId), {
+      anchorSessionId: String(anchorSessionId ?? "").trim(),
+      requesterSessionId: String(requesterSessionId ?? "").trim(),
+      shareKind: String(shareKind ?? "").trim().toLowerCase(),
+      expiresAt: Date.now() + 60_000,
+    });
+  }
+
+  hasApprovedShareJoin(anchorSessionId, requesterSessionId) {
+    this.pruneShareJoinApprovals();
+    return this.approvedShareJoins.has(this.getShareJoinKey(anchorSessionId, requesterSessionId));
+  }
+
+  clearApprovedShareJoin(anchorSessionId, requesterSessionId) {
+    this.approvedShareJoins.delete(this.getShareJoinKey(anchorSessionId, requesterSessionId));
+  }
+
+  sessionHasCapacity(session) {
+    const maxViewers = Math.max(1, Number(session?.maxViewers) || PRIVATE_WORLD_MAX_RECIPIENTS);
+    const viewerCount = session?.subscribers instanceof Set
+      ? Math.max(0, session.subscribers.size - 1)
+      : Math.max(0, Number(session?.viewerCount) || 0);
+    return viewerCount < maxViewers;
+  }
+
+  buildSessionContextPayload(sessionLike) {
+    const session = this.buildBrowserSessionPayload(sessionLike);
+    if (!session) {
+      return null;
+    }
+    return {
+      sessionId: session.sessionId,
+      hostSessionId: session.hostSessionId,
+      anchorSessionId: session.anchorSessionId,
+      anchorHostSessionId: session.anchorHostSessionId,
+      title: session.title,
+      shareKind: session.shareKind,
+      viewerCount: session.viewerCount,
+      maxViewers: session.maxViewers,
+      listedLive: session.listedLive !== false,
+      groupRole: session.groupRole,
+    };
+  }
+
+  getSessionAudienceRecipients(session, worldClients) {
+    const hostClient = this.getSessionHostClient(session);
+    if (!hostClient) {
+      return new Set([String(session?.hostSessionId ?? "").trim()].filter(Boolean));
+    }
+    const anchorSession = isMemberSession(session) || isJoinedPersistentVoiceSession(session)
+      ? this.getOriginSession(session)
+      : null;
+    const senderPosition = anchorSession ? this.getSessionHostPosition(anchorSession) : positionFromPrivateClient(hostClient);
+    const recipients = new Set(
+      selectNearestRecipients({
+        senderSessionId: hostClient.viewerSessionId,
+        senderPosition,
+        candidates: worldClients.map((entry) => ({
+          viewerSessionId: entry.viewerSessionId,
+          position: positionFromPrivateClient(entry),
+        })),
+        radius: PRIVATE_WORLD_BROWSER_RADIUS,
+        maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+      }),
+    );
+    recipients.add(hostClient.viewerSessionId);
+    return recipients;
+  }
+
+  getClientDisplayName(client) {
+    return String(client?.displayName ?? client?.profile?.display_name ?? client?.profile?.username ?? "viewer").trim() || "viewer";
   }
 
   broadcastToWorld(worldId, creatorUsername, payload) {
@@ -279,99 +465,6 @@ export class PrivateWorldGateway {
     }
   }
 
-  async rebalanceBrowserSessions(browserWorldKey) {
-    const worldClients = this.getBrowserWorldClients(browserWorldKey);
-    for (const session of this.browserManager.listSessionsForWorld(browserWorldKey)) {
-      const hostClient = this.findBrowserClient(browserWorldKey, session.hostSessionId);
-      if (!hostClient) {
-        await this.browserManager.stopSession(session.id ?? session.sessionId);
-        continue;
-      }
-      const fullRecipients = new Set(
-        selectNearestRecipients({
-          senderSessionId: hostClient.viewerSessionId,
-          senderPosition: positionFromPrivateClient(hostClient),
-          candidates: worldClients.map((entry) => ({
-            viewerSessionId: entry.viewerSessionId,
-            position: positionFromPrivateClient(entry),
-          })),
-          radius: PRIVATE_WORLD_BROWSER_RADIUS,
-          maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
-        }),
-      );
-      fullRecipients.add(hostClient.viewerSessionId);
-      const previousRecipients = new Set(session.subscribers ?? []);
-      session.subscribers = fullRecipients;
-      const recipientsChanged =
-        previousRecipients.size !== fullRecipients.size
-        || [...fullRecipients].some((viewerSessionId) => !previousRecipients.has(viewerSessionId));
-      const nextViewerCount = Math.max(0, fullRecipients.size - 1);
-      const nextMaxViewers = PRIVATE_WORLD_MAX_RECIPIENTS;
-      const countsChanged =
-        Number(session.viewerCount ?? -1) !== nextViewerCount
-        || Number(session.maxViewers ?? -1) !== nextMaxViewers;
-      session.viewerCount = nextViewerCount;
-      session.maxViewers = nextMaxViewers;
-
-      for (const viewerSessionId of fullRecipients) {
-        if (previousRecipients.has(viewerSessionId)) {
-          continue;
-        }
-        const client = this.findBrowserClient(browserWorldKey, viewerSessionId);
-        if (!client) {
-          continue;
-        }
-        client.browserModes.set(session.id ?? session.sessionId, "full");
-        sendJson(client, {
-          type: "browser:subscribe",
-          sessionId: session.id ?? session.sessionId,
-          hostSessionId: session.hostSessionId,
-          viewerCount: session.viewerCount,
-          maxViewers: session.maxViewers,
-        });
-      }
-
-      for (const viewerSessionId of previousRecipients) {
-        if (fullRecipients.has(viewerSessionId)) {
-          continue;
-        }
-        const client = this.findBrowserClient(browserWorldKey, viewerSessionId);
-        if (!client) {
-          continue;
-        }
-        client.browserModes.set(session.id ?? session.sessionId, "placeholder");
-        sendJson(client, {
-          type: "browser:unsubscribe",
-          sessionId: session.id ?? session.sessionId,
-          hostSessionId: session.hostSessionId,
-          viewerCount: session.viewerCount,
-          maxViewers: session.maxViewers,
-        });
-      }
-
-      for (const client of worldClients) {
-        if (fullRecipients.has(client.viewerSessionId)) {
-          client.browserModes.set(session.id ?? session.sessionId, "full");
-          continue;
-        }
-        if (client.browserModes.get(session.id ?? session.sessionId) !== "placeholder") {
-          client.browserModes.set(session.id ?? session.sessionId, "placeholder");
-          sendJson(client, {
-            type: "browser:unsubscribe",
-            sessionId: session.id ?? session.sessionId,
-            hostSessionId: session.hostSessionId,
-            viewerCount: session.viewerCount,
-            maxViewers: session.maxViewers,
-          });
-        }
-      }
-
-      if (recipientsChanged || countsChanged) {
-        await this.broadcastBrowserSession(session, { rebalance: false });
-      }
-    }
-  }
-
   handleChatSend(client, message) {
     if (!client?.profile) {
       sendJson(client, {
@@ -423,6 +516,241 @@ export class PrivateWorldGateway {
         expiresAt,
       });
     }
+  }
+
+  async handleShareJoinRequest(client, message) {
+    if (!client?.profile) {
+      return;
+    }
+    const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
+    const anchorSession = requestedAnchorSessionId
+      ? this.browserManager.getSession(requestedAnchorSessionId)
+      : this.getNearestOriginSessionForClient(client, client.browserWorldKey);
+    if (
+      !anchorSession
+      || !isOriginSession(anchorSession)
+      || anchorSession.hostSessionId === client.viewerSessionId
+      || !this.isClientWithinAnchorRadius(client, anchorSession)
+    ) {
+      sendJson(client, {
+        type: "share:join-resolved",
+        approved: false,
+        anchorSessionId: requestedAnchorSessionId,
+        message: "No nearby share is available to join.",
+      });
+      return;
+    }
+    if (!this.sessionHasCapacity(anchorSession)) {
+      sendJson(client, {
+        type: "share:join-resolved",
+        approved: false,
+        anchorSessionId: anchorSession.id,
+        message: "That nearby share is full right now.",
+      });
+      return;
+    }
+    const key = this.getShareJoinKey(anchorSession.id, client.viewerSessionId);
+    this.pendingShareJoinRequests.set(key, {
+      anchorSessionId: anchorSession.id,
+      requesterSessionId: client.viewerSessionId,
+      shareKind: String(message.shareKind ?? "screen").trim().toLowerCase(),
+      requestedAt: Date.now(),
+      browserWorldKey: client.browserWorldKey,
+    });
+    const anchorClient = this.findBrowserClient(client.browserWorldKey, anchorSession.hostSessionId);
+    if (anchorClient) {
+      sendJson(anchorClient, {
+        type: "share:join-request",
+        anchorSessionId: anchorSession.id,
+        requesterSessionId: client.viewerSessionId,
+        requesterDisplayName: this.getClientDisplayName(client),
+        shareKind: String(message.shareKind ?? "screen").trim().toLowerCase(),
+        anchorSession: this.buildSessionContextPayload(anchorSession),
+      });
+    }
+    sendJson(client, {
+      type: "share:join-requested",
+      anchorSessionId: anchorSession.id,
+      anchorHostSessionId: anchorSession.hostSessionId,
+    });
+  }
+
+  async handleShareJoinDecision(client, message) {
+    const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    const requesterSessionId = String(message.requesterSessionId ?? "").trim();
+    if (!anchorSessionId || !requesterSessionId) {
+      return;
+    }
+    const key = this.getShareJoinKey(anchorSessionId, requesterSessionId);
+    const request = this.pendingShareJoinRequests.get(key);
+    if (!request) {
+      return;
+    }
+    this.pendingShareJoinRequests.delete(key);
+    const anchorSession = this.browserManager.getSession(anchorSessionId);
+    if (!anchorSession || anchorSession.hostSessionId !== client.viewerSessionId || !isOriginSession(anchorSession)) {
+      return;
+    }
+    const requesterClient = this.findBrowserClient(client.browserWorldKey, requesterSessionId);
+    if (!requesterClient) {
+      return;
+    }
+    const approved = message.approved === true
+      && this.isClientWithinAnchorRadius(requesterClient, anchorSession)
+      && this.sessionHasCapacity(anchorSession);
+    if (approved) {
+      this.grantApprovedShareJoin(anchorSessionId, requesterSessionId, request.shareKind);
+    } else {
+      this.clearApprovedShareJoin(anchorSessionId, requesterSessionId);
+    }
+    sendJson(requesterClient, {
+      type: "share:join-resolved",
+      approved,
+      anchorSessionId,
+      anchorHostSessionId: anchorSession.hostSessionId,
+      anchorSession: this.buildSessionContextPayload(anchorSession),
+      message: approved ? "Join approved." : "Join request declined.",
+    });
+  }
+
+  clearVoiceJoinOffer(sessionId) {
+    this.voiceJoinOffers.delete(String(sessionId ?? "").trim());
+  }
+
+  async handleVoiceStart(client) {
+    if (!client?.profile) {
+      sendJson(client, {
+        type: "voice:error",
+        message: "Guests cannot use persistent voice chat in private worlds.",
+      });
+      return;
+    }
+    try {
+      const session = await this.browserManager.startSession({
+        hostSessionId: client.viewerSessionId,
+        worldSnapshotId: client.browserWorldKey,
+        mode: "display-share",
+        title: "",
+        shareKind: "audio",
+        hasVideo: false,
+        hasAudio: true,
+        aspectRatio: 1.2,
+        groupRole: "persistent-voice",
+        sessionSlot: "persistent-voice",
+        listedLive: false,
+        movementLocked: false,
+        groupJoined: false,
+      });
+      const internal = this.browserManager.getSession(session.sessionId);
+      if (internal) {
+        internal.subscribers = internal.subscribers ?? new Set();
+        internal.groupJoined = false;
+        internal.anchorSessionId = "";
+        internal.anchorHostSessionId = "";
+      }
+      this.clearVoiceJoinOffer(session.sessionId);
+      await this.broadcastBrowserSession(session);
+    } catch (error) {
+      sendJson(client, {
+        type: "voice:error",
+        message: error.message || "Could not start persistent voice chat.",
+      });
+    }
+  }
+
+  async handleVoiceStop(client, message) {
+    const requestedSessionId = String(message.sessionId ?? "").trim();
+    const session = requestedSessionId
+      ? this.browserManager.getSession(requestedSessionId)
+      : this.getHostedPersistentVoiceSession(client.viewerSessionId);
+    if (!session || session.hostSessionId !== client.viewerSessionId) {
+      return;
+    }
+    this.clearVoiceJoinOffer(session.id ?? session.sessionId);
+    await this.browserManager.stopSession(session.id ?? session.sessionId);
+  }
+
+  async handleVoiceJoinOfferResponse(client, message) {
+    const voiceSession = this.getHostedPersistentVoiceSession(client.viewerSessionId);
+    if (!voiceSession) {
+      return;
+    }
+    const offer = this.voiceJoinOffers.get(voiceSession.id ?? voiceSession.sessionId);
+    const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    if (!offer || offer.anchorSessionId !== anchorSessionId) {
+      return;
+    }
+    if (message.accepted !== true) {
+      offer.state = "declined";
+      sendJson(client, {
+        type: "voice:join-resolved",
+        approved: false,
+        anchorSessionId,
+        message: "Stayed in standalone voice chat.",
+      });
+      return;
+    }
+    const anchorSession = this.browserManager.getSession(anchorSessionId);
+    if (!anchorSession || !isOriginSession(anchorSession)) {
+      this.clearVoiceJoinOffer(voiceSession.id ?? voiceSession.sessionId);
+      sendJson(client, {
+        type: "voice:join-resolved",
+        approved: false,
+        anchorSessionId,
+        message: "That nearby live session is no longer available.",
+      });
+      return;
+    }
+    const anchorClient = this.findBrowserClient(client.browserWorldKey, anchorSession.hostSessionId);
+    if (!anchorClient) {
+      return;
+    }
+    offer.state = "pending-origin";
+    sendJson(anchorClient, {
+      type: "voice:join-request",
+      anchorSessionId,
+      requesterSessionId: client.viewerSessionId,
+      requesterDisplayName: this.getClientDisplayName(client),
+      sessionId: voiceSession.id ?? voiceSession.sessionId,
+    });
+  }
+
+  async handleVoiceJoinDecision(client, message) {
+    const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    const requesterSessionId = String(message.requesterSessionId ?? "").trim();
+    if (!anchorSessionId || !requesterSessionId) {
+      return;
+    }
+    const anchorSession = this.browserManager.getSession(anchorSessionId);
+    if (!anchorSession || !isOriginSession(anchorSession) || anchorSession.hostSessionId !== client.viewerSessionId) {
+      return;
+    }
+    const requesterClient = this.findBrowserClient(client.browserWorldKey, requesterSessionId);
+    const voiceSession = this.getHostedPersistentVoiceSession(requesterSessionId);
+    if (!requesterClient || !voiceSession) {
+      return;
+    }
+    const offer = this.voiceJoinOffers.get(voiceSession.id ?? voiceSession.sessionId);
+    if (!offer || offer.anchorSessionId !== anchorSessionId) {
+      return;
+    }
+    const approved = message.approved === true
+      && this.isClientWithinAnchorRadius(requesterClient, anchorSession)
+      && this.sessionHasCapacity(anchorSession);
+    offer.state = approved ? "joined" : "denied";
+    if (approved) {
+      voiceSession.groupJoined = true;
+      voiceSession.anchorSessionId = anchorSession.id;
+      voiceSession.anchorHostSessionId = anchorSession.hostSessionId;
+    }
+    sendJson(requesterClient, {
+      type: "voice:join-resolved",
+      approved,
+      anchorSessionId,
+      anchorHostSessionId: anchorSession.hostSessionId,
+      message: approved ? "Voice joined the nearby live group." : "Voice join request declined.",
+    });
+    await this.broadcastBrowserSession(voiceSession);
   }
 
   buildPresencePayload(client) {
@@ -513,17 +841,71 @@ export class PrivateWorldGateway {
       return;
     }
     try {
+      const sessionMode = String(message.mode ?? "").trim() === "display-share" ? "display-share" : "remote-browser";
+      const existingDisplaySession = this.getHostedDisplaySession(client.viewerSessionId);
+      let groupRole = "origin";
+      let anchorSession = null;
+      if (sessionMode === "display-share") {
+        if (existingDisplaySession && isMemberSession(existingDisplaySession)) {
+          const existingAnchorSession = this.getOriginSession(existingDisplaySession);
+          if (existingAnchorSession && this.isClientWithinAnchorRadius(client, existingAnchorSession)) {
+            anchorSession = existingAnchorSession;
+            groupRole = "member";
+          }
+        }
+        if (!anchorSession) {
+          const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
+          anchorSession = requestedAnchorSessionId
+            ? this.browserManager.getSession(requestedAnchorSessionId)
+            : this.getNearestOriginSessionForClient(client, client.browserWorldKey);
+          if (anchorSession && !isOriginSession(anchorSession)) {
+            anchorSession = this.getOriginSession(anchorSession);
+          }
+        }
+        if (anchorSession && this.isClientWithinAnchorRadius(client, anchorSession)) {
+          const alreadyJoinedAnchor =
+            existingDisplaySession
+            && isMemberSession(existingDisplaySession)
+            && getAnchorSessionId(existingDisplaySession) === anchorSession.id;
+          if (!alreadyJoinedAnchor && !this.hasApprovedShareJoin(anchorSession.id, client.viewerSessionId)) {
+            sendJson(client, {
+              type: "share:join-required",
+              anchorSessionId: anchorSession.id,
+              anchorHostSessionId: anchorSession.hostSessionId,
+              anchorSession: this.buildSessionContextPayload(anchorSession),
+              message: "Ask the original sharer to join this nearby share.",
+            });
+            return;
+          }
+          groupRole = "member";
+        } else {
+          anchorSession = null;
+        }
+      }
       const session = await this.browserManager.startSession({
         hostSessionId: client.viewerSessionId,
         worldSnapshotId: client.browserWorldKey,
-        mode: message.mode,
-        title: message.title,
+        mode: sessionMode,
+        title: groupRole === "member" ? "" : message.title,
         shareKind: message.shareKind,
         hasVideo: message.hasVideo,
         hasAudio: message.hasAudio,
         aspectRatio: message.aspectRatio,
         displaySurface: message.displaySurface,
+        groupRole,
+        sessionSlot: sessionMode === "display-share" ? "display-share" : "remote-browser",
+        listedLive: groupRole === "origin",
+        movementLocked: groupRole === "origin",
+        anchorSessionId: anchorSession?.id ?? "",
+        anchorHostSessionId: anchorSession?.hostSessionId ?? "",
       });
+      const internal = this.browserManager.getSession(session.sessionId);
+      if (internal) {
+        internal.subscribers = internal.subscribers ?? new Set();
+      }
+      if (groupRole === "member" && anchorSession) {
+        this.clearApprovedShareJoin(anchorSession.id, client.viewerSessionId);
+      }
       await this.broadcastBrowserSession(session);
     } catch (error) {
       sendJson(client, {
@@ -537,7 +919,7 @@ export class PrivateWorldGateway {
     const requestedSessionId = String(message.sessionId ?? "").trim();
     const session = requestedSessionId
       ? this.browserManager.getSession(requestedSessionId)
-      : this.browserManager.getSessionByHost(client.viewerSessionId);
+      : this.getHostedDisplaySession(client.viewerSessionId);
     if (!session || session.hostSessionId !== client.viewerSessionId) {
       return;
     }
@@ -623,21 +1005,6 @@ export class PrivateWorldGateway {
     }
   }
 
-  broadcastBrowserStop(payload) {
-    const browserWorldKey = String(payload.worldSnapshotId ?? "").trim();
-    if (!browserWorldKey) {
-      return;
-    }
-    this.broadcastToBrowserWorld(browserWorldKey, {
-      type: "browser:stop",
-      sessionId: payload.sessionId,
-      hostSessionId: payload.hostSessionId,
-    });
-    for (const client of this.getBrowserWorldClients(browserWorldKey)) {
-      client.browserModes?.delete?.(payload.sessionId);
-    }
-  }
-
   notifyBrowserError(payload) {
     const session = payload.sessionId ? this.browserManager.getSession(payload.sessionId) : null;
     const hostSessionId = payload.hostSessionId || session?.hostSessionId || "";
@@ -652,14 +1019,219 @@ export class PrivateWorldGateway {
     });
   }
 
+  async updatePersistentVoiceOffers(browserWorldKey) {
+    const sessions = this.browserManager.listSessionsForWorld(browserWorldKey);
+    for (const session of sessions) {
+      if (!isPersistentVoiceSession(session)) {
+        continue;
+      }
+      const sessionId = session.id ?? session.sessionId;
+      const hostClient = this.getSessionHostClient(session);
+      if (!hostClient) {
+        continue;
+      }
+      const offer = this.voiceJoinOffers.get(sessionId) ?? null;
+      const offeredAnchor = offer?.anchorSessionId ? this.browserManager.getSession(offer.anchorSessionId) : null;
+      const stillInOfferedRange = offeredAnchor ? this.isClientWithinAnchorRadius(hostClient, offeredAnchor) : false;
+
+      if (isJoinedPersistentVoiceSession(session)) {
+        const anchorSession = this.getOriginSession(session);
+        if (anchorSession && this.isClientWithinAnchorRadius(hostClient, anchorSession)) {
+          continue;
+        }
+        session.groupJoined = false;
+        session.anchorSessionId = "";
+        session.anchorHostSessionId = "";
+        this.clearVoiceJoinOffer(sessionId);
+        sendJson(hostClient, {
+          type: "voice:join-resolved",
+          approved: false,
+          anchorSessionId: offeredAnchor?.id ?? "",
+          message: "Returned to standalone voice chat.",
+        });
+        await this.broadcastBrowserSession(session, { rebalance: false });
+      }
+
+      if (offer && !stillInOfferedRange) {
+        this.clearVoiceJoinOffer(sessionId);
+      }
+
+      const nearestOrigin = this.getNearestOriginSessionForClient(hostClient, browserWorldKey);
+      if (!nearestOrigin || !this.sessionHasCapacity(nearestOrigin)) {
+        continue;
+      }
+      const currentOffer = this.voiceJoinOffers.get(sessionId);
+      if (currentOffer?.anchorSessionId === nearestOrigin.id) {
+        continue;
+      }
+      this.voiceJoinOffers.set(sessionId, {
+        anchorSessionId: nearestOrigin.id,
+        state: "offered",
+      });
+      sendJson(hostClient, {
+        type: "voice:join-offer",
+        sessionId,
+        anchorSessionId: nearestOrigin.id,
+        anchorHostSessionId: nearestOrigin.hostSessionId,
+        anchorSession: this.buildSessionContextPayload(nearestOrigin),
+      });
+    }
+  }
+
+  async rebalanceBrowserSessions(browserWorldKey) {
+    const worldClients = this.getBrowserWorldClients(browserWorldKey);
+    for (const session of this.browserManager.listSessionsForWorld(browserWorldKey)) {
+      const hostClient = this.getSessionHostClient(session);
+      if (!hostClient) {
+        await this.browserManager.stopSession(session.id ?? session.sessionId);
+        continue;
+      }
+      if (isMemberSession(session)) {
+        const anchorSession = this.getOriginSession(session);
+        if (!anchorSession || !this.isClientWithinAnchorRadius(hostClient, anchorSession)) {
+          await this.browserManager.stopSession(session.id ?? session.sessionId);
+          continue;
+        }
+      }
+      const fullRecipients = this.getSessionAudienceRecipients(session, worldClients);
+      const previousRecipients = new Set(session.subscribers ?? []);
+      session.subscribers = fullRecipients;
+      const recipientsChanged =
+        previousRecipients.size !== fullRecipients.size
+        || [...fullRecipients].some((viewerSessionId) => !previousRecipients.has(viewerSessionId));
+      const nextViewerCount = Math.max(0, fullRecipients.size - 1);
+      const nextMaxViewers = PRIVATE_WORLD_MAX_RECIPIENTS;
+      const countsChanged =
+        Number(session.viewerCount ?? -1) !== nextViewerCount
+        || Number(session.maxViewers ?? -1) !== nextMaxViewers;
+      session.viewerCount = nextViewerCount;
+      session.maxViewers = nextMaxViewers;
+      const sessionId = session.id ?? session.sessionId;
+
+      for (const viewerSessionId of fullRecipients) {
+        if (previousRecipients.has(viewerSessionId)) {
+          continue;
+        }
+        const client = this.findBrowserClient(browserWorldKey, viewerSessionId);
+        if (!client) {
+          continue;
+        }
+        client.browserModes.set(sessionId, "full");
+        sendJson(client, {
+          type: "browser:subscribe",
+          sessionId,
+          hostSessionId: session.hostSessionId,
+          viewerCount: session.viewerCount,
+          maxViewers: session.maxViewers,
+        });
+      }
+
+      for (const viewerSessionId of previousRecipients) {
+        if (fullRecipients.has(viewerSessionId)) {
+          continue;
+        }
+        const client = this.findBrowserClient(browserWorldKey, viewerSessionId);
+        if (!client) {
+          continue;
+        }
+        client.browserModes.set(sessionId, "placeholder");
+        sendJson(client, {
+          type: "browser:unsubscribe",
+          sessionId,
+          hostSessionId: session.hostSessionId,
+          viewerCount: session.viewerCount,
+          maxViewers: session.maxViewers,
+        });
+      }
+
+      for (const client of worldClients) {
+        if (fullRecipients.has(client.viewerSessionId)) {
+          client.browserModes.set(sessionId, "full");
+          continue;
+        }
+        if (client.browserModes.get(sessionId) !== "placeholder") {
+          client.browserModes.set(sessionId, "placeholder");
+          sendJson(client, {
+            type: "browser:unsubscribe",
+            sessionId,
+            hostSessionId: session.hostSessionId,
+            viewerCount: session.viewerCount,
+            maxViewers: session.maxViewers,
+          });
+        }
+      }
+
+      if (recipientsChanged || countsChanged) {
+        await this.broadcastBrowserSession(session, { rebalance: false });
+      }
+    }
+    await this.updatePersistentVoiceOffers(browserWorldKey);
+  }
+
+  async broadcastBrowserStop(payload) {
+    const browserWorldKey = String(payload.worldSnapshotId ?? "").trim();
+    if (!browserWorldKey) {
+      return;
+    }
+    if (isOriginSession(payload)) {
+      for (const key of [...this.pendingShareJoinRequests.keys()]) {
+        if (key.startsWith(`${payload.sessionId}:`)) {
+          this.pendingShareJoinRequests.delete(key);
+        }
+      }
+      for (const key of [...this.approvedShareJoins.keys()]) {
+        if (key.startsWith(`${payload.sessionId}:`)) {
+          this.approvedShareJoins.delete(key);
+        }
+      }
+      for (const session of this.browserManager.listSessionsForWorld(browserWorldKey)) {
+        if (getAnchorSessionId(session) !== payload.sessionId) {
+          continue;
+        }
+        if (isMemberSession(session)) {
+          await this.browserManager.stopSession(session.id ?? session.sessionId);
+          continue;
+        }
+        if (isJoinedPersistentVoiceSession(session)) {
+          session.groupJoined = false;
+          session.anchorSessionId = "";
+          session.anchorHostSessionId = "";
+          this.clearVoiceJoinOffer(session.id ?? session.sessionId);
+          const voiceClient = this.getSessionHostClient(session);
+          if (voiceClient) {
+            sendJson(voiceClient, {
+              type: "voice:join-resolved",
+              approved: false,
+              anchorSessionId: payload.sessionId,
+              message: "Returned to standalone voice chat.",
+            });
+          }
+          await this.broadcastBrowserSession(session, { rebalance: false });
+        }
+      }
+    }
+    if (isPersistentVoiceSession(payload)) {
+      this.clearVoiceJoinOffer(payload.sessionId);
+    }
+    this.broadcastToBrowserWorld(browserWorldKey, {
+      type: "browser:stop",
+      sessionId: payload.sessionId,
+      hostSessionId: payload.hostSessionId,
+    });
+    for (const client of this.getBrowserWorldClients(browserWorldKey)) {
+      client.browserModes?.delete?.(payload.sessionId);
+    }
+    await this.rebalanceBrowserSessions(browserWorldKey).catch(() => null);
+  }
+
   async handleDisconnect(client) {
     if (!this.clients.has(client)) {
       return;
     }
     this.clients.delete(client);
-    const browserSession = this.browserManager.getSessionByHost(client.viewerSessionId);
-    if (browserSession) {
-      await this.browserManager.stopSession(browserSession.id ?? browserSession.sessionId);
+    const remainingHostedSessions = this.browserManager.listSessionsForHost(client.viewerSessionId);
+    if (remainingHostedSessions.length > 0) {
+      await this.stopHostedSessions(client.viewerSessionId);
     } else {
       await this.rebalanceBrowserSessions(client.browserWorldKey);
     }

@@ -181,6 +181,15 @@
                 🙌
               </button>
             </div>
+            <section class="world-voice-panel" aria-label="Persistent voice chat">
+              <div class="world-voice-panel__head">
+                <strong>Persistent Voice Chat</strong>
+                <button type="button" class="is-muted" data-world-voice-toggle>Start Voice Chat</button>
+              </div>
+              <p class="world-voice-panel__status" data-world-voice-status>Voice chat is off.</p>
+              <div class="world-request-stack" data-world-voice-offer-stack></div>
+              <div class="world-request-stack" data-world-voice-request-stack></div>
+            </section>
           </section>
 
           <section
@@ -204,6 +213,9 @@
                   >⤢</button>
                 </div>
               </div>
+
+              <div class="world-request-stack" data-world-share-request-stack></div>
+              <section class="world-group-summary" data-world-share-group-summary hidden></section>
 
               <div class="world-browser-share" data-world-browser-share>
                 <label class="world-browser-share__field">

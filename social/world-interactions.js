@@ -1126,7 +1126,7 @@ export function createNearbyDisplayShareFeature(options = {}) {
     return true;
   }
 
-  async function launch() {
+  async function defaultLaunch() {
     if (options.canLaunch?.() === false) {
       options.onCannotLaunch?.();
       return false;
@@ -1145,6 +1145,22 @@ export function createNearbyDisplayShareFeature(options = {}) {
       failureMessages: options.failureMessages,
       mediaDevices: options.mediaDevices,
     });
+  }
+
+  async function launch() {
+    if (typeof options.handleLaunch === "function") {
+      const handled = await options.handleLaunch({
+        defaultLaunch,
+        updateLiveTitle,
+        getLocalSession: () => options.getLocalSession?.() ?? null,
+        getDraft: () => getDraft(options.getLocalSession?.()),
+        getSelectedMode,
+      });
+      if (handled !== undefined) {
+        return handled;
+      }
+    }
+    return defaultLaunch();
   }
 
   function bind() {

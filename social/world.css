@@ -991,6 +991,10 @@ body.is-world-loading .world-panel {
   gap: 8px;
 }
 
+.world-browser-share.is-join-mode .world-browser-share__field {
+  display: none;
+}
+
 .world-browser-share__actions {
   display: flex;
   gap: 8px;
@@ -1097,8 +1101,104 @@ body.is-world-loading .world-panel {
   display: none;
 }
 
+.world-request-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.world-request-card,
+.world-group-summary,
+.world-voice-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(61, 87, 182, 0.12);
+  border-radius: 8px;
+  background: rgba(249, 251, 255, 0.96);
+}
+
+.world-request-card__title,
+.world-group-summary__title {
+  color: var(--world-ink);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.world-request-card__copy,
+.world-group-summary__copy,
+.world-voice-panel__status {
+  margin: 0;
+  color: var(--world-muted);
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
+.world-request-card__actions,
+.world-voice-panel__head,
+.world-group-summary__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.world-request-card__actions button,
+.world-voice-panel__head button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(61, 87, 182, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--world-ink);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.world-request-card__actions button.is-muted,
+.world-voice-panel__head button.is-muted {
+  color: var(--world-muted);
+}
+
+.world-group-summary__list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.world-group-summary__list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--world-ink);
+  font-size: 0.78rem;
+}
+
+.world-group-summary__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(45, 216, 255, 0.14);
+  color: #196d87;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.world-voice-panel {
+  margin-top: 8px;
+}
+
 .world-panel-chat {
   display: grid;
+  gap: 8px;
 }
 
 .world-panel-chat__field {

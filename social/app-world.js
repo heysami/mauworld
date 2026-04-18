@@ -6,7 +6,9 @@ import {
   createChatBubbleState,
   createChatBubbleRenderer,
   createChatFeature,
+  createLocalDisplayShare,
   createNearbyDisplayShareFeature,
+  launchNearbyDisplayShare,
   getBrowserShareKindLabel,
   getDisplayShareStageLayout,
   getDisplayShareStagePlaceholderText,
@@ -65,6 +67,7 @@ const elements = {
   inspector: document.querySelector(".world-inspector"),
   inspectorClose: document.querySelector("[data-world-inspector-close]"),
   browserPanel: document.querySelector("[data-world-browser-panel]"),
+  browserShare: document.querySelector("[data-world-browser-share]"),
   browserDock: document.querySelector("[data-world-browser-dock]"),
   browserOverlayRoot: document.querySelector("[data-world-browser-overlay-root]"),
   browserExpand: document.querySelector("[data-world-browser-expand]"),
@@ -81,6 +84,8 @@ const elements = {
   browserFrame: document.querySelector("[data-world-browser-frame]"),
   browserPlaceholder: document.querySelector("[data-world-browser-placeholder]"),
   browserResume: document.querySelector("[data-world-browser-resume]"),
+  shareRequestStack: document.querySelector("[data-world-share-request-stack]"),
+  shareGroupSummary: document.querySelector("[data-world-share-group-summary]"),
   privateLaunch: document.querySelector("[data-world-private-launch]"),
   sessionLabel: document.querySelector("[data-world-session-label]"),
   openAccountButton: document.querySelector("[data-world-open-account]"),
@@ -104,6 +109,10 @@ const elements = {
   chatInput: document.querySelector("[data-world-chat-input]"),
   chatStatus: document.querySelector("[data-world-chat-status]"),
   chatCounter: document.querySelector("[data-world-chat-counter]"),
+  voiceToggle: document.querySelector("[data-world-voice-toggle]"),
+  voiceStatus: document.querySelector("[data-world-voice-status]"),
+  voiceOfferStack: document.querySelector("[data-world-voice-offer-stack]"),
+  voiceRequestStack: document.querySelector("[data-world-voice-request-stack]"),
 };
 
 elements.panelTabs = [...document.querySelectorAll("[data-world-panel-tab]")];
@@ -265,6 +274,7 @@ const state = {
   activeChats: new Map(),
   browserSessions: new Map(),
   localBrowserSessionId: "",
+  localVoiceSessionId: "",
   localBrowserFocus: false,
   browserOverlayOpen: false,
   browserStagePointerId: null,
@@ -277,8 +287,14 @@ const state = {
   browserMediaPendingFrameId: 0,
   pendingBrowserShare: null,
   localBrowserShare: null,
+  pendingVoiceShare: null,
+  localVoiceShare: null,
   browserShareMode: "screen",
   browserPanelRemoteSessionId: "",
+  pendingShareJoin: null,
+  incomingShareJoinRequests: [],
+  voiceJoinOffer: null,
+  incomingVoiceJoinRequests: [],
   browserMediaState: {
     enabled: null,
     connected: false,
@@ -325,6 +341,7 @@ const sceneState = {
   trails: new THREE.Group(),
   player: new THREE.Group(),
   browserScreens: new THREE.Group(),
+  browserAnchors: new THREE.Group(),
   privateWorldMiniatures: new THREE.Group(),
   billboards: [],
   persistentBillboards: [],
@@ -338,6 +355,7 @@ const sceneState = {
   animatedPrivateWorldMiniatures: [],
   presenceEntries: new Map(),
   browserScreenEntries: new Map(),
+  browserAnchorEntries: new Map(),
   clickable: [],
   snow: null,
   snowData: [],
@@ -2166,6 +2184,26 @@ function clearLocalBrowserShare({ stopTracks = false, sessionId = "" } = {}) {
   state.localBrowserShare = null;
 }
 
+function clearPendingVoiceShare({ stopTracks = false } = {}) {
+  if (!state.pendingVoiceShare) {
+    return;
+  }
+  releaseBrowserDisplayShare(state.pendingVoiceShare, { stopTracks });
+  state.pendingVoiceShare = null;
+}
+
+function clearLocalVoiceShare({ stopTracks = false, sessionId = "" } = {}) {
+  const activeShare = state.localVoiceShare;
+  if (!activeShare) {
+    return;
+  }
+  if (sessionId && activeShare.sessionId && activeShare.sessionId !== sessionId) {
+    return;
+  }
+  releaseBrowserDisplayShare(activeShare, { stopTracks });
+  state.localVoiceShare = null;
+}
+
 function dropLocalBrowserSession(sessionId, { unpublish = true } = {}) {
   const normalized = String(sessionId ?? "").trim();
   if (!normalized) {
@@ -2183,6 +2221,9 @@ function dropLocalBrowserSession(sessionId, { unpublish = true } = {}) {
   if (state.localBrowserSessionId === normalized) {
     state.localBrowserSessionId = "";
     state.browserMediaTransport = "jpeg-sequence";
+  }
+  if (state.localVoiceSessionId === normalized) {
+    state.localVoiceSessionId = "";
   }
   return true;
 }
@@ -2209,6 +2250,227 @@ function getBrowserShareMissingAudioMessage(share) {
   return "";
 }
 
+function getLocalVoiceSession() {
+  return state.localVoiceSessionId ? state.browserSessions.get(state.localVoiceSessionId) ?? null : null;
+}
+
+function getVoiceShareActionLabel() {
+  const localVoiceSession = getLocalVoiceSession();
+  if (state.pendingVoiceShare) {
+    return "Starting...";
+  }
+  return localVoiceSession ? "Stop Persistent Voice Chat" : "Start Persistent Voice Chat";
+}
+
+function updateVoicePanel() {
+  const localVoiceSession = getLocalVoiceSession();
+  const signedIn = isPublicViewerSignedIn();
+  const canToggle = Boolean(signedIn && state.realtimeClient?.isConnected());
+  if (elements.voiceToggle) {
+    elements.voiceToggle.disabled = !canToggle && !localVoiceSession && !state.pendingVoiceShare;
+    elements.voiceToggle.textContent = getVoiceShareActionLabel();
+  }
+  if (elements.voiceStatus) {
+    if (!signedIn) {
+      elements.voiceStatus.textContent = "Log in to keep a nearby voice channel open.";
+    } else if (!state.realtimeConnected) {
+      elements.voiceStatus.textContent = "Persistent voice chat is offline right now.";
+    } else if (state.pendingVoiceShare) {
+      elements.voiceStatus.textContent = "Starting persistent voice chat...";
+    } else if (localVoiceSession) {
+      elements.voiceStatus.textContent = isBrowserJoinedPersistentVoiceSession(localVoiceSession)
+        ? "Persistent voice chat is joined to the nearby live group."
+        : "Persistent voice chat is live nearby.";
+    } else {
+      elements.voiceStatus.textContent = "Keep your mic nearby without showing up in What's Live.";
+    }
+  }
+}
+
+function renderShareJoinRequests() {
+  if (!elements.shareRequestStack) {
+    return;
+  }
+  if (state.incomingShareJoinRequests.length === 0) {
+    elements.shareRequestStack.innerHTML = "";
+    elements.shareRequestStack.hidden = true;
+    return;
+  }
+  elements.shareRequestStack.hidden = false;
+  elements.shareRequestStack.innerHTML = state.incomingShareJoinRequests.map((request) => `
+    <div class="world-request-card">
+      <div class="world-request-card__title">${htmlEscape(request.requesterDisplayName || "Nearby visitor")}</div>
+      <div class="world-request-card__body">Wants to join with ${htmlEscape(getBrowserShareKindLabel(request.shareKind || "screen").toLowerCase())}.</div>
+      <div class="world-request-card__actions">
+        <button type="button" data-share-join-decision="approve" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Approve</button>
+        <button type="button" data-share-join-decision="decline" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Decline</button>
+      </div>
+    </div>
+  `).join("");
+  for (const button of elements.shareRequestStack.querySelectorAll("[data-share-join-decision]")) {
+    button.addEventListener("click", () => {
+      const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
+      const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
+      const approved = button.getAttribute("data-share-join-decision") === "approve";
+      state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) =>
+        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+      updateBrowserPanel();
+      state.realtimeClient?.decideShareJoin(anchorSessionId, requesterSessionId, approved);
+    });
+  }
+}
+
+function renderVoiceJoinOffers() {
+  if (!elements.voiceOfferStack) {
+    return;
+  }
+  const offer = state.voiceJoinOffer;
+  if (!offer?.anchorSessionId) {
+    elements.voiceOfferStack.innerHTML = "";
+    elements.voiceOfferStack.hidden = true;
+    return;
+  }
+  const hostName = getPresenceDisplayNameForSessionId(offer.anchorHostSessionId);
+  const title = offer.anchorSession?.title
+    ? `"${offer.anchorSession.title}"`
+    : "this nearby live share";
+  elements.voiceOfferStack.hidden = false;
+  elements.voiceOfferStack.innerHTML = `
+    <div class="world-request-card">
+      <div class="world-request-card__title">Join Nearby Voice Group?</div>
+      <div class="world-request-card__body">${htmlEscape(hostName || "Nearby host")} is live with ${htmlEscape(title)}.</div>
+      <div class="world-request-card__actions">
+        <button type="button" data-voice-offer-decision="accept">Join</button>
+        <button type="button" data-voice-offer-decision="decline">Stay Nearby</button>
+      </div>
+    </div>
+  `;
+  for (const button of elements.voiceOfferStack.querySelectorAll("[data-voice-offer-decision]")) {
+    button.addEventListener("click", () => {
+      const accepted = button.getAttribute("data-voice-offer-decision") === "accept";
+      state.realtimeClient?.respondVoiceJoinOffer(offer.anchorSessionId, accepted);
+      if (!accepted) {
+        state.voiceJoinOffer = null;
+        updateVoicePanel();
+        renderVoiceJoinOffers();
+      }
+    });
+  }
+}
+
+function renderVoiceJoinRequests() {
+  if (!elements.voiceRequestStack) {
+    return;
+  }
+  if (state.incomingVoiceJoinRequests.length === 0) {
+    elements.voiceRequestStack.innerHTML = "";
+    elements.voiceRequestStack.hidden = true;
+    return;
+  }
+  elements.voiceRequestStack.hidden = false;
+  elements.voiceRequestStack.innerHTML = state.incomingVoiceJoinRequests.map((request) => `
+    <div class="world-request-card">
+      <div class="world-request-card__title">${htmlEscape(request.requesterDisplayName || "Nearby visitor")}</div>
+      <div class="world-request-card__body">Wants their persistent voice chat heard in your live group.</div>
+      <div class="world-request-card__actions">
+        <button type="button" data-voice-join-decision="approve" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Approve</button>
+        <button type="button" data-voice-join-decision="decline" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Decline</button>
+      </div>
+    </div>
+  `).join("");
+  for (const button of elements.voiceRequestStack.querySelectorAll("[data-voice-join-decision]")) {
+    button.addEventListener("click", () => {
+      const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
+      const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
+      const approved = button.getAttribute("data-voice-join-decision") === "approve";
+      state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
+        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+      renderVoiceJoinRequests();
+      state.realtimeClient?.decideVoiceJoin(anchorSessionId, requesterSessionId, approved);
+    });
+  }
+}
+
+function renderShareGroupSummary() {
+  if (!elements.shareGroupSummary) {
+    return;
+  }
+  const localSession = getLocalBrowserSession();
+  const anchorSession = getShareJoinTarget();
+  if (!anchorSession) {
+    elements.shareGroupSummary.innerHTML = "";
+    elements.shareGroupSummary.hidden = true;
+    return;
+  }
+  const groupSessions = getShareGroupSessions(anchorSession.sessionId);
+  const memberNames = groupSessions
+    .filter((session) => isBrowserMemberSession(session))
+    .map((session) => getPresenceDisplayNameForSessionId(session.hostSessionId))
+    .filter(Boolean);
+  const hostName = getPresenceDisplayNameForSessionId(anchorSession.hostSessionId) || "Nearby host";
+  const viewerCount = Math.min(getBrowserSessionViewerCount(anchorSession), getBrowserSessionMaxViewers(anchorSession));
+  const maxViewers = getBrowserSessionMaxViewers(anchorSession);
+  const pendingState = state.pendingShareJoin?.anchorSessionId === anchorSession.sessionId
+    ? (state.pendingShareJoin.approved ? "Approved. Choose what to share." : "Waiting for approval.")
+    : "";
+  const title = getBrowserSessionTitle(anchorSession);
+  const summaryCopy = localSession
+    ? isBrowserOriginSession(localSession)
+      ? "You are the anchor for this nearby share group. Movement stays locked while it is live."
+      : "You are contributing inside this nearby share group. Leaving the circle will stop your share."
+    : `Join ${hostName}'s nearby share group without creating another live row.`;
+  elements.shareGroupSummary.hidden = false;
+  elements.shareGroupSummary.innerHTML = `
+    <div class="world-group-summary__title">${htmlEscape(title)}</div>
+    <div class="world-group-summary__meta">
+      <span>${htmlEscape(hostName)}</span>
+      <span>${viewerCount}/${maxViewers} viewers</span>
+      <span>${memberNames.length} contributor${memberNames.length === 1 ? "" : "s"}</span>
+    </div>
+    <div class="world-group-summary__body">${htmlEscape(summaryCopy)}</div>
+    ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
+    ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
+  `;
+}
+
+async function handleNearbyShareLaunch({ defaultLaunch, getLocalSession, getSelectedMode }) {
+  const localSession = getLocalSession();
+  if (localSession) {
+    return defaultLaunch();
+  }
+  const joinTarget = getShareJoinTarget();
+  const approvedJoin = state.pendingShareJoin?.approved === true ? state.pendingShareJoin : null;
+  if (!joinTarget || (approvedJoin && approvedJoin.anchorSessionId === joinTarget.sessionId)) {
+    return defaultLaunch();
+  }
+  if (!isPublicViewerSignedIn()) {
+    showToast("Log in to share nearby.");
+    void openPrivateWorldGate("account");
+    return true;
+  }
+  if (!state.realtimeClient?.isConnected()) {
+    showToast("Realtime share is offline.");
+    return true;
+  }
+  const shareKind = normalizeBrowserShareKind(getSelectedMode?.(), state.browserShareMode);
+  state.pendingShareJoin = {
+    anchorSessionId: joinTarget.sessionId,
+    anchorHostSessionId: joinTarget.hostSessionId,
+    shareKind,
+    approved: false,
+  };
+  const requested = state.realtimeClient.requestShareJoin(joinTarget.sessionId, shareKind);
+  if (!requested) {
+    state.pendingShareJoin = null;
+    updateBrowserPanel();
+    showToast("Realtime share is offline.");
+    return true;
+  }
+  updateBrowserPanel();
+  showToast(`Asked ${getPresenceDisplayNameForSessionId(joinTarget.hostSessionId) || "the nearby host"} to join.`);
+  return true;
+}
+
 const browserShareFeature = createNearbyDisplayShareFeature({
   modeButtons: elements.browserShareModes,
   modeAttribute: "data-world-browser-share-mode",
@@ -2221,6 +2483,7 @@ const browserShareFeature = createNearbyDisplayShareFeature({
   onModeChanged() {
     updateBrowserPanel();
   },
+  handleLaunch: handleNearbyShareLaunch,
   getTitleInputValue: () => elements.browserShareTitle?.value ?? "",
   getSessionShareKind: getBrowserSessionShareKind,
   getPendingShare: () => state.pendingBrowserShare,
@@ -2328,6 +2591,120 @@ function attachLocalBrowserShare(sessionId, share) {
     state.realtimeClient?.stopBrowser(sessionId);
     updateBrowserPanel();
   });
+}
+
+function attachLocalVoiceShare(sessionId, share) {
+  if (!share || !sessionId || !state.meta?.worldSnapshotId) {
+    return;
+  }
+  clearLocalVoiceShare({ stopTracks: true });
+  state.localVoiceShare = {
+    ...share,
+    sessionId,
+  };
+  void getBrowserMediaController().publishStream({
+    sessionId,
+    stream: share.stream,
+    viewerSessionId: state.viewerSessionId,
+    worldSnapshotId: state.meta.worldSnapshotId,
+  }).then((published) => {
+    if (!published) {
+      showToast(getBrowserSharePublishErrorLabel("audio"));
+      clearLocalVoiceShare({ stopTracks: true, sessionId });
+      dropLocalBrowserSession(sessionId);
+      state.realtimeClient?.stopVoice(sessionId);
+      updateVoicePanel();
+      return;
+    }
+    updateVoicePanel();
+  }).catch((error) => {
+    showToast(error?.message || getBrowserSharePublishErrorLabel("audio"));
+    clearLocalVoiceShare({ stopTracks: true, sessionId });
+    dropLocalBrowserSession(sessionId);
+    state.realtimeClient?.stopVoice(sessionId);
+    updateVoicePanel();
+  });
+}
+
+async function startPersistentVoiceChat() {
+  if (!isPublicViewerSignedIn()) {
+    showToast("Log in to use persistent voice chat.");
+    void openPrivateWorldGate("account");
+    return false;
+  }
+  if (!state.realtimeClient?.isConnected()) {
+    showToast("Realtime share is offline.");
+    return false;
+  }
+  clearPendingVoiceShare({ stopTracks: true });
+  const started = await launchNearbyDisplayShare({
+    shareKind: "audio",
+    getRequestedTitle: () => "",
+    createShare: (stream, shareOptions = {}) => createLocalDisplayShare(stream, {
+      ...shareOptions,
+      title: "",
+      shareKind: "audio",
+      hasVideo: false,
+      hasAudio: true,
+      aspectRatio: 1.2,
+      fallbackWidth: 540,
+      fallbackHeight: 432,
+      isPendingShare: (candidate) => state.pendingVoiceShare?.stream === candidate.stream,
+      isLocalShare: (candidate) => state.localVoiceShare?.stream === candidate.stream,
+      onEndedWhilePending() {
+        clearPendingVoiceShare({ stopTracks: false });
+        updateVoicePanel();
+      },
+      onEndedWhileLive() {
+        const sessionId = String(state.localVoiceShare?.sessionId ?? state.localVoiceSessionId ?? "").trim();
+        clearLocalVoiceShare({ stopTracks: false, sessionId });
+        dropLocalBrowserSession(sessionId);
+        if (sessionId) {
+          state.realtimeClient?.stopVoice(sessionId);
+        }
+        updateVoicePanel();
+      },
+    }),
+    startShare(share) {
+      state.pendingVoiceShare = share;
+      const sent = state.realtimeClient?.startVoice({ shareKind: "audio" }) === true;
+      if (!sent) {
+        clearPendingVoiceShare({ stopTracks: true });
+        updateVoicePanel();
+        showToast("Realtime share is offline.");
+        return false;
+      }
+      updateVoicePanel();
+      return true;
+    },
+    onUnsupported(message) {
+      showToast(message);
+    },
+    onError(message, error) {
+      showToast(error?.message || message);
+    },
+    unsupportedMessages: {
+      audio: "This browser does not support voice sharing.",
+    },
+    failureMessages: {
+      audio: "Could not start voice sharing.",
+    },
+  });
+  updateVoicePanel();
+  return started;
+}
+
+function stopPersistentVoiceChat() {
+  const localVoiceSession = getLocalVoiceSession();
+  if (localVoiceSession) {
+    return state.realtimeClient?.stopVoice(localVoiceSession.sessionId) === true;
+  }
+  if (state.pendingVoiceShare) {
+    clearPendingVoiceShare({ stopTracks: true });
+    updateVoicePanel();
+    return true;
+  }
+  return false;
 }
 
 function getBrowserMediaController() {
@@ -2550,6 +2927,139 @@ function getBrowserSessionMaxViewers(session) {
     return Math.max(1, Math.floor(value));
   }
   return getInteractionConfig().maxRecipients;
+}
+
+function getBrowserSessionRole(session = {}) {
+  const explicitRole = String(session?.groupRole ?? "").trim().toLowerCase();
+  if (explicitRole === "origin" || explicitRole === "member" || explicitRole === "persistent-voice") {
+    return explicitRole;
+  }
+  if (String(session?.sessionSlot ?? "").trim().toLowerCase() === "persistent-voice") {
+    return "persistent-voice";
+  }
+  if (String(session?.sessionMode ?? "").trim().toLowerCase() === "display-share") {
+    return "origin";
+  }
+  return "";
+}
+
+function isBrowserOriginSession(session = {}) {
+  return getBrowserSessionRole(session) === "origin";
+}
+
+function isBrowserMemberSession(session = {}) {
+  return getBrowserSessionRole(session) === "member";
+}
+
+function isBrowserPersistentVoiceSession(session = {}) {
+  return getBrowserSessionRole(session) === "persistent-voice";
+}
+
+function getBrowserSessionAnchorSessionId(session = {}) {
+  if (isBrowserOriginSession(session)) {
+    return String(session?.sessionId ?? "").trim();
+  }
+  return String(session?.anchorSessionId ?? "").trim();
+}
+
+function getBrowserSessionAnchorHostSessionId(session = {}) {
+  if (isBrowserOriginSession(session)) {
+    return String(session?.hostSessionId ?? "").trim();
+  }
+  return String(session?.anchorHostSessionId ?? "").trim();
+}
+
+function isBrowserJoinedPersistentVoiceSession(session = {}) {
+  return isBrowserPersistentVoiceSession(session)
+    && session?.groupJoined === true
+    && Boolean(getBrowserSessionAnchorSessionId(session));
+}
+
+function resolveBrowserOriginSession(session = {}) {
+  const anchorSessionId = getBrowserSessionAnchorSessionId(session);
+  if (!anchorSessionId) {
+    return null;
+  }
+  if (String(session?.sessionId ?? "").trim() === anchorSessionId && isBrowserOriginSession(session)) {
+    return session;
+  }
+  return state.browserSessions.get(anchorSessionId) ?? null;
+}
+
+function isListedLiveSession(session = {}) {
+  return String(session?.sessionMode ?? "").trim() === "display-share"
+    && isBrowserOriginSession(session)
+    && !isBrowserPersistentVoiceSession(session)
+    && session?.listedLive !== false;
+}
+
+function getBrowserSessionSpatialCenter(session = {}) {
+  const anchorHostSessionId =
+    isBrowserMemberSession(session) || isBrowserJoinedPersistentVoiceSession(session)
+      ? getBrowserSessionAnchorHostSessionId(session)
+      : "";
+  const hostSessionId = anchorHostSessionId || String(session?.hostSessionId ?? "").trim();
+  return getBrowserHostPosition(hostSessionId);
+}
+
+function getNearbyOriginSession(excludeHostSessionId = state.viewerSessionId) {
+  const viewerPosition = getNavigationPosition();
+  const radius = Math.max(16, getInteractionConfig().browserRadius);
+  let bestSession = null;
+  let bestDistanceSquared = Infinity;
+  for (const session of state.browserSessions.values()) {
+    if (!isListedLiveSession(session)) {
+      continue;
+    }
+    if (excludeHostSessionId && String(session.hostSessionId ?? "").trim() === String(excludeHostSessionId ?? "").trim()) {
+      continue;
+    }
+    const hostPosition = getBrowserHostPosition(session.hostSessionId);
+    if (!hostPosition) {
+      continue;
+    }
+    const dx = viewerPosition.x - hostPosition.x;
+    const dz = viewerPosition.z - hostPosition.z;
+    const distanceSquared = dx * dx + dz * dz;
+    if (distanceSquared > radius * radius || distanceSquared >= bestDistanceSquared) {
+      continue;
+    }
+    bestSession = session;
+    bestDistanceSquared = distanceSquared;
+  }
+  return bestSession;
+}
+
+function getShareGroupSessions(anchorSessionId = "") {
+  const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+  if (!normalizedAnchorSessionId) {
+    return [];
+  }
+  return [...state.browserSessions.values()]
+    .filter((session) =>
+      (isBrowserOriginSession(session) && String(session.sessionId ?? "").trim() === normalizedAnchorSessionId)
+      || getBrowserSessionAnchorSessionId(session) === normalizedAnchorSessionId)
+    .sort((left, right) =>
+      Number(isBrowserOriginSession(right)) - Number(isBrowserOriginSession(left))
+      || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
+      || String(left.hostSessionId ?? "").localeCompare(String(right.hostSessionId ?? "")));
+}
+
+function getShareJoinTarget() {
+  const localSession = getLocalBrowserSession();
+  if (localSession) {
+    return resolveBrowserOriginSession(localSession);
+  }
+  const pendingAnchorSessionId = String(state.pendingShareJoin?.anchorSessionId ?? "").trim();
+  if (pendingAnchorSessionId) {
+    return state.browserSessions.get(pendingAnchorSessionId) ?? null;
+  }
+  return getNearbyOriginSession();
+}
+
+function isLocalOriginShareLocked() {
+  const localSession = getLocalBrowserSession();
+  return Boolean(localSession && isBrowserOriginSession(localSession) && localSession.movementLocked === true);
 }
 
 function setLoading(isLoading) {
@@ -5361,14 +5871,14 @@ function getBrowserPlaceholderBadge(session) {
   if (viewerCount < maxViewers) {
     return "";
   }
-  const hostPosition = getBrowserHostPosition(session.hostSessionId);
-  if (!hostPosition) {
+  const spatialCenter = getBrowserSessionSpatialCenter(session);
+  if (!spatialCenter) {
     return "";
   }
   const listenerPosition = getNavigationPosition();
   const planarDistance = Math.hypot(
-    listenerPosition.x - hostPosition.x,
-    listenerPosition.z - hostPosition.z,
+    listenerPosition.x - spatialCenter.x,
+    listenerPosition.z - spatialCenter.z,
   );
   if (planarDistance > Math.max(16, getInteractionConfig().browserRadius)) {
     return "";
@@ -5753,14 +6263,14 @@ function computeRemoteBrowserAudioVolume(session) {
   if (!session || session.hostSessionId === state.viewerSessionId || session.deliveryMode !== "full") {
     return 0;
   }
-  const hostPosition = getBrowserHostPosition(session.hostSessionId);
-  if (!hostPosition) {
+  const spatialCenter = getBrowserSessionSpatialCenter(session);
+  if (!spatialCenter) {
     return 0;
   }
   const listenerPosition = getNavigationPosition();
   const planarDistance = Math.hypot(
-    listenerPosition.x - hostPosition.x,
-    listenerPosition.z - hostPosition.z,
+    listenerPosition.x - spatialCenter.x,
+    listenerPosition.z - spatialCenter.z,
   );
   const maxDistance = Math.max(16, getInteractionConfig().browserRadius);
   const fullVolumeDistance = Math.min(8, Math.max(5, maxDistance * 0.08));
@@ -5836,6 +6346,134 @@ function reconcileBrowserScreens() {
     entry.placeholderTexture = createBrowserPlaceholderTexture(session);
     entry.placeholderKey = getBrowserPlaceholderTextureKey(session);
     updateBrowserScreenPresentation(entry);
+  }
+}
+
+function removeBrowserAnchorEntry(anchorSessionId) {
+  const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+  if (!normalizedAnchorSessionId) {
+    return;
+  }
+  const entry = sceneState.browserAnchorEntries.get(normalizedAnchorSessionId);
+  if (!entry) {
+    return;
+  }
+  entry.group.parent?.remove(entry.group);
+  entry.group.traverse((node) => {
+    if (node.geometry) {
+      node.geometry.dispose();
+    }
+    if (Array.isArray(node.material)) {
+      node.material.forEach(disposeMaterial);
+    } else {
+      disposeMaterial(node.material);
+    }
+  });
+  sceneState.browserAnchorEntries.delete(normalizedAnchorSessionId);
+}
+
+function updateBrowserAnchorGeometry(entry, radius = getInteractionConfig().browserRadius) {
+  if (!entry?.fill || !entry?.ring) {
+    return;
+  }
+  const nextRadius = Math.max(16, Number(radius) || getInteractionConfig().browserRadius);
+  if (Math.abs((entry.radius ?? 0) - nextRadius) < 0.01) {
+    return;
+  }
+  entry.fill.geometry.dispose();
+  entry.fill.geometry = new THREE.CircleGeometry(nextRadius, 96);
+  entry.ring.geometry.dispose();
+  entry.ring.geometry = new THREE.RingGeometry(Math.max(0.1, nextRadius - 0.8), nextRadius, 96);
+  entry.radius = nextRadius;
+}
+
+function ensureBrowserAnchorEntry(session = {}) {
+  const anchorSessionId = String(session.sessionId ?? "").trim();
+  if (!anchorSessionId) {
+    return null;
+  }
+  const existing = sceneState.browserAnchorEntries.get(anchorSessionId);
+  if (existing) {
+    existing.session = session;
+    existing.hostSessionId = String(session.hostSessionId ?? existing.hostSessionId ?? "").trim();
+    updateBrowserAnchorGeometry(existing);
+    return existing;
+  }
+  const radius = Math.max(16, getInteractionConfig().browserRadius);
+  const fill = new THREE.Mesh(
+    new THREE.CircleGeometry(radius, 96),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(WORLD_STYLE.accents[1]),
+      transparent: true,
+      opacity: 0.08,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  fill.rotation.x = -Math.PI / 2;
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(Math.max(0.1, radius - 0.8), radius, 96),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(WORLD_STYLE.accents[1]),
+      transparent: true,
+      opacity: 0.34,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  const group = new THREE.Group();
+  group.add(fill);
+  group.add(ring);
+  sceneState.browserAnchors.add(group);
+  const entry = {
+    session,
+    hostSessionId: String(session.hostSessionId ?? "").trim(),
+    group,
+    fill,
+    ring,
+    radius,
+  };
+  sceneState.browserAnchorEntries.set(anchorSessionId, entry);
+  return entry;
+}
+
+function reconcileBrowserAnchorEntries() {
+  const activeAnchorIds = new Set(
+    [...state.browserSessions.values()]
+      .filter((session) =>
+        isBrowserOriginSession(session)
+        && session?.movementLocked === true
+        && String(session?.sessionMode ?? "").trim() === "display-share")
+      .map((session) => String(session.sessionId ?? "").trim())
+      .filter(Boolean),
+  );
+  for (const anchorSessionId of [...sceneState.browserAnchorEntries.keys()]) {
+    if (!activeAnchorIds.has(anchorSessionId)) {
+      removeBrowserAnchorEntry(anchorSessionId);
+    }
+  }
+  for (const session of state.browserSessions.values()) {
+    if (!activeAnchorIds.has(String(session.sessionId ?? "").trim())) {
+      continue;
+    }
+    ensureBrowserAnchorEntry(session);
+  }
+}
+
+function updateBrowserAnchorEntries() {
+  reconcileBrowserAnchorEntries();
+  for (const entry of sceneState.browserAnchorEntries.values()) {
+    const hostPosition = getBrowserHostPosition(entry.hostSessionId);
+    if (!hostPosition) {
+      entry.group.visible = false;
+      continue;
+    }
+    updateBrowserAnchorGeometry(entry);
+    entry.group.visible = true;
+    entry.group.position.set(hostPosition.x, hostPosition.y + 0.08, hostPosition.z);
   }
 }
 
@@ -7079,6 +7717,7 @@ function initScene() {
   sceneState.root.add(sceneState.tags);
   sceneState.root.add(sceneState.posts);
   sceneState.root.add(sceneState.presence);
+  sceneState.root.add(sceneState.browserAnchors);
   sceneState.root.add(sceneState.browserScreens);
   sceneState.root.add(sceneState.privateWorldMiniatures);
   sceneState.root.add(sceneState.visitors);
@@ -7398,6 +8037,7 @@ function getLiveShareSessions(query = state.liveShareQuery) {
   const normalizedQuery = String(query ?? "").trim().toLowerCase();
   return [...state.browserSessions.values()]
     .filter((session) => !worldSnapshotId || String(session.worldSnapshotId ?? "").trim() === worldSnapshotId)
+    .filter((session) => isListedLiveSession(session))
     .filter((session) => {
       if (!normalizedQuery) {
         return true;
@@ -7502,6 +8142,7 @@ function renderLiveSharesList() {
       const shareKindLabel = getBrowserShareKindLabel(getBrowserSessionShareKind(session));
       const viewerCount = Math.min(getBrowserSessionViewerCount(session), getBrowserSessionMaxViewers(session));
       const maxViewers = getBrowserSessionMaxViewers(session);
+      const contributorCount = Math.max(0, getShareGroupSessions(session.sessionId).filter((entry) => isBrowserMemberSession(entry)).length);
       const isOwn = session.hostSessionId === state.viewerSessionId;
       const hostName = getPresenceDisplayNameForSessionId(session.hostSessionId);
       const isActive =
@@ -7520,6 +8161,7 @@ function renderLiveSharesList() {
           <div class="world-live-result__meta">
             <span class="world-live-result__badge">${htmlEscape(shareKindLabel)}</span>
             <span>${isOwn ? "You are sharing this now." : `${htmlEscape(hostName)} is sharing now.`}</span>
+            ${contributorCount > 0 ? `<span>${contributorCount} contributor${contributorCount === 1 ? "" : "s"}</span>` : ""}
           </div>
         </button>
       `;
@@ -8015,10 +8657,22 @@ function updateBrowserPanel() {
       state.realtimeClient?.stopBrowser(endedSessionId);
     }
   }
+  if (state.localVoiceShare && !isLocalDisplayShareActive(state.localVoiceShare)) {
+    const endedVoiceSessionId = String(state.localVoiceShare.sessionId ?? state.localVoiceSessionId ?? "").trim();
+    clearLocalVoiceShare({ stopTracks: false, sessionId: endedVoiceSessionId });
+    dropLocalBrowserSession(endedVoiceSessionId);
+    if (endedVoiceSessionId) {
+      state.realtimeClient?.stopVoice(endedVoiceSessionId);
+    }
+  }
   if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
     state.browserPanelRemoteSessionId = "";
   }
   const localSession = getLocalBrowserSession();
+  const localVoiceSession = getLocalVoiceSession();
+  const joinTarget = getShareJoinTarget();
+  const joinMode = Boolean(!localSession && joinTarget);
+  const titleLocked = joinMode || isBrowserMemberSession(localSession);
   const draft = browserShareFeature.getDraft(localSession);
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
@@ -8030,7 +8684,10 @@ function updateBrowserPanel() {
     : localSession
       ? null
       : [...state.browserSessions.values()].find(
-        (session) => session.hostSessionId !== state.viewerSessionId && session.deliveryMode === "full",
+        (session) =>
+          session.hostSessionId !== state.viewerSessionId
+          && session.deliveryMode === "full"
+          && !isBrowserPersistentVoiceSession(session),
       ) ?? null;
   const hasRemotePanelSession = Boolean(!previewStream && remotePanelSession);
   const remotePanelHasVisual = Boolean(remotePanelSession && remotePanelSession.hasVideo !== false);
@@ -8069,8 +8726,17 @@ function updateBrowserPanel() {
     elements.browserStage.setAttribute("aria-hidden", stageLayout.collapseDockedStage ? "true" : "false");
   }
   if (elements.browserShareTitle) {
-    elements.browserShareTitle.disabled = !signedIn;
+    elements.browserShareTitle.disabled = !signedIn || titleLocked;
+    if (titleLocked && document.activeElement !== elements.browserShareTitle) {
+      elements.browserShareTitle.value = "";
+    }
   }
+  elements.browserShare?.classList.toggle("is-join-mode", titleLocked);
+  renderShareJoinRequests();
+  renderShareGroupSummary();
+  updateVoicePanel();
+  renderVoiceJoinOffers();
+  renderVoiceJoinRequests();
   if (!state.realtimeConnected) {
     setBrowserStatus("Realtime share offline.");
     updateBrowserPanelSummary({
@@ -8088,6 +8754,15 @@ function updateBrowserPanel() {
       hint: state.pendingBrowserShare.title
         ? `"${state.pendingBrowserShare.title}" will go live after the picker or permission prompt finishes.`
         : "Finish the picker or permission prompt to go live.",
+    });
+  } else if (state.pendingShareJoin?.anchorSessionId && state.pendingShareJoin.approved !== true) {
+    const hostName = getPresenceDisplayNameForSessionId(state.pendingShareJoin.anchorHostSessionId) || "nearby host";
+    setBrowserStatus(`Waiting for ${hostName} to approve your nearby share request...`);
+    updateBrowserPanelSummary({
+      state: "starting",
+      badge: "Waiting",
+      current: `Requested ${getBrowserShareKindLabel(state.pendingShareJoin.shareKind || state.browserShareMode)}`,
+      hint: "Once approved, you can choose your screen, video, or voice and it will stay attached to this anchor group.",
     });
   } else if (remotePanelSession) {
     const shareKind = getBrowserSessionShareKind(remotePanelSession);
@@ -8114,6 +8789,15 @@ function updateBrowserPanel() {
       current: "Sharing is off for guests",
       hint: "Log in to screen share, go live on camera, or use voice nearby.",
     });
+  } else if (!localSession && joinTarget) {
+    const hostName = getPresenceDisplayNameForSessionId(joinTarget.hostSessionId) || "Nearby host";
+    setBrowserStatus(`Join ${hostName}'s nearby share group after approval.`);
+    updateBrowserPanelSummary({
+      state: "draft",
+      badge: "Join",
+      current: getBrowserSessionTitle(joinTarget),
+      hint: "Choose Screen, Video, or Voice to request access. Contributor shares stay above your own character and stay out of What's Live.",
+    });
   } else if (!localSession) {
     setBrowserStatus("Share a screen, video, or voice nearby.");
     updateBrowserPanelSummary(
@@ -8122,6 +8806,21 @@ function updateBrowserPanel() {
         scopeLabel: "nearby",
       }),
     );
+  } else if (isBrowserMemberSession(localSession)) {
+    const anchorSession = resolveBrowserOriginSession(localSession);
+    const anchorHostName = getPresenceDisplayNameForSessionId(anchorSession?.hostSessionId) || "nearby host";
+    const shareKind = getBrowserShareKindLabel(getBrowserSessionShareKind(localSession));
+    setBrowserStatus(
+      state.localBrowserShare?.sessionId === localSession.sessionId
+        ? `Sharing ${shareKind.toLowerCase()} inside ${anchorHostName}'s nearby group.`
+        : `Allow ${shareKind.toLowerCase()} access to contribute inside ${anchorHostName}'s nearby group.`,
+    );
+    updateBrowserPanelSummary({
+      state: "live",
+      badge: "Group",
+      current: `${shareKind} contributor`,
+      hint: "You can move while sharing, but leaving the anchor circle stops this contributor share.",
+    });
   } else if (localSession.sessionMode === "display-share") {
     const presentation = getLocalDisplaySharePresentation({
       localSession,
@@ -8131,6 +8830,9 @@ function updateBrowserPanel() {
       screenPrompt: "Share a tab or window to start the nearby stream.",
     });
     if (presentation) {
+      if (localSession.movementLocked === true) {
+        presentation.hint = `${presentation.hint} Movement stays locked while this anchor share is live.`;
+      }
       setBrowserStatus(presentation.status);
       updateBrowserPanelSummary(presentation);
     }
@@ -8165,6 +8867,17 @@ function updateBrowserPanel() {
     launchState,
     showStop: Boolean(localSession),
   });
+  if (!localSession && joinMode && elements.browserLaunch) {
+    const joinStateMatches = state.pendingShareJoin?.anchorSessionId === joinTarget?.sessionId;
+    const waitingForApproval = joinStateMatches && state.pendingShareJoin.approved !== true;
+    const joinApproved = joinStateMatches && state.pendingShareJoin.approved === true;
+    elements.browserLaunch.textContent = waitingForApproval
+      ? "Waiting..."
+      : joinApproved
+        ? `Start ${getBrowserShareKindLabel(state.browserShareMode)}`
+        : `Request ${getBrowserShareKindLabel(state.browserShareMode)}`;
+    elements.browserLaunch.disabled = !canShareNearby || waitingForApproval || Boolean(state.pendingBrowserShare);
+  }
   syncDisplayShareExpandButton(elements.browserExpand, state.browserOverlayOpen);
 
   if (!elements.browserFrame || !elements.browserPlaceholder) {
@@ -8223,6 +8936,9 @@ function updateBrowserPanel() {
       elements.browserResume.textContent = needsManualPlaybackStart ? "Start Stream" : "Enable Sound";
     }
   }
+  if (!localVoiceSession && !state.pendingVoiceShare) {
+    state.voiceJoinOffer = state.voiceJoinOffer?.anchorSessionId ? state.voiceJoinOffer : null;
+  }
 }
 
 function updateBrowserSessionState(sessionPatch) {
@@ -8245,7 +8961,11 @@ function updateBrowserSessionState(sessionPatch) {
     clearBrowserScreenVideo(next.sessionId);
   }
   if (next.hostSessionId === state.viewerSessionId) {
-    state.localBrowserSessionId = next.sessionId;
+    if (isBrowserPersistentVoiceSession(next)) {
+      state.localVoiceSessionId = next.sessionId;
+    } else {
+      state.localBrowserSessionId = next.sessionId;
+    }
     if (isLiveKitBrowserTransport(next.frameTransport) && state.meta?.worldSnapshotId) {
       void getBrowserMediaController().connect({
         viewerSessionId: state.viewerSessionId,
@@ -8253,13 +8973,21 @@ function updateBrowserSessionState(sessionPatch) {
         canPublish: true,
       });
     }
-    if (next.sessionMode === "display-share" && state.pendingBrowserShare?.stream) {
+    if (isBrowserPersistentVoiceSession(next) && state.pendingVoiceShare?.stream) {
+      const pendingVoiceShare = state.pendingVoiceShare;
+      state.pendingVoiceShare = null;
+      attachLocalVoiceShare(next.sessionId, pendingVoiceShare);
+    } else if (next.sessionMode === "display-share" && state.pendingBrowserShare?.stream) {
       const pendingShare = state.pendingBrowserShare;
       state.pendingBrowserShare = null;
       attachLocalBrowserShare(next.sessionId, pendingShare);
     }
+    if (isBrowserMemberSession(next)) {
+      state.pendingShareJoin = null;
+    }
   }
   reconcileBrowserScreens();
+  reconcileBrowserAnchorEntries();
   if (
     next.hostSessionId === state.viewerSessionId
     && state.localBrowserShare?.sessionId === next.sessionId
@@ -8278,15 +9006,26 @@ function handleBrowserStop(payload) {
   if (!sessionId) {
     return;
   }
-  if (hostSessionId && hostSessionId === state.viewerSessionId) {
+  if (hostSessionId && hostSessionId === state.viewerSessionId && sessionId === state.localVoiceSessionId) {
+    clearPendingVoiceShare();
+  } else if (hostSessionId && hostSessionId === state.viewerSessionId) {
     clearPendingBrowserShare();
   }
   if (state.browserFocusSessionId === sessionId) {
     clearBrowserFocus();
   }
   clearLocalBrowserShare({ sessionId });
+  clearLocalVoiceShare({ sessionId });
   clearBrowserScreenVideo(sessionId);
   dropLocalBrowserSession(sessionId);
+  if (state.pendingShareJoin?.anchorSessionId === sessionId) {
+    state.pendingShareJoin = null;
+  }
+  if (state.voiceJoinOffer?.anchorSessionId === sessionId) {
+    state.voiceJoinOffer = null;
+  }
+  state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) => request.anchorSessionId !== sessionId);
+  state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) => request.anchorSessionId !== sessionId);
   updateBrowserPanel();
   renderLiveSharesList();
 }
@@ -8338,6 +9077,68 @@ function handleRealtimeMessage(payload) {
     updateBrowserSessionState(payload.session ?? {});
     return;
   }
+  if (payload.type === "share:join-required") {
+    clearPendingBrowserShare({ stopTracks: true });
+    state.pendingShareJoin = {
+      anchorSessionId: String(payload.anchorSessionId ?? payload.anchorSession?.sessionId ?? "").trim(),
+      anchorHostSessionId: String(payload.anchorHostSessionId ?? payload.anchorSession?.hostSessionId ?? "").trim(),
+      shareKind: normalizeBrowserShareKind(payload.shareKind, state.browserShareMode),
+      approved: false,
+    };
+    updateBrowserPanel();
+    showToast(payload.message || "A nearby share is already live here. Ask to join it.");
+    return;
+  }
+  if (payload.type === "share:join-request") {
+    const requestKey = `${String(payload.anchorSessionId ?? "").trim()}:${String(payload.requesterSessionId ?? "").trim()}`;
+    state.incomingShareJoinRequests = [
+      ...state.incomingShareJoinRequests.filter((request) =>
+        `${request.anchorSessionId}:${request.requesterSessionId}` !== requestKey),
+      {
+        anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+        requesterSessionId: String(payload.requesterSessionId ?? "").trim(),
+        requesterDisplayName: String(payload.requesterDisplayName ?? "").trim(),
+        shareKind: normalizeBrowserShareKind(payload.shareKind, "screen"),
+        anchorSession: payload.anchorSession ?? null,
+      },
+    ];
+    updateBrowserPanel();
+    return;
+  }
+  if (payload.type === "share:join-requested") {
+    state.pendingShareJoin = {
+      ...(state.pendingShareJoin ?? {}),
+      anchorSessionId: String(payload.anchorSessionId ?? state.pendingShareJoin?.anchorSessionId ?? "").trim(),
+      anchorHostSessionId: String(payload.anchorHostSessionId ?? state.pendingShareJoin?.anchorHostSessionId ?? "").trim(),
+      shareKind: normalizeBrowserShareKind(state.pendingShareJoin?.shareKind, state.browserShareMode),
+      approved: false,
+    };
+    updateBrowserPanel();
+    return;
+  }
+  if (payload.type === "share:join-resolved") {
+    const approved = payload.approved === true;
+    if (!approved) {
+      state.pendingShareJoin = null;
+      updateBrowserPanel();
+      if (payload.message) {
+        showToast(payload.message);
+      }
+      return;
+    }
+    state.pendingShareJoin = {
+      anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+      anchorHostSessionId: String(payload.anchorHostSessionId ?? "").trim(),
+      shareKind: normalizeBrowserShareKind(state.pendingShareJoin?.shareKind, state.browserShareMode),
+      approved: true,
+    };
+    updateBrowserPanel();
+    if (payload.message) {
+      showToast(payload.message);
+    }
+    void browserShareFeature.launch();
+    return;
+  }
   if (payload.type === "browser:subscribe") {
     updateBrowserSessionState({
       ...(state.browserSessions.get(payload.sessionId) ?? {}),
@@ -8370,11 +9171,56 @@ function handleRealtimeMessage(payload) {
     handleBrowserStop(payload);
     return;
   }
+  if (payload.type === "voice:join-offer") {
+    state.voiceJoinOffer = {
+      sessionId: String(payload.sessionId ?? "").trim(),
+      anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+      anchorHostSessionId: String(payload.anchorHostSessionId ?? "").trim(),
+      anchorSession: payload.anchorSession ?? null,
+    };
+    updateVoicePanel();
+    renderVoiceJoinOffers();
+    return;
+  }
+  if (payload.type === "voice:join-request") {
+    const requestKey = `${String(payload.anchorSessionId ?? "").trim()}:${String(payload.requesterSessionId ?? "").trim()}`;
+    state.incomingVoiceJoinRequests = [
+      ...state.incomingVoiceJoinRequests.filter((request) =>
+        `${request.anchorSessionId}:${request.requesterSessionId}` !== requestKey),
+      {
+        anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+        requesterSessionId: String(payload.requesterSessionId ?? "").trim(),
+        requesterDisplayName: String(payload.requesterDisplayName ?? "").trim(),
+        sessionId: String(payload.sessionId ?? "").trim(),
+      },
+    ];
+    renderVoiceJoinRequests();
+    return;
+  }
+  if (payload.type === "voice:join-resolved") {
+    state.voiceJoinOffer = null;
+    updateVoicePanel();
+    renderVoiceJoinOffers();
+    if (payload.message) {
+      showToast(payload.message);
+    }
+    return;
+  }
+  if (payload.type === "voice:error") {
+    clearPendingVoiceShare({ stopTracks: true });
+    updateVoicePanel();
+    showToast(payload.message || "Persistent voice chat failed.");
+    return;
+  }
   if (payload.type === "browser:error") {
     if (state.pendingBrowserShare) {
       clearPendingBrowserShare({ stopTracks: true });
     }
+    if (state.pendingShareJoin?.approved === true) {
+      state.pendingShareJoin = null;
+    }
     setBrowserStatus(payload.message || "Nearby share failed.");
+    updateBrowserPanel();
     showToast(payload.message || "Nearby share failed.");
   }
 }
@@ -8729,6 +9575,7 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
   for (const entry of sceneState.animatedBrowserScreens) {
     updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds);
   }
+  updateBrowserAnchorEntries();
   updateRemoteBrowserAudioMix();
 
   if (sceneState.routeGuide) {
@@ -8967,6 +9814,10 @@ function updateMovement(deltaSeconds) {
   }
 
   if (velocity.lengthSq() === 0 && vertical === 0) {
+    return;
+  }
+
+  if (isLocalOriginShareLocked()) {
     return;
   }
 
@@ -9314,14 +10165,20 @@ async function startLocalNearbyShare(share) {
   state.pendingBrowserShare = share;
   setBrowserPreviewStream(share.hasVideo ? share.stream : null);
   setBrowserStatus("Starting nearby share...");
+  const existingLocalSession = getLocalBrowserSession();
+  const approvedJoin = state.pendingShareJoin?.approved === true ? state.pendingShareJoin : null;
+  const anchorSessionId = approvedJoin?.anchorSessionId
+    || (isBrowserMemberSession(existingLocalSession) ? getBrowserSessionAnchorSessionId(existingLocalSession) : "");
+  const memberShare = Boolean(anchorSessionId);
   const started = state.realtimeClient.startBrowser({
     mode: "display-share",
-    title: share.title,
+    title: memberShare ? "" : share.title,
     shareKind: share.shareKind,
     hasVideo: share.hasVideo,
     hasAudio: share.hasAudio,
     aspectRatio: share.aspectRatio,
     displaySurface: share.displaySurface,
+    anchorSessionId,
   });
   if (!started) {
     clearPendingBrowserShare({ stopTracks: true });
@@ -9564,6 +10421,14 @@ function registerInput() {
     if (sessionId) {
       state.realtimeClient?.stopBrowser(sessionId);
     }
+  });
+  elements.voiceToggle?.addEventListener("click", () => {
+    if (getLocalVoiceSession() || state.pendingVoiceShare) {
+      stopPersistentVoiceChat();
+      updateVoicePanel();
+      return;
+    }
+    void startPersistentVoiceChat();
   });
   elements.browserResume?.addEventListener("click", (event) => {
     event.preventDefault();
