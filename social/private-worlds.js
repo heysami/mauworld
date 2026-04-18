@@ -1353,6 +1353,7 @@ function updateShellState() {
   setLauncherTab(state.launcherTab);
   setPrivatePanelTab(state.privatePanelTab, { syncMode: false });
   renderToolPresetPanel();
+  syncPreviewCanvasCursor();
 }
 
 function setLauncherOpen(open) {
@@ -9606,17 +9607,11 @@ function getDominantHitNormal(hit) {
 }
 
 function getPreviewPointerContext(pointerSource) {
-  const preview = ensurePreview();
-  const clientX = Number(pointerSource?.clientX);
-  const clientY = Number(pointerSource?.clientY);
-  if (!preview || !Number.isFinite(clientX) || !Number.isFinite(clientY) || !elements.previewCanvas) {
+  const metrics = getPreviewPointerMetrics(pointerSource);
+  if (!metrics) {
     return null;
   }
-  const rect = elements.previewCanvas.getBoundingClientRect();
-  const pointer = new THREE.Vector2(
-    ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-    -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
-  );
+  const { preview, pointer } = metrics;
   preview.raycaster.setFromCamera(pointer, preview.camera);
   const hit = getFirstPreviewEntityHit(preview.raycaster.intersectObjects(preview.entityPickables, false));
   const groundPoint = new THREE.Vector3();
@@ -10008,20 +10003,95 @@ function getTransformHandleColor(axis) {
   return "#5eb9ff";
 }
 
-function getTransformHandleHit(pointerSource) {
+function getPreviewPointerMetrics(pointerSource) {
   const preview = ensurePreview();
-  if (!preview?.transformPickables?.length || !elements.previewCanvas) {
-    return null;
-  }
-  preview.buildOverlay?.updateMatrixWorld?.(true);
   const clientX = Number(pointerSource?.clientX);
   const clientY = Number(pointerSource?.clientY);
-  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+  if (!preview || !Number.isFinite(clientX) || !Number.isFinite(clientY) || !elements.previewCanvas) {
     return null;
   }
   const rect = elements.previewCanvas.getBoundingClientRect();
-  const pointerX = clientX - rect.left;
-  const pointerY = clientY - rect.top;
+  const width = Math.max(1, rect.width);
+  const height = Math.max(1, rect.height);
+  const canvasX = clientX - rect.left;
+  const canvasY = clientY - rect.top;
+  return {
+    preview,
+    rect,
+    canvasX,
+    canvasY,
+    pointer: new THREE.Vector2(
+      (canvasX / width) * 2 - 1,
+      -((canvasY / height) * 2 - 1),
+    ),
+  };
+}
+
+function projectWorldPointToPreviewScreen(worldPoint, preview = state.preview, rect = null) {
+  if (!preview?.camera || !worldPoint) {
+    return null;
+  }
+  const activeRect = rect ?? elements.previewCanvas?.getBoundingClientRect?.();
+  if (!activeRect) {
+    return null;
+  }
+  const screenPosition = worldPoint.clone().project(preview.camera);
+  if (
+    !Number.isFinite(screenPosition.x)
+    || !Number.isFinite(screenPosition.y)
+    || screenPosition.z < -1
+    || screenPosition.z > 1
+  ) {
+    return null;
+  }
+  return {
+    depth: screenPosition.z,
+    x: (screenPosition.x * 0.5 + 0.5) * activeRect.width,
+    y: (-screenPosition.y * 0.5 + 0.5) * activeRect.height,
+  };
+}
+
+function getPreviewWorldUnitsPerPixel(distance, preview = state.preview, rect = null) {
+  const activeRect = rect ?? elements.previewCanvas?.getBoundingClientRect?.();
+  if (!preview?.camera || !activeRect) {
+    return 0.1;
+  }
+  const fovRadians = THREE.MathUtils.degToRad(Number(preview.camera.fov) || 58);
+  return (
+    Math.max(0.1, distance) * 2 * Math.tan(fovRadians / 2)
+  ) / Math.max(1, activeRect.height);
+}
+
+function syncPreviewCanvasCursor() {
+  if (!elements.previewCanvas) {
+    return;
+  }
+  let cursor = "";
+  if (state.mode === "build" && isEditor()) {
+    if (getActivePlacementTool() || getActivePrefabPlacementId()) {
+      cursor = "crosshair";
+    } else if (state.buildDrag?.handle) {
+      cursor = "grabbing";
+    } else if (state.buildHover?.transformHandle) {
+      cursor = "grab";
+    }
+  }
+  elements.previewCanvas.style.cursor = cursor;
+}
+
+function getTransformHandleHit(pointerSource) {
+  const metrics = getPreviewPointerMetrics(pointerSource);
+  const preview = metrics?.preview;
+  if (!preview?.transformPickables?.length || !metrics) {
+    return null;
+  }
+  preview.buildOverlay?.updateMatrixWorld?.(true);
+  const {
+    rect,
+    canvasX: pointerX,
+    canvasY: pointerY,
+    pointer,
+  } = metrics;
   const hoveredHandleKey = state.buildHover?.transformHandle?.key ?? "";
   const cameraRight = new THREE.Vector3();
   const cameraUp = new THREE.Vector3();
@@ -10029,18 +10099,8 @@ function getTransformHandleHit(pointerSource) {
   preview.camera.matrixWorld.extractBasis(cameraRight, cameraUp, cameraForward);
   cameraRight.normalize();
   cameraUp.normalize();
-  const projectWorldPoint = (worldPoint) => {
-    const screenPosition = worldPoint.clone().project(preview.camera);
-    if (!Number.isFinite(screenPosition.x) || !Number.isFinite(screenPosition.y) || screenPosition.z < -1 || screenPosition.z > 1) {
-      return null;
-    }
-    return {
-      depth: screenPosition.z,
-      x: (screenPosition.x * 0.5 + 0.5) * rect.width,
-      y: (-screenPosition.y * 0.5 + 0.5) * rect.height,
-    };
-  };
-  const rankHandle = (object) => {
+  const projectWorldPoint = (worldPoint) => projectWorldPointToPreviewScreen(worldPoint, preview, rect);
+  const rankHandle = (object, rayDistance = null) => {
     const handle = object?.userData?.privateWorldTransformHandle;
     if (!handle) {
       return null;
@@ -10077,20 +10137,22 @@ function getTransformHandleHit(pointerSource) {
       handle,
       object,
       depth: screenPoint.depth,
+      rayDistance,
       screenDistance: Math.hypot(screenPoint.x - pointerX, screenPoint.y - pointerY),
       thresholdPx: Math.max(baseThresholdPx, projectedRadiusPx + 8),
     };
   };
-  const chooseCandidate = (candidates) => {
+  const chooseCandidate = (candidates, { requireThreshold = true } = {}) => {
     const rankedCandidates = candidates
       .filter(Boolean)
-      .filter((candidate) => candidate.screenDistance <= (
+      .filter((candidate) => !requireThreshold || candidate.screenDistance <= (
         candidate.handle?.key === hoveredHandleKey
           ? candidate.thresholdPx + 10
           : candidate.thresholdPx
       ))
       .sort((left, right) =>
         left.screenDistance - right.screenDistance
+        || (left.rayDistance ?? left.depth) - (right.rayDistance ?? right.depth)
         || left.depth - right.depth
       );
     if (!rankedCandidates.length) {
@@ -10111,6 +10173,26 @@ function getTransformHandleHit(pointerSource) {
       ? bestCandidate
       : stickyCandidate;
   };
+  preview.raycaster.setFromCamera(pointer, preview.camera);
+  const rayCandidates = [];
+  const seenObjects = new Set();
+  for (const hit of preview.raycaster.intersectObjects(preview.transformPickables, false)) {
+    if (!hit?.object || seenObjects.has(hit.object)) {
+      continue;
+    }
+    seenObjects.add(hit.object);
+    const candidate = rankHandle(hit.object, hit.distance);
+    if (candidate) {
+      rayCandidates.push(candidate);
+    }
+  }
+  const rayCandidate = chooseCandidate(rayCandidates, { requireThreshold: false });
+  if (rayCandidate) {
+    return {
+      object: rayCandidate.object,
+      distance: rayCandidate.rayDistance ?? rayCandidate.depth,
+    };
+  }
   const candidate = chooseCandidate(
     preview.transformPickables.map((object) => rankHandle(object)),
   );
@@ -10370,9 +10452,11 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
   const size = frame.size;
   const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
   const handleSize = clampNumber(Math.max(size.x, size.y, size.z) * 0.12, 1.1, 0.6, 2.4);
-  const pickSize = Math.max(handleSize * 2.4, 1.6);
+  const dragHandleKey = state.buildDrag?.handle?.key ?? "";
+  const pickSize = Math.max(handleSize * 3.2, 2.2);
   const handleOffset = Math.max(0.24, handleSize * 0.58);
   for (const handle of getTransformHandleSpecs(frame)) {
+    const isActive = handle.key === dragHandleKey;
     const isHovered = handle.key === hoveredHandleKey;
     const axisVector = getBuildDragAxisVector(handle.axis, frame);
     const handlePosition = handle.position
@@ -10380,12 +10464,13 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
       .applyQuaternion(frameQuaternion)
       .add(frame.center)
       .addScaledVector(axisVector, handle.direction * handleOffset);
+    const visualSize = handleSize * (isActive ? 1.24 : isHovered ? 1.12 : 1);
     const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(handleSize, handleSize, handleSize),
+      new THREE.BoxGeometry(visualSize, visualSize, visualSize),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(getTransformHandleColor(handle.axis)),
         transparent: true,
-        opacity: isHovered ? 1 : 0.82,
+        opacity: isActive ? 1 : isHovered ? 0.96 : 0.82,
         depthWrite: false,
         fog: false,
       }),
@@ -10393,6 +10478,21 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
     mesh.position.copy(handlePosition);
     mesh.quaternion.copy(frameQuaternion);
     preview.buildOverlay.add(mesh);
+    if (isHovered || isActive) {
+      const outline = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(visualSize * 1.18, visualSize * 1.18, visualSize * 1.18)),
+        new THREE.LineBasicMaterial({
+          color: new THREE.Color(isActive ? "#ffffff" : getTransformHandleColor(handle.axis)),
+          transparent: true,
+          opacity: isActive ? 0.94 : 0.62,
+          depthTest: false,
+          fog: false,
+        }),
+      );
+      outline.position.copy(handlePosition);
+      outline.quaternion.copy(frameQuaternion);
+      preview.buildOverlay.add(outline);
+    }
 
     const pickMesh = new THREE.Mesh(
       new THREE.BoxGeometry(pickSize, pickSize, pickSize),
@@ -10428,8 +10528,9 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
   const maxSize = Math.max(size.x, size.y, size.z);
   const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
   const handleLength = clampNumber(maxSize * 0.3, 1.6, 1.05, 3.8);
-  const pickThickness = Math.max(handleThickness * 2.8, 1.9);
-  const pickLength = Math.max(handleLength * 1.35, 2.4);
+  const dragHandleKey = state.buildDrag?.handle?.key ?? "";
+  const pickThickness = Math.max(handleThickness * 3.2, 2.3);
+  const pickLength = Math.max(handleLength * 1.55, 3.1);
   const handleOffset = Math.max(0.18, handleThickness * 0.4);
   const buildDimensions = (axis, longSide, shortSide) => ({
     x: axis === "x" ? longSide : shortSide,
@@ -10437,6 +10538,7 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
     z: axis === "z" ? longSide : shortSide,
   });
   for (const handle of getRotateHandleSpecs(frame)) {
+    const isActive = handle.key === dragHandleKey;
     const isHovered = handle.key === hoveredHandleKey;
     const outward = handle.position.clone();
     if (outward.lengthSq() < 0.0001) {
@@ -10449,7 +10551,11 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
       .applyQuaternion(frameQuaternion)
       .add(center)
       .addScaledVector(outward, handleOffset);
-    const visibleDimensions = buildDimensions(handle.axis, handleLength, handleThickness);
+    const visibleDimensions = buildDimensions(
+      handle.axis,
+      handleLength * (isActive ? 1.18 : isHovered ? 1.08 : 1),
+      handleThickness * (isActive ? 1.28 : isHovered ? 1.12 : 1),
+    );
     const pickDimensions = buildDimensions(handle.axis, pickLength, pickThickness);
 
     const mesh = new THREE.Mesh(
@@ -10457,7 +10563,7 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(getTransformHandleColor(handle.axis)),
         transparent: true,
-        opacity: isHovered ? 1 : 0.86,
+        opacity: isActive ? 1 : isHovered ? 0.96 : 0.86,
         depthWrite: false,
         fog: false,
       }),
@@ -10465,6 +10571,25 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
     mesh.position.copy(handlePosition);
     mesh.quaternion.copy(frameQuaternion);
     preview.buildOverlay.add(mesh);
+    if (isHovered || isActive) {
+      const outline = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(
+          visibleDimensions.x * 1.14,
+          visibleDimensions.y * 1.14,
+          visibleDimensions.z * 1.14,
+        )),
+        new THREE.LineBasicMaterial({
+          color: new THREE.Color(isActive ? "#ffffff" : getTransformHandleColor(handle.axis)),
+          transparent: true,
+          opacity: isActive ? 0.9 : 0.58,
+          depthTest: false,
+          fog: false,
+        }),
+      );
+      outline.position.copy(handlePosition);
+      outline.quaternion.copy(frameQuaternion);
+      preview.buildOverlay.add(outline);
+    }
 
     const pickMesh = new THREE.Mesh(
       new THREE.BoxGeometry(pickDimensions.x, pickDimensions.y, pickDimensions.z),
@@ -10500,9 +10625,11 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   const placementArmed = Boolean(activeTool || activePrefabPlacementId);
   const requestedTransformMode = buildMode ? getBuildTransformMode() : "";
   const hoveredHandleKey = hover?.transformHandle?.key ?? "";
+  const dragHandleKey = state.buildDrag?.handle?.key ?? "";
+  const displayedHandleKey = dragHandleKey || hoveredHandleKey;
   const gridCell = placementArmed ? hover?.gridCell ?? null : null;
   const placement = placementArmed ? hover?.placement ?? null : null;
-  const hoveredEntityRef = hoveredHandleKey ? null : hover?.entityRef ?? null;
+  const hoveredEntityRef = displayedHandleKey ? null : hover?.entityRef ?? null;
   const selectionRefs = buildMode ? getBuilderSelectionRefs() : [];
   let selectedEntities = [];
   if (selectionRefs.length) {
@@ -10523,15 +10650,18 @@ function syncBuildPlacementOverlay(preview = state.preview) {
     selectionRefs.map((entry) => `${entry.kind}:${entry.id}`).join(",") || "noselection",
     getOverlayFrameSignature(selectionFrame),
     hoveredEntityRef ? `${hoveredEntityRef.kind}:${hoveredEntityRef.id}` : "nohover",
-    hoveredHandleKey || "nohandle",
+    displayedHandleKey || "nohandle",
+    dragHandleKey || "nodrag",
     gridCell ? `${gridCell.x}:${gridCell.z}` : "nogrid",
     placement ? `${placement.key}:${placement.valid ? "ok" : "blocked"}` : "noplacement",
   ].join("|");
   if (preview.buildOverlayKey === overlayKey) {
+    syncPreviewCanvasCursor();
     return;
   }
   clearBuildPlacementOverlay(preview);
   preview.buildOverlay.visible = buildMode;
+  syncPreviewCanvasCursor();
   if (!buildMode) {
     return;
   }
@@ -10593,42 +10723,34 @@ function syncBuildPlacementOverlay(preview = state.preview) {
     });
   }
   if ((transformMode === "move" || transformMode === "multi") && groupFrame) {
-    buildTransformHandles(preview, groupFrame, hoveredHandleKey);
+    buildTransformHandles(preview, groupFrame, displayedHandleKey);
   } else if (transformMode === "scale" && groupFrame && canScaleSelection(selectedEntities)) {
     if (canAxisScaleSelection(selectedEntities)) {
-      buildTransformHandles(preview, groupFrame, hoveredHandleKey);
+      buildTransformHandles(preview, groupFrame, displayedHandleKey);
     }
   } else if (transformMode === "rotate" && groupFrame && canRotateSelection(selectedEntities)) {
-    buildRotateHandles(preview, groupFrame, hoveredHandleKey);
+    buildRotateHandles(preview, groupFrame, displayedHandleKey);
   }
   preview.buildOverlay.updateMatrixWorld(true);
   preview.buildOverlayKey = overlayKey;
 }
 
 function raycastPreviewPointer(event) {
-  const preview = ensurePreview();
-  if (!preview) {
+  const metrics = getPreviewPointerMetrics(event);
+  if (!metrics) {
     return null;
   }
-  const rect = elements.previewCanvas.getBoundingClientRect();
-  const pointer = new THREE.Vector2(
-    ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-    -(((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
-  );
+  const { preview, pointer } = metrics;
   preview.raycaster.setFromCamera(pointer, preview.camera);
   return getFirstPreviewEntityHit(preview.raycaster.intersectObjects(preview.entityPickables, false));
 }
 
 function getBuildDragPoint(event, plane) {
-  const preview = ensurePreview();
-  if (!preview || !plane) {
+  const metrics = getPreviewPointerMetrics(event);
+  if (!metrics || !plane) {
     return null;
   }
-  const rect = elements.previewCanvas.getBoundingClientRect();
-  const pointer = new THREE.Vector2(
-    ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-    -(((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
-  );
+  const { preview, pointer } = metrics;
   preview.raycaster.setFromCamera(pointer, preview.camera);
   const point = new THREE.Vector3();
   return preview.raycaster.ray.intersectPlane(plane, point) ? point : null;
@@ -10658,6 +10780,170 @@ function getBuildDragAxisPlane(axis, origin, preview = state.preview, axisVector
   }
   const planeNormal = new THREE.Vector3().crossVectors(axisVector, tangent).normalize();
   return new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, origin);
+}
+
+function createBuildAxisScreenDrag(pointerSource, axisVector, pivot, frame = null) {
+  const metrics = getPreviewPointerMetrics(pointerSource);
+  if (!metrics || !axisVector || !pivot) {
+    return null;
+  }
+  const axisLength = Math.max(
+    1,
+    Number(frame?.size?.x ?? 0),
+    Number(frame?.size?.y ?? 0),
+    Number(frame?.size?.z ?? 0),
+  );
+  const sampleWorld = clampNumber(axisLength * 0.3, 1, 0.8, 4);
+  const projectedPivot = projectWorldPointToPreviewScreen(pivot, metrics.preview, metrics.rect);
+  const projectedAxis = projectWorldPointToPreviewScreen(
+    pivot.clone().addScaledVector(axisVector, sampleWorld),
+    metrics.preview,
+    metrics.rect,
+  );
+  if (projectedPivot && projectedAxis) {
+    const axisScreen = new THREE.Vector2(
+      projectedAxis.x - projectedPivot.x,
+      projectedAxis.y - projectedPivot.y,
+    );
+    const axisPixels = axisScreen.length();
+    if (axisPixels >= 10) {
+      axisScreen.normalize();
+      return {
+        kind: "linear-axis",
+        startX: metrics.canvasX,
+        startY: metrics.canvasY,
+        directionX: axisScreen.x,
+        directionY: axisScreen.y,
+        worldUnitsPerPixel: sampleWorld / axisPixels,
+      };
+    }
+  }
+  const cameraDirection = new THREE.Vector3();
+  metrics.preview.camera.getWorldDirection(cameraDirection);
+  const axisAlignment = axisVector.clone().normalize().dot(cameraDirection.normalize());
+  const worldUnitsPerPixel = getPreviewWorldUnitsPerPixel(
+    metrics.preview.camera.position.distanceTo(pivot),
+    metrics.preview,
+    metrics.rect,
+  ) * 1.35;
+  return {
+    kind: "linear-axis",
+    startX: metrics.canvasX,
+    startY: metrics.canvasY,
+    directionX: 0,
+    directionY: -1,
+    worldUnitsPerPixel: worldUnitsPerPixel * (axisAlignment >= 0 ? 1 : -1),
+  };
+}
+
+function createBuildRotateScreenDrag(pointerSource, frame, handle, axisVector, pivot) {
+  const metrics = getPreviewPointerMetrics(pointerSource);
+  if (!metrics || !frame || !handle || !axisVector || !pivot) {
+    return null;
+  }
+  const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
+  const maxSize = Math.max(frame.size.x, frame.size.y, frame.size.z);
+  const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
+  const handleOffset = Math.max(0.18, handleThickness * 0.4);
+  const handleSpec = getRotateHandleSpecs(frame).find((entry) => entry.key === handle.key);
+  if (!handleSpec) {
+    return null;
+  }
+  const outward = handleSpec.position.clone();
+  if (outward.lengthSq() < 0.0001) {
+    outward.copy(getBuildDragAxisVector(handle.axis, frame));
+  } else {
+    outward.applyQuaternion(frameQuaternion).normalize();
+  }
+  const handlePosition = handleSpec.position
+    .clone()
+    .applyQuaternion(frameQuaternion)
+    .add(pivot)
+    .addScaledVector(outward, handleOffset);
+  const projectedPivot = projectWorldPointToPreviewScreen(pivot, metrics.preview, metrics.rect);
+  const projectedHandle = projectWorldPointToPreviewScreen(handlePosition, metrics.preview, metrics.rect);
+  const radial = handlePosition.clone().sub(pivot);
+  const tangent = new THREE.Vector3().crossVectors(axisVector, radial);
+  if (projectedPivot && projectedHandle && tangent.lengthSq() > 0.0001) {
+    const tangentSampleDistance = clampNumber(radial.length() * 0.35, 1, 0.8, 3);
+    const projectedTangent = projectWorldPointToPreviewScreen(
+      handlePosition.clone().addScaledVector(tangent.normalize(), tangentSampleDistance),
+      metrics.preview,
+      metrics.rect,
+    );
+    if (projectedTangent) {
+      const tangentScreen = new THREE.Vector2(
+        projectedTangent.x - projectedHandle.x,
+        projectedTangent.y - projectedHandle.y,
+      );
+      const tangentPixels = tangentScreen.length();
+      const radiusPixels = Math.hypot(
+        projectedHandle.x - projectedPivot.x,
+        projectedHandle.y - projectedPivot.y,
+      );
+      if (tangentPixels >= 8 && radiusPixels >= 18) {
+        tangentScreen.normalize();
+        return {
+          kind: "rotate-axis",
+          mode: "linear",
+          startX: metrics.canvasX,
+          startY: metrics.canvasY,
+          directionX: tangentScreen.x,
+          directionY: tangentScreen.y,
+          radiansPerPixel: 1 / radiusPixels,
+        };
+      }
+    }
+  }
+  if (!projectedPivot) {
+    return null;
+  }
+  const cameraDirection = new THREE.Vector3();
+  metrics.preview.camera.getWorldDirection(cameraDirection);
+  return {
+    kind: "rotate-axis",
+    mode: "angle",
+    centerX: projectedPivot.x,
+    centerY: projectedPivot.y,
+    startAngle: Math.atan2(
+      metrics.canvasY - projectedPivot.y,
+      metrics.canvasX - projectedPivot.x,
+    ),
+    angleSign: axisVector.clone().normalize().dot(cameraDirection.normalize()) >= 0 ? 1 : -1,
+  };
+}
+
+function getBuildScreenDragAmount(pointerSource, screenDrag) {
+  const metrics = getPreviewPointerMetrics(pointerSource);
+  if (!metrics || screenDrag?.kind !== "linear-axis") {
+    return null;
+  }
+  const deltaX = metrics.canvasX - screenDrag.startX;
+  const deltaY = metrics.canvasY - screenDrag.startY;
+  return (
+    deltaX * (screenDrag.directionX ?? 0)
+    + deltaY * (screenDrag.directionY ?? 0)
+  ) * (screenDrag.worldUnitsPerPixel ?? 0);
+}
+
+function getBuildScreenDragAngle(pointerSource, screenDrag) {
+  const metrics = getPreviewPointerMetrics(pointerSource);
+  if (!metrics || screenDrag?.kind !== "rotate-axis") {
+    return null;
+  }
+  if (screenDrag.mode === "linear") {
+    const deltaX = metrics.canvasX - screenDrag.startX;
+    const deltaY = metrics.canvasY - screenDrag.startY;
+    return (
+      deltaX * (screenDrag.directionX ?? 0)
+      + deltaY * (screenDrag.directionY ?? 0)
+    ) * (screenDrag.radiansPerPixel ?? 0);
+  }
+  const currentAngle = Math.atan2(
+    metrics.canvasY - (screenDrag.centerY ?? 0),
+    metrics.canvasX - (screenDrag.centerX ?? 0),
+  );
+  return normalizeAngle((currentAngle - (screenDrag.startAngle ?? 0)) * (screenDrag.angleSign ?? 1));
 }
 
 function getBuildMoveStep(kind) {
@@ -10937,6 +11223,7 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
   let axis = null;
   let axisVector = null;
   let direction = 0;
+  let screenDrag = null;
   let dragType = transformMode === "scale" ? "scale-uniform" : "move-plane";
   if (hoveredHandle) {
     axis = hoveredHandle.axis;
@@ -10947,7 +11234,8 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
       }
       plane = new THREE.Plane().setFromNormalAndCoplanarPoint(axisVector, pivot);
       startPoint = getBuildDragPoint(event, plane);
-      if (!startPoint) {
+      screenDrag = createBuildRotateScreenDrag(event, selectionFrame, hoveredHandle, axisVector, pivot);
+      if (!startPoint && !screenDrag) {
         return false;
       }
       dragType = "rotate-axis";
@@ -10958,7 +11246,8 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
       direction = hoveredHandle.direction;
       plane = getBuildDragAxisPlane(axis, pivot, state.preview, axisVector);
       startPoint = getBuildDragPoint(event, plane);
-      if (!startPoint) {
+      screenDrag = createBuildAxisScreenDrag(event, axisVector, pivot, selectionFrame);
+      if (!startPoint && !screenDrag) {
         return false;
       }
       dragType = transformMode === "scale" ? "scale-axis" : "move-axis";
@@ -10987,11 +11276,13 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
     axis,
     axisVector: axisVector?.clone?.() ?? null,
     direction,
+    handle: hoveredHandle ? { ...hoveredHandle } : null,
     pivot: { x: pivot.x, y: pivot.y, z: pivot.z },
     startPoint: startPoint?.clone?.() ?? null,
     startVector: dragType === "rotate-axis"
-      ? startPoint.clone().sub(pivot)
+      ? (startPoint ? startPoint.clone().sub(pivot) : null)
       : null,
+    screenDrag,
     startBoundsSize: selectionFrame.size.clone(),
     startClientX: event.clientX,
     startClientY: event.clientY,
@@ -11006,6 +11297,7 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
     })),
     moved: false,
   };
+  syncBuildPlacementOverlay();
   return true;
 }
 
@@ -11023,31 +11315,46 @@ function updateBuildDrag(event) {
     || state.buildDrag.type === "rotate-axis"
   ) {
     const point = getBuildDragPoint(event, state.buildDrag.plane);
-    if (!point || !state.buildDrag.startPoint) {
-      return false;
-    }
-    const delta = new THREE.Vector3().subVectors(point, state.buildDrag.startPoint);
+    const hasPlanePoint = Boolean(point && state.buildDrag.startPoint);
+    const delta = hasPlanePoint
+      ? new THREE.Vector3().subVectors(point, state.buildDrag.startPoint)
+      : new THREE.Vector3();
     const axisVector = state.buildDrag.axisVector?.clone?.()
       ?? getBuildDragAxisVector(state.buildDrag.axis);
     if (state.buildDrag.type === "move-plane") {
+      if (!hasPlanePoint) {
+        return false;
+      }
       amount = 0;
       state.buildDrag.delta = delta;
       state.buildDrag.moved = state.buildDrag.moved || delta.lengthSq() > 0.0004;
     } else if (state.buildDrag.type === "rotate-axis") {
-      const pivot = new THREE.Vector3(
-        Number(state.buildDrag.pivot?.x ?? 0) || 0,
-        Number(state.buildDrag.pivot?.y ?? 0) || 0,
-        Number(state.buildDrag.pivot?.z ?? 0) || 0,
-      );
-      const startVector = state.buildDrag.startVector?.clone?.() ?? null;
-      const currentVector = point.clone().sub(pivot);
-      if (!startVector) {
-        return false;
+      if (hasPlanePoint) {
+        const pivot = new THREE.Vector3(
+          Number(state.buildDrag.pivot?.x ?? 0) || 0,
+          Number(state.buildDrag.pivot?.y ?? 0) || 0,
+          Number(state.buildDrag.pivot?.z ?? 0) || 0,
+        );
+        const startVector = state.buildDrag.startVector?.clone?.() ?? null;
+        const currentVector = point.clone().sub(pivot);
+        if (!startVector) {
+          return false;
+        }
+        angle = getSignedAngleAroundAxis(startVector, currentVector, axisVector);
+      } else {
+        angle = getBuildScreenDragAngle(event, state.buildDrag.screenDrag);
+        if (!Number.isFinite(angle)) {
+          return false;
+        }
       }
-      angle = getSignedAngleAroundAxis(startVector, currentVector, axisVector);
       state.buildDrag.moved = state.buildDrag.moved || Math.abs(angle) > 0.01;
     } else {
-      amount = delta.dot(axisVector);
+      amount = hasPlanePoint
+        ? delta.dot(axisVector)
+        : getBuildScreenDragAmount(event, state.buildDrag.screenDrag);
+      if (!Number.isFinite(amount)) {
+        return false;
+      }
       state.buildDrag.moved = state.buildDrag.moved || Math.abs(amount) > 0.02;
     }
   } else if (state.buildDrag.type === "scale-uniform") {
@@ -11121,6 +11428,7 @@ function endBuildDrag(pointerId = 0, pointerEvent = null) {
     recordBuildSuppressedClick(pointerEvent);
   }
   state.buildDrag = null;
+  syncBuildPlacementOverlay();
 }
 
 function buildPlacementEntry(kind, sceneDoc, placement) {
