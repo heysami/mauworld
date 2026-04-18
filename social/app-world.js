@@ -1010,6 +1010,10 @@ function setPrivateGateSectionVisibility(element, isVisible, displayValue = "") 
   element.style.display = "none";
 }
 
+function normalizePublicAccessContext(context = "account") {
+  return context === "worlds" ? "worlds" : "account";
+}
+
 function getOwnedPrivateWorlds(worlds = [], profile = null) {
   const username = String(profile?.username ?? "").trim().toLowerCase();
   if (!username) {
@@ -1183,7 +1187,10 @@ async function ensurePrivateWorldGateClient() {
         renderPrivateWorldGate();
         return;
       }
-      void refreshPrivateWorldGateState({ preserveStatus: true });
+      void refreshPrivateWorldGateState({
+        preserveStatus: true,
+        context: gate.open ? normalizePublicAccessContext(gate.context) : "account",
+      });
     });
     return gate;
   } finally {
@@ -1196,7 +1203,8 @@ async function ensurePrivateWorldGateClient() {
 
 async function refreshPrivateWorldGateState(options = {}) {
   const gate = state.privateWorldGate;
-  const accountOnly = options.context === "account";
+  const nextContext = normalizePublicAccessContext(options.context || gate.context);
+  const accountOnly = nextContext === "account";
   if (!gate.session) {
     gate.profile = null;
     gate.worlds = [];
@@ -1233,7 +1241,7 @@ async function refreshPrivateWorldGateState(options = {}) {
     if (gate.requestId !== requestId) {
       return;
     }
-    setPrivateWorldGateStatus(error.message || "Could not load private worlds.");
+    setPrivateWorldGateStatus(error.message || (accountOnly ? "Could not load your account." : "Could not load private worlds."));
   } finally {
     if (gate.requestId === requestId) {
       gate.busy = false;
@@ -1245,7 +1253,7 @@ async function refreshPrivateWorldGateState(options = {}) {
 }
 
 async function openPrivateWorldGate(context = "worlds") {
-  const nextContext = context === "account" ? "account" : "worlds";
+  const nextContext = normalizePublicAccessContext(context);
   state.privateWorldGate.context = nextContext;
   state.privateWorldGate.open = true;
   renderPrivateWorldGate();
@@ -1255,7 +1263,7 @@ async function openPrivateWorldGate(context = "worlds") {
   } catch (error) {
     state.privateWorldGate.busy = false;
     state.privateWorldGate.ready = true;
-    setPrivateWorldGateStatus(error.message || "Could not open private worlds.");
+    setPrivateWorldGateStatus(error.message || (nextContext === "account" ? "Could not open account." : "Could not open private worlds."));
     renderPublicSessionSummary();
     renderPrivateWorldGate();
   }
@@ -1358,8 +1366,10 @@ async function savePrivateWorldGateProfile(event) {
       },
     });
     gate.profile = payload.profile ?? null;
-    const worldsPayload = await privateWorldGateApiFetch("/private/worlds");
-    gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
+    if (normalizePublicAccessContext(gate.context) === "worlds") {
+      const worldsPayload = await privateWorldGateApiFetch("/private/worlds");
+      gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
+    }
     applyPublicAuthState();
     setPrivateWorldGateStatus("Profile saved.");
   } catch (error) {
@@ -1374,7 +1384,7 @@ async function savePrivateWorldGateProfile(event) {
 async function initializePublicAuthState() {
   try {
     await ensurePrivateWorldGateClient();
-    await refreshPrivateWorldGateState({ preserveStatus: true });
+    await refreshPrivateWorldGateState({ preserveStatus: true, context: "account" });
   } catch (_error) {
     state.privateWorldGate.ready = true;
     renderPublicSessionSummary();
@@ -9349,7 +9359,7 @@ function registerInput() {
     void signUpPrivateWorldGate();
   });
   elements.privateGateRefresh?.addEventListener("click", () => {
-    void refreshPrivateWorldGateState();
+    void refreshPrivateWorldGateState({ context: "worlds" });
   });
   elements.privateGateCreate?.addEventListener("click", () => {
     navigateToPrivateWorld({ intent: "create" });
