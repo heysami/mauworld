@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418l" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418m" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -665,19 +665,22 @@
             </section>
           </section>
 
-          <section class="pw-drawer-view" data-scene-drawer-view="prefabs" role="tabpanel" hidden>
-            <section class="pw-builder-panel">
-              <div class="pw-panel__header">
-                <h3>Prefabs</h3>
-                <button type="button" class="is-muted" data-place-prefab disabled>Use in world</button>
-              </div>
-              <label class="pw-prefab-search">
-                <span>Find prefab</span>
-                <input type="search" data-prefab-search placeholder="Search prefab library" />
-              </label>
-              <p class="pw-prefab-search__hint" data-prefab-search-hint>Pick a prefab, then click in the world to place it.</p>
-              <div class="pw-prefab-list" data-prefab-list></div>
-            </section>
+          <section class="pw-drawer-view pw-drawer-view--prefabs" data-scene-drawer-view="prefabs" role="tabpanel" hidden>
+            <div class="pw-prefab-sidebar">
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Prefab library</h3>
+                  <button type="button" class="is-muted" data-place-prefab disabled>Use in world</button>
+                </div>
+                <label class="pw-prefab-search">
+                  <span>Find prefab</span>
+                  <input type="search" data-prefab-search placeholder="Search prefab library" />
+                </label>
+                <p class="pw-prefab-search__hint" data-prefab-search-hint>Pick a prefab, then click in the world to place it.</p>
+                <div class="pw-prefab-list" data-prefab-list></div>
+              </section>
+            </div>
+            <div class="pw-prefab-detail-stack" data-prefab-detail></div>
           </section>
 
           <section class="pw-drawer-view" data-scene-drawer-view="logic" role="tabpanel" hidden>
@@ -743,6 +746,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418k"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418m"></script>
   </body>
 </html>

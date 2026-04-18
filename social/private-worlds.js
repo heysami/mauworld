@@ -522,6 +522,7 @@ const elements = {
   entityEmpty: document.querySelector("[data-entity-empty]"),
   selectionLabel: document.querySelector("[data-selection-label]"),
   prefabList: document.querySelector("[data-prefab-list]"),
+  prefabDetail: document.querySelector("[data-prefab-detail]"),
   prefabSearch: document.querySelector("[data-prefab-search]"),
   prefabSearchHint: document.querySelector("[data-prefab-search-hint]"),
   removeEntity: document.querySelector("[data-remove-entity]"),
@@ -5250,7 +5251,7 @@ function buildEntitySummary(kind, entry = {}) {
 }
 
 function renderSceneBuilder() {
-  if (!elements.entitySections || !elements.entityEditor || !elements.prefabList) {
+  if (!elements.entitySections || !elements.entityEditor || !elements.prefabList || !elements.prefabDetail) {
     return;
   }
   let sceneDoc = null;
@@ -5262,6 +5263,7 @@ function renderSceneBuilder() {
     elements.entitySections.innerHTML = '<div class="pw-builder-group"><p class="pw-builder-empty">Fix the scene JSON to continue editing.</p></div>';
     elements.entityEditor.innerHTML = "";
     elements.prefabList.innerHTML = "";
+    elements.prefabDetail.innerHTML = "";
     return;
   }
   const selected = ensureBuilderSelection(sceneDoc);
@@ -6034,6 +6036,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
 function renderPrefabList(sceneDoc) {
   const prefabs = state.selectedWorld?.prefabs ?? [];
   const normalizedQuery = String(state.prefabQuery ?? "").trim().toLowerCase();
+  const canEditPrefabs = isEditor() && state.mode === "build";
   const visiblePrefabs = prefabs
     .map((prefab) => ({
       prefab,
@@ -6049,7 +6052,16 @@ function renderPrefabList(sceneDoc) {
       return String(right.prefab.updated_at ?? "").localeCompare(String(left.prefab.updated_at ?? ""));
     });
   if (!prefabs.length) {
+    state.selectedPrefabId = "";
     elements.prefabList.innerHTML = '<div class="pw-prefab-card"><p>No prefabs yet. Select an object and convert it into one.</p></div>';
+    if (elements.prefabDetail) {
+      elements.prefabDetail.innerHTML = `
+        <section class="pw-builder-panel pw-prefab-detail pw-prefab-detail--empty">
+          <h3>Prefab details</h3>
+          <p class="pw-builder-empty">Select an object and turn it into a prefab to start building a reusable library.</p>
+        </section>
+      `;
+    }
     if (elements.prefabSearchHint) {
       elements.prefabSearchHint.textContent = "Turn a scene item into a prefab, then place it in the world from here.";
     }
@@ -6057,46 +6069,80 @@ function renderPrefabList(sceneDoc) {
   }
   if (!visiblePrefabs.length) {
     elements.prefabList.innerHTML = '<div class="pw-prefab-card"><p>No prefabs match that search.</p></div>';
+    if (elements.prefabDetail) {
+      elements.prefabDetail.innerHTML = `
+        <section class="pw-builder-panel pw-prefab-detail pw-prefab-detail--empty">
+          <h3>Prefab details</h3>
+          <p class="pw-builder-empty">No prefab matches that search. Try another name or clear the filter.</p>
+        </section>
+      `;
+    }
     if (elements.prefabSearchHint) {
       elements.prefabSearchHint.textContent = "Try a different name or clear the search.";
     }
     return;
   }
-  const activePrefab = visiblePrefabs.find(({ prefab }) => prefab.id === state.prefabPlacementId || prefab.id === state.selectedPrefabId)?.prefab ?? null;
+  const selectedEntry = visiblePrefabs.find(({ prefab }) => prefab.id === state.selectedPrefabId)
+    ?? visiblePrefabs.find(({ prefab }) => prefab.id === state.prefabPlacementId)
+    ?? visiblePrefabs[0];
+  const activePrefab = selectedEntry?.prefab ?? null;
+  if (activePrefab && state.selectedPrefabId !== activePrefab.id) {
+    state.selectedPrefabId = activePrefab.id;
+  }
   if (elements.prefabSearchHint) {
     elements.prefabSearchHint.textContent = state.prefabPlacementId
       ? `Placing ${activePrefab?.name || "prefab"} in the world. Click a spot in build mode to drop it.`
       : `${visiblePrefabs.length} prefab${visiblePrefabs.length === 1 ? "" : "s"} ready. Pick one, then click in the world to place it.`;
   }
   elements.prefabList.innerHTML = visiblePrefabs.map(({ prefab, meta }) => {
-    const isSelected = state.selectedPrefabId === prefab.id;
+    const isSelected = activePrefab?.id === prefab.id;
     const isArmed = state.prefabPlacementId === prefab.id;
+    const status = isArmed ? "armed" : isSelected ? "selected" : "saved";
     return `
-      <article class="pw-prefab-card ${isSelected ? "is-active" : ""} ${isArmed ? "is-armed" : ""}" data-prefab-card="${htmlEscape(prefab.id)}" data-prefab-card-select="${htmlEscape(prefab.id)}">
-        <div class="pw-prefab-card__head">
-          <div class="pw-prefab-card__title">
+      <button
+        type="button"
+        class="pw-scene-library-item pw-prefab-row ${isSelected ? "is-active" : ""} ${isArmed ? "is-armed" : ""}"
+        data-prefab-card-select="${htmlEscape(prefab.id)}"
+      >
+        <div class="pw-scene-library-item__head">
+          <strong>${htmlEscape(prefab.name)}</strong>
+          <span>${status}</span>
+        </div>
+        <small>${htmlEscape(meta.itemCount)} item${meta.itemCount === 1 ? "" : "s"} · ${htmlEscape(meta.sizeSummary)}</small>
+        <small>${htmlEscape(meta.typeSummary)}</small>
+      </button>
+    `;
+  }).join("");
+  if (elements.prefabDetail && selectedEntry) {
+    const { prefab, meta } = selectedEntry;
+    const isArmed = state.prefabPlacementId === prefab.id;
+    const status = isArmed ? "armed" : "selected";
+    const updatedAt = prefab.updated_at ? new Date(prefab.updated_at).toLocaleString() : "new";
+    elements.prefabDetail.innerHTML = `
+      <section class="pw-builder-panel pw-prefab-detail">
+        <div class="pw-panel__header">
+          <h3>Prefab details</h3>
+          <span class="pw-prefab-card__badge">${status}</span>
+        </div>
+        <div class="pw-scene-focus">
+          <div class="pw-scene-focus__head">
             <strong>${htmlEscape(prefab.name)}</strong>
             <span>${htmlEscape(meta.typeSummary)}</span>
           </div>
-          <span class="pw-prefab-card__badge">${isArmed ? "armed" : isSelected ? "selected" : "saved"}</span>
-        </div>
-        <p>${htmlEscape(meta.itemCount)} item${meta.itemCount === 1 ? "" : "s"} · ${htmlEscape(meta.sizeSummary)}</p>
-        <div class="pw-prefab-card__meta">
-          <span>${htmlEscape(prefab.updated_at ? new Date(prefab.updated_at).toLocaleString() : "new")}</span>
-          <span>${htmlEscape(meta.typeSummary)}</span>
+          <small>${htmlEscape(meta.itemCount)} item${meta.itemCount === 1 ? "" : "s"} · ${htmlEscape(meta.sizeSummary)}</small>
+          <small>Updated ${htmlEscape(updatedAt)}</small>
         </div>
         <label>
           <span>Name</span>
-          <input type="text" data-prefab-name="${htmlEscape(prefab.id)}" value="${htmlEscape(prefab.name)}" ${!isEditor() || state.mode !== "build" ? "disabled" : ""} />
+          <input type="text" data-prefab-name="${htmlEscape(prefab.id)}" value="${htmlEscape(prefab.name)}" ${canEditPrefabs ? "" : "disabled"} />
         </label>
         <div class="pw-prefab-card__actions">
-          <button type="button" data-place-prefab-id="${htmlEscape(prefab.id)}" ${!isEditor() || state.mode !== "build" ? "disabled" : ""}>${isArmed ? "Cancel" : "Use in world"}</button>
-          <button type="button" class="is-muted" data-select-prefab="${htmlEscape(prefab.id)}">Details</button>
-          <button type="button" class="is-muted" data-delete-prefab="${htmlEscape(prefab.id)}" ${!isEditor() || state.mode !== "build" ? "disabled" : ""}>Remove</button>
+          <button type="button" data-place-prefab-id="${htmlEscape(prefab.id)}" ${canEditPrefabs ? "" : "disabled"}>${isArmed ? "Cancel world placement" : "Use in world"}</button>
+          <button type="button" class="is-muted" data-delete-prefab="${htmlEscape(prefab.id)}" ${canEditPrefabs ? "" : "disabled"}>Remove</button>
         </div>
-      </article>
+      </section>
     `;
-  }).join("");
+  }
 }
 
 function renderWorldMeta() {
@@ -12141,7 +12187,7 @@ function bindEvents() {
     armPrefabPlacement(state.selectedPrefabId, { toggle: true });
     renderSceneBuilder();
   });
-  elements.prefabList.addEventListener("click", (event) => {
+  const handlePrefabLibraryClick = (event) => {
     const selectButton = event.target.closest("[data-select-prefab]");
     if (selectButton) {
       state.selectedPrefabId = selectButton.getAttribute("data-select-prefab");
@@ -12164,12 +12210,12 @@ function bindEvents() {
       return;
     }
     const card = event.target.closest("[data-prefab-card-select]");
-    if (card && !event.target.closest("button, input, select, textarea, label")) {
+    if (card) {
       state.selectedPrefabId = card.getAttribute("data-prefab-card-select");
       renderSceneBuilder();
     }
-  });
-  elements.prefabList.addEventListener("change", (event) => {
+  };
+  const handlePrefabRenameChange = (event) => {
     const input = event.target.closest("[data-prefab-name]");
     if (!input) {
       return;
@@ -12177,7 +12223,11 @@ function bindEvents() {
     void renamePrefab(input.getAttribute("data-prefab-name"), input.value).catch((error) => {
       setStatus(error.message);
     });
-  });
+  };
+  elements.prefabList.addEventListener("click", handlePrefabLibraryClick);
+  elements.prefabDetail?.addEventListener("click", handlePrefabLibraryClick);
+  elements.prefabList.addEventListener("change", handlePrefabRenameChange);
+  elements.prefabDetail?.addEventListener("change", handlePrefabRenameChange);
   elements.prefabSearch?.addEventListener("input", () => {
     state.prefabQuery = elements.prefabSearch.value || "";
     renderSceneBuilder();

@@ -662,7 +662,8 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 .pw-resolve-form label,
 .pw-collaborator-form label,
 .pw-ai-form label,
-.pw-prefab-card label {
+.pw-prefab-card label,
+.pw-prefab-detail label {
   display: grid;
   gap: 6px;
 }
@@ -685,7 +686,8 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 .pw-ai-form input,
 .pw-ai-form textarea,
 .pw-ai-form select,
-.pw-prefab-card input {
+.pw-prefab-card input,
+.pw-prefab-detail input {
   width: 100%;
   min-width: 0;
   padding: 11px 12px;
@@ -905,13 +907,31 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   align-items: start;
 }
 
+.pw-drawer-view--prefabs {
+  grid-template-columns: minmax(248px, 292px) minmax(0, 1fr);
+  align-items: start;
+}
+
 .pw-scene-sidebar {
   position: sticky;
   top: 0;
   align-self: start;
 }
 
+.pw-prefab-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+}
+
 .pw-scene-editor-stack {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  align-content: start;
+}
+
+.pw-prefab-detail-stack {
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -1067,6 +1087,24 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   border-color: rgba(45, 216, 255, 0.34);
   color: var(--pw-text);
   background: rgba(45, 216, 255, 0.12);
+}
+
+.pw-prefab-row.is-armed {
+  border-color: rgba(45, 216, 255, 0.34);
+  background: rgba(45, 216, 255, 0.08);
+}
+
+.pw-prefab-row small + small {
+  margin-top: -2px;
+}
+
+.pw-prefab-detail {
+  display: grid;
+  gap: 12px;
+}
+
+.pw-prefab-detail--empty {
+  align-content: start;
 }
 
 .pw-script-editor__fields {
@@ -1439,7 +1477,7 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
 
 .pw-prefab-card__actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .pw-collaborator-item,
@@ -1559,11 +1597,23 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
     grid-template-columns: 1fr;
   }
 
+  .pw-drawer-view--prefabs {
+    grid-template-columns: 1fr;
+  }
+
   .pw-scene-sidebar {
     position: static;
   }
 
+  .pw-prefab-sidebar {
+    position: static;
+  }
+
   .pw-scene-library {
+    max-height: min(26dvh, 260px);
+  }
+
+  .pw-prefab-list {
     max-height: min(26dvh, 260px);
   }
 }
