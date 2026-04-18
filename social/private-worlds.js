@@ -11444,6 +11444,7 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
       ? (startPoint ? startPoint.clone().sub(pivot) : null)
       : null,
     screenDrag,
+    preferScreenDrag: Boolean(hoveredHandle && screenDrag),
     startBoundsSize: selectionFrame.size.clone(),
     startClientX: event.clientX,
     startClientY: event.clientY,
@@ -11475,7 +11476,20 @@ function updateBuildDrag(event) {
     || state.buildDrag.type === "scale-axis"
     || state.buildDrag.type === "rotate-axis"
   ) {
-    const point = getBuildDragPoint(event, state.buildDrag.plane);
+    const preferScreenDrag = Boolean(state.buildDrag.preferScreenDrag && state.buildDrag.screenDrag);
+    const screenAmount = preferScreenDrag
+      && (state.buildDrag.type === "move-axis" || state.buildDrag.type === "scale-axis")
+      ? getBuildScreenDragAmount(event, state.buildDrag.screenDrag)
+      : null;
+    const screenAngle = preferScreenDrag && state.buildDrag.type === "rotate-axis"
+      ? getBuildScreenDragAngle(event, state.buildDrag.screenDrag)
+      : null;
+    const point = (
+      (state.buildDrag.type === "move-plane")
+      || (!Number.isFinite(screenAmount) && !Number.isFinite(screenAngle))
+    )
+      ? getBuildDragPoint(event, state.buildDrag.plane)
+      : null;
     const hasPlanePoint = Boolean(point && state.buildDrag.startPoint);
     const delta = hasPlanePoint
       ? new THREE.Vector3().subVectors(point, state.buildDrag.startPoint)
@@ -11490,7 +11504,9 @@ function updateBuildDrag(event) {
       state.buildDrag.delta = delta;
       state.buildDrag.moved = state.buildDrag.moved || delta.lengthSq() > 0.0004;
     } else if (state.buildDrag.type === "rotate-axis") {
-      if (hasPlanePoint) {
+      if (Number.isFinite(screenAngle)) {
+        angle = screenAngle;
+      } else if (hasPlanePoint) {
         const pivot = new THREE.Vector3(
           Number(state.buildDrag.pivot?.x ?? 0) || 0,
           Number(state.buildDrag.pivot?.y ?? 0) || 0,
@@ -11510,9 +11526,11 @@ function updateBuildDrag(event) {
       }
       state.buildDrag.moved = state.buildDrag.moved || Math.abs(angle) > 0.01;
     } else {
-      amount = hasPlanePoint
-        ? delta.dot(axisVector)
-        : getBuildScreenDragAmount(event, state.buildDrag.screenDrag);
+      amount = Number.isFinite(screenAmount)
+        ? screenAmount
+        : hasPlanePoint
+          ? delta.dot(axisVector)
+          : getBuildScreenDragAmount(event, state.buildDrag.screenDrag);
       if (!Number.isFinite(amount)) {
         return false;
       }
