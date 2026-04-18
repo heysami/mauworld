@@ -358,16 +358,11 @@
             <button type="button" class="world-private-gate__close" data-world-private-gate-close>Close</button>
           </div>
 
-          <p class="world-private-gate__copy" data-world-private-gate-copy>
+          <p class="world-private-gate__copy pw-access-note" data-world-private-gate-copy>
             Sign in here first. Then you can choose one of your private worlds or start a new one.
           </p>
 
-          <div class="world-private-gate__account" data-world-private-gate-account hidden>
-            <span data-world-private-gate-account-label>Signed in.</span>
-            <button type="button" class="world-private-gate__ghost" data-world-private-gate-signout>Sign Out</button>
-          </div>
-
-          <form class="world-private-gate__auth" data-world-private-gate-auth>
+          <form class="world-private-gate__auth pw-auth-form" data-world-private-gate-auth>
             <label>
               <span>Email</span>
               <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
@@ -381,6 +376,22 @@
               <button type="button" class="world-private-gate__ghost" data-world-private-gate-auth-action="signup">Create Account</button>
             </div>
           </form>
+
+          <form class="world-private-gate__profile pw-profile-form" data-world-private-gate-profile hidden>
+            <label>
+              <span>Username</span>
+              <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
+            </label>
+            <label>
+              <span>Display Name</span>
+              <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
+            </label>
+            <button type="submit">Save Profile</button>
+          </form>
+
+          <div class="world-private-gate__account-actions pw-inline-actions pw-account-actions" data-world-private-gate-account-actions hidden>
+            <button type="button" class="world-private-gate__ghost is-muted" data-world-private-gate-signout>Sign Out</button>
+          </div>
 
           <section class="world-private-gate__worlds" data-world-private-gate-worlds hidden>
             <div class="world-private-gate__actions world-private-gate__actions--top">
@@ -410,6 +421,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/app-world.js?v=20260418c"></script>
+    <script type="module" src="/social/app-world.js?v=20260418d"></script>
   </body>
 </html>

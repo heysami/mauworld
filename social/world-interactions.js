@@ -107,12 +107,121 @@ const SHARED_WORLD_PANEL_TAB_LABELS = Object.freeze({
   live: "What's Live",
 });
 
+const DEFAULT_AUTH_SESSION_COPY = Object.freeze({
+  checkingLabel: "Checking your account.",
+  checkingAction: "Loading",
+  signedInFallbackLabel: "Signed in.",
+  signedInAction: "Account",
+  signedOutLabel: "Sign in to open your private worlds.",
+  signedOutAction: "Sign In",
+});
+
+const DEFAULT_AUTH_ACCESS_COPY = Object.freeze({
+  checkingHeading: "Checking account",
+  checkingNote: "Loading your account before this private world opens.",
+  signedInHeading: "Account",
+  signedInNote: "Edit your profile here, or sign out when you are done.",
+  signedOutHeading: "Sign in",
+  signedOutNote: "There is no shared demo login here. Use your own email and password, or create an account first.",
+});
+
 export function syncWorldPanelTabLabels(buttons, attributeName, labels = SHARED_WORLD_PANEL_TAB_LABELS) {
   for (const button of buttons ?? []) {
     const tabName = String(button?.getAttribute?.(attributeName) ?? "").trim();
     const label = labels[tabName];
     if (label) {
       button.textContent = label;
+    }
+  }
+}
+
+export function renderAuthSessionSummary(options = {}) {
+  const {
+    ready = false,
+    session = null,
+    profile = null,
+    labelElement = null,
+    actionButton = null,
+    copy = {},
+  } = options;
+  if (!labelElement || !actionButton) {
+    return;
+  }
+  const labels = { ...DEFAULT_AUTH_SESSION_COPY, ...(copy ?? {}) };
+  if (!ready) {
+    labelElement.textContent = labels.checkingLabel;
+    actionButton.textContent = labels.checkingAction;
+    actionButton.disabled = true;
+    return;
+  }
+  actionButton.disabled = false;
+  const username = String(profile?.username ?? "").trim();
+  if (session && username) {
+    labelElement.textContent = `Signed in as @${username}.`;
+    actionButton.textContent = labels.signedInAction;
+    return;
+  }
+  if (session) {
+    labelElement.textContent = labels.signedInFallbackLabel;
+    actionButton.textContent = labels.signedInAction;
+    return;
+  }
+  labelElement.textContent = labels.signedOutLabel;
+  actionButton.textContent = labels.signedOutAction;
+}
+
+export function renderAuthAccessSection(options = {}) {
+  const {
+    ready = false,
+    session = null,
+    profile = null,
+    headingElement = null,
+    noteElement = null,
+    authForm = null,
+    profileForm = null,
+    accountActions = null,
+    copy = {},
+  } = options;
+  const labels = { ...DEFAULT_AUTH_ACCESS_COPY, ...(copy ?? {}) };
+  const signedIn = Boolean(session);
+
+  if (headingElement) {
+    headingElement.textContent = !ready
+      ? labels.checkingHeading
+      : (signedIn ? labels.signedInHeading : labels.signedOutHeading);
+  }
+  if (noteElement) {
+    noteElement.textContent = !ready
+      ? labels.checkingNote
+      : (signedIn ? labels.signedInNote : labels.signedOutNote);
+  }
+  if (authForm) {
+    const showAuthForm = ready && !signedIn;
+    authForm.hidden = !showAuthForm;
+    if (showAuthForm) {
+      authForm.style?.removeProperty?.("display");
+    }
+  }
+  if (profileForm) {
+    const showProfile = ready && signedIn && Boolean(profile);
+    profileForm.hidden = !showProfile;
+    if (showProfile) {
+      profileForm.style?.removeProperty?.("display");
+    }
+    if (showProfile) {
+      if (profileForm.elements?.username) {
+        profileForm.elements.username.value = profile.username || "";
+      }
+      if (profileForm.elements?.displayName) {
+        profileForm.elements.displayName.value = profile.display_name || "";
+      }
+    }
+  }
+  if (accountActions) {
+    const showAccountActions = ready && signedIn;
+    accountActions.hidden = !showAccountActions;
+    if (showAccountActions) {
+      accountActions.style?.removeProperty?.("display");
     }
   }
 }

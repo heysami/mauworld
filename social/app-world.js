@@ -17,13 +17,15 @@ import {
   isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
   normalizeBrowserShareKind,
   normalizeHostedBrowserSession,
+  renderAuthAccessSection,
+  renderAuthSessionSummary,
   sanitizeBrowserShareTitle,
   setDisplayShareOverlayState,
   syncDisplayShareActionButtons,
   syncDisplayShareExpandButton,
   syncWorldPanelTabLabels,
   updateChatBubbleGhosts,
-} from "./world-interactions.js";
+} from "./world-interactions.js?v=20260418a";
 import {
   SHARED_BROWSER_SHARE_LAYOUT,
   SHARED_CHAT_BUBBLE_LAYOUT,
@@ -88,9 +90,9 @@ const elements = {
   privateGateEyebrow: document.querySelector("[data-world-private-gate-eyebrow]"),
   privateGateTitle: document.querySelector("[data-world-private-gate-title]"),
   privateGateCopy: document.querySelector("[data-world-private-gate-copy]"),
-  privateGateAccount: document.querySelector("[data-world-private-gate-account]"),
-  privateGateAccountLabel: document.querySelector("[data-world-private-gate-account-label]"),
   privateGateAuthForm: document.querySelector("[data-world-private-gate-auth]"),
+  privateGateProfileForm: document.querySelector("[data-world-private-gate-profile]"),
+  privateGateAccountActions: document.querySelector("[data-world-private-gate-account-actions]"),
   privateGateWorlds: document.querySelector("[data-world-private-gate-worlds]"),
   privateGateList: document.querySelector("[data-world-private-gate-list]"),
   privateGateStatus: document.querySelector("[data-world-private-gate-status]"),
@@ -875,29 +877,18 @@ function getPublicAuthModeKey() {
 }
 
 function renderPublicSessionSummary() {
-  if (!elements.sessionLabel || !elements.openAccountButton) {
-    return;
-  }
   const gate = state.privateWorldGate;
-  if (gate.ready !== true) {
-    elements.sessionLabel.textContent = "Checking your account.";
-    elements.openAccountButton.textContent = "Loading";
-    elements.openAccountButton.disabled = true;
-    return;
-  }
-  elements.openAccountButton.disabled = false;
-  if (gate.session && gate.profile?.username) {
-    elements.sessionLabel.textContent = `Signed in as @${gate.profile.username}.`;
-    elements.openAccountButton.textContent = "Account";
-    return;
-  }
-  if (gate.session) {
-    elements.sessionLabel.textContent = "Signed in.";
-    elements.openAccountButton.textContent = "Account";
-    return;
-  }
-  elements.sessionLabel.textContent = "Guest mode. Log in to chat and share nearby.";
-  elements.openAccountButton.textContent = "Log In";
+  renderAuthSessionSummary({
+    ready: gate.ready,
+    session: gate.session,
+    profile: gate.profile,
+    labelElement: elements.sessionLabel,
+    actionButton: elements.openAccountButton,
+    copy: {
+      signedOutLabel: "Guest mode. Log in to chat and share nearby.",
+      signedOutAction: "Log In",
+    },
+  });
 }
 
 function renderPublicInteractionAccess() {
@@ -1072,7 +1063,6 @@ function renderPrivateWorldGate() {
   const gate = state.privateWorldGate;
   const open = gate.open === true;
   const signedIn = Boolean(gate.session);
-  const isCheckingSession = gate.busy && !signedIn && !gate.profile && !gate.worlds.length;
   const accountMode = gate.context === "account";
   document.body.classList.toggle("is-private-gate-open", open);
   setPrivateGateSectionVisibility(elements.privateGate, open, "grid");
@@ -1084,43 +1074,52 @@ function renderPrivateWorldGate() {
   if (elements.privateGateEyebrow) {
     elements.privateGateEyebrow.textContent = accountMode ? "Account" : "Private worlds";
   }
-  if (elements.privateGateTitle) {
-    elements.privateGateTitle.textContent = isCheckingSession
-      ? "Checking your account"
-      : accountMode
-        ? (signedIn ? "Account" : "Sign in")
-        : signedIn
-          ? "Choose a private world"
-          : "Sign in to continue";
-  }
-  if (elements.privateGateCopy) {
-    elements.privateGateCopy.textContent = isCheckingSession
-      ? "Looking for your current session."
-      : accountMode
-        ? (
-          signedIn
-            ? "You can sign out here, then head back into Mauworld or open your private worlds from the main button."
-            : "Log in here first. Then chat, nearby share, and the rest of public Mauworld unlock."
-        )
+  if (accountMode) {
+    renderAuthAccessSection({
+      ready: gate.ready,
+      session: gate.session,
+      profile: gate.profile,
+      headingElement: elements.privateGateTitle,
+      noteElement: elements.privateGateCopy,
+      authForm: elements.privateGateAuthForm,
+      profileForm: elements.privateGateProfileForm,
+      accountActions: elements.privateGateAccountActions,
+    });
+    setPrivateGateSectionVisibility(elements.privateGateWorlds, false);
+  } else {
+    if (elements.privateGateTitle) {
+      elements.privateGateTitle.textContent = gate.ready !== true
+        ? "Checking your account"
+        : (signedIn ? "Choose a private world" : "Sign in to continue");
+    }
+    if (elements.privateGateCopy) {
+      elements.privateGateCopy.textContent = gate.ready !== true
+        ? "Looking for your current session."
         : (
           signedIn
             ? "Open one of your worlds or start a new one. The scene loads after you choose."
             : "Sign in here first. Then you can choose one of your private worlds or start a new one."
         );
+    }
+    setPrivateGateSectionVisibility(elements.privateGateAuthForm, gate.ready === true && !signedIn, "grid");
+    if (elements.privateGateProfileForm) {
+      elements.privateGateProfileForm.hidden = true;
+    }
+    if (elements.privateGateAccountActions) {
+      elements.privateGateAccountActions.hidden = true;
+    }
+    setPrivateGateSectionVisibility(elements.privateGateWorlds, gate.ready === true && signedIn, "grid");
   }
-  setPrivateGateSectionVisibility(elements.privateGateAccount, signedIn, "flex");
-  if (elements.privateGateAccountLabel && signedIn) {
-    elements.privateGateAccountLabel.textContent = gate.profile?.username
-      ? `Signed in as @${gate.profile.username}`
-      : "Signed in.";
-  }
-  setPrivateGateSectionVisibility(elements.privateGateAuthForm, !signedIn && !isCheckingSession, "grid");
   if (elements.privateGateAuthForm) {
     for (const field of elements.privateGateAuthForm.querySelectorAll("input, button")) {
       field.disabled = gate.busy;
     }
   }
-  setPrivateGateSectionVisibility(elements.privateGateWorlds, signedIn && !accountMode, "grid");
+  if (elements.privateGateProfileForm) {
+    for (const field of elements.privateGateProfileForm.querySelectorAll("input, button")) {
+      field.disabled = gate.busy;
+    }
+  }
   if (elements.privateGateRefresh) {
     elements.privateGateRefresh.disabled = gate.busy;
   }
@@ -1266,12 +1265,12 @@ async function handlePrivateWorldGateAuthSubmit(event) {
   const gate = state.privateWorldGate;
   try {
     await ensurePrivateWorldGateClient();
-    gate.busy = true;
-    setPrivateWorldGateStatus("");
-    renderPrivateWorldGate();
     const formData = new FormData(elements.privateGateAuthForm);
     const email = String(formData.get("email") ?? "").trim();
     const password = String(formData.get("password") ?? "").trim();
+    gate.busy = true;
+    setPrivateWorldGateStatus("");
+    renderPrivateWorldGate();
     const { error } = await gate.supabase.auth.signInWithPassword({ email, password });
     if (error) {
       throw error;
@@ -1288,12 +1287,12 @@ async function signUpPrivateWorldGate() {
   const gate = state.privateWorldGate;
   try {
     await ensurePrivateWorldGateClient();
-    gate.busy = true;
-    setPrivateWorldGateStatus("");
-    renderPrivateWorldGate();
     const formData = new FormData(elements.privateGateAuthForm);
     const email = String(formData.get("email") ?? "").trim();
     const password = String(formData.get("password") ?? "").trim();
+    gate.busy = true;
+    setPrivateWorldGateStatus("");
+    renderPrivateWorldGate();
     const { error } = await gate.supabase.auth.signUp({ email, password });
     if (error) {
       throw error;
@@ -1329,6 +1328,39 @@ async function signOutPrivateWorldGate() {
   } catch (error) {
     gate.busy = false;
     setPrivateWorldGateStatus(error.message || "Could not sign out.");
+    renderPrivateWorldGate();
+  }
+}
+
+async function savePrivateWorldGateProfile(event) {
+  event.preventDefault();
+  const gate = state.privateWorldGate;
+  if (!elements.privateGateProfileForm) {
+    return;
+  }
+  try {
+    await ensurePrivateWorldGateClient();
+    const formData = new FormData(elements.privateGateProfileForm);
+    gate.busy = true;
+    setPrivateWorldGateStatus("");
+    renderPrivateWorldGate();
+    const payload = await privateWorldGateApiFetch("/private/profile", {
+      method: "PATCH",
+      body: {
+        username: formData.get("username"),
+        displayName: formData.get("displayName"),
+      },
+    });
+    gate.profile = payload.profile ?? null;
+    const worldsPayload = await privateWorldGateApiFetch("/private/worlds");
+    gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
+    applyPublicAuthState();
+    setPrivateWorldGateStatus("Profile saved.");
+  } catch (error) {
+    setPrivateWorldGateStatus(error.message || "Could not save profile.");
+  } finally {
+    gate.busy = false;
+    renderPublicSessionSummary();
     renderPrivateWorldGate();
   }
 }
@@ -9303,6 +9335,9 @@ function registerInput() {
   });
   elements.privateGateAuthForm?.addEventListener("submit", (event) => {
     void handlePrivateWorldGateAuthSubmit(event);
+  });
+  elements.privateGateProfileForm?.addEventListener("submit", (event) => {
+    void savePrivateWorldGateProfile(event);
   });
   elements.privateGateAuthForm?.querySelector('[data-world-private-gate-auth-action="signup"]')?.addEventListener("click", () => {
     void signUpPrivateWorldGate();

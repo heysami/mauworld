@@ -392,8 +392,8 @@ body.is-world-loading .world-panel {
 }
 
 .world-private-gate__head,
-.world-private-gate__account,
-.world-private-gate__actions {
+.world-private-gate__actions,
+.world-private-gate__account-actions {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -406,7 +406,8 @@ body.is-world-loading .world-panel {
 }
 
 .world-private-gate__eyebrow,
-.world-private-gate__auth span {
+.world-private-gate__auth span,
+.world-private-gate__profile span {
   color: var(--world-muted);
   font-size: 11px;
   font-weight: 800;
@@ -426,7 +427,6 @@ body.is-world-loading .world-panel {
 }
 
 .world-private-gate__copy,
-.world-private-gate__account span,
 .world-private-gate__world small,
 .world-private-gate__empty p,
 .world-private-gate__status {
@@ -437,6 +437,7 @@ body.is-world-loading .world-panel {
 .world-private-gate__close,
 .world-private-gate__actions > button,
 .world-private-gate__auth button,
+.world-private-gate__profile button,
 .world-private-gate__ghost {
   min-height: 40px;
   padding: 0 12px;
@@ -465,6 +466,8 @@ body.is-world-loading .world-panel {
 .world-private-gate__actions > button:focus-visible,
 .world-private-gate__auth button:hover,
 .world-private-gate__auth button:focus-visible,
+.world-private-gate__profile button:hover,
+.world-private-gate__profile button:focus-visible,
 .world-private-gate__ghost:hover,
 .world-private-gate__ghost:focus-visible,
 .world-private-gate__world:hover,
@@ -477,18 +480,21 @@ body.is-world-loading .world-panel {
 }
 
 .world-private-gate__auth,
+.world-private-gate__profile,
 .world-private-gate__worlds,
 .world-private-gate__list {
   display: grid;
   gap: 12px;
 }
 
-.world-private-gate__auth label {
+.world-private-gate__auth label,
+.world-private-gate__profile label {
   display: grid;
   gap: 6px;
 }
 
-.world-private-gate__auth input {
+.world-private-gate__auth input,
+.world-private-gate__profile input {
   min-height: 44px;
   padding: 0 12px;
   border: 1px solid rgba(61, 87, 182, 0.16);
@@ -496,9 +502,16 @@ body.is-world-loading .world-panel {
   background: rgba(255, 255, 255, 0.92);
   color: var(--world-ink);
   font: inherit;
+  width: 100%;
+  min-width: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
 }
 
 .world-private-gate__actions--top {
+  justify-content: flex-start;
+}
+
+.world-private-gate__account-actions {
   justify-content: flex-start;
 }
 
@@ -669,14 +682,18 @@ body.is-world-loading .world-panel {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 2px 0;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--world-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .world-panel__session span {
   min-width: 0;
   color: var(--world-muted);
-  font-size: 0.88rem;
+  font-size: 0.78rem;
   line-height: 1.4;
 }
 
