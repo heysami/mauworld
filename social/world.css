@@ -372,8 +372,9 @@ body.is-world-loading .world-panel {
   top: 50%;
   left: 50%;
   z-index: 4;
+  transform: translate(-50%, -50%);
   width: min(460px, calc(100vw - 32px));
-  max-height: min(84dvh, 760px);
+  max-height: min(calc(100dvh - 32px), 760px);
   display: grid;
   gap: 16px;
   padding: 18px;
