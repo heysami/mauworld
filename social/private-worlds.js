@@ -11803,6 +11803,11 @@ function ensurePreview() {
     refreshBuildHoverFromPointer(event);
     if (state.mode === "build" && isEditor()) {
       if (getActivePlacementTool() || getActivePrefabPlacementId()) {
+        privateInputState.pointerDown = false;
+        privateInputState.pointerMoved = false;
+        privateInputState.dragDistance = 0;
+        privateInputState.pointerId = 0;
+        state.viewerSuppressClickAt = 0;
         return;
       }
       const transformMode = getBuildTransformMode();
@@ -11914,12 +11919,12 @@ function ensurePreview() {
     if (state.mode === "build" && shouldSuppressBuildClick(event)) {
       return;
     }
-    if (state.viewerSuppressClickAt && performance.now() - state.viewerSuppressClickAt < 240) {
-      return;
-    }
     if (state.mode === "build" && (getActivePlacementTool() || getActivePrefabPlacementId())) {
       refreshBuildHoverFromPointer(event);
       placeActiveTool();
+      return;
+    }
+    if (state.viewerSuppressClickAt && performance.now() - state.viewerSuppressClickAt < 240) {
       return;
     }
     const hit = raycastPreviewPointer(event);
