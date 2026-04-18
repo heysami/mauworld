@@ -792,6 +792,8 @@ const state = {
   profile: null,
   publicWorlds: [],
   worlds: [],
+  worldsLoading: false,
+  worldsError: "",
   selectedWorld: null,
   selectedSceneId: "",
   sceneDrawerFocusId: "",
@@ -4737,6 +4739,7 @@ function updatePrivateBrowserPanel() {
 }
 
 async function apiFetch(path, options = {}) {
+  const method = String(options.method ?? "GET").toUpperCase();
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers ?? {}),
@@ -4747,16 +4750,48 @@ async function apiFetch(path, options = {}) {
   if (options.body === undefined) {
     delete headers["Content-Type"];
   }
-  const response = await fetch(mauworldApiUrl(path, options.search), {
-    method: options.method ?? "GET",
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `Request failed (${response.status})`);
+  const timeoutMs = Math.max(1000, Number(options.timeoutMs ?? 15000));
+  const retryCount = Number.isFinite(Number(options.retryCount))
+    ? Math.max(0, Math.floor(Number(options.retryCount)))
+    : (method === "GET" ? 1 : 0);
+  const requestUrl = mauworldApiUrl(path, options.search);
+  let lastError = null;
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort("timeout"), timeoutMs);
+    try {
+      const response = await fetch(requestUrl, {
+        method,
+        headers,
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error || `Request failed (${response.status})`);
+      }
+      return payload;
+    } catch (error) {
+      lastError = error;
+      const aborted = error?.name === "AbortError";
+      const networkFailure = aborted || error instanceof TypeError || /failed to fetch/i.test(String(error?.message ?? ""));
+      const canRetry = attempt < retryCount && networkFailure;
+      if (canRetry) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+        continue;
+      }
+      if (aborted) {
+        throw new Error("Mauworld API timed out. Please try again in a moment.");
+      }
+      if (error instanceof TypeError || /failed to fetch/i.test(String(error?.message ?? ""))) {
+        throw new Error("Could not reach Mauworld right now. Please refresh or try again in a moment.");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
-  return payload;
+  throw lastError ?? new Error("Could not complete the request.");
 }
 
 async function fetchAuthConfig() {
@@ -4788,6 +4823,8 @@ async function runRefreshAuthState() {
     await releaseSceneLock();
     state.profile = null;
     state.worlds = [];
+    state.worldsLoading = false;
+    state.worldsError = "";
     state.selectedWorld = null;
     state.selectedSceneId = "";
     state.selectedPrefabId = "";
@@ -4816,6 +4853,9 @@ async function runRefreshAuthState() {
     return;
   }
   try {
+    state.worldsLoading = true;
+    state.worldsError = "";
+    renderWorldList();
     const payload = await apiFetch("/private/profile");
     state.profile = payload.profile;
     renderProfile();
@@ -4847,6 +4887,9 @@ async function runRefreshAuthState() {
       }
     }
   } catch (error) {
+    state.worldsLoading = false;
+    state.worldsError = String(error?.message || "Could not load your private worlds.");
+    renderWorldList();
     setStatus(error.message);
   }
 }
@@ -4944,19 +4987,31 @@ function renderSessionSummary() {
 
 async function loadWorlds() {
   if (!state.session) {
+    state.worldsLoading = false;
+    state.worldsError = "";
     state.worlds = [];
     renderWorldList();
     return;
   }
-  const payload = await apiFetch("/private/worlds", {
-    search: {
-      q: elements.worldSearch?.value || "",
-    },
-  });
-  state.worlds = payload.worlds ?? [];
+  state.worldsLoading = true;
+  state.worldsError = "";
   renderWorldList();
-  if (state.launcherOpen && !state.selectedWorld) {
-    setLauncherTab(getPreferredLauncherTab());
+  try {
+    const payload = await apiFetch("/private/worlds", {
+      search: {
+        q: elements.worldSearch?.value || "",
+      },
+    });
+    state.worlds = payload.worlds ?? [];
+    state.worldsError = "";
+  } catch (error) {
+    state.worldsError = String(error?.message || "Could not load your private worlds.");
+  } finally {
+    state.worldsLoading = false;
+    renderWorldList();
+    if (state.launcherOpen && !state.selectedWorld && !state.worldsError) {
+      setLauncherTab(getPreferredLauncherTab());
+    }
   }
 }
 
@@ -4990,6 +5045,14 @@ function renderPublicWorldList() {
 
 function renderWorldList() {
   if (!elements.worldList) {
+    return;
+  }
+  if (state.worldsLoading) {
+    elements.worldList.innerHTML = '<div class="pw-world-card"><p>Loading your private worlds.</p></div>';
+    return;
+  }
+  if (state.worldsError) {
+    elements.worldList.innerHTML = `<div class="pw-world-card"><p>${htmlEscape(state.worldsError)}</p></div>`;
     return;
   }
   if (!state.worlds.length) {
