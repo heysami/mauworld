@@ -34,7 +34,7 @@ import {
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
-import { createWorldRealtimeClient } from "./world-realtime.js?v=20260418f";
+import { createWorldRealtimeClient } from "./world-realtime.js?v=20260418g";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
@@ -292,6 +292,7 @@ const state = {
   browserShareMode: "screen",
   browserPanelRemoteSessionId: "",
   pendingShareJoin: null,
+  pendingShareJoinCancellationAnchorSessionId: "",
   incomingShareJoinRequests: [],
   voiceJoinOffer: null,
   incomingVoiceJoinRequests: [],
@@ -953,9 +954,19 @@ function resetPublicBrowserState({ disconnectMediaController = false, stopTracks
   state.browserMediaState.remoteAudioBlocked = false;
   state.browserMediaState.remoteAudioError = "";
   state.browserMediaState.lastPlayError = "";
+  state.pendingShareJoin = null;
+  state.pendingShareJoinCancellationAnchorSessionId = "";
+  state.incomingShareJoinRequests = [];
+  state.voiceJoinOffer = null;
+  state.incomingVoiceJoinRequests = [];
   if (activeSessionId) {
     state.browserFocusSessionId = "";
   }
+}
+
+function clearPendingShareJoinState() {
+  state.pendingShareJoin = null;
+  state.pendingShareJoinCancellationAnchorSessionId = "";
 }
 
 function resetPublicPresenceState() {
@@ -2423,7 +2434,11 @@ function renderShareGroupSummary() {
   const viewerCount = Math.min(getBrowserSessionViewerCount(anchorSession), getBrowserSessionMaxViewers(anchorSession));
   const maxViewers = getBrowserSessionMaxViewers(anchorSession);
   const pendingState = state.pendingShareJoin?.anchorSessionId === anchorSession.sessionId
-    ? (state.pendingShareJoin.approved ? "Approved. Choose what to share." : "Waiting for approval.")
+    ? state.pendingShareJoin.approved
+      ? "Approved. Choose what to share."
+      : isShareJoinCancellationPending(anchorSession.sessionId)
+        ? "Canceling request..."
+        : "Waiting for approval."
     : "";
   const title = getBrowserSessionTitle(anchorSession);
   const summaryCopy = localSession
@@ -2443,6 +2458,26 @@ function renderShareGroupSummary() {
     ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
     ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
   `;
+}
+
+function isShareJoinCancellationPending(anchorSessionId = "") {
+  return String(state.pendingShareJoinCancellationAnchorSessionId ?? "").trim() === String(anchorSessionId ?? "").trim()
+    && Boolean(anchorSessionId);
+}
+
+function cancelPendingShareJoinRequest() {
+  const anchorSessionId = String(state.pendingShareJoin?.anchorSessionId ?? "").trim();
+  if (!anchorSessionId || state.pendingShareJoin?.approved === true || isShareJoinCancellationPending(anchorSessionId)) {
+    return false;
+  }
+  const cancelled = state.realtimeClient?.cancelShareJoin?.(anchorSessionId) === true;
+  if (!cancelled) {
+    showToast("Realtime share is offline.");
+    return false;
+  }
+  state.pendingShareJoinCancellationAnchorSessionId = anchorSessionId;
+  updateBrowserPanel();
+  return true;
 }
 
 async function handleNearbyShareLaunch({ defaultLaunch, getLocalSession, getSelectedMode }) {
@@ -2471,9 +2506,10 @@ async function handleNearbyShareLaunch({ defaultLaunch, getLocalSession, getSele
     shareKind,
     approved: false,
   };
+  state.pendingShareJoinCancellationAnchorSessionId = "";
   const requested = state.realtimeClient?.requestShareJoin?.(joinTarget.sessionId, shareKind) === true;
   if (!requested) {
-    state.pendingShareJoin = null;
+    clearPendingShareJoinState();
     updateBrowserPanel();
     showToast("Realtime share is offline.");
     return true;
@@ -8692,6 +8728,9 @@ function updateBrowserPanel() {
   const localVoiceSession = getLocalVoiceSession();
   const joinTarget = getShareJoinTarget();
   const joinMode = Boolean(!localSession && joinTarget);
+  const pendingShareJoinRequest = Boolean(!localSession && state.pendingShareJoin?.anchorSessionId && state.pendingShareJoin.approved !== true);
+  const cancelingShareJoinRequest = pendingShareJoinRequest
+    && isShareJoinCancellationPending(state.pendingShareJoin?.anchorSessionId);
   const titleLocked = joinMode || isBrowserMemberSession(localSession);
   const draft = browserShareFeature.getDraft(localSession);
   const previewStream = state.pendingBrowserShare?.hasVideo
@@ -8777,12 +8816,18 @@ function updateBrowserPanel() {
     });
   } else if (state.pendingShareJoin?.anchorSessionId && state.pendingShareJoin.approved !== true) {
     const hostName = getPresenceDisplayNameForSessionId(state.pendingShareJoin.anchorHostSessionId) || "nearby host";
-    setBrowserStatus(`Waiting for ${hostName} to approve your nearby share request...`);
+    setBrowserStatus(
+      cancelingShareJoinRequest
+        ? `Canceling your nearby share request to ${hostName}...`
+        : `Waiting for ${hostName} to approve your nearby share request...`,
+    );
     updateBrowserPanelSummary({
       state: "starting",
-      badge: "Waiting",
+      badge: cancelingShareJoinRequest ? "Canceling" : "Waiting",
       current: `Requested ${getBrowserShareKindLabel(state.pendingShareJoin.shareKind || state.browserShareMode)}`,
-      hint: "Once approved, you can choose your screen, video, or voice and it will stay attached to this anchor group.",
+      hint: cancelingShareJoinRequest
+        ? "This request will disappear from the anchor host as soon as the realtime update lands."
+        : "Once approved, you can choose your screen, video, or voice and it will stay attached to this anchor group.",
     });
   } else if (remotePanelSession) {
     const shareKind = getBrowserSessionShareKind(remotePanelSession);
@@ -8885,9 +8930,12 @@ function updateBrowserPanel() {
     launchButton: elements.browserLaunch,
     stopButton: elements.browserStop,
     launchState,
-    showStop: Boolean(localSession),
+    showStop: Boolean(localSession || pendingShareJoinRequest),
   });
-  if (!localSession && joinMode && elements.browserLaunch) {
+  if (!localSession && pendingShareJoinRequest && elements.browserLaunch) {
+    elements.browserLaunch.textContent = cancelingShareJoinRequest ? "Canceling..." : "Waiting...";
+    elements.browserLaunch.disabled = true;
+  } else if (!localSession && joinMode && elements.browserLaunch) {
     const joinStateMatches = state.pendingShareJoin?.anchorSessionId === joinTarget?.sessionId;
     const waitingForApproval = joinStateMatches && state.pendingShareJoin.approved !== true;
     const joinApproved = joinStateMatches && state.pendingShareJoin.approved === true;
@@ -8897,6 +8945,16 @@ function updateBrowserPanel() {
         ? `Start ${getBrowserShareKindLabel(state.browserShareMode)}`
         : `Request ${getBrowserShareKindLabel(state.browserShareMode)}`;
     elements.browserLaunch.disabled = !canShareNearby || waitingForApproval || Boolean(state.pendingBrowserShare);
+  }
+  if (elements.browserStop) {
+    if (pendingShareJoinRequest) {
+      elements.browserStop.hidden = false;
+      elements.browserStop.textContent = cancelingShareJoinRequest ? "Canceling..." : "Cancel Request";
+      elements.browserStop.disabled = cancelingShareJoinRequest || !state.realtimeConnected;
+      elements.browserStop.setAttribute("aria-hidden", "false");
+    } else {
+      elements.browserStop.textContent = "Stop";
+    }
   }
   syncDisplayShareExpandButton(elements.browserExpand, state.browserOverlayOpen);
 
@@ -9003,7 +9061,7 @@ function updateBrowserSessionState(sessionPatch) {
       attachLocalBrowserShare(next.sessionId, pendingShare);
     }
     if (isBrowserMemberSession(next)) {
-      state.pendingShareJoin = null;
+      clearPendingShareJoinState();
     }
   }
   reconcileBrowserScreens();
@@ -9039,7 +9097,10 @@ function handleBrowserStop(payload) {
   clearBrowserScreenVideo(sessionId);
   dropLocalBrowserSession(sessionId);
   if (state.pendingShareJoin?.anchorSessionId === sessionId) {
-    state.pendingShareJoin = null;
+    clearPendingShareJoinState();
+  }
+  if (state.pendingShareJoinCancellationAnchorSessionId === sessionId) {
+    state.pendingShareJoinCancellationAnchorSessionId = "";
   }
   if (state.voiceJoinOffer?.anchorSessionId === sessionId) {
     state.voiceJoinOffer = null;
@@ -9105,6 +9166,7 @@ function handleRealtimeMessage(payload) {
       shareKind: normalizeBrowserShareKind(payload.shareKind, state.browserShareMode),
       approved: false,
     };
+    state.pendingShareJoinCancellationAnchorSessionId = "";
     updateBrowserPanel();
     showToast(payload.message || "A nearby share is already live here. Ask to join it.");
     return;
@@ -9126,9 +9188,13 @@ function handleRealtimeMessage(payload) {
     return;
   }
   if (payload.type === "share:join-requested") {
+    const anchorSessionId = String(payload.anchorSessionId ?? state.pendingShareJoin?.anchorSessionId ?? "").trim();
+    if (isShareJoinCancellationPending(anchorSessionId)) {
+      return;
+    }
     state.pendingShareJoin = {
       ...(state.pendingShareJoin ?? {}),
-      anchorSessionId: String(payload.anchorSessionId ?? state.pendingShareJoin?.anchorSessionId ?? "").trim(),
+      anchorSessionId,
       anchorHostSessionId: String(payload.anchorHostSessionId ?? state.pendingShareJoin?.anchorHostSessionId ?? "").trim(),
       shareKind: normalizeBrowserShareKind(state.pendingShareJoin?.shareKind, state.browserShareMode),
       approved: false,
@@ -9136,10 +9202,32 @@ function handleRealtimeMessage(payload) {
     updateBrowserPanel();
     return;
   }
+  if (payload.type === "share:join-cancelled") {
+    const anchorSessionId = String(payload.anchorSessionId ?? "").trim();
+    const requesterSessionId = String(payload.requesterSessionId ?? "").trim();
+    if (requesterSessionId && requesterSessionId !== state.viewerSessionId) {
+      state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) =>
+        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+      updateBrowserPanel();
+      return;
+    }
+    if (state.pendingShareJoin?.anchorSessionId === anchorSessionId || isShareJoinCancellationPending(anchorSessionId)) {
+      clearPendingShareJoinState();
+      updateBrowserPanel();
+      if (payload.message) {
+        showToast(payload.message);
+      }
+    }
+    return;
+  }
   if (payload.type === "share:join-resolved") {
+    const anchorSessionId = String(payload.anchorSessionId ?? "").trim();
+    if (isShareJoinCancellationPending(anchorSessionId)) {
+      return;
+    }
     const approved = payload.approved === true;
     if (!approved) {
-      state.pendingShareJoin = null;
+      clearPendingShareJoinState();
       updateBrowserPanel();
       if (payload.message) {
         showToast(payload.message);
@@ -9147,11 +9235,12 @@ function handleRealtimeMessage(payload) {
       return;
     }
     state.pendingShareJoin = {
-      anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+      anchorSessionId,
       anchorHostSessionId: String(payload.anchorHostSessionId ?? "").trim(),
       shareKind: normalizeBrowserShareKind(state.pendingShareJoin?.shareKind, state.browserShareMode),
       approved: true,
     };
+    state.pendingShareJoinCancellationAnchorSessionId = "";
     updateBrowserPanel();
     if (payload.message) {
       showToast(payload.message);
@@ -9237,7 +9326,7 @@ function handleRealtimeMessage(payload) {
       clearPendingBrowserShare({ stopTracks: true });
     }
     if (state.pendingShareJoin?.approved === true) {
-      state.pendingShareJoin = null;
+      clearPendingShareJoinState();
     }
     setBrowserStatus(payload.message || "Nearby share failed.");
     updateBrowserPanel();
@@ -10440,7 +10529,9 @@ function registerInput() {
     const sessionId = getActiveBrowserSessionId();
     if (sessionId) {
       state.realtimeClient?.stopBrowser(sessionId);
+      return;
     }
+    cancelPendingShareJoinRequest();
   });
   elements.voiceToggle?.addEventListener("click", () => {
     if (getLocalVoiceSession() || state.pendingVoiceShare) {

@@ -158,6 +158,9 @@ export function createWorldRealtimeClient(options = {}) {
     requestShareJoin(anchorSessionId, shareKind) {
       return send("share:join-request", { anchorSessionId, shareKind });
     },
+    cancelShareJoin(anchorSessionId) {
+      return send("share:join-cancel", { anchorSessionId });
+    },
     decideShareJoin(anchorSessionId, requesterSessionId, approved) {
       return send("share:join-decision", { anchorSessionId, requesterSessionId, approved });
     },

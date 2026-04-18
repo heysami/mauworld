@@ -871,6 +871,7 @@ const state = {
   browserShareMode: "screen",
   browserPanelRemoteSessionId: "",
   pendingShareJoin: null,
+  pendingShareJoinCancellationAnchorSessionId: "",
   incomingShareJoinRequests: [],
   voiceJoinOffer: null,
   incomingVoiceJoinRequests: [],
@@ -4570,7 +4571,11 @@ function renderPrivateShareGroupSummary() {
   const viewerCount = Math.min(getPrivateBrowserSessionViewerCount(anchorSession), getPrivateBrowserSessionMaxViewers(anchorSession));
   const maxViewers = getPrivateBrowserSessionMaxViewers(anchorSession);
   const pendingState = state.pendingShareJoin?.anchorSessionId === anchorSession.sessionId
-    ? (state.pendingShareJoin.approved ? "Approved. Choose what to share." : "Waiting for approval.")
+    ? state.pendingShareJoin.approved
+      ? "Approved. Choose what to share."
+      : isPrivateShareJoinCancellationPending(anchorSession.sessionId)
+        ? "Canceling request..."
+        : "Waiting for approval."
     : "";
   const summaryCopy = localSession
     ? isPrivateBrowserOriginSession(localSession)
@@ -4589,6 +4594,34 @@ function renderPrivateShareGroupSummary() {
     ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
     ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
   `;
+}
+
+function isPrivateShareJoinCancellationPending(anchorSessionId = "") {
+  return String(state.pendingShareJoinCancellationAnchorSessionId ?? "").trim() === String(anchorSessionId ?? "").trim()
+    && Boolean(anchorSessionId);
+}
+
+function clearPendingPrivateShareJoinState() {
+  state.pendingShareJoin = null;
+  state.pendingShareJoinCancellationAnchorSessionId = "";
+}
+
+function cancelPendingPrivateShareJoinRequest() {
+  const anchorSessionId = String(state.pendingShareJoin?.anchorSessionId ?? "").trim();
+  if (!anchorSessionId || state.pendingShareJoin?.approved === true || isPrivateShareJoinCancellationPending(anchorSessionId)) {
+    return false;
+  }
+  const cancelled = sendWorldSocketMessage({
+    type: "share:join-cancel",
+    anchorSessionId,
+  });
+  if (!cancelled) {
+    setPrivateBrowserStatus("Private world share is offline right now.");
+    return false;
+  }
+  state.pendingShareJoinCancellationAnchorSessionId = anchorSessionId;
+  updatePrivateBrowserPanel();
+  return true;
 }
 
 async function handlePrivateNearbyShareLaunch({ defaultLaunch, getLocalSession, getSelectedMode }) {
@@ -4612,13 +4645,14 @@ async function handlePrivateNearbyShareLaunch({ defaultLaunch, getLocalSession, 
     shareKind,
     approved: false,
   };
+  state.pendingShareJoinCancellationAnchorSessionId = "";
   const sent = sendWorldSocketMessage({
     type: "share:join-request",
     anchorSessionId: joinTarget.sessionId,
     shareKind,
   });
   if (!sent) {
-    state.pendingShareJoin = null;
+    clearPendingPrivateShareJoinState();
     updatePrivateBrowserPanel();
     setPrivateBrowserStatus("Private world share is offline right now.");
     return true;
@@ -5051,7 +5085,7 @@ function updatePrivateBrowserSessionState(sessionPatch = {}) {
       attachLocalPrivateBrowserShare(next.sessionId, pendingShare);
     }
     if (isPrivateBrowserMemberSession(next)) {
-      state.pendingShareJoin = null;
+      clearPendingPrivateShareJoinState();
     }
   }
 
@@ -5113,7 +5147,10 @@ function handlePrivateBrowserStop(payload = {}) {
   clearLocalPrivateVoiceShare({ sessionId });
   dropLocalPrivateBrowserSession(sessionId);
   if (state.pendingShareJoin?.anchorSessionId === sessionId) {
-    state.pendingShareJoin = null;
+    clearPendingPrivateShareJoinState();
+  }
+  if (state.pendingShareJoinCancellationAnchorSessionId === sessionId) {
+    state.pendingShareJoinCancellationAnchorSessionId = "";
   }
   if (state.voiceJoinOffer?.anchorSessionId === sessionId) {
     state.voiceJoinOffer = null;
@@ -5142,6 +5179,7 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
   state.localVoiceSessionId = "";
   state.browserPanelRemoteSessionId = "";
   state.pendingShareJoin = null;
+  state.pendingShareJoinCancellationAnchorSessionId = "";
   state.incomingShareJoinRequests = [];
   state.voiceJoinOffer = null;
   state.incomingVoiceJoinRequests = [];
@@ -5190,6 +5228,9 @@ function updatePrivateBrowserPanel() {
   const localVoiceSession = getLocalPrivateVoiceSession();
   const joinTarget = getPrivateShareJoinTarget();
   const joinMode = Boolean(!localSession && joinTarget);
+  const pendingShareJoinRequest = Boolean(!localSession && state.pendingShareJoin?.anchorSessionId && state.pendingShareJoin.approved !== true);
+  const cancelingShareJoinRequest = pendingShareJoinRequest
+    && isPrivateShareJoinCancellationPending(state.pendingShareJoin?.anchorSessionId);
   const titleLocked = joinMode || isPrivateBrowserMemberSession(localSession);
   const draft = privateBrowserShareFeature.getDraft(localSession);
   if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
@@ -5274,9 +5315,12 @@ function updatePrivateBrowserPanel() {
     launchButton: elements.panelBrowserLaunch,
     stopButton: elements.panelBrowserStop,
     launchState,
-    showStop: Boolean(localSession),
+    showStop: Boolean(localSession || pendingShareJoinRequest),
   });
-  if (!localSession && joinMode && elements.panelBrowserLaunch) {
+  if (!localSession && pendingShareJoinRequest && elements.panelBrowserLaunch) {
+    elements.panelBrowserLaunch.textContent = cancelingShareJoinRequest ? "Canceling..." : "Waiting...";
+    elements.panelBrowserLaunch.disabled = true;
+  } else if (!localSession && joinMode && elements.panelBrowserLaunch) {
     const joinStateMatches = state.pendingShareJoin?.anchorSessionId === joinTarget?.sessionId;
     const waitingForApproval = joinStateMatches && state.pendingShareJoin.approved !== true;
     const joinApproved = joinStateMatches && state.pendingShareJoin.approved === true;
@@ -5286,6 +5330,16 @@ function updatePrivateBrowserPanel() {
         ? `Start ${getBrowserShareKindLabel(state.browserShareMode)}`
         : `Request ${getBrowserShareKindLabel(state.browserShareMode)}`;
     elements.panelBrowserLaunch.disabled = !canShare || waitingForApproval || Boolean(state.pendingBrowserShare);
+  }
+  if (elements.panelBrowserStop) {
+    if (pendingShareJoinRequest) {
+      elements.panelBrowserStop.hidden = false;
+      elements.panelBrowserStop.textContent = cancelingShareJoinRequest ? "Canceling..." : "Cancel Request";
+      elements.panelBrowserStop.disabled = cancelingShareJoinRequest || !socketReady;
+      elements.panelBrowserStop.setAttribute("aria-hidden", "false");
+    } else {
+      elements.panelBrowserStop.textContent = "Stop";
+    }
   }
   syncDisplayShareExpandButton(elements.panelBrowserExpand, state.browserOverlayOpen);
 
@@ -5309,12 +5363,18 @@ function updatePrivateBrowserPanel() {
     });
   } else if (state.pendingShareJoin?.anchorSessionId && state.pendingShareJoin.approved !== true) {
     const hostName = getPrivateDisplayNameForSessionId(state.pendingShareJoin.anchorHostSessionId) || "nearby host";
-    setPrivateBrowserStatus(`Waiting for ${hostName} to approve your nearby share request...`);
+    setPrivateBrowserStatus(
+      cancelingShareJoinRequest
+        ? `Canceling your nearby share request to ${hostName}...`
+        : `Waiting for ${hostName} to approve your nearby share request...`,
+    );
     updatePrivateBrowserSummary({
       state: "starting",
-      badge: "Waiting",
+      badge: cancelingShareJoinRequest ? "Canceling" : "Waiting",
       current: `Requested ${getBrowserShareKindLabel(state.pendingShareJoin.shareKind || state.browserShareMode)}`,
-      hint: "Once approved, you can choose your screen, video, or voice and it will stay attached to this anchor group.",
+      hint: cancelingShareJoinRequest
+        ? "This request will disappear from the anchor host as soon as the world socket updates."
+        : "Once approved, you can choose your screen, video, or voice and it will stay attached to this anchor group.",
     });
   } else if (remoteSession) {
     const shareKind = getBrowserShareKindLabel(remoteSession.shareKind || "screen");
@@ -12191,6 +12251,7 @@ function connectWorldSocket() {
           shareKind: normalizeBrowserShareKind(payload.shareKind, state.browserShareMode),
           approved: false,
         };
+        state.pendingShareJoinCancellationAnchorSessionId = "";
         updatePrivateBrowserPanel();
       } else if (payload.type === "share:join-request") {
         const requestKey = `${String(payload.anchorSessionId ?? "").trim()}:${String(payload.requesterSessionId ?? "").trim()}`;
@@ -12207,25 +12268,47 @@ function connectWorldSocket() {
         ];
         updatePrivateBrowserPanel();
       } else if (payload.type === "share:join-requested") {
+        const anchorSessionId = String(payload.anchorSessionId ?? state.pendingShareJoin?.anchorSessionId ?? "").trim();
+        if (isPrivateShareJoinCancellationPending(anchorSessionId)) {
+          return;
+        }
         state.pendingShareJoin = {
           ...(state.pendingShareJoin ?? {}),
-          anchorSessionId: String(payload.anchorSessionId ?? state.pendingShareJoin?.anchorSessionId ?? "").trim(),
+          anchorSessionId,
           anchorHostSessionId: String(payload.anchorHostSessionId ?? state.pendingShareJoin?.anchorHostSessionId ?? "").trim(),
           shareKind: normalizeBrowserShareKind(state.pendingShareJoin?.shareKind, state.browserShareMode),
           approved: false,
         };
         updatePrivateBrowserPanel();
+      } else if (payload.type === "share:join-cancelled") {
+        const anchorSessionId = String(payload.anchorSessionId ?? "").trim();
+        const requesterSessionId = String(payload.requesterSessionId ?? "").trim();
+        if (requesterSessionId && requesterSessionId !== getPrivateViewerSessionId()) {
+          state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) =>
+            !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+          updatePrivateBrowserPanel();
+          return;
+        }
+        if (state.pendingShareJoin?.anchorSessionId === anchorSessionId || isPrivateShareJoinCancellationPending(anchorSessionId)) {
+          clearPendingPrivateShareJoinState();
+          updatePrivateBrowserPanel();
+        }
       } else if (payload.type === "share:join-resolved") {
+        const anchorSessionId = String(payload.anchorSessionId ?? "").trim();
+        if (isPrivateShareJoinCancellationPending(anchorSessionId)) {
+          return;
+        }
         if (payload.approved !== true) {
-          state.pendingShareJoin = null;
+          clearPendingPrivateShareJoinState();
           updatePrivateBrowserPanel();
         } else {
           state.pendingShareJoin = {
-            anchorSessionId: String(payload.anchorSessionId ?? "").trim(),
+            anchorSessionId,
             anchorHostSessionId: String(payload.anchorHostSessionId ?? "").trim(),
             shareKind: normalizeBrowserShareKind(state.pendingShareJoin?.shareKind, state.browserShareMode),
             approved: true,
           };
+          state.pendingShareJoinCancellationAnchorSessionId = "";
           updatePrivateBrowserPanel();
           void privateBrowserShareFeature.launch();
         }
@@ -12285,7 +12368,7 @@ function connectWorldSocket() {
       } else if (payload.type === "browser:error") {
         clearPendingPrivateBrowserShare({ stopTracks: true });
         if (state.pendingShareJoin?.approved === true) {
-          state.pendingShareJoin = null;
+          clearPendingPrivateShareJoinState();
         }
         setPrivateBrowserStatus(payload.message || "Live share failed.");
         updatePrivateBrowserPanel();
@@ -13650,13 +13733,14 @@ function bindEvents() {
   privateBrowserShareFeature.bind();
   elements.panelBrowserStop?.addEventListener("click", () => {
     const sessionId = getLocalPrivateBrowserSession()?.sessionId || "";
-    if (!sessionId) {
+    if (sessionId) {
+      sendWorldSocketMessage({
+        type: "browser:stop",
+        sessionId,
+      });
       return;
     }
-    sendWorldSocketMessage({
-      type: "browser:stop",
-      sessionId,
-    });
+    cancelPendingPrivateShareJoinRequest();
   });
   elements.panelVoiceToggle?.addEventListener("click", () => {
     if (getLocalPrivateVoiceSession() || state.pendingVoiceShare) {

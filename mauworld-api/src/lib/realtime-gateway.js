@@ -238,6 +238,10 @@ export class RealtimeGateway {
       await this.handleShareJoinRequest(client, message);
       return;
     }
+    if (type === "share:join-cancel") {
+      await this.handleShareJoinCancel(client, message);
+      return;
+    }
     if (type === "share:join-decision") {
       await this.handleShareJoinDecision(client, message);
       return;
@@ -744,6 +748,38 @@ export class RealtimeGateway {
       type: "share:join-requested",
       anchorSessionId: anchorSession.id,
       anchorHostSessionId: anchorSession.hostSessionId,
+    });
+  }
+
+  async handleShareJoinCancel(client, message) {
+    if (!client.worldSnapshotId || client.isGuest) {
+      return;
+    }
+    const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    if (!anchorSessionId) {
+      return;
+    }
+    const key = this.getShareJoinKey(anchorSessionId, client.viewerSessionId);
+    const hadPendingRequest = this.pendingShareJoinRequests.delete(key);
+    this.clearApprovedShareJoin(anchorSessionId, client.viewerSessionId);
+    const anchorSession = this.browserManager.getSession(anchorSessionId);
+    const anchorHostSessionId = String(anchorSession?.hostSessionId ?? "").trim();
+    if (hadPendingRequest && anchorHostSessionId) {
+      const anchorClient = this.clients.get(anchorHostSessionId);
+      if (anchorClient) {
+        sendJson(anchorClient, {
+          type: "share:join-cancelled",
+          anchorSessionId,
+          requesterSessionId: client.viewerSessionId,
+        });
+      }
+    }
+    sendJson(client, {
+      type: "share:join-cancelled",
+      anchorSessionId,
+      anchorHostSessionId,
+      requesterSessionId: client.viewerSessionId,
+      message: "Nearby share request cancelled.",
     });
   }
 

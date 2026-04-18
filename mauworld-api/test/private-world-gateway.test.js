@@ -342,6 +342,61 @@ test("approved private nearby join creates a member share linked to the anchor",
   assert.equal(capturedStart?.title, "");
 });
 
+test("private pending nearby join requests can be cancelled", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const requester = createClient({
+    viewerSessionId: "profile:requester",
+    displayName: "requester",
+    position: { x: 36, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(requester);
+
+  const anchorSession = {
+    id: "anchor_session",
+    sessionId: "anchor_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([host.viewerSessionId]),
+  };
+  gateway.browserManager.listSessionsForWorld = () => [anchorSession];
+  gateway.browserManager.getSession = (sessionId) => sessionId === anchorSession.id ? anchorSession : null;
+
+  await gateway.handleShareJoinRequest(requester, {
+    anchorSessionId: anchorSession.id,
+    shareKind: "screen",
+  });
+  gateway.grantApprovedShareJoin(anchorSession.id, requester.viewerSessionId, "screen");
+
+  assert.equal(gateway.pendingShareJoinRequests.size, 1);
+  assert.equal(gateway.hasApprovedShareJoin(anchorSession.id, requester.viewerSessionId), true);
+
+  await gateway.handleShareJoinCancel(requester, {
+    anchorSessionId: anchorSession.id,
+  });
+
+  assert.equal(gateway.pendingShareJoinRequests.size, 0);
+  assert.equal(gateway.hasApprovedShareJoin(anchorSession.id, requester.viewerSessionId), false);
+  assert.equal(
+    requester.socket.sent.some((message) =>
+      message.type === "share:join-cancelled" && message.anchorSessionId === anchorSession.id),
+    true,
+  );
+  assert.equal(
+    host.socket.sent.some((message) =>
+      message.type === "share:join-cancelled" && message.requesterSessionId === requester.viewerSessionId),
+    true,
+  );
+});
+
 test("private member shares stop outside the anchor radius and persistent voice detaches on exit", async () => {
   const gateway = createGateway();
   const host = createClient({
