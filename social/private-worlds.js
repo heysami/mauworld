@@ -36,7 +36,7 @@ const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
 const TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY = "mauworldPrivateWorldToolPresetPanelCollapsed";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 const LAUNCHER_TABS = new Set(["worlds", "access"]);
-const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
+const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "world"]);
 const SCENE_DRAWER_TABS = new Set(["scenes", "items", "prefabs", "logic"]);
 const WORLD_PANEL_SECTIONS = new Set(["overview", "ai", "editors", "feed"]);
 const PRIVATE_CAMERA = {
@@ -1173,17 +1173,8 @@ function settleHorizontalScroll(element) {
 
 function setPrivatePanelTab(tab, options = {}) {
   const nextTab = normalizePrivatePanelTab(tab);
-  const syncMode = options.syncMode !== false;
   const refreshWorld = options.refreshWorld === true;
-  const enterBuildMode = syncMode && nextTab === "build" && state.mode !== "build" && isEditor();
-  const exitBuildMode = syncMode && nextTab !== "build" && state.mode === "build";
   state.privatePanelTab = nextTab;
-  if (enterBuildMode) {
-    setMode("build", { syncPanelTab: false });
-  }
-  if (exitBuildMode) {
-    setMode("play", { syncPanelTab: false });
-  }
   if (nextTab !== "share" && state.browserOverlayOpen) {
     setPrivateBrowserOverlayOpen(false);
   }
@@ -5703,7 +5694,6 @@ function getRenderableSceneDoc() {
 function setMode(mode, options = {}) {
   const nextMode = mode === "build" && isEditor() ? "build" : "play";
   const previousMode = state.mode;
-  const syncPanelTab = options.syncPanelTab !== false;
   state.mode = nextMode;
   if (nextMode === "play") {
     state.buildModifierKeys.clear();
@@ -5712,9 +5702,6 @@ function setMode(mode, options = {}) {
     clearPlacementTool();
     writeBuilderSelection([]);
     state.sceneDrawerOpen = false;
-    if (syncPanelTab && state.privatePanelTab === "build") {
-      state.privatePanelTab = "chat";
-    }
   }
   if (nextMode === "build") {
     if (previousMode === "play" && state.buildReturnSceneId) {
@@ -5725,9 +5712,6 @@ function setMode(mode, options = {}) {
     }
     for (const key of ["q", "e", "shift"]) {
       privateInputState.keys.delete(key);
-    }
-    if (syncPanelTab && state.privatePanelTab !== "build") {
-      state.privatePanelTab = "build";
     }
   }
   document.body.classList.toggle("is-play-mode", nextMode === "play");
@@ -7288,21 +7272,14 @@ function renderSelectedWorld() {
   const showReleaseControl = hasWorld && state.session && joinedAsPlayer;
   const showResetControl = hasWorld && canEdit;
   const readyLabel = localParticipant?.ready === true ? "Not Ready" : "Ready Up";
-  if (!hasWorld || (state.privatePanelTab === "build" && !canEdit)) {
+  if (!hasWorld) {
     state.privatePanelTab = "chat";
   } else {
     state.privatePanelTab = normalizePrivatePanelTab(state.privatePanelTab);
   }
   renderSessionSummary();
   for (const button of elements.privatePanelTabButtons ?? []) {
-    const tab = button.getAttribute("data-private-panel-tab") || "";
-    if (tab === "build") {
-      button.disabled = !hasWorld || !canEdit;
-    } else if (tab === "world") {
-      button.disabled = !hasWorld;
-    } else {
-      button.disabled = !hasWorld;
-    }
+    button.disabled = !hasWorld;
   }
   if (elements.sceneToolsToggle) {
     elements.sceneToolsToggle.disabled = !hasWorld || !canEdit || state.mode !== "build";
@@ -12577,7 +12554,7 @@ function bindEvents() {
   });
   for (const button of elements.privatePanelTabButtons ?? []) {
     button.addEventListener("click", () => {
-      setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "build", {
+      setPrivatePanelTab(button.getAttribute("data-private-panel-tab") || "chat", {
         refreshWorld: true,
       });
     });
@@ -12686,7 +12663,8 @@ function bindEvents() {
   elements.panelLibrary?.addEventListener("click", () => {
     if (state.selectedWorld && isEditor()) {
       setSceneDrawerOpen(true);
-      setPrivatePanelTab("build");
+      setPrivatePanelTab("world");
+      setWorldPanelSection("overview", { openWorldPanel: false });
     }
   });
   elements.panelExport?.addEventListener("click", () => {

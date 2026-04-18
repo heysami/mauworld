@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418ab" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418ac" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -84,13 +84,6 @@
             role="tab"
             aria-selected="true"
           >Chat</button>
-          <button
-            type="button"
-            class="world-panel__tab"
-            data-private-panel-tab="build"
-            role="tab"
-            aria-selected="false"
-          >Edit</button>
           <button
             type="button"
             class="world-panel__tab"
@@ -232,13 +225,6 @@
           </section>
         </section>
 
-        <section class="world-panel__view" data-private-panel-view="build" role="tabpanel" hidden>
-          <div class="pw-action-grid">
-            <button type="button" data-private-panel-library>Library</button>
-            <button type="button" data-private-panel-export>Export</button>
-          </div>
-        </section>
-
         <section class="world-panel__view" data-private-panel-view="world" role="tabpanel" hidden>
           <div class="pw-world-nav" aria-label="World tools" role="tablist">
             <button type="button" class="is-active" data-world-section-jump="overview" role="tab" aria-selected="true" aria-controls="pw-world-section-overview">Overview</button>
@@ -251,6 +237,8 @@
             <div class="pw-action-grid pw-action-grid--world">
               <button type="button" data-private-copy-link disabled>Copy Entry</button>
               <button type="button" data-private-native-share disabled>Share Entry</button>
+              <button type="button" data-private-panel-library disabled>Library</button>
+              <button type="button" data-private-panel-export disabled>Export</button>
             </div>
             <p class="world-live-status" data-private-share-status>Open a world to copy its entry link.</p>
             <div class="pw-world-meta" data-private-panel-world-meta></div>
@@ -850,6 +838,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418ab"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418ac"></script>
   </body>
 </html>

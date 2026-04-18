@@ -185,7 +185,7 @@ body.private-worlds-body.is-world-entry-loading .pw-inspector {
 }
 
 .pw-mau-panel .world-panel__tabs {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .pw-mau-panel .world-panel__bar,
@@ -218,9 +218,13 @@ body.private-worlds-body.is-world-entry-loading .pw-inspector {
 }
 
 .pw-mau-panel [data-private-panel-view="world"] .pw-grid-2,
-.pw-mau-panel [data-private-panel-view="world"] .pw-action-grid--world,
 .pw-mau-panel [data-private-panel-view="world"] .pw-inline-actions {
   grid-template-columns: 1fr;
+  grid-auto-flow: row;
+}
+
+.pw-mau-panel [data-private-panel-view="world"] .pw-action-grid--world {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-flow: row;
 }
 
@@ -2002,7 +2006,7 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
   }
 
   .pw-mau-panel .world-panel__tabs {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pw-drawer-tabs {
