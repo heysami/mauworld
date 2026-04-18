@@ -97,7 +97,7 @@
             data-private-panel-tab="share"
             role="tab"
             aria-selected="false"
-          >Share</button>
+          >Share Nearby</button>
           <button
             type="button"
             class="world-panel__tab"
@@ -150,9 +150,14 @@
             <div class="world-browser-panel__head">
               <strong>Nearby Share</strong>
               <div class="world-browser-panel__actions">
-                <button type="button" class="is-muted" data-private-browser-expand aria-expanded="false">Focus</button>
-                <button type="button" data-private-browser-launch disabled>Share</button>
-                <button type="button" class="is-muted" data-private-browser-stop disabled>Stop</button>
+                <button
+                  type="button"
+                  class="world-browser-panel__icon-button is-muted"
+                  data-private-browser-expand
+                  aria-expanded="false"
+                  aria-label="Expand nearby share"
+                  title="Expand nearby share"
+                >⤢</button>
               </div>
             </div>
 
@@ -171,6 +176,10 @@
                 <button type="button" class="is-active" data-private-browser-share-mode="screen" aria-pressed="true">Screen</button>
                 <button type="button" data-private-browser-share-mode="camera" aria-pressed="false">Video</button>
                 <button type="button" data-private-browser-share-mode="audio" aria-pressed="false">Voice</button>
+              </div>
+              <div class="world-browser-share__actions">
+                <button type="button" data-private-browser-launch disabled>Pick Screen</button>
+                <button type="button" class="is-muted" data-private-browser-stop hidden>Stop</button>
               </div>
             </div>
 

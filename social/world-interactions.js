@@ -65,6 +65,58 @@ export function getBrowserShareKindLabel(shareKind) {
   return "Screen";
 }
 
+function getDisplaySharePrimaryActionLabel(shareKind) {
+  const kind = normalizeBrowserShareKind(shareKind, "screen");
+  if (kind === "camera") {
+    return "Share Video";
+  }
+  if (kind === "audio") {
+    return "Share Voice";
+  }
+  return "Pick Screen";
+}
+
+const DISPLAY_SHARE_EXPAND_ICON = `
+  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <path d="M7 3H3v4" />
+    <path d="M13 3h4v4" />
+    <path d="M3 13v4h4" />
+    <path d="M17 13v4h-4" />
+    <path d="M3 7l5-5" />
+    <path d="M17 7l-5-5" />
+    <path d="M3 13l5 5" />
+    <path d="M17 13l-5 5" />
+  </svg>
+`;
+
+const DISPLAY_SHARE_DOCK_ICON = `
+  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <path d="M8 8H3V3" />
+    <path d="M12 8h5V3" />
+    <path d="M8 12H3v5" />
+    <path d="M12 12h5v5" />
+    <path d="M3 3l5 5" />
+    <path d="M17 3l-5 5" />
+    <path d="M3 17l5-5" />
+    <path d="M17 17l-5-5" />
+  </svg>
+`;
+
+const SHARED_WORLD_PANEL_TAB_LABELS = Object.freeze({
+  share: "Share Nearby",
+  live: "What's Live",
+});
+
+export function syncWorldPanelTabLabels(buttons, attributeName, labels = SHARED_WORLD_PANEL_TAB_LABELS) {
+  for (const button of buttons ?? []) {
+    const tabName = String(button?.getAttribute?.(attributeName) ?? "").trim();
+    const label = labels[tabName];
+    if (label) {
+      button.textContent = label;
+    }
+  }
+}
+
 export function syncShareModeButtons(buttons, mode, attributeName, fallback = "screen") {
   const normalized = normalizeBrowserShareKind(mode, fallback);
   for (const button of buttons ?? []) {
@@ -158,8 +210,7 @@ export function setDisplayShareOverlayState(options = {}) {
   options.backdrop?.classList?.toggle("is-visible", open);
   options.backdrop?.setAttribute?.("aria-hidden", open ? "false" : "true");
   if (options.expandButton) {
-    options.expandButton.textContent = open ? "Dock" : "Focus";
-    options.expandButton.setAttribute("aria-expanded", String(open));
+    syncDisplayShareExpandButton(options.expandButton, open);
   }
   if (options.stage) {
     options.stage.tabIndex = open ? 0 : -1;
@@ -652,10 +703,17 @@ export function getDisplayShareLaunchState(options = {}) {
   const pending = options.pending === true;
   const localSession = options.localSession ?? null;
   const draft = options.draft ?? null;
+  const actionLabel = getDisplaySharePrimaryActionLabel(
+    draft?.draftMode
+      || options.selectedMode
+      || options.shareKind
+      || localSession?.shareKind
+      || "screen",
+  );
   if (!canShare) {
     return {
       disabled: true,
-      label: options.disabledLabel || "Share",
+      label: options.disabledLabel || actionLabel,
     };
   }
   if (pending) {
@@ -670,21 +728,9 @@ export function getDisplayShareLaunchState(options = {}) {
       label: "Update Title",
     };
   }
-  if (localSession?.sessionMode === "display-share" && draft?.modeDiff) {
-    return {
-      disabled: false,
-      label: `Switch to ${draft.draftModeLabel}`,
-    };
-  }
-  if (localSession?.sessionMode === "display-share") {
-    return {
-      disabled: false,
-      label: "Share Again",
-    };
-  }
   return {
     disabled: false,
-    label: "Share",
+    label: actionLabel,
   };
 }
 
@@ -720,21 +766,29 @@ export function getLocalDisplaySharePresentation(options = {}) {
     status = screenPrompt;
   }
 
-  let hint = options.defaultHint || "Change the type, then press Share again to replace the live share.";
+  let hint = options.defaultHint || "Use the action button below to update the live share.";
   let summaryState = "live";
+  const launchState = getDisplayShareLaunchState({
+    canShare: true,
+    pending: false,
+    localSession,
+    draft,
+  });
   if (draft.canUpdateTitleOnly) {
     hint = `Press Update Title to rename the live ${liveKindLabel.toLowerCase()} to "${draft.draftTitle}".`;
     summaryState = "draft";
   } else if (draft.modeDiff) {
-    hint = draft.draftTitle
-      ? `Press Switch to replace the live ${liveKindLabel.toLowerCase()} with ${draft.draftModeLabel.toLowerCase()} "${draft.draftTitle}".`
-      : `Press Switch to replace the live ${liveKindLabel.toLowerCase()} with ${draft.draftModeLabel.toLowerCase()}.`;
+    hint = draft.draftMode === "screen"
+      ? `Pick Screen to replace the live ${liveKindLabel.toLowerCase()}.${draft.draftTitle ? ` The title "${draft.draftTitle}" will go live too.` : ""}`
+      : `Press ${launchState.label} to replace the live ${liveKindLabel.toLowerCase()}.${draft.draftTitle ? ` The title "${draft.draftTitle}" will go live too.` : ""}`;
     summaryState = "draft";
   } else if (draft.titleDiff) {
     hint = `Press Update Title to rename the live ${liveKindLabel.toLowerCase()} to "${draft.draftTitle}".`;
     summaryState = "draft";
-  } else if (!draft.draftTitle) {
-    hint = "The title field is only a draft until you press Share or Update Title.";
+  } else {
+    hint = draft.draftMode === "screen"
+      ? "Pick Screen again to replace the live screen."
+      : `Press ${launchState.label} again to replace the live ${liveKindLabel.toLowerCase()}.`;
   }
 
   return {
@@ -744,6 +798,57 @@ export function getLocalDisplaySharePresentation(options = {}) {
     state: summaryState,
     status,
   };
+}
+
+export function getDisplayShareReadyPresentation(options = {}) {
+  const draft = options.draft ?? null;
+  if (!draft) {
+    return null;
+  }
+  const launchState = options.launchState ?? getDisplayShareLaunchState({
+    canShare: options.canShare,
+    pending: options.pending,
+    localSession: options.localSession,
+    draft,
+  });
+  const scopeLabel = String(options.scopeLabel ?? "").trim();
+  const scopeSuffix = scopeLabel ? ` ${scopeLabel}` : "";
+  return {
+    state: "idle",
+    badge: "Idle",
+    current: draft.draftTitle
+      ? `Ready: ${draft.draftModeLabel} "${draft.draftTitle}"`
+      : `Ready: ${draft.draftModeLabel}`,
+    hint: draft.draftMode === "screen"
+      ? `Pick Screen to choose what to share${scopeSuffix}.`
+      : `Press ${launchState.label} to go live${scopeSuffix}.`,
+  };
+}
+
+export function syncDisplayShareActionButtons(options = {}) {
+  const launchState = options.launchState ?? getDisplayShareLaunchState(options.launchStateOptions ?? {});
+  if (options.launchButton) {
+    options.launchButton.disabled = launchState.disabled;
+    options.launchButton.textContent = launchState.label;
+  }
+  if (options.stopButton) {
+    const showStop = options.showStop === true;
+    options.stopButton.hidden = !showStop;
+    options.stopButton.disabled = !showStop;
+    options.stopButton.setAttribute("aria-hidden", showStop ? "false" : "true");
+  }
+  return launchState;
+}
+
+export function syncDisplayShareExpandButton(button, open) {
+  if (!button) {
+    return;
+  }
+  const expanded = open === true;
+  button.innerHTML = expanded ? DISPLAY_SHARE_DOCK_ICON : DISPLAY_SHARE_EXPAND_ICON;
+  button.setAttribute("aria-expanded", String(expanded));
+  button.setAttribute("aria-label", expanded ? "Dock nearby share" : "Expand nearby share");
+  button.setAttribute("title", expanded ? "Dock nearby share" : "Expand nearby share");
 }
 
 function resolveStageCopy(copy, session) {

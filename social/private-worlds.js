@@ -12,6 +12,7 @@ import {
   getDisplayShareStageLayout,
   getDisplayShareStagePlaceholderText,
   getDisplayShareLaunchState,
+  getDisplayShareReadyPresentation,
   getLocalDisplaySharePresentation,
   isLocalDisplayShareActive,
   isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
@@ -19,6 +20,9 @@ import {
   normalizeHostedBrowserSession,
   sanitizeBrowserShareTitle,
   setDisplayShareOverlayState,
+  syncDisplayShareActionButtons,
+  syncDisplayShareExpandButton,
+  syncWorldPanelTabLabels,
   updateChatBubbleGhosts,
 } from "./world-interactions.js";
 import {
@@ -603,6 +607,7 @@ elements.panelBrowserShareModes = [...document.querySelectorAll("[data-private-b
 elements.sceneAddButtons = [...document.querySelectorAll("[data-scene-add-button]")];
 elements.worldSectionJumpButtons = [...document.querySelectorAll("[data-world-section-jump]")];
 elements.worldSections = [...document.querySelectorAll("[data-world-section]")];
+syncWorldPanelTabLabels(elements.privatePanelTabButtons, "data-private-panel-tab");
 
 function createEmptyToolPresetCustoms() {
   return Object.fromEntries(TOOL_PRESET_KINDS.map((kind) => [kind, []]));
@@ -4614,23 +4619,19 @@ function updatePrivateBrowserPanel() {
   if (elements.panelBrowserShareTitle) {
     elements.panelBrowserShareTitle.disabled = !canShare;
   }
-  if (elements.panelBrowserLaunch) {
-    const launchState = getDisplayShareLaunchState({
-      canShare,
-      pending: Boolean(state.pendingBrowserShare),
-      localSession,
-      draft,
-    });
-    elements.panelBrowserLaunch.disabled = launchState.disabled;
-    elements.panelBrowserLaunch.textContent = launchState.label;
-  }
-  if (elements.panelBrowserStop) {
-    elements.panelBrowserStop.disabled = !localSession;
-  }
-  if (elements.panelBrowserExpand) {
-    elements.panelBrowserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
-    elements.panelBrowserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
-  }
+  const launchState = getDisplayShareLaunchState({
+    canShare,
+    pending: Boolean(state.pendingBrowserShare),
+    localSession,
+    draft,
+  });
+  syncDisplayShareActionButtons({
+    launchButton: elements.panelBrowserLaunch,
+    stopButton: elements.panelBrowserStop,
+    launchState,
+    showStop: Boolean(localSession),
+  });
+  syncDisplayShareExpandButton(elements.panelBrowserExpand, state.browserOverlayOpen);
 
   if (!world) {
     setPrivateBrowserStatus("Open a world to use nearby share.");
@@ -4718,12 +4719,12 @@ function updatePrivateBrowserPanel() {
     });
   } else {
     setPrivateBrowserStatus("Share a screen, video, or voice nearby.");
-    updatePrivateBrowserSummary({
-      state: "idle",
-      badge: "Idle",
-      current: draft.draftTitle ? `Ready: ${draft.draftModeLabel} "${draft.draftTitle}"` : `Ready: ${draft.draftModeLabel}`,
-      hint: "Pick a type, add a title if you want, then press Share.",
-    });
+    updatePrivateBrowserSummary(
+      getDisplayShareReadyPresentation({
+        draft,
+        scopeLabel: "in this private world",
+      }),
+    );
   }
 
   if (previewStream) {

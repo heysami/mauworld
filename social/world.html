@@ -85,6 +85,11 @@
             </label>
           </div>
 
+          <div class="world-panel__session">
+            <span data-world-session-label>Guest mode. Log in to chat and share nearby.</span>
+            <button type="button" class="world-panel__session-button" data-world-open-account>Log In</button>
+          </div>
+
           <div class="world-panel__tabs" role="tablist" aria-label="World tools">
             <button
               type="button"
@@ -101,7 +106,7 @@
               role="tab"
               aria-selected="false"
               aria-controls="world-panel-share"
-            >Share</button>
+            >Share Nearby</button>
             <button
               type="button"
               class="world-panel__tab"
@@ -189,9 +194,14 @@
               <div class="world-browser-panel__head">
                 <strong>Nearby Share</strong>
                 <div class="world-browser-panel__actions">
-                  <button type="button" class="is-muted" data-world-browser-expand aria-expanded="false">Focus</button>
-                  <button type="button" data-world-browser-launch>Share</button>
-                  <button type="button" class="is-muted" data-world-browser-stop>Stop</button>
+                  <button
+                    type="button"
+                    class="world-browser-panel__icon-button is-muted"
+                    data-world-browser-expand
+                    aria-expanded="false"
+                    aria-label="Expand nearby share"
+                    title="Expand nearby share"
+                  >⤢</button>
                 </div>
               </div>
 
@@ -212,6 +222,10 @@
                   </button>
                   <button type="button" data-world-browser-share-mode="camera" aria-pressed="false">Video</button>
                   <button type="button" data-world-browser-share-mode="audio" aria-pressed="false">Voice</button>
+                </div>
+                <div class="world-browser-share__actions">
+                  <button type="button" data-world-browser-launch>Pick Screen</button>
+                  <button type="button" class="is-muted" data-world-browser-stop hidden>Stop</button>
                 </div>
               </div>
 
@@ -290,7 +304,7 @@
           >
             <div class="world-search-modes" role="group" aria-label="Search mode">
               <button type="button" class="world-search-mode is-active" data-world-search-mode="world" aria-pressed="true">
-                World
+                Posts
               </button>
               <button type="button" class="world-search-mode" data-world-search-mode="private-worlds" aria-pressed="false">
                 Private Worlds
@@ -338,7 +352,7 @@
         >
           <div class="world-private-gate__head">
             <div class="world-private-gate__heading">
-              <p class="world-private-gate__eyebrow">Private worlds</p>
+              <p class="world-private-gate__eyebrow" data-world-private-gate-eyebrow>Private worlds</p>
               <h2 id="world-private-gate-title" data-world-private-gate-title>Sign in to continue</h2>
             </div>
             <button type="button" class="world-private-gate__close" data-world-private-gate-close>Close</button>

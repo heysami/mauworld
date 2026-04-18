@@ -11,6 +11,7 @@ import {
   getDisplayShareStageLayout,
   getDisplayShareStagePlaceholderText,
   getDisplayShareLaunchState,
+  getDisplayShareReadyPresentation,
   getLocalDisplaySharePresentation,
   isLocalDisplayShareActive,
   isEmojiOnlyChatText as sharedIsEmojiOnlyChatText,
@@ -18,6 +19,9 @@ import {
   normalizeHostedBrowserSession,
   sanitizeBrowserShareTitle,
   setDisplayShareOverlayState,
+  syncDisplayShareActionButtons,
+  syncDisplayShareExpandButton,
+  syncWorldPanelTabLabels,
   updateChatBubbleGhosts,
 } from "./world-interactions.js";
 import {
@@ -76,9 +80,12 @@ const elements = {
   browserPlaceholder: document.querySelector("[data-world-browser-placeholder]"),
   browserResume: document.querySelector("[data-world-browser-resume]"),
   privateLaunch: document.querySelector("[data-world-private-launch]"),
+  sessionLabel: document.querySelector("[data-world-session-label]"),
+  openAccountButton: document.querySelector("[data-world-open-account]"),
   privateGate: document.querySelector("[data-world-private-gate]"),
   privateGateBackdrop: document.querySelector("[data-world-private-gate-backdrop]"),
   privateGateClose: document.querySelector("[data-world-private-gate-close]"),
+  privateGateEyebrow: document.querySelector("[data-world-private-gate-eyebrow]"),
   privateGateTitle: document.querySelector("[data-world-private-gate-title]"),
   privateGateCopy: document.querySelector("[data-world-private-gate-copy]"),
   privateGateAccount: document.querySelector("[data-world-private-gate-account]"),
@@ -102,6 +109,7 @@ elements.panelTabPanels = [...document.querySelectorAll("[data-world-panel-tab-p
 elements.browserShareModes = [...document.querySelectorAll("[data-world-browser-share-mode]")];
 elements.chatReactionButtons = [...document.querySelectorAll("[data-world-chat-reaction]")];
 elements.searchModeButtons = [...document.querySelectorAll("[data-world-search-mode]")];
+syncWorldPanelTabLabels(elements.panelTabs, "data-world-panel-tab");
 
 elements.focusPieces = {
   top: document.querySelector('[data-world-focus-piece="top"]'),
@@ -193,6 +201,8 @@ let toonGradientTexture = null;
 function createEmptyPrivateWorldGateState() {
   return {
     open: false,
+    ready: false,
+    context: "worlds",
     authConfig: null,
     supabase: null,
     session: null,
@@ -228,6 +238,7 @@ const state = {
   lastStreamCheckAt: 0,
   initialViewFramed: false,
   viewerSessionId: "",
+  publicAuthModeKey: "guest",
   viewerDisplayName: "",
   viewerDisplayNameCustom: "",
   viewerDisplayNameTimer: 0,
@@ -372,12 +383,36 @@ function sanitizeViewerDisplayNameInput(input) {
     .slice(0, VIEWER_NAME_MAX_CHARS);
 }
 
+function isPublicViewerSignedIn() {
+  return Boolean(state.privateWorldGate.session);
+}
+
+function getPublicAccessToken() {
+  return String(state.privateWorldGate.session?.access_token ?? "").trim();
+}
+
+function getSignedInViewerDisplayName() {
+  const profile = state.privateWorldGate.profile ?? null;
+  const displayName = sanitizeViewerDisplayNameInput(
+    profile?.display_name || profile?.username || "",
+  );
+  return displayName || "";
+}
+
 function getDefaultViewerDisplayName(viewerSessionId = state.viewerSessionId) {
+  const signedInDisplayName = getSignedInViewerDisplayName();
+  if (signedInDisplayName) {
+    return signedInDisplayName;
+  }
   const sessionId = String(viewerSessionId ?? "").trim();
   return sessionId ? `visitor ${sessionId.slice(-4)}` : "visitor";
 }
 
 function getViewerDisplayName() {
+  const signedInDisplayName = getSignedInViewerDisplayName();
+  if (signedInDisplayName) {
+    return signedInDisplayName;
+  }
   return state.viewerDisplayName || getDefaultViewerDisplayName();
 }
 
@@ -399,14 +434,20 @@ function syncViewerNameInput() {
   if (!elements.nameInput) {
     return;
   }
-  if (document.activeElement !== elements.nameInput) {
-    elements.nameInput.value = state.viewerDisplayNameCustom;
+  const signedInDisplayName = getSignedInViewerDisplayName();
+  elements.nameInput.disabled = Boolean(signedInDisplayName);
+  if (document.activeElement !== elements.nameInput || signedInDisplayName) {
+    elements.nameInput.value = signedInDisplayName || state.viewerDisplayNameCustom;
   }
   elements.nameInput.placeholder = getDefaultViewerDisplayName();
 }
 
 function applyViewerDisplayNameFromInput({ sendPresence = false } = {}) {
   if (!elements.nameInput) {
+    return false;
+  }
+  if (isPublicViewerSignedIn()) {
+    syncViewerNameInput();
     return false;
   }
   const nextCustomName = persistViewerDisplayNameCustom(elements.nameInput.value);
@@ -821,6 +862,140 @@ function launchPrivateWorld(options = {}) {
   navigateToPrivateWorld(options);
 }
 
+function getPublicAuthModeKey() {
+  if (!isPublicViewerSignedIn()) {
+    return "guest";
+  }
+  const profileId = String(
+    state.privateWorldGate.profile?.id
+    ?? state.privateWorldGate.session?.user?.id
+    ?? "",
+  ).trim();
+  return profileId ? `user:${profileId}` : "user:session";
+}
+
+function renderPublicSessionSummary() {
+  if (!elements.sessionLabel || !elements.openAccountButton) {
+    return;
+  }
+  const gate = state.privateWorldGate;
+  if (gate.ready !== true) {
+    elements.sessionLabel.textContent = "Checking your account.";
+    elements.openAccountButton.textContent = "Loading";
+    elements.openAccountButton.disabled = true;
+    return;
+  }
+  elements.openAccountButton.disabled = false;
+  if (gate.session && gate.profile?.username) {
+    elements.sessionLabel.textContent = `Signed in as @${gate.profile.username}.`;
+    elements.openAccountButton.textContent = "Account";
+    return;
+  }
+  if (gate.session) {
+    elements.sessionLabel.textContent = "Signed in.";
+    elements.openAccountButton.textContent = "Account";
+    return;
+  }
+  elements.sessionLabel.textContent = "Guest mode. Log in to chat and share nearby.";
+  elements.openAccountButton.textContent = "Log In";
+}
+
+function renderPublicInteractionAccess() {
+  const signedIn = isPublicViewerSignedIn();
+  if (elements.chatInput) {
+    elements.chatInput.disabled = !signedIn;
+    elements.chatInput.placeholder = signedIn
+      ? "/ say something nearby and press Enter"
+      : "Log in to chat nearby";
+  }
+  for (const button of elements.chatReactionButtons) {
+    button.disabled = !signedIn;
+  }
+  if (elements.browserShareTitle) {
+    elements.browserShareTitle.disabled = !signedIn;
+  }
+  updateChatCounter();
+}
+
+function resetPublicBrowserState({ disconnectMediaController = false, stopTracks = false } = {}) {
+  const activeSessionId = getActiveBrowserSessionId();
+  if (disconnectMediaController) {
+    void state.browserMediaController?.disconnect?.();
+  }
+  clearPendingBrowserShare({ stopTracks });
+  clearLocalBrowserShare({ stopTracks });
+  setBrowserPreviewStream(null);
+  updateBrowserMediaVideoMetrics(null, "");
+  for (const sessionId of [...state.browserSessions.keys()]) {
+    state.browserMediaController?.removeSession?.(sessionId);
+    clearBrowserScreenVideo(sessionId);
+    removeBrowserScreenEntry(sessionId);
+  }
+  state.browserSessions.clear();
+  state.localBrowserSessionId = "";
+  state.browserPanelRemoteSessionId = "";
+  state.browserMediaTransport = "jpeg-sequence";
+  state.browserMediaPendingFrameId = 0;
+  state.browserMediaState.connected = false;
+  state.browserMediaState.canPublish = false;
+  state.browserMediaState.remoteVideoSessionId = "";
+  state.browserMediaState.remoteAudioSessionId = "";
+  state.browserMediaState.remoteAudioAvailable = false;
+  state.browserMediaState.remoteAudioBlocked = false;
+  state.browserMediaState.remoteAudioError = "";
+  state.browserMediaState.lastPlayError = "";
+  if (activeSessionId) {
+    state.browserFocusSessionId = "";
+  }
+}
+
+function resetPublicPresenceState() {
+  state.livePresence.clear();
+  state.activeChats.clear();
+  syncStreamPresence();
+  reconcilePresenceScene();
+}
+
+function restartRealtimeClient(options = {}) {
+  const sessionId = getActiveBrowserSessionId();
+  if (options.stopShare !== false && sessionId) {
+    state.realtimeClient?.stopBrowser(sessionId);
+  }
+  state.realtimeClient?.stop();
+  state.realtimeClient = null;
+  state.realtimeConnected = false;
+  resetPublicBrowserState({
+    disconnectMediaController: options.disconnectMediaController === true,
+    stopTracks: options.stopTracks === true,
+  });
+  resetPublicPresenceState();
+  updateBrowserPanel();
+  renderLiveSharesList();
+  if (state.meta?.worldSnapshotId) {
+    initRealtimeClient();
+  }
+}
+
+function applyPublicAuthState(options = {}) {
+  renderPublicSessionSummary();
+  renderPublicInteractionAccess();
+  syncViewerNameInput();
+  const nextModeKey = getPublicAuthModeKey();
+  const authChanged = state.publicAuthModeKey !== nextModeKey;
+  state.publicAuthModeKey = nextModeKey;
+  state.lastPresenceAt = 0;
+  if (authChanged && state.meta?.worldSnapshotId) {
+    restartRealtimeClient({
+      disconnectMediaController: true,
+      stopShare: true,
+      stopTracks: true,
+    });
+    return;
+  }
+  updateBrowserPanel();
+  renderLiveSharesList();
+}
+
 function setPrivateWorldGateStatus(text) {
   state.privateWorldGate.status = String(text ?? "");
   if (elements.privateGateStatus) {
@@ -898,6 +1073,7 @@ function renderPrivateWorldGate() {
   const open = gate.open === true;
   const signedIn = Boolean(gate.session);
   const isCheckingSession = gate.busy && !signedIn && !gate.profile && !gate.worlds.length;
+  const accountMode = gate.context === "account";
   document.body.classList.toggle("is-private-gate-open", open);
   setPrivateGateSectionVisibility(elements.privateGate, open, "grid");
   setPrivateGateSectionVisibility(elements.privateGateBackdrop, open);
@@ -905,19 +1081,32 @@ function renderPrivateWorldGate() {
     return;
   }
 
+  if (elements.privateGateEyebrow) {
+    elements.privateGateEyebrow.textContent = accountMode ? "Account" : "Private worlds";
+  }
   if (elements.privateGateTitle) {
     elements.privateGateTitle.textContent = isCheckingSession
       ? "Checking your account"
-      : signedIn
-        ? "Choose a private world"
-        : "Sign in to continue";
+      : accountMode
+        ? (signedIn ? "Account" : "Sign in")
+        : signedIn
+          ? "Choose a private world"
+          : "Sign in to continue";
   }
   if (elements.privateGateCopy) {
     elements.privateGateCopy.textContent = isCheckingSession
       ? "Looking for your current session."
-      : signedIn
-        ? "Open one of your worlds or start a new one. The scene loads after you choose."
-        : "Sign in here first. Then you can choose one of your private worlds or start a new one.";
+      : accountMode
+        ? (
+          signedIn
+            ? "You can sign out here, then head back into Mauworld or open your private worlds from the main button."
+            : "Log in here first. Then chat, nearby share, and the rest of public Mauworld unlock."
+        )
+        : (
+          signedIn
+            ? "Open one of your worlds or start a new one. The scene loads after you choose."
+            : "Sign in here first. Then you can choose one of your private worlds or start a new one."
+        );
   }
   setPrivateGateSectionVisibility(elements.privateGateAccount, signedIn, "flex");
   if (elements.privateGateAccountLabel && signedIn) {
@@ -931,7 +1120,7 @@ function renderPrivateWorldGate() {
       field.disabled = gate.busy;
     }
   }
-  setPrivateGateSectionVisibility(elements.privateGateWorlds, signedIn, "grid");
+  setPrivateGateSectionVisibility(elements.privateGateWorlds, signedIn && !accountMode, "grid");
   if (elements.privateGateRefresh) {
     elements.privateGateRefresh.disabled = gate.busy;
   }
@@ -974,7 +1163,9 @@ async function ensurePrivateWorldGateClient() {
   if (gate.supabase) {
     return gate;
   }
+  gate.ready = false;
   gate.busy = true;
+  renderPublicSessionSummary();
   renderPrivateWorldGate();
   try {
     gate.authConfig = await fetchJson("/public/auth/config");
@@ -988,6 +1179,8 @@ async function ensurePrivateWorldGateClient() {
         gate.worlds = [];
         gate.loadingWorlds = false;
         gate.busy = false;
+        gate.ready = true;
+        applyPublicAuthState();
         renderPrivateWorldGate();
         return;
       }
@@ -995,7 +1188,9 @@ async function ensurePrivateWorldGateClient() {
     });
     return gate;
   } finally {
+    gate.ready = true;
     gate.busy = false;
+    renderPublicSessionSummary();
     renderPrivateWorldGate();
   }
 }
@@ -1007,6 +1202,7 @@ async function refreshPrivateWorldGateState(options = {}) {
     gate.worlds = [];
     gate.loadingWorlds = false;
     gate.busy = false;
+    applyPublicAuthState(options);
     renderPrivateWorldGate();
     return;
   }
@@ -1028,6 +1224,7 @@ async function refreshPrivateWorldGateState(options = {}) {
     }
     gate.profile = profilePayload.profile ?? null;
     gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
+    applyPublicAuthState(options);
   } catch (error) {
     if (gate.requestId !== requestId) {
       return;
@@ -1037,20 +1234,24 @@ async function refreshPrivateWorldGateState(options = {}) {
     if (gate.requestId === requestId) {
       gate.busy = false;
       gate.loadingWorlds = false;
+      renderPublicSessionSummary();
       renderPrivateWorldGate();
     }
   }
 }
 
-async function openPrivateWorldGate() {
+async function openPrivateWorldGate(context = "worlds") {
+  state.privateWorldGate.context = context === "account" ? "account" : "worlds";
   state.privateWorldGate.open = true;
   renderPrivateWorldGate();
   try {
     await ensurePrivateWorldGateClient();
-    await refreshPrivateWorldGateState();
+    await refreshPrivateWorldGateState({ preserveStatus: true });
   } catch (error) {
     state.privateWorldGate.busy = false;
+    state.privateWorldGate.ready = true;
     setPrivateWorldGateStatus(error.message || "Could not open private worlds.");
+    renderPublicSessionSummary();
     renderPrivateWorldGate();
   }
 }
@@ -1122,11 +1323,23 @@ async function signOutPrivateWorldGate() {
     }
     gate.busy = false;
     setPrivateWorldGateStatus("Signed out.");
+    applyPublicAuthState();
+    renderPublicSessionSummary();
     renderPrivateWorldGate();
   } catch (error) {
     gate.busy = false;
     setPrivateWorldGateStatus(error.message || "Could not sign out.");
     renderPrivateWorldGate();
+  }
+}
+
+async function initializePublicAuthState() {
+  try {
+    await ensurePrivateWorldGateClient();
+    await refreshPrivateWorldGateState({ preserveStatus: true });
+  } catch (_error) {
+    state.privateWorldGate.ready = true;
+    renderPublicSessionSummary();
   }
 }
 
@@ -1604,12 +1817,17 @@ function normalizeWorldResult(result) {
   };
 }
 
-async function postJson(path, body) {
+async function postJson(path, body, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+  const accessToken = options.auth === true ? getPublicAccessToken() : "";
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
   const response = await fetch(mauworldApiUrl(path), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({}));
@@ -1628,6 +1846,8 @@ async function fetchBrowserMediaToken({ canPublish = false } = {}) {
       viewerSessionId: state.viewerSessionId,
       worldSnapshotId: state.meta.worldSnapshotId,
       canPublish,
+    }, {
+      auth: isPublicViewerSignedIn(),
     });
   } catch (_error) {
     return { enabled: false };
@@ -1987,8 +2207,13 @@ const browserShareFeature = createNearbyDisplayShareFeature({
   setStatus: setBrowserStatus,
   updateView: updateBrowserPanel,
   updatingStatusText: "Updating live share title...",
-  canLaunch: () => Boolean(state.realtimeClient?.isConnected()),
+  canLaunch: () => Boolean(isPublicViewerSignedIn() && state.realtimeClient?.isConnected()),
   onCannotLaunch() {
+    if (!isPublicViewerSignedIn()) {
+      showToast("Log in to share nearby.");
+      void openPrivateWorldGate("account");
+      return;
+    }
     showToast("Realtime share is offline.");
   },
   onUnsupported(message) {
@@ -7522,6 +7747,12 @@ function updateChatCounter() {
 }
 
 function openChatComposer() {
+  if (!isPublicViewerSignedIn()) {
+    setWorldPanelTab("chat");
+    showToast("Log in to chat nearby.");
+    void openPrivateWorldGate("account");
+    return;
+  }
   if (!elements.chatInput) {
     return;
   }
@@ -7539,6 +7770,11 @@ const chatFeature = createChatFeature({
   reactionAttribute: "data-world-chat-reaction",
   onAfterInputChange: updateChatCounter,
   onSubmit(text) {
+    if (!isPublicViewerSignedIn()) {
+      showToast("Log in to chat nearby.");
+      void openPrivateWorldGate("account");
+      return false;
+    }
     if (!state.realtimeClient?.sendChat(text)) {
       showToast("Realtime chat is offline.");
       return false;
@@ -7721,6 +7957,8 @@ function getBrowserStagePlaceholderText({
 }
 
 function updateBrowserPanel() {
+  const signedIn = isPublicViewerSignedIn();
+  const canShareNearby = Boolean(signedIn && state.realtimeConnected);
   if (state.localBrowserShare && !isLocalDisplayShareActive(state.localBrowserShare)) {
     const endedSessionId = String(state.localBrowserShare.sessionId ?? state.localBrowserSessionId ?? "").trim();
     clearLocalBrowserShare({ stopTracks: false, sessionId: endedSessionId });
@@ -7782,6 +8020,9 @@ function updateBrowserPanel() {
     elements.browserStage.tabIndex = state.browserOverlayOpen ? 0 : -1;
     elements.browserStage.setAttribute("aria-hidden", stageLayout.collapseDockedStage ? "true" : "false");
   }
+  if (elements.browserShareTitle) {
+    elements.browserShareTitle.disabled = !signedIn;
+  }
   if (!state.realtimeConnected) {
     setBrowserStatus("Realtime share offline.");
     updateBrowserPanelSummary({
@@ -7813,18 +8054,26 @@ function updateBrowserPanel() {
       current: shareKind === "audio"
         ? `Hearing ${remotePanelSession.title || "live voice"}`
         : `Seeing ${remotePanelSession.title || "nearby share"}`,
-      hint: "Your Share controls still start your own nearby share.",
+      hint: signedIn
+        ? "Your Share controls still start your own nearby share."
+        : "Log in to start your own nearby share.",
+    });
+  } else if (!localSession && !signedIn) {
+    setBrowserStatus("Log in to share nearby.");
+    updateBrowserPanelSummary({
+      state: "idle",
+      badge: "Guest",
+      current: "Sharing is off for guests",
+      hint: "Log in to screen share, go live on camera, or use voice nearby.",
     });
   } else if (!localSession) {
     setBrowserStatus("Share a screen, video, or voice nearby.");
-    updateBrowserPanelSummary({
-      state: "idle",
-      badge: "Idle",
-      current: draft.draftTitle
-        ? `Ready: ${draft.draftModeLabel} "${draft.draftTitle}"`
-        : `Ready: ${draft.draftModeLabel}`,
-      hint: "Press Share to go live nearby.",
-    });
+    updateBrowserPanelSummary(
+      getDisplayShareReadyPresentation({
+        draft,
+        scopeLabel: "nearby",
+      }),
+    );
   } else if (localSession.sessionMode === "display-share") {
     const presentation = getLocalDisplaySharePresentation({
       localSession,
@@ -7855,23 +8104,20 @@ function updateBrowserPanel() {
     });
   }
 
-  if (elements.browserStop) {
-    elements.browserStop.disabled = !localSession;
-  }
-  if (elements.browserLaunch) {
-    const launchState = getDisplayShareLaunchState({
-      canShare: state.realtimeConnected,
-      pending: Boolean(state.pendingBrowserShare),
-      localSession,
-      draft,
-    });
-    elements.browserLaunch.textContent = launchState.label;
-    elements.browserLaunch.disabled = launchState.disabled;
-  }
-  if (elements.browserExpand) {
-    elements.browserExpand.textContent = state.browserOverlayOpen ? "Dock" : "Focus";
-    elements.browserExpand.setAttribute("aria-expanded", String(state.browserOverlayOpen));
-  }
+  const launchState = getDisplayShareLaunchState({
+    canShare: canShareNearby,
+    disabledLabel: signedIn ? undefined : "Log In",
+    pending: Boolean(state.pendingBrowserShare),
+    localSession,
+    draft,
+  });
+  syncDisplayShareActionButtons({
+    launchButton: elements.browserLaunch,
+    stopButton: elements.browserStop,
+    launchState,
+    showStop: Boolean(localSession),
+  });
+  syncDisplayShareExpandButton(elements.browserExpand, state.browserOverlayOpen);
 
   if (!elements.browserFrame || !elements.browserPlaceholder) {
     return;
@@ -8091,6 +8337,7 @@ function initRealtimeClient() {
   }
   state.realtimeClient = createWorldRealtimeClient({
     viewerSessionId: state.viewerSessionId,
+    getAccessToken: getPublicAccessToken,
     getPresencePayload: buildRealtimePresencePayload,
     onMessage: handleRealtimeMessage,
     onStatus: ({ connected }) => {
@@ -8109,7 +8356,7 @@ function initRealtimeClient() {
 }
 
 async function sendPresence() {
-  if (!state.meta) {
+  if (!state.meta || !isPublicViewerSignedIn()) {
     return;
   }
   const now = Date.now();
@@ -8127,6 +8374,8 @@ async function sendPresence() {
       position_z: Number(state.navigationPosition.z.toFixed(4)),
       heading_y: Number(inputState.yaw.toFixed(4)),
       movement_state: movementState,
+    }, {
+      auth: true,
     });
     void loadStream(true);
   } catch (_error) {
@@ -9000,6 +9249,11 @@ function normalizeBrowserKey(event) {
 }
 
 async function startLocalNearbyShare(share) {
+  if (!isPublicViewerSignedIn()) {
+    showToast("Log in to share nearby.");
+    void openPrivateWorldGate("account");
+    return false;
+  }
   if (!state.realtimeClient?.isConnected()) {
     showToast("Realtime share is offline.");
     return false;
@@ -9034,9 +9288,12 @@ async function startLocalNearbyShare(share) {
 function registerInput() {
   browserShareFeature.setSelectedMode(state.browserShareMode);
   window.addEventListener("resize", resizeScene);
+  elements.openAccountButton?.addEventListener("click", () => {
+    void openPrivateWorldGate("account");
+  });
   elements.privateLaunch?.addEventListener("click", (event) => {
     event.preventDefault();
-    void openPrivateWorldGate();
+    void openPrivateWorldGate("worlds");
   });
   elements.privateGateClose?.addEventListener("click", () => {
     closePrivateWorldGate();
@@ -9423,9 +9680,12 @@ async function bootstrapWorld() {
   state.viewerSessionId = createViewerSessionId();
   state.viewerDisplayNameCustom = loadViewerDisplayNameCustom();
   state.viewerDisplayName = state.viewerDisplayNameCustom || getDefaultViewerDisplayName();
+  renderPublicSessionSummary();
   syncViewerNameInput();
   initScene();
   registerInput();
+  renderPublicInteractionAccess();
+  void initializePublicAuthState();
   updateSearchModeControls();
   renderSelected(null);
   renderSearchResults();

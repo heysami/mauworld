@@ -1,9 +1,10 @@
 const { mauworldApiUrl } = window.MauworldSocial;
 
-function buildRealtimeUrl(viewerSessionId) {
+function buildRealtimeUrl(viewerSessionId, accessToken = "") {
   const url = new URL(
     mauworldApiUrl("/ws/public/world/current", {
       viewerSessionId,
+      accessToken,
     }),
   );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -75,8 +76,13 @@ export function createWorldRealtimeClient(options = {}) {
     if (!viewerSessionId) {
       return;
     }
+    const accessToken = String(
+      typeof options.getAccessToken === "function"
+        ? options.getAccessToken()
+        : (options.accessToken ?? ""),
+    ).trim();
     try {
-      client.socket = new WebSocket(buildRealtimeUrl(viewerSessionId));
+      client.socket = new WebSocket(buildRealtimeUrl(viewerSessionId, accessToken));
     } catch (error) {
       options.onError?.(error);
       scheduleReconnect();

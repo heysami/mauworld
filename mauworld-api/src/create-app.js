@@ -254,6 +254,7 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
   }));
 
   app.post("/api/public/world/current/presence", asyncRoute(async (req, res) => {
+    await requireUser(req, store);
     const payload = await store.upsertViewerPresence({
       viewerSessionId: requireString(req.body?.viewerSessionId, "viewerSessionId"),
       position_x: req.body?.position_x,
@@ -266,6 +267,9 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
   }));
 
   app.post("/api/public/world/current/browser-media-token", asyncRoute(async (req, res) => {
+    if (req.body?.canPublish === true) {
+      await requireUser(req, store);
+    }
     const payload = await createBrowserMediaToken(config, {
       viewerSessionId: requireString(req.body?.viewerSessionId, "viewerSessionId"),
       worldSnapshotId: requireString(req.body?.worldSnapshotId, "worldSnapshotId"),

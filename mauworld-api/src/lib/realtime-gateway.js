@@ -113,16 +113,27 @@ export class RealtimeGateway {
       }
 
       this.wss.handleUpgrade(request, socket, head, (websocket) => {
-        this.handleConnection(websocket, requestUrl);
+        void this.handleConnection(websocket, requestUrl);
       });
     });
   }
 
-  handleConnection(socket, requestUrl) {
+  async handleConnection(socket, requestUrl) {
     const viewerSessionId = String(requestUrl.searchParams.get("viewerSessionId") ?? "").trim();
+    const accessToken = String(requestUrl.searchParams.get("accessToken") ?? "").trim();
     if (!viewerSessionId) {
       socket.close(1008, "viewerSessionId is required");
       return;
+    }
+
+    let auth = null;
+    if (accessToken) {
+      try {
+        auth = await this.store.verifyUserAccessToken(accessToken);
+      } catch (_error) {
+        socket.close(1008, "invalid access token");
+        return;
+      }
     }
 
     const existing = this.clients.get(viewerSessionId);
@@ -145,6 +156,9 @@ export class RealtimeGateway {
       cellKey: "",
       browserModes: new Map(),
       messageQueue: Promise.resolve(),
+      profile: auth?.profile ?? null,
+      authUser: auth?.user ?? null,
+      isGuest: !auth?.profile,
     };
     this.clients.set(viewerSessionId, client);
 
@@ -165,6 +179,7 @@ export class RealtimeGateway {
       type: "session:ready",
       viewerSessionId,
       connectedAt: nowIso(),
+      authenticated: Boolean(auth?.profile),
     });
   }
 
@@ -264,10 +279,12 @@ export class RealtimeGateway {
         previousCells.get(client.cellKey)?.delete(client.viewerSessionId);
       }
       client.cellKey = "";
-      this.broadcastToWorld(previousWorld, {
-        type: "presence:remove",
-        viewerSessionId: client.viewerSessionId,
-      }, new Set([client.viewerSessionId]));
+      if (!client.isGuest) {
+        this.broadcastToWorld(previousWorld, {
+          type: "presence:remove",
+          viewerSessionId: client.viewerSessionId,
+        }, new Set([client.viewerSessionId]));
+      }
       const ownedSession = this.browserManager.getSessionByHost(client.viewerSessionId);
       if (ownedSession) {
         void this.browserManager.stopSession(ownedSession.sessionId ?? ownedSession.id);
@@ -283,6 +300,42 @@ export class RealtimeGateway {
     return [...this.getWorldMemberIds(worldSnapshotId)]
       .map((viewerSessionId) => this.clients.get(viewerSessionId))
       .filter(Boolean);
+  }
+
+  buildPresencePayload(client) {
+    if (!client || client.isGuest) {
+      return null;
+    }
+    return buildViewerPresencePayload(client);
+  }
+
+  selectBrowserRecipients(hostClient, candidates, interactionSettings) {
+    const maxRecipients = Math.max(1, interactionSettings?.interactionMaxRecipients ?? 20);
+    const signedInCandidates = candidates.filter((entry) => !entry?.isGuest);
+    const guestCandidates = candidates.filter((entry) => entry?.isGuest);
+    const recipients = new Set(
+      selectNearestRecipients({
+        senderSessionId: hostClient.viewerSessionId,
+        senderPosition: hostClient.position,
+        candidates: signedInCandidates,
+        radius: interactionSettings?.browserRadius,
+        maxRecipients,
+      }),
+    );
+    const remaining = Math.max(0, maxRecipients - recipients.size);
+    if (remaining > 0 && guestCandidates.length > 0) {
+      for (const viewerSessionId of selectNearestRecipients({
+        senderSessionId: hostClient.viewerSessionId,
+        senderPosition: hostClient.position,
+        candidates: guestCandidates,
+        radius: interactionSettings?.browserRadius,
+        maxRecipients: remaining,
+      })) {
+        recipients.add(viewerSessionId);
+      }
+    }
+    recipients.add(hostClient.viewerSessionId);
+    return recipients;
   }
 
   broadcastToWorld(worldSnapshotId, payload, excludeSessionIds = new Set()) {
@@ -305,9 +358,16 @@ export class RealtimeGateway {
       : { ...rawSession };
     const hostSessionId = String(session.hostSessionId ?? rawSession.hostSessionId ?? "").trim();
     const subscribers = rawSession.subscribers instanceof Set ? rawSession.subscribers : null;
-    const viewerCount = Number.isFinite(Number(rawSession.viewerCount))
-      ? Math.max(0, Math.floor(Number(rawSession.viewerCount)))
-      : Math.max(0, [...(subscribers ?? [])].filter((viewerSessionId) => viewerSessionId !== hostSessionId).length);
+    const countedSubscribers = subscribers
+      ? [...subscribers].filter((viewerSessionId) =>
+        viewerSessionId !== hostSessionId
+        && this.clients.get(viewerSessionId)?.isGuest !== true)
+      : null;
+    const viewerCount = countedSubscribers
+      ? Math.max(0, countedSubscribers.length)
+      : Number.isFinite(Number(rawSession.viewerCount))
+        ? Math.max(0, Math.floor(Number(rawSession.viewerCount)))
+        : 0;
     const maxViewers = Number.isFinite(Number(rawSession.maxViewers)) && Number(rawSession.maxViewers) > 0
       ? Math.max(1, Math.floor(Number(rawSession.maxViewers)))
       : Math.max(
@@ -345,7 +405,7 @@ export class RealtimeGateway {
     client.lastHeartbeatAt = Date.now();
     this.updateClientCell(client, interactionSettings);
 
-    const presence = buildViewerPresencePayload(client);
+    const presence = this.buildPresencePayload(client);
     if (worldChanged || client.joinedWorldSnapshotId !== worldSnapshotId) {
       client.joinedWorldSnapshotId = worldSnapshotId;
       sendJson(client, {
@@ -353,7 +413,8 @@ export class RealtimeGateway {
         worldSnapshotId,
         presence: this.getWorldClients(worldSnapshotId)
           .filter((entry) => entry.viewerSessionId !== client.viewerSessionId)
-          .map((entry) => buildViewerPresencePayload(entry)),
+          .map((entry) => this.buildPresencePayload(entry))
+          .filter(Boolean),
       });
       const browserSessions = this.browserManager.listSessionsForWorld(worldSnapshotId);
       for (const rawSession of browserSessions) {
@@ -375,16 +436,25 @@ export class RealtimeGateway {
       }
     }
 
-    this.broadcastToWorld(worldSnapshotId, {
-      type: "presence:update",
-      worldSnapshotId,
-      presence,
-    }, new Set([client.viewerSessionId]));
+    if (presence) {
+      this.broadcastToWorld(worldSnapshotId, {
+        type: "presence:update",
+        worldSnapshotId,
+        presence,
+      }, new Set([client.viewerSessionId]));
+    }
     await this.rebalanceBrowserSessions(worldSnapshotId);
   }
 
   async handleChatSend(client, message) {
     if (!client.worldSnapshotId) {
+      return;
+    }
+    if (client.isGuest) {
+      sendJson(client, {
+        type: "chat:error",
+        message: "Sign in to chat nearby.",
+      });
       return;
     }
     const interactionSettings = await this.getInteractionSettings();
@@ -432,6 +502,13 @@ export class RealtimeGateway {
 
   async handleBrowserStart(client, message) {
     if (!client.worldSnapshotId) {
+      return;
+    }
+    if (client.isGuest) {
+      sendJson(client, {
+        type: "browser:error",
+        message: "Sign in to share nearby.",
+      });
       return;
     }
     try {
@@ -569,22 +646,18 @@ export class RealtimeGateway {
         await this.browserManager.stopSession(session.id ?? session.sessionId);
         continue;
       }
-      const fullRecipients = new Set(
-        selectNearestRecipients({
-          senderSessionId: hostClient.viewerSessionId,
-          senderPosition: hostClient.position,
-          candidates: worldClients,
-          radius: resolvedInteractionSettings.browserRadius,
-          maxRecipients: resolvedInteractionSettings.interactionMaxRecipients,
-        }),
-      );
-      fullRecipients.add(hostClient.viewerSessionId);
+      const fullRecipients = this.selectBrowserRecipients(hostClient, worldClients, resolvedInteractionSettings);
       const previousRecipients = new Set(session.subscribers ?? []);
       session.subscribers = fullRecipients;
       const recipientsChanged =
         previousRecipients.size !== fullRecipients.size
         || [...fullRecipients].some((viewerSessionId) => !previousRecipients.has(viewerSessionId));
-      const nextViewerCount = Math.max(0, fullRecipients.size - 1);
+      const nextViewerCount = Math.max(
+        0,
+        [...fullRecipients].filter((viewerSessionId) =>
+          viewerSessionId !== hostClient.viewerSessionId
+          && this.clients.get(viewerSessionId)?.isGuest !== true).length,
+      );
       const nextMaxViewers = Math.max(1, resolvedInteractionSettings.interactionMaxRecipients);
       const countsChanged =
         Number(session.viewerCount ?? -1) !== nextViewerCount
@@ -665,10 +738,12 @@ export class RealtimeGateway {
       if (client.cellKey) {
         this.getWorldCellMap(worldSnapshotId).get(client.cellKey)?.delete(client.viewerSessionId);
       }
-      this.broadcastToWorld(worldSnapshotId, {
-        type: "presence:remove",
-        viewerSessionId: client.viewerSessionId,
-      });
+      if (!client.isGuest) {
+        this.broadcastToWorld(worldSnapshotId, {
+          type: "presence:remove",
+          viewerSessionId: client.viewerSessionId,
+        });
+      }
     }
     const browserSession = this.browserManager.getSessionByHost(client.viewerSessionId);
     if (browserSession) {
