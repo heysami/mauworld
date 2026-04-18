@@ -10130,6 +10130,61 @@ function updatePreviewFromSelection() {
   };
   refreshPrivatePreviewEnvironment(preview, state.selectedWorld, sceneDoc);
   const environmentTheme = buildPrivateSceneEnvironmentTheme(getPrivateSceneEnvironmentSettings(sceneDoc));
+  const authoredPrimitiveById = new Map(
+    (sceneDoc.primitives ?? [])
+      .filter((entry) => entry?.id != null)
+      .map((entry) => [String(entry.id), entry]),
+  );
+  const useRuntimePrimitivePreview = state.mode === "play" && runtimeTransforms.dynamicObjects.length > 0;
+  const renderPrimitiveMesh = (primitiveSource = {}, options = {}) => {
+    const authoredPrimitive = options.authoredPrimitive ?? null;
+    const primitiveId = String(options.id ?? primitiveSource.id ?? authoredPrimitive?.id ?? "").trim();
+    const resolvedPrimitiveScale = options.scale
+      ?? primitiveSource?.scale
+      ?? authoredPrimitive?.scale
+      ?? { x: 1, y: 1, z: 1 };
+    const resolvedPrimitiveMaterial = options.material
+      ?? (primitiveSource?.material_override
+        ? { ...(primitiveSource.material ?? authoredPrimitive?.material ?? {}), ...primitiveSource.material_override }
+        : (primitiveSource?.material ?? authoredPrimitive?.material ?? { color: "#edf2f8", texture_preset: "none" }));
+    const mesh = addMesh(
+      getPrimitiveGeometry(primitiveSource?.shape ? primitiveSource : (authoredPrimitive ?? primitiveSource)),
+      makeMaterial(
+        resolvedPrimitiveMaterial,
+        resolvedPrimitiveScale,
+        {
+          selected: options.selected === true,
+        },
+      ),
+      primitiveSource?.position || authoredPrimitive?.position || { x: 0, y: 1, z: 0 },
+      primitiveSource?.rotation || authoredPrimitive?.rotation || { x: 0, y: 0, z: 0 },
+      resolvedPrimitiveScale,
+      primitiveId ? { id: primitiveId, kind: "primitive" } : null,
+    );
+    applyRenderableVisibility(mesh, {
+      invisibleInPlay: authoredPrimitive?.invisible === true,
+      runtimeVisible: options.runtimeVisible,
+    });
+    attachEmissionLight(
+      mesh,
+      resolvedPrimitiveMaterial,
+      resolvedPrimitiveScale,
+      {
+        runtimeVisible: options.runtimeVisible,
+      },
+    );
+    const effectColor = resolvedPrimitiveMaterial?.color || authoredPrimitive?.material?.color || "#ffb16a";
+    if (authoredPrimitive?.particle_effect) {
+      particleEffects.push(createParticleSystem(preview, primitiveId, authoredPrimitive.particle_effect, effectColor));
+    }
+    if (authoredPrimitive?.trail_effect) {
+      particleEffects.push(createTrailSystem(preview, primitiveId, authoredPrimitive.trail_effect, effectColor));
+    }
+    if (options.selected === true && mesh.material?.emissiveIntensity !== undefined) {
+      mesh.material.emissiveIntensity = Math.max(Number(mesh.material.emissiveIntensity || 0), 0.3);
+    }
+    return mesh;
+  };
   const hasPlacedGeometry = Boolean(
     (sceneDoc.voxels?.length ?? 0)
     || (sceneDoc.primitives?.length ?? 0)
@@ -10164,46 +10219,20 @@ function updatePreviewFromSelection() {
   }
 
   for (const primitive of sceneDoc.primitives ?? []) {
+    if (useRuntimePrimitivePreview) {
+      continue;
+    }
     const runtimePrimitive = runtimeTransforms.dynamicById.get(primitive.id);
-    const resolvedPrimitiveScale = runtimePrimitive?.scale || primitive.scale || { x: 1, y: 1, z: 1 };
-    const resolvedPrimitiveMaterial = runtimePrimitive?.material_override
-      ? { ...(runtimePrimitive.material ?? primitive.material ?? {}), ...runtimePrimitive.material_override }
-      : (runtimePrimitive?.material ?? primitive.material);
-    const mesh = addMesh(
-      getPrimitiveGeometry(runtimePrimitive ?? primitive),
-      makeMaterial(
-        resolvedPrimitiveMaterial,
-        resolvedPrimitiveScale,
-        {
-          selected: isSelected("primitive", primitive.id),
-        },
-      ),
-      runtimePrimitive?.position || primitive.position || { x: 0, y: 1, z: 0 },
-      runtimePrimitive?.rotation || primitive.rotation || { x: 0, y: 0, z: 0 },
-      resolvedPrimitiveScale,
-      { id: primitive.id, kind: "primitive" },
-    );
-    applyRenderableVisibility(mesh, {
-      invisibleInPlay: primitive.invisible === true,
+    renderPrimitiveMesh(runtimePrimitive ?? primitive, {
+      id: primitive.id,
+      authoredPrimitive: primitive,
+      scale: runtimePrimitive?.scale || primitive.scale || { x: 1, y: 1, z: 1 },
+      material: runtimePrimitive?.material_override
+        ? { ...(runtimePrimitive.material ?? primitive.material ?? {}), ...runtimePrimitive.material_override }
+        : (runtimePrimitive?.material ?? primitive.material),
       runtimeVisible: runtimePrimitive?.visible !== false,
+      selected: isSelected("primitive", primitive.id),
     });
-    attachEmissionLight(
-      mesh,
-      resolvedPrimitiveMaterial,
-      resolvedPrimitiveScale,
-      {
-        runtimeVisible: runtimePrimitive?.visible !== false,
-      },
-    );
-    if (primitive.particle_effect) {
-      particleEffects.push(createParticleSystem(preview, primitive.id, primitive.particle_effect, primitive.material?.color || "#ffb16a"));
-    }
-    if (primitive.trail_effect) {
-      particleEffects.push(createTrailSystem(preview, primitive.id, primitive.trail_effect, primitive.material?.color || "#ffcf84"));
-    }
-    if (isSelected("primitive", primitive.id)) {
-      mesh.material.emissiveIntensity = Math.max(Number(mesh.material.emissiveIntensity || 0), 0.3);
-    }
   }
 
   for (const player of sceneDoc.players ?? []) {
@@ -10354,32 +10383,20 @@ function updatePreviewFromSelection() {
 
   for (const runtimePrimitive of runtimeTransforms.dynamicObjects) {
     const objectId = runtimePrimitive.id;
-    if ((sceneDoc.primitives ?? []).some((entry) => entry.id === objectId)) {
+    const authoredPrimitive = authoredPrimitiveById.get(String(objectId ?? "")) ?? null;
+    if (!useRuntimePrimitivePreview && authoredPrimitive) {
       continue;
     }
-    const resolvedPrimitiveScale = runtimePrimitive?.scale || { x: 1, y: 1, z: 1 };
-    const resolvedPrimitiveMaterial = runtimePrimitive?.material_override
-      ? { ...(runtimePrimitive.material ?? {}), ...runtimePrimitive.material_override }
-      : (runtimePrimitive?.material ?? { color: "#edf2f8", texture_preset: "none" });
-    const mesh = addMesh(
-      getPrimitiveGeometry(runtimePrimitive),
-      makeMaterial(resolvedPrimitiveMaterial, resolvedPrimitiveScale),
-      runtimePrimitive.position || { x: 0, y: 1, z: 0 },
-      runtimePrimitive.rotation || { x: 0, y: 0, z: 0 },
-      resolvedPrimitiveScale,
-      { id: objectId, kind: "primitive" },
-    );
-    applyRenderableVisibility(mesh, {
+    renderPrimitiveMesh(runtimePrimitive, {
+      id: objectId,
+      authoredPrimitive,
+      scale: runtimePrimitive?.scale || authoredPrimitive?.scale || { x: 1, y: 1, z: 1 },
+      material: runtimePrimitive?.material_override
+        ? { ...(runtimePrimitive.material ?? authoredPrimitive?.material ?? {}), ...runtimePrimitive.material_override }
+        : (runtimePrimitive?.material ?? authoredPrimitive?.material ?? { color: "#edf2f8", texture_preset: "none" }),
       runtimeVisible: runtimePrimitive?.visible !== false,
+      selected: isSelected("primitive", objectId),
     });
-    attachEmissionLight(
-      mesh,
-      resolvedPrimitiveMaterial,
-      resolvedPrimitiveScale,
-      {
-        runtimeVisible: runtimePrimitive?.visible !== false,
-      },
-    );
   }
 
   for (const text of sceneDoc.texts ?? []) {
