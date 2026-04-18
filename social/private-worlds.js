@@ -10022,15 +10022,8 @@ function getTransformHandleHit(pointerSource) {
   const rect = elements.previewCanvas.getBoundingClientRect();
   const pointerX = clientX - rect.left;
   const pointerY = clientY - rect.top;
-  const pointer = new THREE.Vector2(
-    ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-    -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
-  );
-  preview.raycaster.setFromCamera(pointer, preview.camera);
   const hoveredHandleKey = state.buildHover?.transformHandle?.key ?? "";
-  const intersections = preview.raycaster.intersectObjects(preview.transformPickables, false)
-    .filter((hit) => hit?.object?.userData?.privateWorldTransformHandle);
-  const rankHandle = (object, distance = Number.POSITIVE_INFINITY) => {
+  const rankHandle = (object) => {
     const handle = object?.userData?.privateWorldTransformHandle;
     if (!handle) {
       return null;
@@ -10045,16 +10038,22 @@ function getTransformHandleHit(pointerSource) {
     return {
       handle,
       object,
-      distance,
+      depth: screenPosition.z,
       screenDistance: Math.hypot(screenX - pointerX, screenY - pointerY),
+      thresholdPx: handle.type === "rotate" ? 34 : 28,
     };
   };
-  const chooseCandidate = (candidates, stickyThresholdPx = 26) => {
+  const chooseCandidate = (candidates) => {
     const rankedCandidates = candidates
       .filter(Boolean)
+      .filter((candidate) => candidate.screenDistance <= (
+        candidate.handle?.key === hoveredHandleKey
+          ? candidate.thresholdPx + 10
+          : candidate.thresholdPx
+      ))
       .sort((left, right) =>
         left.screenDistance - right.screenDistance
-        || left.distance - right.distance
+        || left.depth - right.depth
       );
     if (!rankedCandidates.length) {
       return null;
@@ -10063,34 +10062,24 @@ function getTransformHandleHit(pointerSource) {
       return rankedCandidates[0];
     }
     const stickyCandidate = rankedCandidates.find((candidate) => candidate.handle?.key === hoveredHandleKey);
-    if (!stickyCandidate || stickyCandidate.screenDistance > stickyThresholdPx) {
+    if (!stickyCandidate) {
       return rankedCandidates[0];
     }
     const bestCandidate = rankedCandidates[0];
     if (!bestCandidate || bestCandidate.handle?.key === hoveredHandleKey) {
       return stickyCandidate;
     }
-    return bestCandidate.screenDistance + 8 < stickyCandidate.screenDistance
+    return bestCandidate.screenDistance + 10 < stickyCandidate.screenDistance
       ? bestCandidate
       : stickyCandidate;
   };
-  const chosenIntersection = chooseCandidate(
-    intersections.map((hit) => rankHandle(hit.object, hit.distance)),
+  const candidate = chooseCandidate(
+    preview.transformPickables.map((object) => rankHandle(object)),
   );
-  if (chosenIntersection) {
-    return {
-      object: chosenIntersection.object,
-      distance: chosenIntersection.distance,
-    };
-  }
-  const fallbackThresholdPx = hoveredHandleKey ? 26 : 18;
-  const fallback = chooseCandidate(preview.transformPickables
-    .map((object) => rankHandle(object))
-    .filter((candidate) => candidate && candidate.screenDistance <= fallbackThresholdPx));
-  return fallback
+  return candidate
     ? {
-      object: fallback.object,
-      distance: fallback.distance,
+      object: candidate.object,
+      distance: candidate.depth,
     }
     : null;
 }
@@ -10860,8 +10849,11 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
   if (!requestedTransformMode || requestedTransformMode === "delete") {
     return false;
   }
+  const directHandleHit = getTransformHandleHit(event);
   const hoveredEntityRef = state.buildHover?.entityRef ?? getEntityRefFromHit(hit);
-  const hoveredHandle = state.buildHover?.transformHandle ?? null;
+  const hoveredHandle = directHandleHit?.object?.userData?.privateWorldTransformHandle
+    ? { ...directHandleHit.object.userData.privateWorldTransformHandle }
+    : (state.buildHover?.transformHandle ?? null);
   let sceneDoc = null;
   try {
     sceneDoc = parseSceneTextarea();
