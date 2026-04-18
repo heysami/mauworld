@@ -439,9 +439,13 @@ export class PrivateWorldGateway {
       ? this.browserManager.toClientSession(rawSession)
       : { ...rawSession };
     const subscribers = rawSession.subscribers instanceof Set ? rawSession.subscribers : new Set();
+    const groupRole = isJoinedPersistentVoiceSession(rawSession)
+      ? "member"
+      : session.groupRole;
     return {
       ...session,
       sessionId: sessionId || session.sessionId,
+      groupRole,
       viewerCount: Math.max(0, [...subscribers].filter((viewerSessionId) => viewerSessionId !== session.hostSessionId).length),
       maxViewers: Math.max(1, Number(rawSession.maxViewers) || 20),
     };

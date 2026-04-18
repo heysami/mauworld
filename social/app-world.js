@@ -3100,6 +3100,11 @@ function getBrowserSessionRole(session = {}) {
   return "";
 }
 
+function hasBrowserPersistentVoiceSlot(session = {}) {
+  return String(session?.sessionSlot ?? "").trim().toLowerCase() === "persistent-voice"
+    || String(session?.groupRole ?? "").trim().toLowerCase() === "persistent-voice";
+}
+
 function isBrowserOriginSession(session = {}) {
   return getBrowserSessionRole(session) === "origin";
 }
@@ -3109,7 +3114,7 @@ function isBrowserMemberSession(session = {}) {
 }
 
 function isBrowserPersistentVoiceSession(session = {}) {
-  return getBrowserSessionRole(session) === "persistent-voice";
+  return hasBrowserPersistentVoiceSlot(session);
 }
 
 function getBrowserSessionAnchorSessionId(session = {}) {

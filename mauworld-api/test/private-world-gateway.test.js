@@ -474,3 +474,27 @@ test("private member shares stop outside the anchor radius and persistent voice 
     true,
   );
 });
+
+test("private joined persistent voice is exposed as a contributor session payload", async () => {
+  const gateway = createGateway();
+  const voiceSession = {
+    id: "voice_session",
+    sessionId: "voice_session",
+    hostSessionId: "profile:voice",
+    worldSnapshotId: "world_private",
+    sessionMode: "display-share",
+    sessionSlot: "persistent-voice",
+    groupRole: "persistent-voice",
+    groupJoined: true,
+    anchorSessionId: "anchor_session",
+    anchorHostSessionId: "profile:host",
+    subscribers: new Set(["profile:voice"]),
+  };
+  gateway.browserManager.getSession = () => voiceSession;
+
+  const payload = gateway.buildBrowserSessionPayload(voiceSession);
+
+  assert.equal(payload?.groupRole, "member");
+  assert.equal(payload?.sessionSlot, "persistent-voice");
+  assert.equal(payload?.groupJoined, true);
+});

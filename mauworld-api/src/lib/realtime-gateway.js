@@ -561,9 +561,13 @@ export class RealtimeGateway {
           ?? 20,
         ) || 20),
       );
+    const groupRole = isJoinedPersistentVoiceSession(rawSession)
+      ? "member"
+      : session.groupRole;
     return {
       ...session,
       sessionId: sessionId || session.sessionId,
+      groupRole,
       viewerCount,
       maxViewers,
     };
