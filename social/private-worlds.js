@@ -10019,12 +10019,55 @@ function getTransformHandleHit(pointerSource) {
     return null;
   }
   const rect = elements.previewCanvas.getBoundingClientRect();
+  const pointerX = clientX - rect.left;
+  const pointerY = clientY - rect.top;
   const pointer = new THREE.Vector2(
     ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
     -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
   );
   preview.raycaster.setFromCamera(pointer, preview.camera);
-  return preview.raycaster.intersectObjects(preview.transformPickables, false)[0] ?? null;
+  const intersections = preview.raycaster.intersectObjects(preview.transformPickables, false)
+    .filter((hit) => hit?.object?.userData?.privateWorldTransformHandle);
+  const rankHandle = (object, distance = Number.POSITIVE_INFINITY) => {
+    const worldPosition = object.getWorldPosition(new THREE.Vector3());
+    const screenPosition = worldPosition.clone().project(preview.camera);
+    if (!Number.isFinite(screenPosition.x) || !Number.isFinite(screenPosition.y) || screenPosition.z < -1 || screenPosition.z > 1) {
+      return null;
+    }
+    const screenX = (screenPosition.x * 0.5 + 0.5) * rect.width;
+    const screenY = (-screenPosition.y * 0.5 + 0.5) * rect.height;
+    return {
+      object,
+      distance,
+      screenDistance: Math.hypot(screenX - pointerX, screenY - pointerY),
+    };
+  };
+  if (intersections.length > 0) {
+    const rankedHits = intersections
+      .map((hit) => rankHandle(hit.object, hit.distance))
+      .filter(Boolean)
+      .sort((left, right) =>
+        left.screenDistance - right.screenDistance
+        || left.distance - right.distance
+      );
+    if (rankedHits[0]) {
+      return {
+        object: rankedHits[0].object,
+        distance: rankedHits[0].distance,
+      };
+    }
+  }
+  const fallbackThresholdPx = 18;
+  const fallback = preview.transformPickables
+    .map((object) => rankHandle(object))
+    .filter((candidate) => candidate && candidate.screenDistance <= fallbackThresholdPx)
+    .sort((left, right) => left.screenDistance - right.screenDistance)[0];
+  return fallback
+    ? {
+      object: fallback.object,
+      distance: fallback.distance,
+    }
+    : null;
 }
 
 function getOverlayBoundsSignature(box) {
@@ -10274,7 +10317,7 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
   const size = frame.size;
   const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
   const handleSize = clampNumber(Math.max(size.x, size.y, size.z) * 0.12, 1.1, 0.6, 2.4);
-  const pickSize = Math.max(handleSize * 2.85, 1.95);
+  const pickSize = Math.max(handleSize * 2.4, 1.6);
   const handleOffset = Math.max(0.24, handleSize * 0.58);
   for (const handle of getTransformHandleSpecs(frame)) {
     const isHovered = handle.key === hoveredHandleKey;
@@ -10333,8 +10376,8 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
   const maxSize = Math.max(size.x, size.y, size.z);
   const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
   const handleLength = clampNumber(maxSize * 0.3, 1.6, 1.05, 3.8);
-  const pickThickness = Math.max(handleThickness * 3.1, 2.2);
-  const pickLength = Math.max(handleLength * 1.55, 2.8);
+  const pickThickness = Math.max(handleThickness * 2.8, 1.9);
+  const pickLength = Math.max(handleLength * 1.35, 2.4);
   const handleOffset = Math.max(0.18, handleThickness * 0.4);
   const buildDimensions = (axis, longSide, shortSide) => ({
     x: axis === "x" ? longSide : shortSide,
