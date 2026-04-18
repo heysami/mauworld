@@ -10023,24 +10023,62 @@ function getTransformHandleHit(pointerSource) {
   const pointerX = clientX - rect.left;
   const pointerY = clientY - rect.top;
   const hoveredHandleKey = state.buildHover?.transformHandle?.key ?? "";
+  const cameraRight = new THREE.Vector3();
+  const cameraUp = new THREE.Vector3();
+  const cameraForward = new THREE.Vector3();
+  preview.camera.matrixWorld.extractBasis(cameraRight, cameraUp, cameraForward);
+  cameraRight.normalize();
+  cameraUp.normalize();
+  const projectWorldPoint = (worldPoint) => {
+    const screenPosition = worldPoint.clone().project(preview.camera);
+    if (!Number.isFinite(screenPosition.x) || !Number.isFinite(screenPosition.y) || screenPosition.z < -1 || screenPosition.z > 1) {
+      return null;
+    }
+    return {
+      depth: screenPosition.z,
+      x: (screenPosition.x * 0.5 + 0.5) * rect.width,
+      y: (-screenPosition.y * 0.5 + 0.5) * rect.height,
+    };
+  };
   const rankHandle = (object) => {
     const handle = object?.userData?.privateWorldTransformHandle;
     if (!handle) {
       return null;
     }
     const worldPosition = object.getWorldPosition(new THREE.Vector3());
-    const screenPosition = worldPosition.clone().project(preview.camera);
-    if (!Number.isFinite(screenPosition.x) || !Number.isFinite(screenPosition.y) || screenPosition.z < -1 || screenPosition.z > 1) {
+    const screenPoint = projectWorldPoint(worldPosition);
+    if (!screenPoint) {
       return null;
     }
-    const screenX = (screenPosition.x * 0.5 + 0.5) * rect.width;
-    const screenY = (-screenPosition.y * 0.5 + 0.5) * rect.height;
+    const geometry = object.geometry;
+    geometry?.computeBoundingSphere?.();
+    const sphereRadius = Number(geometry?.boundingSphere?.radius ?? 0) || 0;
+    let projectedRadiusPx = 0;
+    if (sphereRadius > 0) {
+      const worldScale = object.getWorldScale(new THREE.Vector3());
+      const radiusWorld = sphereRadius * Math.max(
+        Math.abs(worldScale.x),
+        Math.abs(worldScale.y),
+        Math.abs(worldScale.z),
+      );
+      const rightEdge = projectWorldPoint(
+        worldPosition.clone().addScaledVector(cameraRight, radiusWorld),
+      );
+      const upEdge = projectWorldPoint(
+        worldPosition.clone().addScaledVector(cameraUp, radiusWorld),
+      );
+      projectedRadiusPx = Math.max(
+        rightEdge ? Math.hypot(rightEdge.x - screenPoint.x, rightEdge.y - screenPoint.y) : 0,
+        upEdge ? Math.hypot(upEdge.x - screenPoint.x, upEdge.y - screenPoint.y) : 0,
+      );
+    }
+    const baseThresholdPx = handle.type === "rotate" ? 34 : 28;
     return {
       handle,
       object,
-      depth: screenPosition.z,
-      screenDistance: Math.hypot(screenX - pointerX, screenY - pointerY),
-      thresholdPx: handle.type === "rotate" ? 34 : 28,
+      depth: screenPoint.depth,
+      screenDistance: Math.hypot(screenPoint.x - pointerX, screenPoint.y - pointerY),
+      thresholdPx: Math.max(baseThresholdPx, projectedRadiusPx + 8),
     };
   };
   const chooseCandidate = (candidates) => {
