@@ -10268,14 +10268,17 @@ function getTransformHandleHit(pointerSource) {
     }
   }
   const selectionRefs = getBuilderSelectionRefs();
-  const selectionFrame = selectionRefs.length
+  const baseSelectionFrame = selectionRefs.length
+    ? getOverlayFrameForRefs(preview, selectionRefs)
+    : null;
+  const handleSelectionFrame = baseSelectionFrame
     ? expandOverlayFrame(
-      getOverlayFrameForRefs(preview, selectionRefs),
+      baseSelectionFrame,
       getSelectionOutlinePadding(selectionRefs.length),
     )
     : null;
-  const projectedFrameRect = selectionFrame
-    ? getOverlayFrameProjectedRect(selectionFrame, preview, rect)
+  const projectedFrameRect = baseSelectionFrame
+    ? getOverlayFrameProjectedRect(baseSelectionFrame, preview, rect)
     : null;
   const pointerIsOutsideProjectedFrame = Boolean(
     projectedFrameRect
@@ -10288,14 +10291,14 @@ function getTransformHandleHit(pointerSource) {
   );
   const handleType = preview.transformPickables[0]?.userData?.privateWorldTransformHandle?.type ?? "";
   preview.raycaster.setFromCamera(pointer, preview.camera);
-  if (selectionFrame && pointerIsOutsideProjectedFrame) {
+  if (handleSelectionFrame && pointerIsOutsideProjectedFrame) {
     const outsideCandidates = handleType === "rotate"
-      ? getRotateHandleSpecs(selectionFrame).map((handle) => {
+      ? getRotateHandleSpecs(handleSelectionFrame).map((handle) => {
         const object = pickableByHandleKey.get(handle.key);
         if (!object) {
           return null;
         }
-        const screenPoint = projectWorldPoint(getRotateHandleWorldPosition(selectionFrame, handle));
+        const screenPoint = projectWorldPoint(getRotateHandleWorldPosition(handleSelectionFrame, handle));
         if (!screenPoint) {
           return null;
         }
@@ -10306,12 +10309,12 @@ function getTransformHandleHit(pointerSource) {
           screenDistance: Math.hypot(screenPoint.x - pointerX, screenPoint.y - pointerY),
         };
       })
-      : getTransformHandleSpecs(selectionFrame).map((handle) => {
+      : getTransformHandleSpecs(handleSelectionFrame).map((handle) => {
         const object = pickableByHandleKey.get(handle.key);
         if (!object) {
           return null;
         }
-        const screenPoint = projectWorldPoint(getTransformHandleWorldPosition(selectionFrame, handle));
+        const screenPoint = projectWorldPoint(getTransformHandleWorldPosition(handleSelectionFrame, handle));
         if (!screenPoint) {
           return null;
         }
@@ -11369,10 +11372,12 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
   if (transformMode === "rotate" && !canRotateSelection(selectedEntities)) {
     return false;
   }
-  const selectionFrame = getOverlayFrameForRefs(state.preview, getBuilderSelectionRefs());
+  const selectionRefs = getBuilderSelectionRefs();
+  const selectionFrame = getOverlayFrameForRefs(state.preview, selectionRefs);
   if (!selectionFrame) {
     return false;
   }
+  const handleFrame = expandOverlayFrame(selectionFrame, getSelectionOutlinePadding(selectionRefs.length));
   const pivot = selectionFrame.center.clone();
   let plane = null;
   let startPoint = null;
@@ -11390,7 +11395,7 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
       }
       plane = new THREE.Plane().setFromNormalAndCoplanarPoint(axisVector, pivot);
       startPoint = getBuildDragPoint(event, plane);
-      screenDrag = createBuildRotateScreenDrag(event, selectionFrame, hoveredHandle, axisVector, pivot);
+      screenDrag = createBuildRotateScreenDrag(event, handleFrame, hoveredHandle, axisVector, pivot);
       if (!startPoint && !screenDrag) {
         return false;
       }
@@ -11402,7 +11407,7 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
       direction = hoveredHandle.direction;
       plane = getBuildDragAxisPlane(axis, pivot, state.preview, axisVector);
       startPoint = getBuildDragPoint(event, plane);
-      screenDrag = createBuildAxisScreenDrag(event, axisVector, pivot, selectionFrame);
+      screenDrag = createBuildAxisScreenDrag(event, axisVector, pivot, handleFrame);
       if (!startPoint && !screenDrag) {
         return false;
       }
