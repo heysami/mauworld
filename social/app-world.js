@@ -27,14 +27,14 @@ import {
   syncDisplayShareExpandButton,
   syncWorldPanelTabLabels,
   updateChatBubbleGhosts,
-} from "./world-interactions.js?v=20260418f";
+} from "./world-interactions.js?v=20260418h";
 import {
   SHARED_BROWSER_SHARE_LAYOUT,
   SHARED_CHAT_BUBBLE_LAYOUT,
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
-import { createWorldRealtimeClient } from "./world-realtime.js?v=20260418g";
+import { createWorldRealtimeClient } from "./world-realtime.js?v=20260418h";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
@@ -2273,8 +2273,31 @@ function getVoiceShareActionLabel() {
   return localVoiceSession ? "Stop Persistent Voice Chat" : "Start Persistent Voice Chat";
 }
 
+function bindPanelPress(button, handler) {
+  if (!button || typeof handler !== "function") {
+    return;
+  }
+  let lastHandledAt = 0;
+  const run = (event) => {
+    const now = Date.now();
+    if (now - lastHandledAt < 240) {
+      return;
+    }
+    lastHandledAt = now;
+    if (event?.type === "pointerup") {
+      event.preventDefault();
+    }
+    handler(event);
+  };
+  button.addEventListener("click", run);
+  button.addEventListener("pointerup", run);
+}
+
 function updateVoicePanel() {
   const localVoiceSession = getLocalVoiceSession();
+  if (!localVoiceSession && !state.pendingVoiceShare && state.voiceJoinOffer) {
+    state.voiceJoinOffer = null;
+  }
   const signedIn = isPublicViewerSignedIn();
   const canToggle = Boolean(signedIn && state.realtimeClient?.isConnected());
   if (elements.voiceToggle) {
@@ -2319,7 +2342,7 @@ function renderShareJoinRequests() {
     </div>
   `).join("");
   for (const button of elements.shareRequestStack.querySelectorAll("[data-share-join-decision]")) {
-    button.addEventListener("click", () => {
+    bindPanelPress(button, () => {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-share-join-decision") === "approve";
@@ -2361,7 +2384,15 @@ function renderVoiceJoinOffers() {
     </div>
   `;
   for (const button of elements.voiceOfferStack.querySelectorAll("[data-voice-offer-decision]")) {
-    button.addEventListener("click", () => {
+    bindPanelPress(button, () => {
+      const localVoiceSession = getLocalVoiceSession();
+      if (!localVoiceSession || !isBrowserPersistentVoiceSession(localVoiceSession)) {
+        state.voiceJoinOffer = null;
+        updateVoicePanel();
+        renderVoiceJoinOffers();
+        showToast("Start persistent voice chat again to answer this offer.");
+        return;
+      }
       const accepted = button.getAttribute("data-voice-offer-decision") === "accept";
       const sent = state.realtimeClient?.respondVoiceJoinOffer?.(offer.anchorSessionId, accepted) === true;
       if (!sent) {
@@ -2398,7 +2429,7 @@ function renderVoiceJoinRequests() {
     </div>
   `).join("");
   for (const button of elements.voiceRequestStack.querySelectorAll("[data-voice-join-decision]")) {
-    button.addEventListener("click", () => {
+    bindPanelPress(button, () => {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-voice-join-decision") === "approve";

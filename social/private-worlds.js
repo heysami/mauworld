@@ -26,7 +26,7 @@ import {
   syncDisplayShareExpandButton,
   syncWorldPanelTabLabels,
   updateChatBubbleGhosts,
-} from "./world-interactions.js?v=20260418f";
+} from "./world-interactions.js?v=20260418h";
 import {
   SHARED_BROWSER_SHARE_LAYOUT,
   SHARED_CHAT_BUBBLE_LAYOUT,
@@ -4397,8 +4397,31 @@ function getPrivateVoiceShareActionLabel() {
   return localVoiceSession ? "Stop Persistent Voice Chat" : "Start Persistent Voice Chat";
 }
 
+function bindPrivatePanelPress(button, handler) {
+  if (!button || typeof handler !== "function") {
+    return;
+  }
+  let lastHandledAt = 0;
+  const run = (event) => {
+    const now = Date.now();
+    if (now - lastHandledAt < 240) {
+      return;
+    }
+    lastHandledAt = now;
+    if (event?.type === "pointerup") {
+      event.preventDefault();
+    }
+    handler(event);
+  };
+  button.addEventListener("click", run);
+  button.addEventListener("pointerup", run);
+}
+
 function updatePrivateVoicePanel() {
   const localVoiceSession = getLocalPrivateVoiceSession();
+  if (!localVoiceSession && !state.pendingVoiceShare && state.voiceJoinOffer) {
+    state.voiceJoinOffer = null;
+  }
   const canToggle = Boolean(state.session && isPrivateWorldReadyForShare());
   if (elements.panelVoiceToggle) {
     elements.panelVoiceToggle.disabled = !canToggle && !localVoiceSession && !state.pendingVoiceShare;
@@ -4444,7 +4467,7 @@ function renderPrivateShareJoinRequests() {
     </div>
   `).join("");
   for (const button of elements.panelShareRequestStack.querySelectorAll("[data-private-share-join-decision]")) {
-    button.addEventListener("click", () => {
+    bindPrivatePanelPress(button, () => {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-private-share-join-decision") === "approve";
@@ -4490,7 +4513,15 @@ function renderPrivateVoiceJoinOffers() {
     </div>
   `;
   for (const button of elements.panelVoiceOfferStack.querySelectorAll("[data-private-voice-offer-decision]")) {
-    button.addEventListener("click", () => {
+    bindPrivatePanelPress(button, () => {
+      const localVoiceSession = getLocalPrivateVoiceSession();
+      if (!localVoiceSession || !isPrivatePersistentVoiceSession(localVoiceSession)) {
+        state.voiceJoinOffer = null;
+        updatePrivateVoicePanel();
+        renderPrivateVoiceJoinOffers();
+        setPrivateBrowserStatus("Start persistent voice chat again to answer this offer.");
+        return;
+      }
       const accepted = button.getAttribute("data-private-voice-offer-decision") === "accept";
       const sent = sendWorldSocketMessage({
         type: "voice:join-offer-response",
@@ -4531,7 +4562,7 @@ function renderPrivateVoiceJoinRequests() {
     </div>
   `).join("");
   for (const button of elements.panelVoiceRequestStack.querySelectorAll("[data-private-voice-join-decision]")) {
-    button.addEventListener("click", () => {
+    bindPrivatePanelPress(button, () => {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-private-voice-join-decision") === "approve";
