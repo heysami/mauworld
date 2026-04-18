@@ -1,7 +1,7 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 import { createBubbleTexture, createWorldVisitorSystem, updateMascotMotion } from "./world-visitors.js";
-import { createBrowserMediaController } from "./world-browser-media.js";
+import { createBrowserMediaController } from "./world-browser-media.js?v=20260418b";
 import {
   createChatBubbleState,
   createChatBubbleRenderer,

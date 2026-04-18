@@ -478,8 +478,13 @@ export function createBrowserMediaController(options = {}) {
     if (!viewerSessionId || !worldSnapshotId) {
       return false;
     }
-    const nextKey = `${viewerSessionId}:${worldSnapshotId}:${canPublish ? "publish" : "subscribe"}`;
-    if (state.room && state.connectionKey === nextKey) {
+    const roomKey = `${viewerSessionId}:${worldSnapshotId}`;
+    const nextKey = `${roomKey}:${canPublish ? "publish" : "subscribe"}`;
+    const currentRoomMatches =
+      state.room
+      && state.viewerSessionId === viewerSessionId
+      && state.worldSnapshotId === worldSnapshotId;
+    if (currentRoomMatches && (state.canPublish || !canPublish)) {
       return true;
     }
     if (state.connectPromise && state.pendingConnectionKey === nextKey) {
@@ -512,7 +517,7 @@ export function createBrowserMediaController(options = {}) {
       });
       state.room = room;
       state.enabled = true;
-      state.connectionKey = nextKey;
+      state.connectionKey = roomKey;
       state.worldSnapshotId = worldSnapshotId;
       state.viewerSessionId = viewerSessionId;
       state.canPublish = canPublish;
