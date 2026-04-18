@@ -3560,6 +3560,55 @@ function getDisplayNameForEntity(kind, entry = {}, index = 0) {
   return entry.id || `Item ${index + 1}`;
 }
 
+function truncatePrivateUiLabel(value = "", maxLength = 48) {
+  const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}...`;
+}
+
+function buildCompactEntityTitle(kind, entry = {}, index = 0) {
+  const config = getEntityCollection(kind);
+  const fallbackLabel = config?.singular || "Item";
+  if (kind === "text") {
+    const value = truncatePrivateUiLabel(entry.value, 42);
+    return value || `${fallbackLabel} ${index + 1}`;
+  }
+  const label = String(entry.label ?? "").trim();
+  if (label) {
+    return truncatePrivateUiLabel(label, 42);
+  }
+  if (kind === "model" && String(entry.asset_id ?? "").trim()) {
+    return truncatePrivateUiLabel(`Model ${index + 1}`, 42);
+  }
+  if (kind === "screen") {
+    return `Screen ${index + 1}`;
+  }
+  if (kind === "primitive") {
+    return `Object ${index + 1}`;
+  }
+  if (kind === "voxel") {
+    return `Voxel ${index + 1}`;
+  }
+  if (kind === "player") {
+    return `Player ${index + 1}`;
+  }
+  if (kind === "trigger") {
+    return `Trigger ${index + 1}`;
+  }
+  if (kind === "particle") {
+    return `Particle ${index + 1}`;
+  }
+  if (kind === "prefab_instance") {
+    return `Prefab ${index + 1}`;
+  }
+  return `${fallbackLabel} ${index + 1}`;
+}
+
 function getSelectedEntity(sceneDoc = parseSceneTextarea()) {
   return findEntityByRef(sceneDoc, state.builderSelection);
 }
@@ -7774,7 +7823,13 @@ function getSelectedTextureAttachTarget() {
       kind: targetKind,
       id: targetId,
       entry: found.entry,
+      index: found.index,
       name: getDisplayNameForEntity(targetKind, found.entry, found.index),
+      title: buildCompactEntityTitle(targetKind, found.entry, found.index),
+      meta: [
+        getEntityCollection(targetKind)?.singular || "Item",
+        found.entry?.id ? truncatePrivateUiLabel(found.entry.id, 72) : "",
+      ].filter(Boolean).join(" · "),
       summary: buildEntitySummary(targetKind, found.entry),
     };
   } catch (_error) {
@@ -7903,7 +7958,7 @@ function openTextureAssetLibrary(options = {}) {
   }
   setSceneDrawerOpen(true);
   setSceneDrawerTab("assets");
-  setStatus(`Choose a texture for ${target.name}.`);
+  setStatus(`Choose a texture for ${target.title}.`);
   void loadAssets();
   window.requestAnimationFrame(() => {
     elements.assetSearch?.focus?.();
@@ -7929,7 +7984,8 @@ function renderAssetsLibrary() {
       elements.assetContext.hidden = false;
       elements.assetContext.innerHTML = `
         <span>Texture target</span>
-        <strong>${htmlEscape(activeTextureTarget.name)}</strong>
+        <strong title="${htmlEscape(activeTextureTarget.name)}">${htmlEscape(activeTextureTarget.title)}</strong>
+        ${activeTextureTarget.meta ? `<small class="pw-asset-context__meta">${htmlEscape(activeTextureTarget.meta)}</small>` : ""}
         <small>Choose a library texture to attach it here, or generate a new one for this item.</small>
       `;
     } else {

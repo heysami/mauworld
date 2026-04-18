@@ -1832,6 +1832,7 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
 .pw-asset-context {
   display: grid;
   gap: 4px;
+  min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--pw-line);
   border-radius: 8px;
@@ -1853,6 +1854,18 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
 
 .pw-asset-context strong {
   line-height: 1.3;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.pw-asset-context__meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .pw-material-texture-card {
