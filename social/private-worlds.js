@@ -33,6 +33,7 @@ const { mauworldApiUrl } = window.MauworldSocial;
 const AI_KEY_STORAGE_KEY = "mauworldPrivateWorldAiKey";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
 const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
+const TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY = "mauworldPrivateWorldToolPresetPanelCollapsed";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 const LAUNCHER_TABS = new Set(["worlds", "access"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
@@ -542,11 +543,16 @@ const elements = {
   addParticle: document.querySelector("[data-add-particle]"),
   addRule: document.querySelector("[data-add-rule]"),
   toolPresetPanel: document.querySelector("[data-tool-preset-panel]"),
+  toolPresetCompact: document.querySelector("[data-tool-preset-compact]"),
+  toolPresetContent: document.querySelector("[data-tool-preset-content]"),
   toolPresetTitle: document.querySelector("[data-tool-preset-title]"),
   toolPresetHint: document.querySelector("[data-tool-preset-hint]"),
+  toolPresetCurrentName: document.querySelector("[data-tool-preset-current-name]"),
   toolPresetSelect: document.querySelector("[data-tool-preset-select]"),
   toolPresetSummary: document.querySelector("[data-tool-preset-summary]"),
   toolPresetName: document.querySelector("[data-tool-preset-name]"),
+  toolPresetCollapse: document.querySelector("[data-tool-preset-collapse]"),
+  toolPresetExpand: document.querySelector("[data-tool-preset-expand]"),
   saveToolPreset: document.querySelector("[data-save-tool-preset]"),
   updateToolPreset: document.querySelector("[data-update-tool-preset]"),
   deleteToolPreset: document.querySelector("[data-delete-tool-preset]"),
@@ -706,6 +712,14 @@ function loadStoredToolPresetState() {
 
 const initialToolPresetState = loadStoredToolPresetState();
 
+function loadStoredToolPresetPanelCollapsed() {
+  try {
+    return window.localStorage.getItem(TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY) === "1";
+  } catch (_error) {
+    return false;
+  }
+}
+
 function createEmptyPrivateBrowserMediaState() {
   return {
     enabled: null,
@@ -736,6 +750,7 @@ const state = {
   selectedPrefabId: "",
   toolPresetSelection: initialToolPresetState.selected,
   toolPresetCustoms: initialToolPresetState.customs,
+  toolPresetPanelCollapsed: loadStoredToolPresetPanelCollapsed(),
   selectedScriptFunctionId: "",
   prefabQuery: "",
   prefabPlacementId: "",
@@ -5311,6 +5326,22 @@ function renderToolPresetPanel() {
   const canDeletePreset = Boolean(selectedPreset && selectedPreset.builtin !== true);
   const saveFromSelection = Boolean(selectedEntry);
   elements.toolPresetPanel.hidden = false;
+  elements.toolPresetPanel.classList.toggle("is-collapsed", state.toolPresetPanelCollapsed === true);
+  if (elements.toolPresetCompact) {
+    elements.toolPresetCompact.hidden = state.toolPresetPanelCollapsed !== true;
+  }
+  if (elements.toolPresetContent) {
+    elements.toolPresetContent.hidden = state.toolPresetPanelCollapsed === true;
+  }
+  if (elements.toolPresetCurrentName) {
+    elements.toolPresetCurrentName.textContent = selectedPreset?.name || `${buildToolPresetDisplayName(kind)} preset`;
+  }
+  if (elements.toolPresetCollapse) {
+    elements.toolPresetCollapse.setAttribute("aria-expanded", String(state.toolPresetPanelCollapsed !== true));
+  }
+  if (elements.toolPresetExpand) {
+    elements.toolPresetExpand.setAttribute("aria-expanded", String(state.toolPresetPanelCollapsed !== true));
+  }
   if (elements.toolPresetTitle) {
     elements.toolPresetTitle.textContent = `${buildToolPresetDisplayName(kind)} Presets`;
   }
@@ -5345,6 +5376,19 @@ function renderToolPresetPanel() {
   if (elements.deleteToolPreset) {
     elements.deleteToolPreset.disabled = !canDeletePreset;
   }
+}
+
+function setToolPresetPanelCollapsed(collapsed) {
+  state.toolPresetPanelCollapsed = collapsed === true;
+  try {
+    window.localStorage.setItem(
+      TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY,
+      state.toolPresetPanelCollapsed ? "1" : "0",
+    );
+  } catch (_error) {
+    // ignore storage failures
+  }
+  renderToolPresetPanel();
 }
 
 function getSelectedPrefabEntry(prefabId = state.selectedPrefabId) {
@@ -11267,6 +11311,12 @@ function bindEvents() {
       return;
     }
     setSelectedToolPreset(kind, elements.toolPresetSelect.value);
+  });
+  elements.toolPresetCollapse?.addEventListener("click", () => {
+    setToolPresetPanelCollapsed(true);
+  });
+  elements.toolPresetExpand?.addEventListener("click", () => {
+    setToolPresetPanelCollapsed(false);
   });
   elements.saveToolPreset?.addEventListener("click", () => {
     const kind = getActivePlacementTool();
