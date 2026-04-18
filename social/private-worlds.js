@@ -10079,6 +10079,117 @@ function syncPreviewCanvasCursor() {
   elements.previewCanvas.style.cursor = cursor;
 }
 
+function getOverlayFrameProjectedRect(frame, preview = state.preview, rect = null) {
+  if (!frame) {
+    return null;
+  }
+  const halfSize = frame.size.clone().multiplyScalar(0.5);
+  const quaternion = frame.quaternion ?? new THREE.Quaternion();
+  const projectedPoints = [];
+  for (const x of [-halfSize.x, halfSize.x]) {
+    for (const y of [-halfSize.y, halfSize.y]) {
+      for (const z of [-halfSize.z, halfSize.z]) {
+        const projectedPoint = projectWorldPointToPreviewScreen(
+          new THREE.Vector3(x, y, z).applyQuaternion(quaternion).add(frame.center),
+          preview,
+          rect,
+        );
+        if (projectedPoint) {
+          projectedPoints.push(projectedPoint);
+        }
+      }
+    }
+  }
+  if (!projectedPoints.length) {
+    return null;
+  }
+  const bounds = {
+    minX: Infinity,
+    minY: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity,
+  };
+  for (const point of projectedPoints) {
+    bounds.minX = Math.min(bounds.minX, point.x);
+    bounds.minY = Math.min(bounds.minY, point.y);
+    bounds.maxX = Math.max(bounds.maxX, point.x);
+    bounds.maxY = Math.max(bounds.maxY, point.y);
+  }
+  bounds.width = Math.max(0, bounds.maxX - bounds.minX);
+  bounds.height = Math.max(0, bounds.maxY - bounds.minY);
+  bounds.diagonal = Math.hypot(bounds.width, bounds.height);
+  return bounds;
+}
+
+function getScreenDistanceToRect(x, y, rect) {
+  if (!rect) {
+    return Infinity;
+  }
+  const deltaX = x < rect.minX ? rect.minX - x : x > rect.maxX ? x - rect.maxX : 0;
+  const deltaY = y < rect.minY ? rect.minY - y : y > rect.maxY ? y - rect.maxY : 0;
+  return Math.hypot(deltaX, deltaY);
+}
+
+function getTransformHandleWorldPosition(frame, handle, includeOffset = true) {
+  if (!frame || !handle) {
+    return null;
+  }
+  const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
+  const worldPosition = handle.position
+    .clone()
+    .applyQuaternion(frameQuaternion)
+    .add(frame.center);
+  if (!includeOffset) {
+    return worldPosition;
+  }
+  const handleSize = clampNumber(Math.max(frame.size.x, frame.size.y, frame.size.z) * 0.12, 1.1, 0.6, 2.4);
+  const handleOffset = Math.max(0.24, handleSize * 0.58);
+  const axisVector = getBuildDragAxisVector(handle.axis, frame);
+  return worldPosition.addScaledVector(axisVector, handle.direction * handleOffset);
+}
+
+function getRotateHandleWorldPosition(frame, handle) {
+  if (!frame || !handle) {
+    return null;
+  }
+  const frameQuaternion = frame.quaternion ?? new THREE.Quaternion();
+  const maxSize = Math.max(frame.size.x, frame.size.y, frame.size.z);
+  const handleThickness = clampNumber(maxSize * 0.1, 0.72, 0.5, 1.5);
+  const handleOffset = Math.max(0.18, handleThickness * 0.4);
+  const outward = handle.position.clone();
+  if (outward.lengthSq() < 0.0001) {
+    outward.copy(getBuildDragAxisVector(handle.axis, frame));
+  } else {
+    outward.applyQuaternion(frameQuaternion).normalize();
+  }
+  return handle.position
+    .clone()
+    .applyQuaternion(frameQuaternion)
+    .add(frame.center)
+    .addScaledVector(outward, handleOffset);
+}
+
+function doesRayIntersectOverlayFrame(ray, frame) {
+  if (!ray || !frame) {
+    return false;
+  }
+  const transform = new THREE.Matrix4().compose(
+    frame.center.clone(),
+    frame.quaternion?.clone?.() ?? new THREE.Quaternion(),
+    new THREE.Vector3(1, 1, 1),
+  );
+  const inverse = transform.clone().invert();
+  const localOrigin = ray.origin.clone().applyMatrix4(inverse);
+  const localDirection = ray.direction.clone().transformDirection(inverse).normalize();
+  const localRay = new THREE.Ray(localOrigin, localDirection);
+  const halfSize = frame.size.clone().multiplyScalar(0.5);
+  const localBox = new THREE.Box3(
+    halfSize.clone().multiplyScalar(-1),
+    halfSize,
+  );
+  return Boolean(localRay.intersectBox(localBox, new THREE.Vector3()));
+}
+
 function getTransformHandleHit(pointerSource) {
   const metrics = getPreviewPointerMetrics(pointerSource);
   const preview = metrics?.preview;
@@ -10173,7 +10284,68 @@ function getTransformHandleHit(pointerSource) {
       ? bestCandidate
       : stickyCandidate;
   };
+  const chooseOutsideCandidate = (candidates) => candidates
+    .filter(Boolean)
+    .sort((left, right) =>
+      left.screenDistance - right.screenDistance
+      || left.depth - right.depth
+    )[0] ?? null;
+  const pickableByHandleKey = new Map();
+  for (const object of preview.transformPickables) {
+    const handleKey = object?.userData?.privateWorldTransformHandle?.key;
+    if (handleKey && !pickableByHandleKey.has(handleKey)) {
+      pickableByHandleKey.set(handleKey, object);
+    }
+  }
+  const selectionRefs = getBuilderSelectionRefs();
+  const selectionFrame = selectionRefs.length ? getOverlayFrameForRefs(preview, selectionRefs) : null;
+  const handleType = preview.transformPickables[0]?.userData?.privateWorldTransformHandle?.type ?? "";
   preview.raycaster.setFromCamera(pointer, preview.camera);
+  const pointerIsInsideSelection = selectionFrame
+    ? doesRayIntersectOverlayFrame(preview.raycaster.ray, selectionFrame)
+    : false;
+  if (selectionFrame && !pointerIsInsideSelection) {
+    const outsideCandidates = handleType === "rotate"
+      ? getRotateHandleSpecs(selectionFrame).map((handle) => {
+        const object = pickableByHandleKey.get(handle.key);
+        if (!object) {
+          return null;
+        }
+        const screenPoint = projectWorldPoint(getRotateHandleWorldPosition(selectionFrame, handle));
+        if (!screenPoint) {
+          return null;
+        }
+        return {
+          handle: object.userData.privateWorldTransformHandle,
+          object,
+          depth: screenPoint.depth,
+          screenDistance: Math.hypot(screenPoint.x - pointerX, screenPoint.y - pointerY),
+        };
+      })
+      : getTransformHandleSpecs(selectionFrame).map((handle) => {
+        const object = pickableByHandleKey.get(handle.key);
+        if (!object) {
+          return null;
+        }
+        const screenPoint = projectWorldPoint(getTransformHandleWorldPosition(selectionFrame, handle, false));
+        if (!screenPoint) {
+          return null;
+        }
+        return {
+          handle: object.userData.privateWorldTransformHandle,
+          object,
+          depth: screenPoint.depth,
+          screenDistance: Math.hypot(screenPoint.x - pointerX, screenPoint.y - pointerY),
+        };
+      });
+    const outsideCandidate = chooseOutsideCandidate(outsideCandidates);
+    if (outsideCandidate) {
+      return {
+        object: outsideCandidate.object,
+        distance: outsideCandidate.depth,
+      };
+    }
+  }
   const rayCandidates = [];
   const seenObjects = new Set();
   for (const hit of preview.raycaster.intersectObjects(preview.transformPickables, false)) {
