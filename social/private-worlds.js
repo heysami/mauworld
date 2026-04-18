@@ -714,9 +714,13 @@ const initialToolPresetState = loadStoredToolPresetState();
 
 function loadStoredToolPresetPanelCollapsed() {
   try {
-    return window.localStorage.getItem(TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY) === "1";
+    const stored = window.localStorage.getItem(TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY);
+    if (stored === null) {
+      return true;
+    }
+    return stored === "1";
   } catch (_error) {
-    return false;
+    return true;
   }
 }
 
