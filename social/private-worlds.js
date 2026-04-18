@@ -488,10 +488,6 @@ const elements = {
   panelReady: document.querySelector("[data-private-panel-ready]"),
   panelRelease: document.querySelector("[data-private-panel-release]"),
   panelReset: document.querySelector("[data-private-panel-reset]"),
-  sceneDock: document.querySelector("[data-scene-dock]"),
-  sceneDockSummary: document.querySelector("[data-scene-dock-summary]"),
-  sceneDockOpen: document.querySelector("[data-scene-dock-open]"),
-  sceneStrip: document.querySelector("[data-scene-strip]"),
   sceneDrawerTabButtons: [...document.querySelectorAll("[data-scene-drawer-tab]")],
   sceneDrawerViews: [...document.querySelectorAll("[data-scene-drawer-view]")],
   sceneLibraryHint: document.querySelector("[data-scene-library-hint]"),
@@ -5091,24 +5087,6 @@ function renderSceneEditor() {
   renderSceneBuilder();
 }
 
-function renderSceneStrip() {
-  if (!elements.sceneStrip) {
-    return;
-  }
-  const scenes = state.selectedWorld?.scenes ?? [];
-  if (elements.sceneDockSummary) {
-    elements.sceneDockSummary.textContent = scenes.length
-      ? `${buildSceneCountLabel(scenes.length)} · ${getSelectedScene()?.name || "No selection"}`
-      : "No scenes yet";
-  }
-  elements.sceneStrip.innerHTML = scenes.map((scene) => `
-    <button type="button" class="pw-scene-pill ${scene.id === state.selectedSceneId ? "is-active" : ""}" data-scene-id="${htmlEscape(scene.id)}">
-      <strong>${htmlEscape(scene.name)}</strong>
-      <span>${scene.version ? `v${scene.version}` : ""}${scene.is_default ? " · default" : ""}</span>
-    </button>
-  `).join("");
-}
-
 function buildSceneLibrarySummary(scene = {}) {
   const stats = scene.compiled_doc?.stats ?? {};
   const entityCount =
@@ -6317,7 +6295,6 @@ function renderSelectedWorld() {
       : "Open or create a world to enter the scene.";
   }
   renderWorldMeta();
-  renderSceneStrip();
   renderSceneLibrary();
   renderSceneDrawerTabs();
   renderSceneEditor();
@@ -6355,9 +6332,6 @@ function renderSelectedWorld() {
   }
   if (elements.sceneToolsToggle) {
     elements.sceneToolsToggle.disabled = !hasWorld || !canEdit || state.mode !== "build";
-  }
-  if (elements.sceneDock) {
-    elements.sceneDock.hidden = !hasWorld || !canEdit || state.mode !== "build";
   }
   for (const button of elements.sceneAddButtons ?? []) {
     button.disabled = !hasWorld || !canEdit || state.mode !== "build";
@@ -11620,22 +11594,6 @@ function bindEvents() {
     }
     deleteCustomToolPreset(kind, selectedPresetId);
     setStatus(`${selectedPreset.name} removed.`);
-  });
-  elements.sceneStrip.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-scene-id]");
-    if (!button) {
-      return;
-    }
-    state.selectedSceneId = button.getAttribute("data-scene-id");
-    renderSelectedWorld();
-  });
-  elements.sceneDockOpen?.addEventListener("click", () => {
-    if (!state.selectedWorld || !isEditor()) {
-      return;
-    }
-    setSceneDrawerTab("scenes");
-    setSceneDrawerOpen(true);
-    setPrivatePanelTab("build");
   });
   for (const button of elements.sceneDrawerTabButtons ?? []) {
     button.addEventListener("click", () => {

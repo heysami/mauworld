@@ -69,8 +69,7 @@ body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
 .pw-tool-preset-panel,
 .pw-inspector,
 .pw-scene-drawer,
-.pw-world-menu,
-.pw-scene-dock {
+.pw-world-menu {
   position: absolute;
   z-index: 2;
 }
@@ -128,8 +127,7 @@ body.private-worlds-body.is-world-entry-loading .pw-launcher,
 body.private-worlds-body.is-world-entry-loading .pw-toolbelt,
 body.private-worlds-body.is-world-entry-loading .pw-tool-preset-panel,
 body.private-worlds-body.is-world-entry-loading .pw-scene-drawer,
-body.private-worlds-body.is-world-entry-loading .pw-inspector,
-body.private-worlds-body.is-world-entry-loading .pw-scene-dock {
+body.private-worlds-body.is-world-entry-loading .pw-inspector {
   pointer-events: none;
 }
 
@@ -347,7 +345,6 @@ body.private-worlds-body.is-launcher-open .pw-launcher {
 body.private-worlds-body.is-auth-gated .pw-mau-panel,
 body.private-worlds-body.is-auth-gated .pw-toolbelt,
 body.private-worlds-body.is-auth-gated .pw-tool-preset-panel,
-body.private-worlds-body.is-auth-gated .pw-scene-dock,
 body.private-worlds-body.is-auth-gated .pw-inspector,
 body.private-worlds-body.is-auth-gated .pw-scene-drawer {
   opacity: 0;
@@ -506,7 +503,6 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 .pw-collaborator-item,
 .pw-prefab-card,
 .pw-event-log__item,
-.pw-scene-pill,
 .pw-world-meta__row,
 .pw-builder-group,
 .pw-builder-item {
@@ -666,8 +662,7 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 .pw-collaborator-list,
 .pw-event-log,
 .pw-world-meta,
-.pw-runtime-status,
-.pw-scene-strip {
+.pw-runtime-status {
   display: grid;
   gap: 10px;
 }
@@ -710,7 +705,6 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 
 .pw-world-card,
 .pw-builder-item,
-.pw-scene-pill,
 .pw-scene-library-item {
   padding: 12px;
 }
@@ -722,7 +716,6 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 .pw-world-card.is-active,
 .pw-builder-item.is-active,
 .pw-prefab-card.is-active,
-.pw-scene-pill.is-active,
 .pw-scene-library-item.is-active {
   border-color: rgba(255, 90, 122, 0.32);
   background: rgba(255, 90, 122, 0.1);
@@ -1184,68 +1177,6 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
   background: linear-gradient(180deg, rgba(251, 252, 255, 0), rgba(251, 252, 255, 0.96) 26%);
 }
 
-.pw-scene-dock {
-  left: 50%;
-  bottom: 18px;
-  display: grid;
-  gap: 10px;
-  width: min(860px, calc(100vw - 36px));
-  padding: 12px;
-  border: 1px solid var(--pw-line-strong);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(18px) saturate(1.04);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.94),
-    0 24px 40px rgba(93, 109, 186, 0.16);
-  transform: translate3d(-50%, 0, 0);
-}
-
-.pw-scene-dock[hidden] {
-  display: none;
-}
-
-body.private-worlds-body:not(.has-world) .pw-scene-dock {
-  opacity: 0;
-  pointer-events: none;
-  transform: translate3d(-50%, 12px, 0);
-}
-
-.pw-scene-dock__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.pw-scene-dock__title {
-  display: grid;
-  gap: 3px;
-}
-
-.pw-scene-dock__title span {
-  color: var(--pw-muted);
-  font-size: 0.76rem;
-  line-height: 1.4;
-}
-
-.pw-scene-strip {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(180px, 240px);
-  overflow: auto;
-  padding-bottom: 2px;
-}
-
-.pw-scene-pill {
-  display: grid;
-  gap: 4px;
-  text-align: left;
-  color: var(--pw-text);
-  font: inherit;
-  cursor: pointer;
-}
-
 .pw-runtime-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1393,7 +1324,6 @@ body.private-worlds-body:not(.has-world) .pw-scene-dock {
 
 body.private-worlds-body.is-launcher-open .pw-toolbelt,
 body.private-worlds-body.is-launcher-open .pw-tool-preset-panel,
-body.private-worlds-body.is-launcher-open .pw-scene-dock,
 body.private-worlds-body.is-launcher-open .pw-inspector,
 body.private-worlds-body.is-launcher-open .pw-scene-drawer,
 body.private-worlds-body.is-launcher-open .pw-world-menu {
@@ -1401,10 +1331,6 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
   visibility: hidden;
   pointer-events: none;
   transform: translate3d(0, 12px, 0);
-}
-
-body.private-worlds-body.is-launcher-open .pw-scene-dock {
-  transform: translate3d(-50%, 12px, 0);
 }
 
 @media (max-width: 1120px) {
@@ -1471,10 +1397,6 @@ body.private-worlds-body.is-launcher-open .pw-scene-dock {
   .pw-world-menu,
   .pw-scene-drawer {
     bottom: 188px;
-  }
-
-  .pw-scene-dock {
-    width: min(760px, calc(100vw - 36px));
   }
 
   .pw-grid-3 {
@@ -1549,14 +1471,6 @@ body.private-worlds-body.is-launcher-open .pw-scene-dock {
   .pw-world-menu,
   .pw-scene-drawer {
     bottom: 216px;
-  }
-
-  .pw-scene-dock {
-    left: 10px;
-    right: 10px;
-    width: auto;
-    bottom: 10px;
-    transform: none;
   }
 
   .pw-grid-2,
