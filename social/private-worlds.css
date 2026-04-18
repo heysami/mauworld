@@ -86,6 +86,10 @@ body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
   backdrop-filter: blur(8px);
 }
 
+.pw-entry-loading[hidden] {
+  display: none !important;
+}
+
 .pw-entry-loading__inner {
   display: grid;
   justify-items: center;
