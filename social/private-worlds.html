@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418v" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418w" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -240,16 +240,71 @@
         </section>
 
         <section class="world-panel__view" data-private-panel-view="world" role="tabpanel" hidden>
-          <div class="pw-action-grid pw-action-grid--world">
-            <button type="button" data-private-copy-link disabled>Copy Entry</button>
-            <button type="button" data-private-native-share disabled>Share Entry</button>
+          <div class="pw-world-nav" aria-label="World tools">
+            <button type="button" data-world-section-jump="overview">Overview</button>
+            <button type="button" data-world-section-jump="ai">AI Builder</button>
+            <button type="button" data-world-section-jump="editors">Editors</button>
+            <button type="button" data-world-section-jump="feed">Live feed</button>
           </div>
-          <p class="world-live-status" data-private-share-status>Open a world to copy its entry link.</p>
-          <div class="pw-world-meta" data-private-panel-world-meta></div>
 
-          <section class="pw-panel pw-panel--compact">
+          <section class="pw-world-section" data-world-section="overview">
+            <div class="pw-action-grid pw-action-grid--world">
+              <button type="button" data-private-copy-link disabled>Copy Entry</button>
+              <button type="button" data-private-native-share disabled>Share Entry</button>
+            </div>
+            <p class="world-live-status" data-private-share-status>Open a world to copy its entry link.</p>
+            <div class="pw-world-meta" data-private-panel-world-meta></div>
+          </section>
+
+          <section class="pw-panel pw-panel--compact pw-world-section" data-world-section="ai">
             <div class="pw-panel__header">
-              <h2>Collaborators</h2>
+              <div>
+                <h2>AI Builder</h2>
+                <p class="pw-world-section__copy">Generate screen HTML or scene logic from here.</p>
+              </div>
+            </div>
+            <form class="pw-ai-form" data-ai-form>
+              <label>
+                <span>Provider</span>
+                <select name="provider">
+                  <option value="openai">OpenAI</option>
+                </select>
+              </label>
+              <label>
+                <span>Model</span>
+                <input type="text" name="model" value="gpt-5.4-mini" />
+              </label>
+              <label>
+                <span>API Key</span>
+                <input type="password" name="apiKey" autocomplete="off" placeholder="Stored only in this browser session" />
+                <small class="pw-ai-form__help">
+                  Get an OpenAI API key from
+                  <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">platform.openai.com/api-keys</a>.
+                  Stored only in this browser session.
+                </small>
+              </label>
+              <label>
+                <span>Objective</span>
+                <textarea name="objective" rows="4" placeholder="Describe the screen or script you want."></textarea>
+              </label>
+              <div class="pw-inline-actions">
+                <button type="button" data-generate-html disabled>Generate Screen HTML</button>
+                <button type="button" class="is-muted" data-generate-script disabled>Generate Script</button>
+              </div>
+              <p class="pw-status pw-ai-form__status" data-ai-status aria-live="polite"></p>
+            </form>
+            <label>
+              <span>AI Output</span>
+              <textarea data-ai-output rows="10" spellcheck="false"></textarea>
+            </label>
+          </section>
+
+          <section class="pw-panel pw-panel--compact pw-world-section" data-world-section="editors">
+            <div class="pw-panel__header">
+              <div>
+                <h2>Editors</h2>
+                <p class="pw-world-section__copy">Manage who can build in this world.</p>
+              </div>
             </div>
             <form class="pw-collaborator-form" data-collaborator-form>
               <div class="pw-grid-2">
@@ -269,43 +324,12 @@
             <div class="pw-collaborator-list" data-collaborator-list></div>
           </section>
 
-          <section class="pw-panel pw-panel--compact">
+          <section class="pw-panel pw-panel--compact pw-world-section" data-world-section="feed">
             <div class="pw-panel__header">
-              <h2>AI Builder</h2>
-            </div>
-            <form class="pw-ai-form" data-ai-form>
-              <label>
-                <span>Provider</span>
-                <select name="provider">
-                  <option value="openai">OpenAI</option>
-                </select>
-              </label>
-              <label>
-                <span>Model</span>
-                <input type="text" name="model" value="gpt-5.4-mini" />
-              </label>
-              <label>
-                <span>API Key</span>
-                <input type="password" name="apiKey" autocomplete="off" placeholder="Stored only in this browser session" />
-              </label>
-              <label>
-                <span>Objective</span>
-                <textarea name="objective" rows="4" placeholder="Describe the screen or script you want."></textarea>
-              </label>
-              <div class="pw-inline-actions">
-                <button type="button" data-generate-html disabled>Generate Screen HTML</button>
-                <button type="button" class="is-muted" data-generate-script disabled>Generate Script</button>
+              <div>
+                <h2>Live feed</h2>
+                <p class="pw-world-section__copy">Recent activity from this world appears here.</p>
               </div>
-            </form>
-            <label>
-              <span>AI Output</span>
-              <textarea data-ai-output rows="10" spellcheck="false"></textarea>
-            </label>
-          </section>
-
-          <section class="pw-panel pw-panel--compact">
-            <div class="pw-panel__header">
-              <h2>Live feed</h2>
             </div>
             <div class="pw-event-log pw-panel-event-log" data-event-log></div>
           </section>
@@ -788,6 +812,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418v"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418w"></script>
   </body>
 </html>

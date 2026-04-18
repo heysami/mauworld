@@ -545,10 +545,12 @@ const elements = {
   saveCollaborator: document.querySelector("[data-save-collaborator]"),
   collaboratorList: document.querySelector("[data-collaborator-list]"),
   aiForm: document.querySelector("[data-ai-form]"),
+  aiStatus: document.querySelector("[data-ai-status]"),
   aiOutput: document.querySelector("[data-ai-output]"),
   generateHtml: document.querySelector("[data-generate-html]"),
   generateScript: document.querySelector("[data-generate-script]"),
   eventLog: document.querySelector("[data-event-log]"),
+  worldSectionNav: document.querySelector("[aria-label=\"World tools\"]"),
   addVoxel: document.querySelector("[data-add-voxel]"),
   addPrimitive: document.querySelector("[data-add-primitive]"),
   addPlayer: document.querySelector("[data-add-player]"),
@@ -581,6 +583,8 @@ elements.privatePanelViews = [...document.querySelectorAll("[data-private-panel-
 elements.panelChatReactionButtons = [...document.querySelectorAll("[data-private-chat-reaction]")];
 elements.panelBrowserShareModes = [...document.querySelectorAll("[data-private-browser-share-mode]")];
 elements.sceneAddButtons = [...document.querySelectorAll("[data-scene-add-button]")];
+elements.worldSectionJumpButtons = [...document.querySelectorAll("[data-world-section-jump]")];
+elements.worldSections = [...document.querySelectorAll("[data-world-section]")];
 
 function createEmptyToolPresetCustoms() {
   return Object.fromEntries(TOOL_PRESET_KINDS.map((kind) => [kind, []]));
@@ -3175,6 +3179,106 @@ function setAiKey(value) {
 
 function getAiKey() {
   return window.sessionStorage.getItem(AI_KEY_STORAGE_KEY) || "";
+}
+
+function setAiBuilderStatus(text = "", tone = "") {
+  if (!elements.aiStatus) {
+    return;
+  }
+  elements.aiStatus.textContent = String(text ?? "");
+  if (tone) {
+    elements.aiStatus.dataset.tone = tone;
+  } else {
+    delete elements.aiStatus.dataset.tone;
+  }
+}
+
+function refreshAiBuilderStatus() {
+  const provider = String(elements.aiForm?.elements?.provider?.value ?? "openai").trim() || "openai";
+  const model = String(elements.aiForm?.elements?.model?.value ?? "gpt-5.4-mini").trim() || "gpt-5.4-mini";
+  const apiKey = String(elements.aiForm?.elements?.apiKey?.value ?? "").trim();
+  if (!state.session) {
+    setAiBuilderStatus("Sign in to use AI Builder.", "error");
+    return;
+  }
+  if (!apiKey) {
+    setAiBuilderStatus("Add your OpenAI API key to enable generation.", "error");
+    return;
+  }
+  setAiBuilderStatus(`Ready with ${provider} · ${model}.`, "success");
+}
+
+function getWorldSectionElement(sectionName) {
+  const normalized = String(sectionName ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return elements.worldSections.find((section) => section.getAttribute("data-world-section") === normalized) || null;
+}
+
+function scrollWorldSectionIntoView(sectionName, options = {}) {
+  const target = getWorldSectionElement(sectionName);
+  if (!target) {
+    return;
+  }
+  if (state.selectedWorld) {
+    setPrivatePanelTab("world");
+  }
+  const fieldName = options.fieldName || "";
+  window.setTimeout(() => {
+    target.scrollIntoView?.({
+      block: "start",
+      behavior: options.behavior || "smooth",
+    });
+    if (!fieldName) {
+      return;
+    }
+    const field = elements.aiForm?.elements?.[fieldName];
+    field?.focus?.();
+    if (fieldName === "apiKey" && typeof field?.select === "function") {
+      field.select();
+    }
+  }, 0);
+}
+
+function focusAiBuilder(fieldName = "apiKey") {
+  scrollWorldSectionIntoView("ai", { fieldName });
+}
+
+function promptForAiBuilder(message, options = {}) {
+  const fieldName = options.fieldName || "apiKey";
+  setAiBuilderStatus(message, "error");
+  setStatus(message);
+  if (state.selectedWorld) {
+    setPrivatePanelTab("world");
+  }
+  let shouldOpen = true;
+  if (options.confirm !== false && typeof window.confirm === "function") {
+    shouldOpen = window.confirm(`${message}\n\nOpen AI Builder now?`);
+  }
+  if (shouldOpen) {
+    focusAiBuilder(fieldName);
+  }
+}
+
+function handleAiGenerationError(error, options = {}) {
+  const message = String(error?.message || "Could not generate with AI.");
+  if (/missing ai provider api key/i.test(message)) {
+    promptForAiBuilder("AI Builder needs your OpenAI API key before it can generate.", {
+      fieldName: "apiKey",
+      confirm: options.confirm !== false,
+    });
+    return;
+  }
+  if (/unsupported ai provider/i.test(message)) {
+    promptForAiBuilder(message, {
+      fieldName: "provider",
+      confirm: options.confirm !== false,
+    });
+    return;
+  }
+  setAiBuilderStatus(message, "error");
+  setStatus(message);
 }
 
 function getJoinAnchorPayload() {
@@ -6734,6 +6838,10 @@ function renderSelectedWorld() {
   elements.saveCollaborator.disabled = !hasWorld || !canEdit;
   elements.generateHtml.disabled = !hasWorld || !state.session;
   elements.generateScript.disabled = !hasWorld || !state.session;
+  for (const button of elements.worldSectionJumpButtons ?? []) {
+    button.disabled = !hasWorld;
+  }
+  refreshAiBuilderStatus();
   if (elements.panelModeBuild) {
     elements.panelModeBuild.disabled = !hasWorld || !canEdit;
     elements.panelModeBuild.classList.toggle("is-active", state.mode === "build");
@@ -11794,10 +11902,17 @@ async function generateAi(kind, options = {}) {
   if (!state.selectedWorld) {
     return "";
   }
+  if (!state.session) {
+    throw new Error("Sign in to use AI Builder.");
+  }
   const provider = String(options.provider ?? elements.aiForm?.elements?.provider?.value ?? "openai").trim() || "openai";
   const model = String(options.model ?? elements.aiForm?.elements?.model?.value ?? "gpt-5.4-mini").trim() || "gpt-5.4-mini";
   const apiKey = String(options.apiKey ?? elements.aiForm?.elements?.apiKey?.value ?? "").trim();
   setAiKey(apiKey);
+  if (!apiKey) {
+    throw new Error("Missing AI provider API key");
+  }
+  setAiBuilderStatus(kind === "html" ? "Generating screen HTML..." : "Generating script...", "");
   const path = kind === "html" ? "/private/worlds/ai/screen-html" : "/private/worlds/ai/script";
   const payload = await apiFetch(path, {
     method: "POST",
@@ -11817,6 +11932,7 @@ async function generateAi(kind, options = {}) {
   } else if (elements.aiOutput) {
     elements.aiOutput.value = text;
   }
+  setAiBuilderStatus(kind === "html" ? "Generated screen HTML." : "Generated script.", "success");
   pushEvent("ai:generated", kind === "html" ? "Generated screen HTML" : "Generated script");
   return text;
 }
@@ -12451,7 +12567,7 @@ function bindEvents() {
   });
   elements.scriptFunctionGenerate?.addEventListener("click", () => {
     void generateSceneLogicFunction().catch((error) => {
-      setStatus(error.message);
+      handleAiGenerationError(error);
     });
   });
   elements.entitySections.addEventListener("click", (event) => {
@@ -12497,7 +12613,7 @@ function bindEvents() {
     const screenGenerateButton = event.target.closest("[data-screen-ai-generate]");
     if (screenGenerateButton) {
       void generateSelectedScreenHtml(screenGenerateButton.getAttribute("data-screen-ai-generate")).catch((error) => {
-        setStatus(error.message);
+        handleAiGenerationError(error);
       });
       return;
     }
@@ -12588,14 +12704,32 @@ function bindEvents() {
     });
   });
   elements.aiForm.elements.apiKey.value = getAiKey();
+  refreshAiBuilderStatus();
+  elements.aiForm.elements.provider?.addEventListener("change", () => {
+    refreshAiBuilderStatus();
+  });
+  elements.aiForm.elements.model?.addEventListener("input", () => {
+    refreshAiBuilderStatus();
+  });
   elements.aiForm.elements.apiKey.addEventListener("input", (event) => {
     setAiKey(event.target.value);
+    refreshAiBuilderStatus();
   });
+  for (const button of elements.worldSectionJumpButtons ?? []) {
+    button.addEventListener("click", () => {
+      const sectionName = button.getAttribute("data-world-section-jump") || "";
+      scrollWorldSectionIntoView(sectionName);
+    });
+  }
   elements.generateHtml.addEventListener("click", () => {
-    void generateAi("html");
+    void generateAi("html").catch((error) => {
+      handleAiGenerationError(error);
+    });
   });
   elements.generateScript.addEventListener("click", () => {
-    void generateAi("script");
+    void generateAi("script").catch((error) => {
+      handleAiGenerationError(error);
+    });
   });
   window.addEventListener("keydown", (event) => {
     if (
