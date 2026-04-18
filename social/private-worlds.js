@@ -466,7 +466,6 @@ const elements = {
   panelChatReactions: document.querySelector(".world-chat-reactions"),
   panelChatEmpty: document.querySelector("[data-private-chat-empty]"),
   panelRuntimeActions: document.querySelector("[data-private-runtime-actions]"),
-  panelRuntimeNote: document.querySelector("[data-private-runtime-note]"),
   panelLiveSearchForm: document.querySelector("[data-private-live-search-form]"),
   panelLiveSearchInput: document.querySelector("[data-private-live-search-input]"),
   panelLiveStatus: document.querySelector("[data-private-live-status]"),
@@ -7425,15 +7424,6 @@ function renderSelectedWorld() {
       && !showReadyControl
       && !showReleaseControl
       && !showResetControl;
-  }
-  if (elements.panelRuntimeNote) {
-    elements.panelRuntimeNote.textContent = !hasWorld
-      ? "Open or create a world to enter."
-      : !localParticipant
-        ? "Opening a world should place you inside it. If you ever leave, Enter World brings you back."
-        : joinedAsPlayer
-          ? `${readyLabel} changes this player's ready state. Leave Player returns you to viewer mode.${showResetControl ? " Reset Scene is editor-only." : ""}`
-          : `Click a player capsule to inhabit it. ${showResetControl ? "Reset Scene returns everyone to the world's default scene." : "Ready Up appears after you take a player."}`;
   }
   if (elements.readyToggle) {
     elements.readyToggle.hidden = !showReadyControl;

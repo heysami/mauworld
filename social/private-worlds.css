@@ -332,6 +332,12 @@ body.private-worlds-body.is-world-entry-loading .pw-inspector {
   text-transform: uppercase;
 }
 
+.pw-mode-strip__runtime {
+  display: grid;
+  gap: 10px;
+  padding-top: 2px;
+}
+
 .pw-drawer__eyebrow,
 .pw-inspector__eyebrow,
 .pw-launcher-section label span,
@@ -1074,7 +1080,6 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 
 .pw-world-card p,
 .pw-builder-empty,
-.pw-preview-hint,
 .pw-event-log__item div {
   color: var(--pw-muted);
   line-height: 1.5;

@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418ae" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418af" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -73,6 +73,15 @@
               <span>Editing scene</span>
               <select data-private-build-scene-select aria-label="Choose scene to edit in build mode"></select>
             </label>
+          </div>
+          <div class="pw-mode-strip__runtime">
+            <div class="pw-action-grid pw-action-grid--runtime" data-private-runtime-actions>
+              <button type="button" data-private-panel-enter hidden>Enter World</button>
+              <button type="button" data-private-panel-leave hidden>Leave World</button>
+              <button type="button" data-private-panel-ready hidden>Ready Up</button>
+              <button type="button" data-private-panel-release hidden>Leave Player</button>
+              <button type="button" data-private-panel-reset hidden>Reset Scene</button>
+            </div>
           </div>
         </section>
 
@@ -134,14 +143,6 @@
             <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="👀" aria-label="Watching">👀</button>
             <button type="button" class="world-chat-reactions__button" data-private-chat-reaction="🙌" aria-label="Hands up">🙌</button>
           </div>
-          <div class="pw-action-grid pw-action-grid--runtime" data-private-runtime-actions>
-            <button type="button" data-private-panel-enter hidden>Enter World</button>
-            <button type="button" data-private-panel-leave hidden>Leave World</button>
-            <button type="button" data-private-panel-ready hidden>Ready Up</button>
-            <button type="button" data-private-panel-release hidden>Leave Player</button>
-            <button type="button" data-private-panel-reset hidden>Reset Scene</button>
-          </div>
-          <p class="pw-preview-hint" data-private-runtime-note>Click a player capsule to inhabit it. Ready Up appears after you take a player.</p>
           <p class="world-live-status" data-private-chat-empty hidden></p>
         </section>
 
@@ -837,6 +838,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418ae"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418af"></script>
   </body>
 </html>
