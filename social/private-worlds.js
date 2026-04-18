@@ -8555,7 +8555,7 @@ function syncPrivateLocalAvatar(preview, elapsedSeconds) {
 }
 
 function updatePossessedCamera(preview) {
-  const player = getPossessedRuntimePlayer();
+  const player = getPossessedPreviewPlayer(preview);
   if (!player) {
     return false;
   }
@@ -8723,9 +8723,14 @@ function refreshPrivatePreviewEnvironment(preview = state.preview, world = state
   );
   preview.sceneEnvironmentSettings = sceneEnvironmentSettings;
   const theme = buildPrivateSceneEnvironmentTheme(sceneEnvironmentSettings);
-  applyPrivatePreviewAtmosphere(preview, theme);
   const bounds = getPrivateWorldBounds(world);
   const nextKey = `${bounds.width}:${bounds.length}:${bounds.height}:${theme.skybox}:${theme.ambient_light}`;
+  const nextVisualStateKey = `${nextKey}:${world ? "1" : "0"}:${state.mode}:${isEditor() ? "1" : "0"}:${preview.showGridHint === true ? "1" : "0"}`;
+  if (preview.environmentVisualStateKey === nextVisualStateKey) {
+    return;
+  }
+  preview.environmentVisualStateKey = nextVisualStateKey;
+  applyPrivatePreviewAtmosphere(preview, theme);
   if (preview.environmentKey === nextKey) {
     syncPrivatePreviewEnvironmentState(preview);
     return;
@@ -8901,20 +8906,22 @@ function ensurePreview() {
   if (state.preview || !elements.previewCanvas) {
     return state.preview;
   }
+  const initialWidth = elements.previewCanvas.clientWidth || 640;
+  const initialHeight = elements.previewCanvas.clientHeight || 360;
   const renderer = new THREE.WebGLRenderer({
     canvas: elements.previewCanvas,
     antialias: true,
     alpha: false,
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setSize(elements.previewCanvas.clientWidth || 640, 360, false);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  renderer.setSize(initialWidth, initialHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PRIVATE_WORLD_STYLE.background);
   scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 170, 1600);
 
-  const camera = new THREE.PerspectiveCamera(58, (elements.previewCanvas.clientWidth || 640) / 360, 0.1, 2400);
+  const camera = new THREE.PerspectiveCamera(58, initialWidth / Math.max(1, initialHeight), 0.1, 2400);
   camera.position.copy(state.viewerCameraPosition);
   camera.rotation.order = "YXZ";
   camera.lookAt(getPrivatePlayerLookTarget());
@@ -8946,6 +8953,8 @@ function ensurePreview() {
     presenceEntries: new Map(),
     browserShareEntries: new Map(),
     lastFrameAt: performance.now(),
+    viewportWidth: Math.round(initialWidth),
+    viewportHeight: Math.round(initialHeight),
     ambientLight: ambient,
     sunLight,
   };
@@ -8967,12 +8976,9 @@ function ensurePreview() {
     }
     const deltaSeconds = Math.min(0.05, Math.max(0.001, (timestamp - state.preview.lastFrameAt) / 1000));
     state.preview.lastFrameAt = timestamp;
-    const width = elements.previewCanvas.clientWidth || 640;
-    const height = elements.previewCanvas.clientHeight || 360;
-    state.preview.camera.aspect = width / Math.max(1, height);
-    state.preview.camera.updateProjectionMatrix();
-    state.preview.renderer.setSize(width, height, false);
+    setPreviewRendererSize(state.preview, elements.previewCanvas.clientWidth || 640, elements.previewCanvas.clientHeight || 360);
     refreshPrivatePreviewEnvironment(state.preview);
+    advanceRuntimeVisuals(state.preview, deltaSeconds);
     const possessed = state.mode === "play" && updatePossessedCamera(state.preview);
     if (possessed) {
       if (state.preview.viewerAvatar) {
@@ -9554,31 +9560,63 @@ function getRuntimeTransformMaps() {
   };
 }
 
+function setPreviewRendererSize(preview, width, height) {
+  if (!preview?.renderer || !preview?.camera) {
+    return;
+  }
+  const nextWidth = Math.max(1, Math.round(Number(width) || 640));
+  const nextHeight = Math.max(1, Math.round(Number(height) || 360));
+  if (preview.viewportWidth === nextWidth && preview.viewportHeight === nextHeight) {
+    return;
+  }
+  preview.viewportWidth = nextWidth;
+  preview.viewportHeight = nextHeight;
+  preview.camera.aspect = nextWidth / Math.max(1, nextHeight);
+  preview.camera.updateProjectionMatrix();
+  preview.renderer.setSize(nextWidth, nextHeight, false);
+}
+
 function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
   if (!mesh || !runtimeEntry) {
     return;
   }
+  const leadSeconds = clampNumber(options.leadSeconds, 1 / 30, 0, 0.08);
   const position = runtimeEntry.position ?? {};
+  const velocity = runtimeEntry.velocity ?? {};
   const rotation = runtimeEntry.rotation ?? {};
-  mesh.position.set(
-    clampNumber(position.x, mesh.position.x, -4096, 4096),
-    clampNumber(position.y, mesh.position.y, -4096, 4096),
-    clampNumber(position.z, mesh.position.z, -4096, 4096),
+  const targetPosition = mesh.userData.privateWorldRuntimeTargetPosition ?? new THREE.Vector3();
+  targetPosition.set(
+    clampNumber(position.x, mesh.position.x, -4096, 4096) + ((Number(velocity.x) || 0) * leadSeconds),
+    clampNumber(position.y, mesh.position.y, -4096, 4096) + ((Number(velocity.y) || 0) * leadSeconds),
+    clampNumber(position.z, mesh.position.z, -4096, 4096) + ((Number(velocity.z) || 0) * leadSeconds),
   );
-  mesh.rotation.set(
+  mesh.userData.privateWorldRuntimeTargetPosition = targetPosition;
+  const targetQuaternion = mesh.userData.privateWorldRuntimeTargetQuaternion ?? new THREE.Quaternion();
+  targetQuaternion.setFromEuler(new THREE.Euler(
     clampNumber(rotation.x, mesh.rotation.x, -Math.PI * 4, Math.PI * 4),
     clampNumber(rotation.y, mesh.rotation.y, -Math.PI * 4, Math.PI * 4),
     clampNumber(rotation.z, mesh.rotation.z, -Math.PI * 4, Math.PI * 4),
-  );
+  ));
+  mesh.userData.privateWorldRuntimeTargetQuaternion = targetQuaternion;
   const scale = typeof runtimeEntry.scale === "number"
     ? { x: runtimeEntry.scale, y: runtimeEntry.scale, z: runtimeEntry.scale }
     : (runtimeEntry.scale ?? options.fallbackScale ?? null);
   if (scale) {
-    mesh.scale.set(
+    const targetScale = mesh.userData.privateWorldRuntimeTargetScale ?? new THREE.Vector3();
+    targetScale.set(
       clampNumber(scale.x, mesh.scale.x, 0.01, 4096),
       clampNumber(scale.y, mesh.scale.y, 0.01, 4096),
       clampNumber(scale.z, mesh.scale.z, 0.01, 4096),
     );
+    mesh.userData.privateWorldRuntimeTargetScale = targetScale;
+  }
+  if (mesh.userData.privateWorldRuntimeInitialized !== true) {
+    mesh.position.copy(targetPosition);
+    mesh.quaternion.copy(targetQuaternion);
+    if (mesh.userData.privateWorldRuntimeTargetScale) {
+      mesh.scale.copy(mesh.userData.privateWorldRuntimeTargetScale);
+    }
+    mesh.userData.privateWorldRuntimeInitialized = true;
   }
   applyRenderableVisibility(mesh, {
     runtimeVisible: runtimeEntry.visible !== false,
@@ -9603,6 +9641,41 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
     for (const material of getObjectMaterials(mesh)) {
       material.color?.set?.(options.playerColor);
       material.needsUpdate = true;
+    }
+  }
+}
+
+function advanceRuntimeVisuals(preview, deltaSeconds) {
+  if (!preview?.entityMeshes?.size) {
+    return;
+  }
+  const positionAlpha = 1 - Math.exp(-deltaSeconds * 18);
+  const rotationAlpha = 1 - Math.exp(-deltaSeconds * 20);
+  const scaleAlpha = 1 - Math.exp(-deltaSeconds * 16);
+  for (const mesh of preview.entityMeshes.values()) {
+    const targetPosition = mesh?.userData?.privateWorldRuntimeTargetPosition;
+    const targetQuaternion = mesh?.userData?.privateWorldRuntimeTargetQuaternion;
+    const targetScale = mesh?.userData?.privateWorldRuntimeTargetScale;
+    if (targetPosition) {
+      if (mesh.position.distanceToSquared(targetPosition) <= 0.000001) {
+        mesh.position.copy(targetPosition);
+      } else {
+        mesh.position.lerp(targetPosition, positionAlpha);
+      }
+    }
+    if (targetQuaternion) {
+      if (1 - Math.abs(mesh.quaternion.dot(targetQuaternion)) <= 0.000001) {
+        mesh.quaternion.copy(targetQuaternion);
+      } else {
+        mesh.quaternion.slerp(targetQuaternion, rotationAlpha);
+      }
+    }
+    if (targetScale) {
+      if (mesh.scale.distanceToSquared(targetScale) <= 0.000001) {
+        mesh.scale.copy(targetScale);
+      } else {
+        mesh.scale.lerp(targetScale, scaleAlpha);
+      }
     }
   }
 }
@@ -9637,6 +9710,32 @@ function syncPreviewRuntimeSnapshot(snapshot) {
     });
   }
   return true;
+}
+
+function getPossessedPreviewPlayer(preview = state.preview) {
+  const player = getPossessedRuntimePlayer();
+  if (!player) {
+    return null;
+  }
+  const mesh = preview?.entityMeshes?.get(player.id);
+  if (!mesh) {
+    return player;
+  }
+  return {
+    ...player,
+    position: {
+      x: mesh.position.x,
+      y: mesh.position.y,
+      z: mesh.position.z,
+    },
+    rotation: {
+      ...(player.rotation ?? {}),
+      x: mesh.rotation.x,
+      y: mesh.rotation.y,
+      z: mesh.rotation.z,
+    },
+    scale: mesh.scale.x || player.scale,
+  };
 }
 
 function updatePreviewFromSelection() {
