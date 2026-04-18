@@ -501,6 +501,7 @@ const elements = {
   sceneLibraryHint: document.querySelector("[data-scene-library-hint]"),
   sceneLibraryList: document.querySelector("[data-scene-library-list]"),
   sceneFocusSummary: document.querySelector("[data-scene-focus-summary]"),
+  sceneSwitchButton: document.querySelector("[data-scene-switch-button]"),
   sceneDrawerSceneIndicator: document.querySelector("[data-scene-drawer-scene-indicator]"),
   sceneForm: document.querySelector("[data-scene-form]"),
   sceneEnvironmentHint: document.querySelector("[data-scene-environment-hint]"),
@@ -756,6 +757,7 @@ const state = {
   worlds: [],
   selectedWorld: null,
   selectedSceneId: "",
+  sceneDrawerFocusId: "",
   buildReturnSceneId: "",
   selectedPrefabId: "",
   toolPresetSelection: initialToolPresetState.selected,
@@ -1046,8 +1048,18 @@ function renderSceneDrawerTabs() {
 }
 
 function setSceneDrawerTab(tab) {
-  state.sceneDrawerTab = normalizeSceneDrawerTab(tab);
+  const nextTab = normalizeSceneDrawerTab(tab);
+  if (nextTab !== "scenes" && state.sceneDrawerFocusId !== state.selectedSceneId) {
+    if (state.sceneEditorSceneId) {
+      rememberSceneDraft();
+    }
+    state.sceneDrawerFocusId = state.selectedSceneId;
+  }
+  state.sceneDrawerTab = nextTab;
   renderSceneDrawerTabs();
+  renderSceneLibrary();
+  renderSceneDrawerSceneIndicator();
+  renderSceneEditor();
   if (elements.sceneDrawer) {
     elements.sceneDrawer.scrollTop = 0;
   }
@@ -4551,8 +4563,44 @@ function renderMetaRows(target, rows) {
   `).join("");
 }
 
+function getSceneById(sceneId = "", world = state.selectedWorld) {
+  const normalizedSceneId = String(sceneId ?? "").trim();
+  if (!normalizedSceneId) {
+    return null;
+  }
+  return (world?.scenes ?? []).find((scene) => scene.id === normalizedSceneId) ?? null;
+}
+
 function getSelectedScene() {
-  return state.selectedWorld?.scenes?.find((scene) => scene.id === state.selectedSceneId) ?? state.selectedWorld?.scenes?.[0] ?? null;
+  return getSceneById(state.selectedSceneId) ?? state.selectedWorld?.scenes?.[0] ?? null;
+}
+
+function getSceneDrawerFocusedScene() {
+  return getSceneById(state.sceneDrawerFocusId) ?? getSelectedScene();
+}
+
+function getSceneEditorScene() {
+  return state.sceneDrawerTab === "scenes"
+    ? getSceneDrawerFocusedScene()
+    : getSelectedScene();
+}
+
+function syncSceneDrawerFocusScene(world = state.selectedWorld) {
+  const scenes = Array.isArray(world?.scenes) ? world.scenes : [];
+  if (!scenes.length) {
+    state.sceneDrawerFocusId = "";
+    return null;
+  }
+  if (state.sceneDrawerTab !== "scenes") {
+    state.sceneDrawerFocusId = getSelectedScene()?.id ?? scenes[0].id;
+    return getSceneById(state.sceneDrawerFocusId, world);
+  }
+  const focusedScene = getSceneById(state.sceneDrawerFocusId, world);
+  if (focusedScene) {
+    return focusedScene;
+  }
+  state.sceneDrawerFocusId = getSelectedScene()?.id ?? scenes[0].id;
+  return getSceneById(state.sceneDrawerFocusId, world);
 }
 
 function resolvePreferredSelectedSceneId(world = state.selectedWorld, options = {}) {
@@ -4583,8 +4631,8 @@ function getDefaultScene(world = state.selectedWorld) {
     ?? null;
 }
 
-function buildSceneEditorSnapshot(scene = getSelectedScene(), overrides = {}) {
-  const sceneId = String(overrides.sceneId ?? scene?.id ?? state.selectedSceneId ?? "").trim();
+function buildSceneEditorSnapshot(scene = getSceneEditorScene(), overrides = {}) {
+  const sceneId = String(overrides.sceneId ?? scene?.id ?? state.sceneEditorSceneId ?? state.selectedSceneId ?? "").trim();
   if (!sceneId || !elements.sceneForm?.elements) {
     return null;
   }
@@ -4605,19 +4653,19 @@ function buildSceneEditorSnapshot(scene = getSelectedScene(), overrides = {}) {
   };
 }
 
-function getSceneDraft(sceneId = state.selectedSceneId) {
+function getSceneDraft(sceneId = state.sceneEditorSceneId || state.selectedSceneId) {
   const key = String(sceneId ?? "").trim();
   return key ? state.sceneDrafts.get(key) ?? null : null;
 }
 
 function rememberSceneDraft(overrides = {}) {
-  const snapshot = buildSceneEditorSnapshot(getSelectedScene(), overrides);
+  const snapshot = buildSceneEditorSnapshot(getSceneEditorScene(), overrides);
   if (snapshot?.sceneId) {
     state.sceneDrafts.set(snapshot.sceneId, snapshot);
   }
 }
 
-function discardSceneDraft(sceneId = state.selectedSceneId) {
+function discardSceneDraft(sceneId = state.sceneEditorSceneId || state.selectedSceneId) {
   const key = String(sceneId ?? "").trim();
   if (!key) {
     return;
@@ -4625,6 +4673,20 @@ function discardSceneDraft(sceneId = state.selectedSceneId) {
   state.sceneDrafts.delete(key);
   if (state.sceneEditorSceneId === key) {
     state.sceneEditorSceneId = "";
+  }
+}
+
+function buildSceneDocFromDraft(scene = null, draft = null) {
+  if (!scene && !draft) {
+    return null;
+  }
+  const sceneDocText = String(draft?.sceneDocText ?? JSON.stringify(scene?.scene_doc ?? {}, null, 2));
+  try {
+    const sceneDoc = JSON.parse(sceneDocText || "{}");
+    sceneDoc.script_dsl = String(draft?.scriptDslText ?? sceneDoc.script_dsl ?? scene?.scene_doc?.script_dsl ?? "").trim();
+    return sceneDoc;
+  } catch (_error) {
+    return scene?.scene_doc ?? null;
   }
 }
 
@@ -5040,7 +5102,7 @@ function getRenderableSceneDoc() {
       }
     }
   }
-  return parseSceneTextarea();
+  return buildSceneDocFromDraft(scene, getSceneDraft(scene.id)) ?? scene.scene_doc ?? null;
 }
 
 function setMode(mode, options = {}) {
@@ -5111,11 +5173,14 @@ function parseSceneTextarea() {
 }
 
 function renderSceneEditor() {
-  const scene = getSelectedScene();
+  const scene = getSceneEditorScene();
   const canEdit = isEditor();
   const buildMode = state.mode === "build";
   const sceneId = String(scene?.id ?? "").trim();
   const draft = getSceneDraft(sceneId);
+  const selectedScene = getSelectedScene();
+  const selectedSceneId = String(selectedScene?.id ?? "").trim();
+  const isFocusedSceneActive = Boolean(sceneId) && sceneId === selectedSceneId;
   let sceneDocForControls = buildEmptySceneDoc();
   if (!scene) {
     elements.sceneForm.elements.name.value = "";
@@ -5140,14 +5205,22 @@ function renderSceneEditor() {
     sceneDocForControls = scene?.scene_doc ?? buildEmptySceneDoc();
   }
   renderSceneFocusSummary(scene);
-  elements.saveScene.disabled = !canEdit || !scene || !buildMode;
+  if (elements.sceneSwitchButton) {
+    const canSwitchScene = Boolean(scene) && canEdit && buildMode && !isFocusedSceneActive;
+    elements.sceneSwitchButton.hidden = !scene;
+    elements.sceneSwitchButton.disabled = !canSwitchScene;
+    elements.sceneSwitchButton.textContent = isFocusedSceneActive
+      ? "Current editing scene"
+      : "Switch to this scene";
+  }
+  elements.saveScene.disabled = !canEdit || !scene || !buildMode || !isFocusedSceneActive;
   elements.refreshScene.disabled = !scene;
-  elements.sceneForm.elements.name.disabled = !canEdit || !buildMode;
-  elements.sceneForm.elements.isDefault.disabled = !canEdit || !buildMode;
-  elements.sceneForm.elements.sceneSkybox.disabled = !canEdit || !scene || !buildMode;
-  elements.sceneForm.elements.sceneAmbientLight.disabled = !canEdit || !scene || !buildMode;
-  elements.sceneForm.elements.scriptDsl.disabled = !canEdit || !buildMode;
-  elements.sceneForm.elements.sceneDoc.disabled = !canEdit || !buildMode;
+  elements.sceneForm.elements.name.disabled = !canEdit || !buildMode || !isFocusedSceneActive;
+  elements.sceneForm.elements.isDefault.disabled = !canEdit || !buildMode || !isFocusedSceneActive;
+  elements.sceneForm.elements.sceneSkybox.disabled = !canEdit || !scene || !buildMode || !isFocusedSceneActive;
+  elements.sceneForm.elements.sceneAmbientLight.disabled = !canEdit || !scene || !buildMode || !isFocusedSceneActive;
+  elements.sceneForm.elements.scriptDsl.disabled = !canEdit || !buildMode || !isFocusedSceneActive;
+  elements.sceneForm.elements.sceneDoc.disabled = !canEdit || !buildMode || !isFocusedSceneActive;
   renderSceneEnvironmentControls(sceneDocForControls);
   renderSceneLogicLibrary();
   const buildPanel = document.querySelector("[data-build-panel]");
@@ -5194,15 +5267,15 @@ function getSceneStatusLabel(scene = getSelectedScene()) {
   return "saved";
 }
 
-function renderSceneDrawerSceneIndicator(scene = getSelectedScene()) {
+function renderSceneDrawerSceneIndicator(scene = getSceneDrawerFocusedScene()) {
   if (!elements.sceneDrawerSceneIndicator) {
     return;
   }
   if (!scene) {
     elements.sceneDrawerSceneIndicator.innerHTML = `
-      <span>Selected Scene</span>
+      <span>Scene Focus</span>
       <strong>No scene selected</strong>
-      <small>Open a scene from the Scenes tab.</small>
+      <small>Pick a scene from the Scenes tab.</small>
     `;
     return;
   }
@@ -5210,26 +5283,33 @@ function renderSceneDrawerSceneIndicator(scene = getSelectedScene()) {
   const activeRuntimeScene = activeRuntimeSceneId
     ? (state.selectedWorld?.scenes ?? []).find((entry) => entry.id === activeRuntimeSceneId) ?? null
     : null;
+  const selectedScene = getSelectedScene();
   const status = getSceneStatusLabel(scene);
-  const liveNote = activeRuntimeScene && activeRuntimeScene.id !== scene.id
+  const statusNote = activeRuntimeScene && activeRuntimeScene.id !== scene.id
     ? `Live now: ${activeRuntimeScene.name || "Untitled Scene"}`
     : buildSceneLibrarySummary(scene);
+  const editingNote = selectedScene && selectedScene.id !== scene.id
+    ? `Editing in world: ${selectedScene.name || "Untitled Scene"}`
+    : "";
   elements.sceneDrawerSceneIndicator.innerHTML = `
-    <span>Selected Scene</span>
+    <span>Scene Focus</span>
     <strong>${htmlEscape(scene.name || "Untitled Scene")}</strong>
     <small>${htmlEscape(status)} · ${htmlEscape(buildSceneLibrarySummary(scene))}</small>
-    ${liveNote !== buildSceneLibrarySummary(scene) ? `<small>${htmlEscape(liveNote)}</small>` : ""}
+    ${statusNote !== buildSceneLibrarySummary(scene) ? `<small>${htmlEscape(statusNote)}</small>` : ""}
+    ${editingNote ? `<small>${htmlEscape(editingNote)}</small>` : ""}
   `;
 }
 
-function renderSceneFocusSummary(scene = getSelectedScene()) {
+function renderSceneFocusSummary(scene = getSceneEditorScene()) {
   if (!elements.sceneFocusSummary) {
     return;
   }
   if (!scene) {
-    elements.sceneFocusSummary.innerHTML = '<p class="pw-builder-empty">Pick a scene to edit its setup.</p>';
+    elements.sceneFocusSummary.innerHTML = '<p class="pw-builder-empty">Pick a scene to review its setup.</p>';
     return;
   }
+  const selectedScene = getSelectedScene();
+  const viewingOnly = selectedScene && selectedScene.id !== scene.id;
   const status = getSceneStatusLabel(scene);
   elements.sceneFocusSummary.innerHTML = `
     <div class="pw-scene-focus__head">
@@ -5237,6 +5317,7 @@ function renderSceneFocusSummary(scene = getSelectedScene()) {
       <span>${htmlEscape(status)}</span>
     </div>
     <small>${htmlEscape(buildSceneLibrarySummary(scene))}</small>
+    ${viewingOnly ? `<small>${htmlEscape(`Viewing details only. Active build scene: ${selectedScene.name || "Untitled Scene"}`)}</small>` : ""}
   `;
 }
 
@@ -5247,7 +5328,7 @@ function renderSceneLibrary() {
   const scenes = state.selectedWorld?.scenes ?? [];
   if (elements.sceneLibraryHint) {
     elements.sceneLibraryHint.textContent = scenes.length
-      ? `${buildSceneCountLabel(scenes.length)} ready. Switch here, then edit the selected scene below.`
+      ? `${buildSceneCountLabel(scenes.length)} ready. Pick one to review on the right, then switch only when you want the world to move there.`
       : "No scenes yet. Add one to start building a different room, level, or state.";
   }
   if (!scenes.length) {
@@ -5258,7 +5339,7 @@ function renderSceneLibrary() {
   elements.sceneLibraryList.innerHTML = scenes.map((scene) => `
     <button
       type="button"
-      class="pw-scene-library-item ${scene.id === state.selectedSceneId ? "is-active" : ""}"
+      class="pw-scene-library-item ${scene.id === state.sceneDrawerFocusId ? "is-active" : ""}"
       data-scene-library-id="${htmlEscape(scene.id)}"
     >
       <div class="pw-scene-library-item__head">
@@ -5275,6 +5356,24 @@ function buildQuickSceneOptionLabel(scene = {}) {
   return `${scene.name || "Untitled Scene"}${status ? ` · ${status}` : ""}`;
 }
 
+function focusSceneInDrawer(sceneId) {
+  const nextSceneId = String(sceneId ?? "").trim();
+  if (!nextSceneId || nextSceneId === state.sceneDrawerFocusId) {
+    return;
+  }
+  if (state.sceneEditorSceneId) {
+    rememberSceneDraft();
+  }
+  const scenes = state.selectedWorld?.scenes ?? [];
+  if (!scenes.some((scene) => scene.id === nextSceneId)) {
+    return;
+  }
+  state.sceneDrawerFocusId = nextSceneId;
+  renderSceneLibrary();
+  renderSceneDrawerSceneIndicator();
+  renderSceneEditor();
+}
+
 function selectSceneForEditing(sceneId) {
   const nextSceneId = String(sceneId ?? "").trim();
   if (!nextSceneId || nextSceneId === state.selectedSceneId) {
@@ -5285,6 +5384,7 @@ function selectSceneForEditing(sceneId) {
     return;
   }
   state.selectedSceneId = nextSceneId;
+  state.sceneDrawerFocusId = nextSceneId;
   renderSelectedWorld();
 }
 
@@ -6546,11 +6646,13 @@ function renderSelectedWorld() {
   if (!world) {
     writeBuilderSelection([]);
     state.sceneDrawerOpen = false;
+    state.sceneDrawerFocusId = "";
     state.launcherTab = getPreferredLauncherTab();
   }
   if (state.mode === "build" && !isEditor()) {
     state.mode = "play";
   }
+  syncSceneDrawerFocusScene(world);
   if (elements.panelTitle) {
     elements.panelTitle.textContent = world?.name || "No world selected";
   }
@@ -10861,7 +10963,7 @@ async function handleCreateWorld(event) {
 }
 
 async function saveCurrentScene(options = {}) {
-  const scene = getSelectedScene();
+  const scene = getSceneEditorScene();
   if (!scene || !state.selectedWorld) {
     return null;
   }
@@ -10911,6 +11013,7 @@ async function createScene() {
   pushEvent("scene:created", payload.scene.name);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
   state.selectedSceneId = payload.scene.id;
+  state.sceneDrawerFocusId = payload.scene.id;
   state.sceneDrawerOpen = keepDrawerOpen;
   renderSelectedWorld();
 }
@@ -12158,7 +12261,7 @@ function bindEvents() {
     if (!button) {
       return;
     }
-    selectSceneForEditing(button.getAttribute("data-scene-library-id"));
+    focusSceneInDrawer(button.getAttribute("data-scene-library-id"));
   });
   elements.buildSceneSelect?.addEventListener("change", () => {
     selectSceneForEditing(elements.buildSceneSelect?.value);
@@ -12172,9 +12275,16 @@ function bindEvents() {
   }
   elements.sceneForm.addEventListener("submit", saveScene);
   elements.refreshScene.addEventListener("click", () => {
-    discardSceneDraft(state.selectedSceneId);
+    discardSceneDraft();
     renderSceneEditor();
     updatePreviewFromSelection();
+  });
+  elements.sceneSwitchButton?.addEventListener("click", () => {
+    const scene = getSceneDrawerFocusedScene();
+    if (!scene) {
+      return;
+    }
+    selectSceneForEditing(scene.id);
   });
   elements.sceneForm.elements.name.addEventListener("input", () => {
     rememberSceneDraft();
