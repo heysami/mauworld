@@ -384,6 +384,12 @@ body.is-world-loading .world-panel {
   box-shadow: 0 28px 70px rgba(93, 109, 186, 0.22);
 }
 
+.world-private-gate[hidden],
+.world-private-gate__backdrop[hidden],
+.world-private-gate [hidden] {
+  display: none !important;
+}
+
 .world-private-gate__head,
 .world-private-gate__account,
 .world-private-gate__actions {

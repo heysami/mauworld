@@ -880,6 +880,7 @@ function renderPrivateWorldGate() {
   const gate = state.privateWorldGate;
   const open = gate.open === true;
   const signedIn = Boolean(gate.session);
+  const isCheckingSession = gate.busy && !signedIn && !gate.profile && !gate.worlds.length;
   document.body.classList.toggle("is-private-gate-open", open);
   if (elements.privateGate) {
     elements.privateGate.hidden = !open;
@@ -891,7 +892,6 @@ function renderPrivateWorldGate() {
     return;
   }
 
-  const isCheckingSession = gate.busy && !signedIn && !gate.profile && !gate.authConfig;
   if (elements.privateGateTitle) {
     elements.privateGateTitle.textContent = isCheckingSession
       ? "Checking your account"
@@ -915,7 +915,7 @@ function renderPrivateWorldGate() {
       : "Signed in.";
   }
   if (elements.privateGateAuthForm) {
-    elements.privateGateAuthForm.hidden = signedIn;
+    elements.privateGateAuthForm.hidden = signedIn || isCheckingSession;
     for (const field of elements.privateGateAuthForm.querySelectorAll("input, button")) {
       field.disabled = gate.busy;
     }
