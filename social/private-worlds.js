@@ -10214,6 +10214,7 @@ function clearBuildPlacementOverlay(preview = state.preview) {
     return;
   }
   preview.transformPickables = [];
+  preview.transformHandleVisuals = [];
   for (const child of [...preview.buildOverlay.children]) {
     preview.buildOverlay.remove(child);
     child.traverse?.((node) => {
@@ -10226,6 +10227,17 @@ function clearBuildPlacementOverlay(preview = state.preview) {
     });
   }
   preview.buildOverlayKey = "";
+}
+
+function updateTransformHandleHoverStyles(preview, hoveredHandleKey = "") {
+  for (const visual of preview?.transformHandleVisuals ?? []) {
+    if (!visual?.mesh?.material) {
+      continue;
+    }
+    visual.mesh.material.opacity = visual.key === hoveredHandleKey
+      ? visual.hoverOpacity
+      : visual.baseOpacity;
+  }
 }
 
 function buildPlacementGhost(preview, placement) {
@@ -10366,6 +10378,12 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
     mesh.position.copy(handlePosition);
     mesh.quaternion.copy(frameQuaternion);
     preview.buildOverlay.add(mesh);
+    preview.transformHandleVisuals.push({
+      key: handle.key,
+      mesh,
+      baseOpacity: 0.82,
+      hoverOpacity: 1,
+    });
 
     const pickMesh = new THREE.Mesh(
       new THREE.BoxGeometry(pickSize, pickSize, pickSize),
@@ -10438,6 +10456,12 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
     mesh.position.copy(handlePosition);
     mesh.quaternion.copy(frameQuaternion);
     preview.buildOverlay.add(mesh);
+    preview.transformHandleVisuals.push({
+      key: handle.key,
+      mesh,
+      baseOpacity: 0.86,
+      hoverOpacity: 1,
+    });
 
     const pickMesh = new THREE.Mesh(
       new THREE.BoxGeometry(pickDimensions.x, pickDimensions.y, pickDimensions.z),
@@ -10489,18 +10513,24 @@ function syncBuildPlacementOverlay(preview = state.preview) {
     ? getResolvedBuildTransformMode(requestedTransformMode, selectedEntities)
     : "";
   const selectionFrame = selectionRefs.length ? getOverlayFrameForRefs(preview, selectionRefs) : null;
+  const overlayHoveredEntityRef = hoveredEntityRef && (
+    transformMode === "delete"
+    || !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id)
+  )
+    ? hoveredEntityRef
+    : null;
   const overlayKey = [
     buildMode ? "build" : "idle",
     activePrefabPlacementId ? `prefab:${activePrefabPlacementId}` : activeTool || "none",
     transformMode || "none",
     selectionRefs.map((entry) => `${entry.kind}:${entry.id}`).join(",") || "noselection",
     getOverlayFrameSignature(selectionFrame),
-    hoveredEntityRef ? `${hoveredEntityRef.kind}:${hoveredEntityRef.id}` : "nohover",
-    hoveredHandleKey || "nohandle",
+    overlayHoveredEntityRef ? `${overlayHoveredEntityRef.kind}:${overlayHoveredEntityRef.id}` : "nohover",
     gridCell ? `${gridCell.x}:${gridCell.z}` : "nogrid",
     placement ? `${placement.key}:${placement.valid ? "ok" : "blocked"}` : "noplacement",
   ].join("|");
   if (preview.buildOverlayKey === overlayKey) {
+    updateTransformHandleHoverStyles(preview, hoveredHandleKey);
     return;
   }
   clearBuildPlacementOverlay(preview);
@@ -10552,14 +10582,14 @@ function syncBuildPlacementOverlay(preview = state.preview) {
       padding: getSelectionOutlinePadding(selectionRefs.length),
     })
     : null;
-  if (transformMode === "delete" && hoveredEntityRef) {
-    drawSelectionOutline([hoveredEntityRef], {
+  if (transformMode === "delete" && overlayHoveredEntityRef) {
+    drawSelectionOutline([overlayHoveredEntityRef], {
       color: "#ff546f",
       opacity: 0.88,
       padding: 0.12,
     });
-  } else if ((transformMode === "move" || transformMode === "scale" || transformMode === "rotate") && hoveredEntityRef && !isEntitySelected(hoveredEntityRef.kind, hoveredEntityRef.id)) {
-    drawSelectionOutline([hoveredEntityRef], {
+  } else if ((transformMode === "move" || transformMode === "scale" || transformMode === "rotate") && overlayHoveredEntityRef) {
+    drawSelectionOutline([overlayHoveredEntityRef], {
       color: transformMode === "scale" ? "#7fe46a" : transformMode === "rotate" ? "#ffb15a" : "#7fc9ff",
       opacity: 0.5,
       padding: 0.1,
@@ -10575,6 +10605,7 @@ function syncBuildPlacementOverlay(preview = state.preview) {
     buildRotateHandles(preview, groupFrame, hoveredHandleKey);
   }
   preview.buildOverlay.updateMatrixWorld(true);
+  updateTransformHandleHoverStyles(preview, hoveredHandleKey);
   preview.buildOverlayKey = overlayKey;
 }
 
@@ -10860,8 +10891,11 @@ function beginBuildDrag(event, hit = raycastPreviewPointer(event)) {
   if (!requestedTransformMode || requestedTransformMode === "delete") {
     return false;
   }
+  const directHandleHit = getTransformHandleHit(event);
   const hoveredEntityRef = state.buildHover?.entityRef ?? getEntityRefFromHit(hit);
-  const hoveredHandle = state.buildHover?.transformHandle ?? null;
+  const hoveredHandle = directHandleHit?.object?.userData?.privateWorldTransformHandle
+    ? { ...directHandleHit.object.userData.privateWorldTransformHandle }
+    : (state.buildHover?.transformHandle ?? null);
   let sceneDoc = null;
   try {
     sceneDoc = parseSceneTextarea();
@@ -11809,6 +11843,7 @@ function ensurePreview() {
     raycaster: new THREE.Raycaster(),
     entityPickables: [],
     transformPickables: [],
+    transformHandleVisuals: [],
     entityMeshes: new Map(),
     effectSystems: [],
     animatedChatBubbleGhosts: [],
