@@ -12500,10 +12500,16 @@ function ensurePreview() {
     if (state.viewerSuppressClickAt && performance.now() - state.viewerSuppressClickAt < 240) {
       return;
     }
+    const transformMode = state.mode === "build" ? getBuildTransformMode() : "";
+    const transformHandleHit = state.mode === "build" && (transformMode === "move" || transformMode === "scale" || transformMode === "rotate")
+      ? getTransformHandleHit(event)
+      : null;
+    if (state.mode === "build" && transformHandleHit?.object?.userData?.privateWorldTransformHandle) {
+      return;
+    }
     const hit = raycastPreviewPointer(event);
     const entityRef = getEntityRefFromHit(hit);
     if (state.mode === "build") {
-      const transformMode = getBuildTransformMode();
       if (transformMode === "delete") {
         if (entityRef) {
           deleteEntityRef(entityRef);
@@ -12518,6 +12524,12 @@ function ensurePreview() {
           setBuilderSelection(entityRef.kind, entityRef.id, { append: true });
         } else if (hasBuilderSelection()) {
           setBuilderSelection("", "");
+        }
+        return;
+      }
+      if (transformMode === "move" || transformMode === "scale" || transformMode === "rotate") {
+        if (entityRef) {
+          setBuilderSelection(entityRef.kind, entityRef.id);
         }
         return;
       }
