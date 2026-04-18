@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418k" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418l" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -598,57 +598,61 @@
         </div>
 
         <form class="pw-scene-form" data-scene-form>
-          <section class="pw-drawer-view" data-scene-drawer-view="scenes" role="tabpanel">
-            <section class="pw-builder-panel">
-              <div class="pw-panel__header">
-                <h3>Scene library</h3>
-                <button type="button" class="is-muted" data-scene-add-button disabled>New scene</button>
-              </div>
-              <p class="pw-builder-empty" data-scene-library-hint>Build multiple scenes, then jump between them here.</p>
-              <div class="pw-scene-library" data-scene-library-list></div>
-            </section>
+          <section class="pw-drawer-view pw-drawer-view--scenes" data-scene-drawer-view="scenes" role="tabpanel">
+            <div class="pw-scene-sidebar">
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Scene library</h3>
+                  <button type="button" class="is-muted" data-scene-add-button disabled>New scene</button>
+                </div>
+                <p class="pw-builder-empty" data-scene-library-hint>Build multiple scenes, then jump between them here.</p>
+                <div class="pw-scene-library" data-scene-library-list></div>
+              </section>
+            </div>
 
-            <section class="pw-builder-panel">
-              <div class="pw-panel__header">
-                <h3>Scene setup</h3>
-              </div>
-              <div class="pw-scene-focus" data-scene-focus-summary></div>
-              <div class="pw-grid-2">
-                <label>
-                  <span>Scene Name</span>
-                  <input type="text" name="name" maxlength="80" placeholder="Main Scene" />
-                </label>
-                <label class="pw-checkbox">
-                  <input type="checkbox" name="isDefault" />
-                  <span>Default scene</span>
-                </label>
-              </div>
-            </section>
+            <div class="pw-scene-editor-stack">
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Scene setup</h3>
+                </div>
+                <div class="pw-scene-focus" data-scene-focus-summary></div>
+                <div class="pw-grid-2">
+                  <label>
+                    <span>Scene Name</span>
+                    <input type="text" name="name" maxlength="80" placeholder="Main Scene" />
+                  </label>
+                  <label class="pw-checkbox">
+                    <input type="checkbox" name="isDefault" />
+                    <span>Default scene</span>
+                  </label>
+                </div>
+              </section>
 
-            <section class="pw-builder-panel">
-              <div class="pw-panel__header">
-                <h3>Scene atmosphere</h3>
-              </div>
-              <div class="pw-grid-2">
-                <label>
-                  <span>Skybox</span>
-                  <select name="sceneSkybox">
-                    <option value="blank">White / none</option>
-                    <option value="day">Day sky</option>
-                    <option value="sunset">Sunset</option>
-                    <option value="night">Night</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Ambient light</span>
-                  <select name="sceneAmbientLight">
-                    <option value="even">Evenly lit</option>
-                    <option value="dim">Dimmer</option>
-                  </select>
-                </label>
-              </div>
-              <p class="pw-scene-environment__hint" data-scene-environment-hint>White background with even ambient light.</p>
-            </section>
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Scene atmosphere</h3>
+                </div>
+                <div class="pw-grid-2">
+                  <label>
+                    <span>Skybox</span>
+                    <select name="sceneSkybox">
+                      <option value="blank">White / none</option>
+                      <option value="day">Day sky</option>
+                      <option value="sunset">Sunset</option>
+                      <option value="night">Night</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Ambient light</span>
+                    <select name="sceneAmbientLight">
+                      <option value="even">Evenly lit</option>
+                      <option value="dim">Dimmer</option>
+                    </select>
+                  </label>
+                </div>
+                <p class="pw-scene-environment__hint" data-scene-environment-hint>White background with even ambient light.</p>
+              </section>
+            </div>
           </section>
 
           <section class="pw-drawer-view" data-scene-drawer-view="items" role="tabpanel" hidden>

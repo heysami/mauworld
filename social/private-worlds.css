@@ -890,7 +890,7 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 .pw-scene-library {
   display: grid;
   gap: 8px;
-  max-height: min(36vh, 340px);
+  max-height: min(58dvh, 560px);
   overflow: auto;
   padding-right: 4px;
 }
@@ -898,6 +898,24 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 .pw-drawer-view {
   display: grid;
   gap: 12px;
+}
+
+.pw-drawer-view--scenes {
+  grid-template-columns: minmax(248px, 292px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.pw-scene-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+}
+
+.pw-scene-editor-stack {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  align-content: start;
 }
 
 .pw-drawer-view[hidden] {
@@ -1256,7 +1274,7 @@ body.private-worlds-body.has-selection:not(.is-play-mode) .pw-inspector {
 .pw-scene-drawer {
   top: 18px;
   left: 396px;
-  width: min(390px, calc(100vw - 36px));
+  width: min(760px, calc(100vw - 432px));
   max-height: calc(100dvh - 36px);
   overflow: auto;
   opacity: 0;
@@ -1535,6 +1553,18 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
 
   .pw-grid-3 {
     grid-template-columns: 1fr;
+  }
+
+  .pw-drawer-view--scenes {
+    grid-template-columns: 1fr;
+  }
+
+  .pw-scene-sidebar {
+    position: static;
+  }
+
+  .pw-scene-library {
+    max-height: min(26dvh, 260px);
   }
 }
 
