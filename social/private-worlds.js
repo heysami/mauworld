@@ -12402,6 +12402,14 @@ function ensurePreview() {
         elements.previewCanvas.setPointerCapture(event.pointerId);
         return;
       }
+      if (transformMode === "move" || transformMode === "scale" || transformMode === "rotate") {
+        privateInputState.pointerDown = false;
+        privateInputState.pointerMoved = false;
+        privateInputState.dragDistance = 0;
+        privateInputState.pointerId = 0;
+        state.viewerSuppressClickAt = 0;
+        return;
+      }
     }
     if (state.mode !== "play" && state.mode !== "build") {
       return;
