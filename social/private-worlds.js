@@ -10013,6 +10013,7 @@ function getTransformHandleHit(pointerSource) {
   if (!preview?.transformPickables?.length || !elements.previewCanvas) {
     return null;
   }
+  preview.buildOverlay?.updateMatrixWorld?.(true);
   const clientX = Number(pointerSource?.clientX);
   const clientY = Number(pointerSource?.clientY);
   if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
@@ -10026,9 +10027,14 @@ function getTransformHandleHit(pointerSource) {
     -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
   );
   preview.raycaster.setFromCamera(pointer, preview.camera);
+  const hoveredHandleKey = state.buildHover?.transformHandle?.key ?? "";
   const intersections = preview.raycaster.intersectObjects(preview.transformPickables, false)
     .filter((hit) => hit?.object?.userData?.privateWorldTransformHandle);
   const rankHandle = (object, distance = Number.POSITIVE_INFINITY) => {
+    const handle = object?.userData?.privateWorldTransformHandle;
+    if (!handle) {
+      return null;
+    }
     const worldPosition = object.getWorldPosition(new THREE.Vector3());
     const screenPosition = worldPosition.clone().project(preview.camera);
     if (!Number.isFinite(screenPosition.x) || !Number.isFinite(screenPosition.y) || screenPosition.z < -1 || screenPosition.z > 1) {
@@ -10037,31 +10043,50 @@ function getTransformHandleHit(pointerSource) {
     const screenX = (screenPosition.x * 0.5 + 0.5) * rect.width;
     const screenY = (-screenPosition.y * 0.5 + 0.5) * rect.height;
     return {
+      handle,
       object,
       distance,
       screenDistance: Math.hypot(screenX - pointerX, screenY - pointerY),
     };
   };
-  if (intersections.length > 0) {
-    const rankedHits = intersections
-      .map((hit) => rankHandle(hit.object, hit.distance))
+  const chooseCandidate = (candidates, stickyThresholdPx = 26) => {
+    const rankedCandidates = candidates
       .filter(Boolean)
       .sort((left, right) =>
         left.screenDistance - right.screenDistance
         || left.distance - right.distance
       );
-    if (rankedHits[0]) {
-      return {
-        object: rankedHits[0].object,
-        distance: rankedHits[0].distance,
-      };
+    if (!rankedCandidates.length) {
+      return null;
     }
+    if (!hoveredHandleKey) {
+      return rankedCandidates[0];
+    }
+    const stickyCandidate = rankedCandidates.find((candidate) => candidate.handle?.key === hoveredHandleKey);
+    if (!stickyCandidate || stickyCandidate.screenDistance > stickyThresholdPx) {
+      return rankedCandidates[0];
+    }
+    const bestCandidate = rankedCandidates[0];
+    if (!bestCandidate || bestCandidate.handle?.key === hoveredHandleKey) {
+      return stickyCandidate;
+    }
+    return bestCandidate.screenDistance + 8 < stickyCandidate.screenDistance
+      ? bestCandidate
+      : stickyCandidate;
+  };
+  const chosenIntersection = chooseCandidate(
+    intersections.map((hit) => rankHandle(hit.object, hit.distance)),
+  );
+  if (chosenIntersection) {
+    return {
+      object: chosenIntersection.object,
+      distance: chosenIntersection.distance,
+    };
   }
-  const fallbackThresholdPx = 18;
-  const fallback = preview.transformPickables
+  const fallbackThresholdPx = hoveredHandleKey ? 26 : 18;
+  const fallback = chooseCandidate(preview.transformPickables
     .map((object) => rankHandle(object))
-    .filter((candidate) => candidate && candidate.screenDistance <= fallbackThresholdPx)
-    .sort((left, right) => left.screenDistance - right.screenDistance)[0];
+    .filter((candidate) => candidate && candidate.screenDistance <= fallbackThresholdPx));
   return fallback
     ? {
       object: fallback.object,
@@ -10339,7 +10364,6 @@ function buildTransformHandles(preview, frame, hoveredHandleKey = "") {
     );
     mesh.position.copy(handlePosition);
     mesh.quaternion.copy(frameQuaternion);
-    mesh.scale.setScalar(isHovered ? 1.22 : 1);
     preview.buildOverlay.add(mesh);
 
     const pickMesh = new THREE.Mesh(
@@ -10412,7 +10436,6 @@ function buildRotateHandles(preview, frame, hoveredHandleKey = "") {
     );
     mesh.position.copy(handlePosition);
     mesh.quaternion.copy(frameQuaternion);
-    mesh.scale.setScalar(isHovered ? 1.16 : 1);
     preview.buildOverlay.add(mesh);
 
     const pickMesh = new THREE.Mesh(
@@ -10549,6 +10572,7 @@ function syncBuildPlacementOverlay(preview = state.preview) {
   } else if (transformMode === "rotate" && groupFrame && canRotateSelection(selectedEntities)) {
     buildRotateHandles(preview, groupFrame, hoveredHandleKey);
   }
+  preview.buildOverlay.updateMatrixWorld(true);
   preview.buildOverlayKey = overlayKey;
 }
 
