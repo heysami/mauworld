@@ -311,6 +311,10 @@ body.private-worlds-body.is-world-entry-loading .pw-inspector {
   gap: 6px;
 }
 
+.pw-mode-strip__scene[hidden] {
+  display: none !important;
+}
+
 .pw-mode-strip__scene label {
   display: grid;
   gap: 6px;
