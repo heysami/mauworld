@@ -1196,6 +1196,7 @@ async function ensurePrivateWorldGateClient() {
 
 async function refreshPrivateWorldGateState(options = {}) {
   const gate = state.privateWorldGate;
+  const accountOnly = options.context === "account";
   if (!gate.session) {
     gate.profile = null;
     gate.worlds = [];
@@ -1207,22 +1208,26 @@ async function refreshPrivateWorldGateState(options = {}) {
   }
   const requestId = gate.requestId + 1;
   gate.requestId = requestId;
-  gate.busy = true;
-  gate.loadingWorlds = true;
+  gate.loadingWorlds = !accountOnly;
+  gate.busy = accountOnly ? !gate.profile : true;
   if (options.preserveStatus !== true) {
     setPrivateWorldGateStatus("");
   }
-  renderPrivateWorldGate();
+  if (gate.busy || gate.loadingWorlds) {
+    renderPrivateWorldGate();
+  }
   try {
     const [profilePayload, worldsPayload] = await Promise.all([
       privateWorldGateApiFetch("/private/profile"),
-      privateWorldGateApiFetch("/private/worlds"),
+      accountOnly ? Promise.resolve(null) : privateWorldGateApiFetch("/private/worlds"),
     ]);
     if (gate.requestId !== requestId) {
       return;
     }
     gate.profile = profilePayload.profile ?? null;
-    gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
+    if (!accountOnly && worldsPayload) {
+      gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
+    }
     applyPublicAuthState(options);
   } catch (error) {
     if (gate.requestId !== requestId) {
@@ -1240,12 +1245,13 @@ async function refreshPrivateWorldGateState(options = {}) {
 }
 
 async function openPrivateWorldGate(context = "worlds") {
-  state.privateWorldGate.context = context === "account" ? "account" : "worlds";
+  const nextContext = context === "account" ? "account" : "worlds";
+  state.privateWorldGate.context = nextContext;
   state.privateWorldGate.open = true;
   renderPrivateWorldGate();
   try {
     await ensurePrivateWorldGateClient();
-    await refreshPrivateWorldGateState({ preserveStatus: true });
+    await refreshPrivateWorldGateState({ preserveStatus: true, context: nextContext });
   } catch (error) {
     state.privateWorldGate.busy = false;
     state.privateWorldGate.ready = true;
