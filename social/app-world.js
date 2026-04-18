@@ -827,6 +827,22 @@ function setPrivateWorldGateStatus(text) {
   }
 }
 
+function setPrivateGateSectionVisibility(element, isVisible, displayValue = "") {
+  if (!element) {
+    return;
+  }
+  element.hidden = !isVisible;
+  if (isVisible) {
+    if (displayValue) {
+      element.style.display = displayValue;
+    } else {
+      element.style.removeProperty("display");
+    }
+    return;
+  }
+  element.style.display = "none";
+}
+
 function getOwnedPrivateWorlds(worlds = [], profile = null) {
   const username = String(profile?.username ?? "").trim().toLowerCase();
   if (!username) {
@@ -882,12 +898,8 @@ function renderPrivateWorldGate() {
   const signedIn = Boolean(gate.session);
   const isCheckingSession = gate.busy && !signedIn && !gate.profile && !gate.worlds.length;
   document.body.classList.toggle("is-private-gate-open", open);
-  if (elements.privateGate) {
-    elements.privateGate.hidden = !open;
-  }
-  if (elements.privateGateBackdrop) {
-    elements.privateGateBackdrop.hidden = !open;
-  }
+  setPrivateGateSectionVisibility(elements.privateGate, open, "grid");
+  setPrivateGateSectionVisibility(elements.privateGateBackdrop, open);
   if (!open) {
     return;
   }
@@ -906,23 +918,19 @@ function renderPrivateWorldGate() {
         ? "Open one of your worlds or start a new one. The scene loads after you choose."
         : "Sign in here first. Then you can choose one of your private worlds or start a new one.";
   }
-  if (elements.privateGateAccount) {
-    elements.privateGateAccount.hidden = !signedIn;
-  }
+  setPrivateGateSectionVisibility(elements.privateGateAccount, signedIn, "flex");
   if (elements.privateGateAccountLabel && signedIn) {
     elements.privateGateAccountLabel.textContent = gate.profile?.username
       ? `Signed in as @${gate.profile.username}`
       : "Signed in.";
   }
+  setPrivateGateSectionVisibility(elements.privateGateAuthForm, !signedIn && !isCheckingSession, "grid");
   if (elements.privateGateAuthForm) {
-    elements.privateGateAuthForm.hidden = signedIn || isCheckingSession;
     for (const field of elements.privateGateAuthForm.querySelectorAll("input, button")) {
       field.disabled = gate.busy;
     }
   }
-  if (elements.privateGateWorlds) {
-    elements.privateGateWorlds.hidden = !signedIn;
-  }
+  setPrivateGateSectionVisibility(elements.privateGateWorlds, signedIn, "grid");
   if (elements.privateGateRefresh) {
     elements.privateGateRefresh.disabled = gate.busy;
   }
