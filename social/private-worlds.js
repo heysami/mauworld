@@ -37,6 +37,7 @@ const TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY = "mauworldPrivateWorldToolPresetP
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 const LAUNCHER_TABS = new Set(["worlds", "access"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "build", "world"]);
+const SCENE_DRAWER_TABS = new Set(["scenes", "items", "prefabs", "logic"]);
 const PRIVATE_CAMERA = {
   minY: 0,
   maxY: 360,
@@ -491,8 +492,11 @@ const elements = {
   sceneDockSummary: document.querySelector("[data-scene-dock-summary]"),
   sceneDockOpen: document.querySelector("[data-scene-dock-open]"),
   sceneStrip: document.querySelector("[data-scene-strip]"),
+  sceneDrawerTabButtons: [...document.querySelectorAll("[data-scene-drawer-tab]")],
+  sceneDrawerViews: [...document.querySelectorAll("[data-scene-drawer-view]")],
   sceneLibraryHint: document.querySelector("[data-scene-library-hint]"),
   sceneLibraryList: document.querySelector("[data-scene-library-list]"),
+  sceneFocusSummary: document.querySelector("[data-scene-focus-summary]"),
   sceneForm: document.querySelector("[data-scene-form]"),
   sceneEnvironmentHint: document.querySelector("[data-scene-environment-hint]"),
   saveScene: document.querySelector("[data-save-scene]"),
@@ -768,6 +772,7 @@ const state = {
   launcherOpen: false,
   createWorldDialogOpen: false,
   sceneDrawerOpen: false,
+  sceneDrawerTab: "scenes",
   activeLockEntityKey: "",
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
@@ -1007,6 +1012,28 @@ function getPrivateBrowserWorldKey(world = state.selectedWorld) {
 
 function normalizePrivatePanelTab(tab) {
   return PRIVATE_PANEL_TABS.has(tab) ? tab : "chat";
+}
+
+function normalizeSceneDrawerTab(tab) {
+  return SCENE_DRAWER_TABS.has(tab) ? tab : "scenes";
+}
+
+function renderSceneDrawerTabs() {
+  const activeTab = normalizeSceneDrawerTab(state.sceneDrawerTab);
+  state.sceneDrawerTab = activeTab;
+  for (const button of elements.sceneDrawerTabButtons ?? []) {
+    const isActive = button.getAttribute("data-scene-drawer-tab") === activeTab;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  }
+  for (const view of elements.sceneDrawerViews ?? []) {
+    view.hidden = view.getAttribute("data-scene-drawer-view") !== activeTab;
+  }
+}
+
+function setSceneDrawerTab(tab) {
+  state.sceneDrawerTab = normalizeSceneDrawerTab(tab);
+  renderSceneDrawerTabs();
 }
 
 function setPrivatePanelTab(tab, options = {}) {
@@ -5046,6 +5073,7 @@ function renderSceneEditor() {
   } catch (_error) {
     sceneDocForControls = scene?.scene_doc ?? buildEmptySceneDoc();
   }
+  renderSceneFocusSummary(scene);
   elements.saveScene.disabled = !canEdit || !scene || !buildMode;
   elements.refreshScene.disabled = !scene;
   elements.sceneForm.elements.name.disabled = !canEdit || !buildMode;
@@ -5099,6 +5127,29 @@ function buildSceneLibrarySummary(scene = {}) {
     meta.push("default");
   }
   return meta.join(" · ");
+}
+
+function renderSceneFocusSummary(scene = getSelectedScene()) {
+  if (!elements.sceneFocusSummary) {
+    return;
+  }
+  if (!scene) {
+    elements.sceneFocusSummary.innerHTML = '<p class="pw-builder-empty">Pick a scene to edit its setup.</p>';
+    return;
+  }
+  const activeRuntimeSceneId = state.selectedWorld?.active_instance?.active_scene_id || "";
+  const status = scene.id === activeRuntimeSceneId
+    ? "live"
+    : scene.is_default
+      ? "default"
+      : "saved";
+  elements.sceneFocusSummary.innerHTML = `
+    <div class="pw-scene-focus__head">
+      <strong>${htmlEscape(scene.name || "Untitled Scene")}</strong>
+      <span>${htmlEscape(status)}</span>
+    </div>
+    <small>${htmlEscape(buildSceneLibrarySummary(scene))}</small>
+  `;
 }
 
 function renderSceneLibrary() {
@@ -6268,6 +6319,7 @@ function renderSelectedWorld() {
   renderWorldMeta();
   renderSceneStrip();
   renderSceneLibrary();
+  renderSceneDrawerTabs();
   renderSceneEditor();
   renderCollaborators();
   renderPrivateShare();
@@ -10911,6 +10963,7 @@ function attachQuickAddButtons() {
   });
 
   elements.addRule.addEventListener("click", () => {
+    setSceneDrawerTab("logic");
     setSceneDrawerOpen(true);
     window.setTimeout(() => {
       const existingFunctions = getSceneScriptFunctions();
@@ -11242,6 +11295,7 @@ function bindEvents() {
   });
   elements.panelScenes?.addEventListener("click", () => {
     if (state.selectedWorld && isEditor()) {
+      setSceneDrawerTab("scenes");
       setSceneDrawerOpen(true);
       setPrivatePanelTab("build");
     }
@@ -11400,9 +11454,15 @@ function bindEvents() {
     if (!state.selectedWorld || !isEditor()) {
       return;
     }
+    setSceneDrawerTab("scenes");
     setSceneDrawerOpen(true);
     setPrivatePanelTab("build");
   });
+  for (const button of elements.sceneDrawerTabButtons ?? []) {
+    button.addEventListener("click", () => {
+      setSceneDrawerTab(button.getAttribute("data-scene-drawer-tab") || "scenes");
+    });
+  }
   elements.sceneLibraryList?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-scene-library-id]");
     if (!button) {

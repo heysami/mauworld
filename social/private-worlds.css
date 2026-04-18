@@ -399,6 +399,15 @@ body.private-worlds-body.is-auth-gated .pw-launcher {
   cursor: pointer;
 }
 
+.pw-drawer-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 12px 0;
+}
+
+.pw-drawer-tabs .world-panel__tab {
+  min-height: 34px;
+}
+
 .pw-launcher__brand span {
   color: var(--pw-muted);
   font-size: 0.84rem;
@@ -761,6 +770,46 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   max-height: min(36vh, 340px);
   overflow: auto;
   padding-right: 4px;
+}
+
+.pw-drawer-view {
+  display: grid;
+  gap: 12px;
+}
+
+.pw-scene-focus {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.pw-scene-focus__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pw-scene-focus__head strong,
+.pw-scene-focus small {
+  margin: 0;
+}
+
+.pw-scene-focus__head span {
+  color: var(--pw-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pw-scene-focus small {
+  color: var(--pw-muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
 }
 
 .pw-scene-library-item {
@@ -1127,6 +1176,14 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
   gap: 12px;
 }
 
+.pw-scene-form__actions {
+  position: sticky;
+  bottom: 0;
+  padding-top: 8px;
+  padding-bottom: 2px;
+  background: linear-gradient(180deg, rgba(251, 252, 255, 0), rgba(251, 252, 255, 0.96) 26%);
+}
+
 .pw-scene-dock {
   left: 50%;
   bottom: 18px;
@@ -1428,6 +1485,10 @@ body.private-worlds-body.is-launcher-open .pw-scene-dock {
 @media (max-width: 720px) {
   .pw-mau-panel .world-panel__tabs {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .pw-drawer-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pw-grid-2,
