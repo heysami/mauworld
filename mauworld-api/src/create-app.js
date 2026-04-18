@@ -1,7 +1,7 @@
 import express from "express";
 import { HttpError, asyncRoute, installCors, installErrorHandler, jsonOk, requireArray, requireString } from "./lib/http.js";
 import { createBrowserMediaToken } from "./lib/livekit-media.js";
-import { generatePrivateWorldAiArtifact } from "./lib/private-world-ai.js";
+import { brainstormPrivateWorldAiArtifact, generatePrivateWorldAiArtifact } from "./lib/private-world-ai.js";
 
 function extractBearerToken(req) {
   const header = req.headers.authorization || "";
@@ -634,6 +634,10 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       worldName: req.body?.worldName,
       worldAbout: req.body?.worldAbout,
       objective: req.body?.objective,
+      messages: req.body?.messages,
+      targetLabel: req.body?.targetLabel,
+      currentArtifact: req.body?.currentArtifact,
+      viewportSummary: req.body?.viewportSummary,
     });
     jsonOk(res, payload);
   }));
@@ -649,6 +653,28 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       worldAbout: req.body?.worldAbout,
       objective: req.body?.objective,
       sceneSummary: req.body?.sceneSummary,
+      messages: req.body?.messages,
+      targetLabel: req.body?.targetLabel,
+      currentArtifact: req.body?.currentArtifact,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/worlds/ai/brainstorm", asyncRoute(async (req, res) => {
+    await requireUser(req, store);
+    const payload = await brainstormPrivateWorldAiArtifact({
+      artifactType: req.body?.artifactType,
+      provider: req.body?.provider ?? "openai",
+      model: req.body?.model,
+      apiKey: req.body?.apiKey,
+      worldName: req.body?.worldName,
+      worldAbout: req.body?.worldAbout,
+      objective: req.body?.objective,
+      sceneSummary: req.body?.sceneSummary,
+      messages: req.body?.messages,
+      targetLabel: req.body?.targetLabel,
+      currentArtifact: req.body?.currentArtifact,
+      viewportSummary: req.body?.viewportSummary,
     });
     jsonOk(res, payload);
   }));

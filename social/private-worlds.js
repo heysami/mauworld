@@ -549,6 +549,20 @@ const elements = {
   aiOutput: document.querySelector("[data-ai-output]"),
   generateHtml: document.querySelector("[data-generate-html]"),
   generateScript: document.querySelector("[data-generate-script]"),
+  aiDialogBackdrop: document.querySelector("[data-ai-dialog-backdrop]"),
+  aiDialog: document.querySelector("[data-ai-dialog]"),
+  aiDialogClose: document.querySelector("[data-ai-dialog-close]"),
+  aiDialogTitle: document.querySelector("[data-ai-dialog-title]"),
+  aiDialogNote: document.querySelector("[data-ai-dialog-note]"),
+  aiDialogThread: document.querySelector("[data-ai-dialog-thread]"),
+  aiDialogStatus: document.querySelector("[data-ai-dialog-status]"),
+  aiDialogInput: document.querySelector("[data-ai-dialog-input]"),
+  aiDialogSend: document.querySelector("[data-ai-dialog-send]"),
+  aiDialogGenerate: document.querySelector("[data-ai-dialog-generate]"),
+  aiDialogApply: document.querySelector("[data-ai-dialog-apply]"),
+  aiDialogResultPanel: document.querySelector("[data-ai-dialog-result-panel]"),
+  aiDialogResultTitle: document.querySelector("[data-ai-dialog-result-title]"),
+  aiDialogResult: document.querySelector("[data-ai-dialog-result]"),
   eventLog: document.querySelector("[data-event-log]"),
   worldSectionNav: document.querySelector("[aria-label=\"World tools\"]"),
   addVoxel: document.querySelector("[data-add-voxel]"),
@@ -751,6 +765,25 @@ function createEmptyPrivateBrowserMediaState() {
   };
 }
 
+function createEmptyAiDialogState() {
+  return {
+    open: false,
+    key: "",
+    artifactType: "screen_html",
+    targetKind: "world",
+    targetId: "",
+    title: "AI brainstorm",
+    note: "Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.",
+    applyLabel: "",
+    messages: [],
+    input: "",
+    result: "",
+    status: "",
+    statusTone: "",
+    busy: false,
+  };
+}
+
 const state = {
   authConfig: null,
   supabase: null,
@@ -775,7 +808,9 @@ const state = {
   entityFilterKind: "all",
   sceneDrafts: new Map(),
   screenAiPromptDrafts: new Map(),
+  aiThreadDrafts: new Map(),
   sceneEditorSceneId: "",
+  aiDialog: createEmptyAiDialogState(),
   placementTool: "",
   placementShortcutTool: "",
   builderSelection: null,
@@ -1139,6 +1174,7 @@ function updateShellState() {
   document.body.classList.toggle("is-world-entry-loading", state.entryLoading === true);
   document.body.classList.toggle("is-create-world-dialog-open", state.createWorldDialogOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
+  document.body.classList.toggle("is-ai-dialog-open", state.aiDialog.open === true);
   document.body.classList.toggle("is-signed-in", Boolean(state.session));
   document.body.classList.toggle(
     "has-placement-tool",
@@ -3206,6 +3242,387 @@ function refreshAiBuilderStatus() {
     return;
   }
   setAiBuilderStatus(`Ready with ${provider} · ${model}.`, "success");
+}
+
+function cloneAiDialogMessages(messages = []) {
+  return Array.isArray(messages)
+    ? messages
+      .map((entry) => ({
+        role: String(entry?.role ?? "user").trim().toLowerCase() === "assistant" ? "assistant" : "user",
+        text: String(entry?.text ?? "").trim(),
+      }))
+      .filter((entry) => entry.text)
+    : [];
+}
+
+function cloneAiDialogState(dialog = {}) {
+  return {
+    ...createEmptyAiDialogState(),
+    ...dialog,
+    messages: cloneAiDialogMessages(dialog.messages),
+  };
+}
+
+function getAiDialogThreadKey(config = {}) {
+  const artifactType = String(config.artifactType ?? "screen_html").trim().toLowerCase() || "screen_html";
+  const targetKind = String(config.targetKind ?? "world").trim().toLowerCase() || "world";
+  const targetId = String(config.targetId ?? "world").trim() || "world";
+  return `${artifactType}:${targetKind}:${targetId}`;
+}
+
+function persistAiDialogThreadState() {
+  if (!state.aiDialog.key) {
+    return;
+  }
+  state.aiThreadDrafts.set(state.aiDialog.key, cloneAiDialogState({
+    ...state.aiDialog,
+    open: false,
+    busy: false,
+  }));
+}
+
+function setAiDialogStatus(text = "", tone = "") {
+  state.aiDialog.status = String(text ?? "");
+  state.aiDialog.statusTone = String(tone ?? "");
+}
+
+function renderAiDialog() {
+  const dialog = state.aiDialog;
+  if (elements.aiDialogBackdrop) {
+    elements.aiDialogBackdrop.hidden = !dialog.open;
+  }
+  if (elements.aiDialog) {
+    elements.aiDialog.hidden = !dialog.open;
+  }
+  if (elements.aiDialogTitle) {
+    elements.aiDialogTitle.textContent = dialog.title || "AI brainstorm";
+  }
+  if (elements.aiDialogNote) {
+    elements.aiDialogNote.textContent = dialog.note
+      || "Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.";
+  }
+  if (elements.aiDialogThread) {
+    elements.aiDialogThread.innerHTML = dialog.messages.length
+      ? dialog.messages.map((entry) => `
+        <article class="pw-ai-dialog__message pw-ai-dialog__message--${entry.role}">
+          <strong>${entry.role === "assistant" ? "AI" : "You"}</strong>
+          <p>${htmlEscape(entry.text)}</p>
+        </article>
+      `).join("")
+      : '<div class="pw-ai-dialog__empty">Start with a short brief. The AI answers with assumptions and questions first, then you decide when to generate the final result.</div>';
+  }
+  if (elements.aiDialogStatus) {
+    elements.aiDialogStatus.textContent = dialog.status || "";
+    if (dialog.statusTone) {
+      elements.aiDialogStatus.dataset.tone = dialog.statusTone;
+    } else {
+      delete elements.aiDialogStatus.dataset.tone;
+    }
+  }
+  if (elements.aiDialogInput && elements.aiDialogInput.value !== dialog.input) {
+    elements.aiDialogInput.value = dialog.input || "";
+  }
+  if (elements.aiDialogInput) {
+    elements.aiDialogInput.disabled = !dialog.open || dialog.busy || !state.selectedWorld || !state.session;
+  }
+  if (elements.aiDialogSend) {
+    elements.aiDialogSend.disabled = !dialog.open || dialog.busy || !state.selectedWorld || !state.session;
+  }
+  const canGenerate = dialog.messages.some((entry) => entry.role === "assistant");
+  if (elements.aiDialogGenerate) {
+    elements.aiDialogGenerate.disabled = !dialog.open || dialog.busy || !canGenerate || !state.selectedWorld || !state.session;
+  }
+  if (elements.aiDialogApply) {
+    const canApply = Boolean(dialog.result) && dialog.targetKind !== "world";
+    elements.aiDialogApply.hidden = !canApply;
+    elements.aiDialogApply.disabled = !canApply || dialog.busy;
+    if (canApply) {
+      elements.aiDialogApply.textContent = dialog.applyLabel || "Apply result";
+    }
+  }
+  if (elements.aiDialogResultPanel) {
+    elements.aiDialogResultPanel.hidden = !dialog.result;
+  }
+  if (elements.aiDialogResultTitle) {
+    elements.aiDialogResultTitle.textContent = dialog.artifactType === "screen_html" ? "Generated HTML" : "Generated script";
+  }
+  if (elements.aiDialogResult && elements.aiDialogResult.value !== dialog.result) {
+    elements.aiDialogResult.value = dialog.result || "";
+  }
+  if (elements.aiDialogResult) {
+    elements.aiDialogResult.disabled = !dialog.open || dialog.busy;
+  }
+}
+
+function closeAiDialog(options = {}) {
+  if (state.aiDialog.open && options.preserve !== false) {
+    persistAiDialogThreadState();
+  }
+  state.aiDialog = createEmptyAiDialogState();
+  updateShellState();
+  renderAiDialog();
+}
+
+function buildSceneLogicAiObjective(prompt, selectedFunction = ensureSelectedScriptFunction()) {
+  return [
+    String(prompt ?? "").trim(),
+    selectedFunction?.name ? `Target function name: ${selectedFunction.name}.` : "",
+    "This should end up as one self-contained Mauworld logic function.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildScreenAiObjective(entry, prompt) {
+  const viewport = entry ? getScreenTextureRenderSize(entry) : null;
+  return [
+    String(prompt ?? "").trim(),
+    viewport ? `This should fit a Mauworld screen with an approximate viewport of ${viewport.width} by ${viewport.height}.` : "",
+    entry?.html ? `Current HTML to replace or improve: ${String(entry.html).slice(0, 600)}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getAiDialogTargetContext(dialog = state.aiDialog) {
+  if (dialog.targetKind === "screen") {
+    const sceneDoc = parseSceneTextarea();
+    const found = findEntityByRef(sceneDoc, { kind: "screen", id: dialog.targetId });
+    const entry = found?.entry ?? null;
+    const viewport = entry ? getScreenTextureRenderSize(entry) : null;
+    return {
+      valid: Boolean(entry),
+      error: entry ? "" : "That screen is no longer available.",
+      objective: buildScreenAiObjective(entry, getScreenAiPrompt(dialog.targetId)),
+      targetLabel: entry ? getDisplayNameForEntity("screen", entry, found?.index ?? 0) : "Screen",
+      currentArtifact: entry?.html || "",
+      viewportSummary: viewport ? `${viewport.width} x ${viewport.height}` : "",
+    };
+  }
+  if (dialog.targetKind === "script_function") {
+    const selectedFunction = getSceneScriptFunctions().find((entry) => entry.id === dialog.targetId) ?? null;
+    return {
+      valid: Boolean(selectedFunction),
+      error: selectedFunction ? "" : "That logic function is no longer available.",
+      objective: buildSceneLogicAiObjective(elements.scriptFunctionPrompt?.value ?? "", selectedFunction),
+      targetLabel: selectedFunction?.name ? `Logic function ${selectedFunction.name}` : "Scene logic function",
+      currentArtifact: selectedFunction?.body || "",
+      viewportSummary: "",
+    };
+  }
+  return {
+    valid: true,
+    error: "",
+    objective: String(elements.aiForm?.elements?.objective?.value ?? "").trim(),
+    targetLabel: dialog.artifactType === "screen_html" ? "Scratch screen output" : "Scratch script output",
+    currentArtifact: String(elements.aiOutput?.value ?? "").trim(),
+    viewportSummary: "",
+  };
+}
+
+function buildAiRequestOptions(dialog = state.aiDialog) {
+  if (!state.selectedWorld) {
+    throw new Error("Open a world before using AI Builder.");
+  }
+  if (!state.session) {
+    throw new Error("Sign in to use AI Builder.");
+  }
+  const provider = String(elements.aiForm?.elements?.provider?.value ?? "openai").trim() || "openai";
+  const model = String(elements.aiForm?.elements?.model?.value ?? "gpt-5.4-mini").trim() || "gpt-5.4-mini";
+  const apiKey = String(elements.aiForm?.elements?.apiKey?.value ?? "").trim();
+  setAiKey(apiKey);
+  if (!apiKey) {
+    throw new Error("Missing AI provider API key");
+  }
+  const targetContext = getAiDialogTargetContext(dialog);
+  if (!targetContext.valid) {
+    throw new Error(targetContext.error || "That AI target is no longer available.");
+  }
+  return {
+    provider,
+    model,
+    apiKey,
+    artifactType: dialog.artifactType,
+    worldName: state.selectedWorld.name,
+    worldAbout: state.selectedWorld.about,
+    objective: targetContext.objective,
+    sceneSummary: JSON.stringify(getSelectedScene()?.compiled_doc?.stats ?? {}),
+    targetLabel: targetContext.targetLabel,
+    currentArtifact: targetContext.currentArtifact,
+    viewportSummary: targetContext.viewportSummary,
+  };
+}
+
+function openAiDialog(config = {}) {
+  const key = getAiDialogThreadKey(config);
+  const stored = cloneAiDialogState(state.aiThreadDrafts.get(key) ?? {});
+  state.aiDialog = cloneAiDialogState({
+    ...stored,
+    ...config,
+    open: true,
+    key,
+    busy: false,
+    status: "",
+    statusTone: "",
+    messages: stored.messages,
+    result: stored.result || "",
+    input: stored.input || "",
+  });
+  updateShellState();
+  renderAiDialog();
+  const seedPrompt = String(config.seedPrompt ?? "").trim();
+  const shouldAutoStart = Boolean(seedPrompt) && !stored.messages.length && !stored.result;
+  if (shouldAutoStart) {
+    void sendAiDialogMessage(seedPrompt);
+    return;
+  }
+  window.setTimeout(() => {
+    elements.aiDialogInput?.focus?.();
+  }, 0);
+}
+
+async function sendAiDialogMessage(seedText = "") {
+  const message = String(seedText || state.aiDialog.input || "").trim();
+  if (!message) {
+    setAiDialogStatus("Add a short brief first.", "error");
+    renderAiDialog();
+    elements.aiDialogInput?.focus?.();
+    return;
+  }
+  const nextMessages = [...state.aiDialog.messages, { role: "user", text: message }];
+  state.aiDialog.messages = nextMessages;
+  state.aiDialog.input = "";
+  state.aiDialog.busy = true;
+  setAiDialogStatus("Thinking through assumptions and questions...", "");
+  persistAiDialogThreadState();
+  renderAiDialog();
+  try {
+    const request = buildAiRequestOptions();
+    const payload = await apiFetch("/private/worlds/ai/brainstorm", {
+      method: "POST",
+      body: {
+        ...request,
+        messages: nextMessages,
+      },
+    });
+    const reply = String(payload.text ?? "").trim() || "I need a little more detail before I can help shape this.";
+    state.aiDialog.messages = [...nextMessages, { role: "assistant", text: reply }];
+    state.aiDialog.busy = false;
+    setAiDialogStatus("AI replied. Revise the thread or generate when it feels right.", "success");
+    persistAiDialogThreadState();
+    renderAiDialog();
+    window.setTimeout(() => {
+      elements.aiDialogInput?.focus?.();
+    }, 0);
+  } catch (error) {
+    state.aiDialog.busy = false;
+    setAiDialogStatus(error.message, "error");
+    persistAiDialogThreadState();
+    renderAiDialog();
+    handleAiGenerationError(error, { confirm: false });
+  }
+}
+
+async function generateAiDialogResult() {
+  if (!state.aiDialog.messages.some((entry) => entry.role === "assistant")) {
+    setAiDialogStatus("Ask AI first so it can answer with assumptions and questions before you generate.", "error");
+    renderAiDialog();
+    return;
+  }
+  if (String(state.aiDialog.input || "").trim()) {
+    setAiDialogStatus("Send your latest revision to AI first, then generate from the updated thread.", "error");
+    renderAiDialog();
+    elements.aiDialogInput?.focus?.();
+    return;
+  }
+  const kind = state.aiDialog.artifactType === "screen_html" ? "html" : "script";
+  state.aiDialog.busy = true;
+  setAiDialogStatus(kind === "html" ? "Generating final HTML..." : "Generating final script...", "");
+  renderAiDialog();
+  try {
+    const request = buildAiRequestOptions();
+    const generatedText = await generateAi(kind, {
+      objective: request.objective,
+      sceneSummary: request.sceneSummary,
+      messages: state.aiDialog.messages,
+      targetLabel: request.targetLabel,
+      currentArtifact: request.currentArtifact,
+      viewportSummary: request.viewportSummary,
+      outputTarget: elements.aiDialogResult,
+      mirrorToAiOutput: state.aiDialog.targetKind === "world",
+    });
+    state.aiDialog.result = String(generatedText ?? "").trim();
+    state.aiDialog.busy = false;
+    setAiDialogStatus("Final result ready. Review it, then apply it when you are happy.", "success");
+    persistAiDialogThreadState();
+    renderAiDialog();
+  } catch (error) {
+    state.aiDialog.busy = false;
+    setAiDialogStatus(error.message, "error");
+    persistAiDialogThreadState();
+    renderAiDialog();
+    handleAiGenerationError(error, { confirm: false });
+  }
+}
+
+function applyAiDialogResult() {
+  const result = String(elements.aiDialogResult?.value ?? state.aiDialog.result ?? "").trim();
+  if (!result) {
+    setAiDialogStatus("Generate something first.", "error");
+    renderAiDialog();
+    return;
+  }
+  if (state.aiDialog.targetKind === "screen") {
+    let applied = false;
+    mutateSceneDoc((sceneDoc) => {
+      const found = findEntityByRef(sceneDoc, { kind: "screen", id: state.aiDialog.targetId });
+      if (!found?.entry) {
+        return;
+      }
+      found.entry.html = result;
+      applied = true;
+    });
+    if (!applied) {
+      setAiDialogStatus("That screen is no longer available.", "error");
+      renderAiDialog();
+      return;
+    }
+    state.aiDialog.result = result;
+    setAiDialogStatus("Applied to the screen.", "success");
+    persistAiDialogThreadState();
+    renderAiDialog();
+    return;
+  }
+  if (state.aiDialog.targetKind === "script_function") {
+    let applied = false;
+    const normalizedBody = normalizeGeneratedScriptBody(result);
+    mutateSceneScriptFunctions((functions) => {
+      const target = functions.find((entry) => entry.id === state.aiDialog.targetId);
+      if (!target) {
+        return;
+      }
+      target.body = normalizedBody;
+      applied = true;
+    });
+    if (!applied) {
+      setAiDialogStatus("That logic function is no longer available.", "error");
+      renderAiDialog();
+      return;
+    }
+    state.aiDialog.result = normalizedBody;
+    setAiDialogStatus("Applied to the function.", "success");
+    persistAiDialogThreadState();
+    renderAiDialog();
+    focusSelectedScriptFunctionBody();
+    return;
+  }
+  if (elements.aiOutput) {
+    elements.aiOutput.value = result;
+  }
+  state.aiDialog.result = result;
+  setAiDialogStatus("Saved as the latest result in AI Builder.", "success");
+  persistAiDialogThreadState();
+  renderAiDialog();
 }
 
 function getWorldSectionElement(sectionName) {
@@ -6277,13 +6694,13 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <textarea rows="10" data-entity-field="html" data-value-type="text" spellcheck="false">${htmlEscape(entry.html || "")}</textarea>
       </label>
       <label class="pw-screen-ai">
-        <span>Generate HTML prompt</span>
-        <textarea rows="3" data-screen-ai-prompt="${htmlEscape(entry.id)}" spellcheck="false" placeholder="Design a clean scoreboard, menu, instructions panel, or whatever this screen should show." ${aiDisabled ? "disabled" : ""}>${htmlEscape(screenPrompt)}</textarea>
+        <span>Starting brief</span>
+        <textarea rows="3" data-screen-ai-prompt="${htmlEscape(entry.id)}" spellcheck="false" placeholder="Optional starting brief for the brainstorm thread." ${aiDisabled ? "disabled" : ""}>${htmlEscape(screenPrompt)}</textarea>
       </label>
       <div class="pw-inline-actions">
-        <button type="button" data-screen-ai-generate="${htmlEscape(entry.id)}" ${aiDisabled ? "disabled" : ""}>Generate HTML</button>
+        <button type="button" data-screen-ai-generate="${htmlEscape(entry.id)}" ${aiDisabled ? "disabled" : ""}>Brainstorm HTML</button>
       </div>
-      <p class="pw-screen-ai__hint">Uses the provider, model, and API key from AI Builder, then writes the result into this screen.</p>
+      <p class="pw-screen-ai__hint">Opens a brainstorm thread first, then generates from that thread and lets you apply the result back to this screen.</p>
     `;
     return;
   }
@@ -6746,12 +7163,17 @@ function renderRuntimeStatus() {
 
 function renderSelectedWorld() {
   const world = state.selectedWorld;
+  const hadAiDialogOpen = state.aiDialog.open;
   syncRuntimeFromWorld(world);
   if (!world) {
     writeBuilderSelection([]);
     state.sceneDrawerOpen = false;
     state.sceneDrawerFocusId = "";
     state.launcherTab = getPreferredLauncherTab();
+    state.aiDialog = createEmptyAiDialogState();
+    if (hadAiDialogOpen) {
+      updateShellState();
+    }
   }
   if (state.mode === "build" && !isEditor()) {
     state.mode = "play";
@@ -6774,6 +7196,7 @@ function renderSelectedWorld() {
   renderCollaborators();
   renderPrivateShare();
   updatePrivateBrowserPanel();
+  renderAiDialog();
 
   const hasWorld = Boolean(world);
   const canEdit = isEditor();
@@ -11924,12 +12347,16 @@ async function generateAi(kind, options = {}) {
       worldAbout: state.selectedWorld.about,
       objective: options.objective ?? elements.aiForm?.elements?.objective?.value ?? "",
       sceneSummary: options.sceneSummary ?? JSON.stringify(getSelectedScene()?.compiled_doc?.stats ?? {}),
+      messages: cloneAiDialogMessages(options.messages ?? []),
+      targetLabel: options.targetLabel ?? "",
+      currentArtifact: options.currentArtifact ?? "",
+      viewportSummary: options.viewportSummary ?? "",
     },
   });
   const text = String(payload.text ?? "").trim();
   if (options.outputTarget instanceof HTMLTextAreaElement) {
     options.outputTarget.value = text;
-  } else if (elements.aiOutput) {
+  } else if (options.mirrorToAiOutput !== false && elements.aiOutput) {
     elements.aiOutput.value = text;
   }
   setAiBuilderStatus(kind === "html" ? "Generated screen HTML." : "Generated script.", "success");
@@ -11937,15 +12364,23 @@ async function generateAi(kind, options = {}) {
   return text;
 }
 
-async function generateSceneLogicFunction() {
+function openWorldAiDialog(kind = "html") {
+  const isHtml = kind === "html";
+  openAiDialog({
+    artifactType: isHtml ? "screen_html" : "world_script",
+    targetKind: "world",
+    targetId: isHtml ? "world-screen" : "world-script",
+    title: isHtml ? "Screen HTML brainstorm" : "Script brainstorm",
+    note: isHtml
+      ? "Talk through the screen first. The AI replies with assumptions and questions before you generate the final HTML."
+      : "Talk through the world logic first. The AI replies with assumptions and questions before you generate the final script.",
+    seedPrompt: String(elements.aiForm?.elements?.objective?.value ?? "").trim(),
+  });
+}
+
+function openSceneLogicAiDialog() {
   if (!state.selectedWorld || !isEditor() || state.mode !== "build") {
-    return;
-  }
-  const prompt = String(elements.scriptFunctionPrompt?.value ?? "").trim();
-  if (!prompt) {
-    setStatus("Add a short prompt for the logic you want generated.");
-    elements.scriptFunctionPrompt?.focus?.();
-    return;
+    return false;
   }
   let selectedFunction = ensureSelectedScriptFunction();
   if (!selectedFunction) {
@@ -11961,66 +12396,42 @@ async function generateSceneLogicFunction() {
     });
     selectedFunction = ensureSelectedScriptFunction();
   }
-  const objective = [
-    prompt,
-    selectedFunction?.name ? `Write one self-contained Mauworld logic function called "${selectedFunction.name}".` : "Write one self-contained Mauworld logic function.",
-    "Return only the DSL rules for that function. No markdown fences. No explanation.",
-  ].join(" ");
-  const generatedText = normalizeGeneratedScriptBody(await generateAi("script", {
-    objective,
-    outputTarget: elements.aiOutput,
-  }));
-  if (!generatedText) {
-    setStatus("The AI returned an empty logic function.");
-    return;
+  if (!selectedFunction) {
+    setStatus("Create or select a function first.");
+    return false;
   }
-  mutateSceneScriptFunctions((functions) => {
-    const target = functions.find((entry) => entry.id === state.selectedScriptFunctionId) ?? functions[functions.length - 1] ?? null;
-    if (!target) {
-      return;
-    }
-    target.body = generatedText;
+  openAiDialog({
+    artifactType: "world_script",
+    targetKind: "script_function",
+    targetId: selectedFunction.id,
+    title: `Brainstorm ${selectedFunction.name}`,
+    note: "Let the AI shape assumptions and questions first. Generate only when this function feels settled.",
+    applyLabel: "Apply to function",
+    seedPrompt: String(elements.scriptFunctionPrompt?.value ?? "").trim(),
   });
-  focusSelectedScriptFunctionBody();
+  return true;
 }
 
-async function generateSelectedScreenHtml(screenId = "") {
+function openScreenAiDialog(screenId = "") {
   if (!state.selectedWorld || !isEditor() || state.mode !== "build") {
-    return;
+    return false;
   }
   const normalizedScreenId = String(screenId ?? "").trim();
-  const selected = getSelectedEntity(parseSceneTextarea());
-  if (!selected?.entry || selected.kind !== "screen" || selected.entry.id !== normalizedScreenId) {
+  const selected = findEntityByRef(parseSceneTextarea(), { kind: "screen", id: normalizedScreenId });
+  if (!selected?.entry) {
     setStatus("Select the screen you want to generate HTML for first.");
-    return;
+    return false;
   }
-  const prompt = getScreenAiPrompt(normalizedScreenId).trim();
-  if (!prompt) {
-    setStatus("Add a short prompt for this screen first.");
-    elements.entityEditor.querySelector("[data-screen-ai-prompt]")?.focus?.();
-    return;
-  }
-  const viewport = getScreenTextureRenderSize(selected.entry);
-  const objective = [
-    prompt,
-    `This should fit a Mauworld screen with an approximate viewport of ${viewport.width} by ${viewport.height}.`,
-    selected.entry.html ? `Current HTML to replace or improve: ${String(selected.entry.html).slice(0, 600)}` : "",
-  ].filter(Boolean).join(" ");
-  const generatedHtml = await generateAi("html", {
-    objective,
-    outputTarget: elements.aiOutput,
+  openAiDialog({
+    artifactType: "screen_html",
+    targetKind: "screen",
+    targetId: normalizedScreenId,
+    title: `Brainstorm ${getDisplayNameForEntity("screen", selected.entry, selected.index)}`,
+    note: "Talk through layout and content first. Generate only when the thread feels ready, then apply it back to this screen.",
+    applyLabel: "Apply to screen",
+    seedPrompt: getScreenAiPrompt(normalizedScreenId).trim(),
   });
-  if (!generatedHtml) {
-    setStatus("The AI returned empty screen HTML.");
-    return;
-  }
-  mutateSceneDoc((sceneDoc) => {
-    const current = getSelectedEntity(sceneDoc);
-    if (!current?.entry || current.kind !== "screen" || current.entry.id !== normalizedScreenId) {
-      return;
-    }
-    current.entry.html = generatedHtml;
-  });
+  return true;
 }
 
 async function acquireSceneLock() {
@@ -12487,23 +12898,7 @@ function bindEvents() {
     focusSelectedScriptFunctionBody();
   });
   elements.scriptFunctionOpenGenerate?.addEventListener("click", () => {
-    if (!ensureSelectedScriptFunction()) {
-      mutateSceneScriptFunctions((functions) => {
-        const nextIndex = functions.length;
-        const nextFunction = normalizeScriptFunctionEntry({
-          id: createScriptFunctionId("logic"),
-          name: `Function ${nextIndex + 1}`,
-          body: "",
-        }, nextIndex);
-        functions.push(nextFunction);
-        state.selectedScriptFunctionId = nextFunction.id;
-      });
-    } else {
-      renderSceneLogicLibrary();
-    }
-    window.setTimeout(() => {
-      elements.scriptFunctionPrompt?.focus?.();
-    }, 0);
+    openSceneLogicAiDialog();
   });
   elements.scriptFunctionDelete?.addEventListener("click", () => {
     mutateSceneScriptFunctions((functions) => {
@@ -12566,9 +12961,7 @@ function bindEvents() {
     void releaseSceneLock();
   });
   elements.scriptFunctionGenerate?.addEventListener("click", () => {
-    void generateSceneLogicFunction().catch((error) => {
-      handleAiGenerationError(error);
-    });
+    openSceneLogicAiDialog();
   });
   elements.entitySections.addEventListener("click", (event) => {
     const button = event.target.closest("[data-select-kind][data-select-id]");
@@ -12612,9 +13005,7 @@ function bindEvents() {
   elements.entityEditor.addEventListener("click", (event) => {
     const screenGenerateButton = event.target.closest("[data-screen-ai-generate]");
     if (screenGenerateButton) {
-      void generateSelectedScreenHtml(screenGenerateButton.getAttribute("data-screen-ai-generate")).catch((error) => {
-        handleAiGenerationError(error);
-      });
+      openScreenAiDialog(screenGenerateButton.getAttribute("data-screen-ai-generate"));
       return;
     }
     const groupButton = event.target.closest("[data-group-selection]");
@@ -12721,17 +13112,45 @@ function bindEvents() {
       scrollWorldSectionIntoView(sectionName);
     });
   }
+  elements.aiDialogBackdrop?.addEventListener("click", () => {
+    closeAiDialog();
+  });
+  elements.aiDialogClose?.addEventListener("click", () => {
+    closeAiDialog();
+  });
+  elements.aiDialogInput?.addEventListener("input", (event) => {
+    state.aiDialog.input = event.target.value;
+    persistAiDialogThreadState();
+  });
+  elements.aiDialogInput?.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      void sendAiDialogMessage();
+    }
+  });
+  elements.aiDialogSend?.addEventListener("click", () => {
+    void sendAiDialogMessage();
+  });
+  elements.aiDialogGenerate?.addEventListener("click", () => {
+    void generateAiDialogResult();
+  });
+  elements.aiDialogApply?.addEventListener("click", () => {
+    applyAiDialogResult();
+  });
+  elements.aiDialogResult?.addEventListener("input", (event) => {
+    state.aiDialog.result = event.target.value;
+    persistAiDialogThreadState();
+  });
   elements.generateHtml.addEventListener("click", () => {
-    void generateAi("html").catch((error) => {
-      handleAiGenerationError(error);
-    });
+    openWorldAiDialog("html");
   });
   elements.generateScript.addEventListener("click", () => {
-    void generateAi("script").catch((error) => {
-      handleAiGenerationError(error);
-    });
+    openWorldAiDialog("script");
   });
   window.addEventListener("keydown", (event) => {
+    if (state.aiDialog.open) {
+      return;
+    }
     if (
       event.key === "/"
       && !event.ctrlKey
@@ -12744,6 +13163,9 @@ function bindEvents() {
     }
   });
   window.addEventListener("keydown", (event) => {
+    if (state.aiDialog.open) {
+      return;
+    }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
       return;
     }
@@ -12759,6 +13181,9 @@ function bindEvents() {
     updateShellState();
   });
   window.addEventListener("keydown", (event) => {
+    if (state.aiDialog.open) {
+      return;
+    }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
       return;
     }
@@ -12773,6 +13198,9 @@ function bindEvents() {
     setPlacementTool(toolKind, { temporary: true });
   });
   window.addEventListener("keydown", (event) => {
+    if (state.aiDialog.open) {
+      return;
+    }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
       return;
     }
@@ -12795,6 +13223,9 @@ function bindEvents() {
     privateInputState.keys.add(key);
   });
   window.addEventListener("keyup", (event) => {
+    if (state.aiDialog.open) {
+      return;
+    }
     const buildShortcut = getBuildTransformShortcut(event);
     const buildKey = normalizeRuntimeKey(event);
     if (buildShortcut && (canUsePlacementTools() || state.buildModifierKeys.has(buildKey))) {
@@ -12807,6 +13238,9 @@ function bindEvents() {
     }
   });
   window.addEventListener("keyup", (event) => {
+    if (state.aiDialog.open) {
+      return;
+    }
     const toolKind = getPlacementShortcutTool(event);
     if (!toolKind) {
       return;
@@ -12818,6 +13252,9 @@ function bindEvents() {
     }
   });
   window.addEventListener("keyup", (event) => {
+    if (state.aiDialog.open) {
+      return;
+    }
     const key = normalizeRuntimeKey(event);
     if (getBuildTransformShortcut(event) && canUsePlacementTools()) {
       return;
@@ -12855,6 +13292,11 @@ function bindEvents() {
   });
   window.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") {
+      return;
+    }
+    if (state.aiDialog.open) {
+      event.preventDefault();
+      closeAiDialog();
       return;
     }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {

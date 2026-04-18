@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418w" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418x" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -260,7 +260,7 @@
             <div class="pw-panel__header">
               <div>
                 <h2>AI Builder</h2>
-                <p class="pw-world-section__copy">Generate screen HTML or scene logic from here.</p>
+                <p class="pw-world-section__copy">Set the model here, then brainstorm in a thread before you generate.</p>
               </div>
             </div>
             <form class="pw-ai-form" data-ai-form>
@@ -284,17 +284,17 @@
                 </small>
               </label>
               <label>
-                <span>Objective</span>
-                <textarea name="objective" rows="4" placeholder="Describe the screen or script you want."></textarea>
+                <span>Starting brief</span>
+                <textarea name="objective" rows="4" placeholder="Optional starting brief for the brainstorm thread."></textarea>
               </label>
               <div class="pw-inline-actions">
-                <button type="button" data-generate-html disabled>Generate Screen HTML</button>
-                <button type="button" class="is-muted" data-generate-script disabled>Generate Script</button>
+                <button type="button" data-generate-html disabled>Brainstorm Screen HTML</button>
+                <button type="button" class="is-muted" data-generate-script disabled>Brainstorm Script</button>
               </div>
               <p class="pw-status pw-ai-form__status" data-ai-status aria-live="polite"></p>
             </form>
             <label>
-              <span>AI Output</span>
+              <span>Last generated result</span>
               <textarea data-ai-output rows="10" spellcheck="false"></textarea>
             </label>
           </section>
@@ -338,6 +338,45 @@
 
       <div data-private-browser-overlay-root></div>
       <div class="world-browser-backdrop" data-private-browser-backdrop aria-hidden="true"></div>
+      <div class="pw-ai-dialog-backdrop" data-ai-dialog-backdrop hidden></div>
+      <aside class="pw-ai-dialog" data-ai-dialog hidden aria-label="AI brainstorm">
+        <div class="pw-drawer__head">
+          <div>
+            <p class="pw-drawer__eyebrow">AI Builder</p>
+            <h2 data-ai-dialog-title>AI brainstorm</h2>
+            <p class="pw-launcher-section__copy" data-ai-dialog-note>Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.</p>
+          </div>
+          <button type="button" class="pw-drawer__close" data-ai-dialog-close>Close</button>
+        </div>
+
+        <div class="pw-ai-dialog__thread" data-ai-dialog-thread></div>
+        <p class="pw-status pw-ai-dialog__status" data-ai-dialog-status aria-live="polite"></p>
+
+        <label class="pw-ai-dialog__composer">
+          <span>Your message</span>
+          <textarea
+            data-ai-dialog-input
+            rows="4"
+            placeholder="Describe what you want, what matters, and what can be assumed."
+          ></textarea>
+        </label>
+
+        <div class="pw-inline-actions pw-ai-dialog__actions">
+          <button type="button" class="is-muted" data-ai-dialog-send>Ask AI</button>
+          <button type="button" data-ai-dialog-generate>Generate final</button>
+          <button type="button" class="is-muted" data-ai-dialog-apply hidden>Apply result</button>
+        </div>
+
+        <section class="pw-panel pw-panel--compact pw-ai-dialog__result" data-ai-dialog-result-panel hidden>
+          <div class="pw-panel__header">
+            <h3 data-ai-dialog-result-title>Generated result</h3>
+          </div>
+          <label>
+            <span>Result</span>
+            <textarea data-ai-dialog-result rows="12" spellcheck="false"></textarea>
+          </label>
+        </section>
+      </aside>
 
       <aside class="world-panel pw-launcher" data-launcher aria-label="Private world launcher">
         <div class="world-panel__bar pw-launcher__bar">
@@ -781,13 +820,13 @@
                     <button type="button" class="is-muted" data-script-function-delete disabled>Remove function</button>
                   </div>
                   <label class="pw-script-ai">
-                    <span>LLM prompt</span>
-                    <textarea data-script-function-prompt rows="3" placeholder="Make a launch pad that throws the player upward when they enter the trigger."></textarea>
+                    <span>Starting brief</span>
+                    <textarea data-script-function-prompt rows="3" placeholder="Optional starting brief for the brainstorm thread."></textarea>
                   </label>
                   <div class="pw-inline-actions">
-                    <button type="button" data-script-function-generate disabled>Generate with LLM</button>
+                    <button type="button" data-script-function-generate disabled>Brainstorm with AI</button>
                   </div>
-                  <p class="pw-script-ai__hint">Uses the provider, model, and API key from AI Builder.</p>
+                  <p class="pw-script-ai__hint">Opens a brainstorm thread first, then generates from that thread using the provider, model, and API key from AI Builder.</p>
                 </div>
               </section>
               <details class="pw-advanced-editor">
@@ -812,6 +851,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418w"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418x"></script>
   </body>
 </html>

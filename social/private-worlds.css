@@ -109,6 +109,7 @@ body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
 .pw-tool-preset-panel,
 .pw-inspector,
 .pw-scene-drawer,
+.pw-ai-dialog,
 .pw-world-menu {
   position: absolute;
   z-index: 2;
@@ -449,6 +450,7 @@ body.private-worlds-body.is-world-entry-loading .pw-inspector {
 .pw-launcher,
 .pw-tool-preset-panel,
 .pw-scene-drawer,
+.pw-ai-dialog,
 .pw-world-menu,
 .pw-inspector {
   display: grid;
@@ -1547,6 +1549,114 @@ body.private-worlds-body.is-world-menu-open .pw-world-menu {
   opacity: 1;
   pointer-events: auto;
   transform: translate3d(0, 0, 0);
+}
+
+.pw-ai-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: rgba(251, 252, 255, 0.7);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.pw-ai-dialog-backdrop[hidden] {
+  display: none !important;
+}
+
+.pw-ai-dialog {
+  top: 18px;
+  left: 50%;
+  width: min(720px, calc(100vw - 36px));
+  max-height: calc(100dvh - 36px);
+  overflow: auto;
+  transform: translate3d(-50%, 18px, 0);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+
+body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate3d(-50%, 0, 0);
+}
+
+.pw-ai-dialog__thread {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  max-height: min(40dvh, 420px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.pw-ai-dialog__empty,
+.pw-ai-dialog__message {
+  padding: 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.pw-ai-dialog__empty {
+  color: var(--pw-muted);
+  line-height: 1.5;
+}
+
+.pw-ai-dialog__message {
+  display: grid;
+  gap: 8px;
+}
+
+.pw-ai-dialog__message strong,
+.pw-ai-dialog__message p {
+  margin: 0;
+}
+
+.pw-ai-dialog__message strong {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pw-muted);
+}
+
+.pw-ai-dialog__message p {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.pw-ai-dialog__message--assistant {
+  border-color: rgba(61, 87, 182, 0.18);
+  background: rgba(245, 248, 255, 0.88);
+}
+
+.pw-ai-dialog__message--user {
+  border-color: rgba(255, 90, 122, 0.18);
+  background: rgba(255, 248, 250, 0.9);
+}
+
+.pw-ai-dialog__composer,
+.pw-ai-dialog__result {
+  display: grid;
+  gap: 10px;
+}
+
+.pw-ai-dialog__actions {
+  grid-auto-flow: column;
+  justify-content: start;
+}
+
+.pw-ai-dialog__status {
+  min-height: 18px;
 }
 
 body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw-inspector {
