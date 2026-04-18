@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418ac" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418ae" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -41,7 +41,7 @@
             <span class="pw-mau-panel__brand-copy">Private worlds</span>
           </div>
           <div class="world-panel__bar-actions">
-            <button type="button" class="world-panel__portal" data-launcher-toggle>Worlds</button>
+            <button type="button" class="world-panel__portal" data-launcher-toggle>Select Worlds</button>
             <a class="world-panel__portal" href="/social/world.html">Public Mauworld</a>
           </div>
         </div>
@@ -367,38 +367,39 @@
       </aside>
 
       <aside class="world-panel pw-launcher" data-launcher aria-label="Private world launcher">
-        <div class="world-panel__bar pw-launcher__bar">
-          <div class="world-panel__brand pw-launcher__brand">
-            <strong>Mauworld</strong>
-            <span>Private worlds</span>
+        <div class="pw-drawer__head pw-launcher__head">
+          <div class="pw-launcher__heading">
+            <h1>Select Worlds</h1>
           </div>
-          <div class="world-panel__bar-actions">
-            <button type="button" class="pw-drawer__close" data-launcher-close>Close</button>
-          </div>
-        </div>
-
-        <div class="pw-launcher__intro">
-          <h1>Sign in, choose a world, then step in.</h1>
-          <p>Open one of your private worlds or start a new one. The scene loads after you choose.</p>
+          <button type="button" class="pw-drawer__close" data-launcher-close>Close</button>
         </div>
 
         <div class="pw-launcher__views">
           <section class="pw-launcher-section" data-launcher-section="worlds" hidden>
-            <div class="pw-panel__header">
-              <div>
-                <h2>My worlds</h2>
-                <p class="pw-launcher-section__copy">Open one to edit or play, or start a new one.</p>
-              </div>
+            <div class="pw-launcher-browser__tabs" role="tablist" aria-label="Private world browser">
+              <button type="button" class="world-panel__tab is-active" data-launcher-world-tab="mine" role="tab" aria-selected="true">My Private Worlds</button>
+              <button type="button" class="world-panel__tab" data-launcher-world-tab="all" role="tab" aria-selected="false">All Private Worlds</button>
+            </div>
+            <div class="pw-launcher-browser__toolbar">
+              <label class="pw-search">
+                <span>Search</span>
+                <input type="search" data-world-search placeholder="Search your private worlds" />
+              </label>
               <div class="pw-inline-actions pw-launcher-actions">
                 <button type="button" data-open-create-world>Create</button>
                 <button type="button" class="is-muted" data-refresh-worlds>Refresh</button>
               </div>
             </div>
-            <label class="pw-search">
-              <span>Search</span>
-              <input type="search" data-world-search placeholder="Search worlds you can edit" />
+            <label class="pw-search pw-launcher-browser__type" data-launcher-world-type-field hidden>
+              <span>Type</span>
+              <select data-public-world-type>
+                <option value="">All</option>
+                <option value="room">Room</option>
+                <option value="field">Field</option>
+                <option value="board">Board</option>
+              </select>
             </label>
-            <div class="pw-world-list" data-world-list></div>
+            <div class="world-results pw-launcher-browser__results" data-world-list></div>
           </section>
 
           <section class="pw-launcher-section" data-launcher-section="access" hidden>
@@ -531,17 +532,6 @@
           </section>
         </section>
 
-        <section class="pw-hidden-public" hidden aria-hidden="true">
-          <button type="button" data-refresh-public-worlds>Refresh</button>
-          <input type="search" data-public-world-search placeholder="Hidden public browse" />
-          <select data-public-world-type>
-            <option value="">All</option>
-            <option value="room">Room</option>
-            <option value="field">Field</option>
-            <option value="board">Board</option>
-          </select>
-          <div data-public-world-list></div>
-        </section>
       </aside>
 
       <aside class="pw-toolbelt" data-build-panel aria-label="Build tools">
@@ -838,6 +828,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418ac"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418ae"></script>
   </body>
 </html>

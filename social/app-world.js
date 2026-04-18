@@ -25,7 +25,8 @@ import {
   SHARED_CHAT_BUBBLE_LAYOUT,
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
-import { createWorldRealtimeClient } from "./world-realtime.js";
+import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
+import { createWorldRealtimeClient } from "./world-realtime.js?v=20260418a";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
@@ -7274,29 +7275,13 @@ function renderSearchResults() {
     }
 
     elements.resultsPanel?.classList.remove("is-empty");
-    elements.results.innerHTML = worlds
-      .map((world) => {
-        const key = getPrivateWorldResultKey(world);
-        const isActive = state.activeResultId === key;
-        const occupancy = Number(world.active_instance?.viewer_count ?? 0) || 0;
-        const credits = world.lineage?.is_imported
-          ? `Forked from ${world.lineage.origin_world_name || world.lineage.origin_world_id || "another world"}`
-          : "Original world";
-        return `
-          <button class="world-result ${isActive ? "is-active" : ""}" type="button" data-private-world-result="${htmlEscape(key)}">
-            <div class="world-result__title">${htmlEscape(world.name || "Private world")}</div>
-            <p class="world-result__body">${htmlEscape(world.about || "No description yet.")}</p>
-            <div class="world-result__meta">
-              <span>@${htmlEscape(world.creator?.username || world.creator_username || "unknown")}</span>
-              <span>${htmlEscape(world.world_type || "world")}</span>
-              <span>${Number(world.width ?? 0)}x${Number(world.length ?? 0)}x${Number(world.height ?? 0)}</span>
-              <span>${occupancy} inside</span>
-              <span>${htmlEscape(credits)}</span>
-            </div>
-          </button>
-        `;
-      })
-      .join("");
+    elements.results.innerHTML = buildPrivateWorldBrowserResultsMarkup(worlds, {
+      selectedKey: state.activeResultId,
+      resultDataAttribute: "data-private-world-result",
+      includeCreator: true,
+      includeOccupancy: true,
+      includeLineage: true,
+    });
 
     for (const button of elements.results.querySelectorAll("[data-private-world-result]")) {
       button.addEventListener("click", () => {

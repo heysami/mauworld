@@ -26,6 +26,10 @@ import {
   SHARED_CHAT_BUBBLE_LAYOUT,
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
+import {
+  buildPrivateWorldBrowserResultsMarkup,
+  getPrivateWorldBrowserKey,
+} from "./private-world-browser.js";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 
 const { mauworldApiUrl } = window.MauworldSocial;
@@ -36,6 +40,7 @@ const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
 const TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY = "mauworldPrivateWorldToolPresetPanelCollapsed";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 const LAUNCHER_TABS = new Set(["worlds", "access"]);
+const LAUNCHER_WORLD_BROWSER_TABS = new Set(["mine", "all"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "world"]);
 const SCENE_DRAWER_TABS = new Set(["scenes", "items", "prefabs", "logic"]);
 const WORLD_PANEL_SECTIONS = new Set(["overview", "ai", "editors", "feed"]);
@@ -436,13 +441,11 @@ const elements = {
   accountSignout: document.querySelector("[data-account-signout]"),
   createWorldForm: document.querySelector("[data-create-world-form]"),
   createWorldDialog: document.querySelector("[data-create-world-dialog]"),
-  refreshPublicWorlds: document.querySelector("[data-refresh-public-worlds]"),
-  publicWorldSearch: document.querySelector("[data-public-world-search]"),
   publicWorldType: document.querySelector("[data-public-world-type]"),
-  publicWorldList: document.querySelector("[data-public-world-list]"),
   refreshWorlds: document.querySelector("[data-refresh-worlds]"),
   worldSearch: document.querySelector("[data-world-search]"),
   worldList: document.querySelector("[data-world-list]"),
+  launcherWorldTypeField: document.querySelector("[data-launcher-world-type-field]"),
   importForm: document.querySelector("[data-import-form]"),
   resolveForm: document.querySelector("[data-resolve-form]"),
   panelRoot: document.querySelector("[data-private-panel]"),
@@ -590,6 +593,7 @@ const elements = {
 };
 
 elements.launcherSections = [...document.querySelectorAll("[data-launcher-section]")];
+elements.launcherWorldTabButtons = [...document.querySelectorAll("[data-launcher-world-tab]")];
 elements.openCreateWorldButtons = [...document.querySelectorAll("[data-open-create-world]")];
 elements.closeCreateWorldButtons = [...document.querySelectorAll("[data-close-create-world]")];
 elements.privatePanelTabButtons = [...document.querySelectorAll("[data-private-panel-tab]")];
@@ -791,6 +795,8 @@ const state = {
   authReady: false,
   profile: null,
   publicWorlds: [],
+  publicWorldsLoading: false,
+  publicWorldsError: "",
   worlds: [],
   worldsLoading: false,
   worldsError: "",
@@ -832,6 +838,7 @@ const state = {
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
   launcherTab: "access",
+  launcherWorldTab: "mine",
   privatePanelTab: "chat",
   worldPanelSection: "overview",
   mode: "play",
@@ -2376,6 +2383,51 @@ function getPreferredLauncherTab() {
   return state.session ? "worlds" : "access";
 }
 
+function normalizeLauncherWorldTab(tab) {
+  return LAUNCHER_WORLD_BROWSER_TABS.has(tab) ? tab : "mine";
+}
+
+function getLauncherSearchPlaceholder() {
+  return normalizeLauncherWorldTab(state.launcherWorldTab) === "all"
+    ? "Search all private worlds"
+    : "Search your private worlds";
+}
+
+function renderLauncherWorldTabs() {
+  const activeTab = normalizeLauncherWorldTab(state.launcherWorldTab);
+  state.launcherWorldTab = activeTab;
+  for (const button of elements.launcherWorldTabButtons ?? []) {
+    const isActive = button.getAttribute("data-launcher-world-tab") === activeTab;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  }
+  if (elements.worldSearch) {
+    elements.worldSearch.placeholder = getLauncherSearchPlaceholder();
+  }
+  if (elements.launcherWorldTypeField) {
+    elements.launcherWorldTypeField.hidden = activeTab !== "all";
+  }
+  if (elements.publicWorldType) {
+    elements.publicWorldType.disabled = activeTab !== "all";
+  }
+}
+
+function setLauncherWorldTab(tab, options = {}) {
+  state.launcherWorldTab = normalizeLauncherWorldTab(tab);
+  renderLauncherWorldTabs();
+  renderLauncherWorldBrowser();
+  if (options.load === false) {
+    return;
+  }
+  if (state.launcherWorldTab === "all") {
+    void loadPublicWorlds();
+    return;
+  }
+  if (state.session) {
+    void loadWorlds();
+  }
+}
+
 function setLauncherTab(tab) {
   const nextTab = LAUNCHER_TABS.has(tab) ? tab : getPreferredLauncherTab();
   state.launcherTab = nextTab;
@@ -2387,6 +2439,7 @@ function setLauncherTab(tab) {
     section.hidden = !active;
     section.classList.toggle("is-active", active);
   }
+  renderLauncherWorldTabs();
 }
 
 function getViewerSpawnPosition(world = state.selectedWorld) {
@@ -4824,6 +4877,9 @@ async function runRefreshAuthState() {
   if (!state.session) {
     await releaseSceneLock();
     state.profile = null;
+    state.publicWorlds = [];
+    state.publicWorldsLoading = false;
+    state.publicWorldsError = "";
     state.worlds = [];
     state.worldsLoading = false;
     state.worldsError = "";
@@ -4847,7 +4903,7 @@ async function runRefreshAuthState() {
     resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
     setEntryLoading(false);
     renderProfile();
-    renderWorldList();
+    renderLauncherWorldBrowser();
     renderSelectedWorld();
     setLauncherTab("access");
     setLauncherOpen(true);
@@ -4857,7 +4913,7 @@ async function runRefreshAuthState() {
   try {
     state.worldsLoading = true;
     state.worldsError = "";
-    renderWorldList();
+    renderLauncherWorldBrowser();
     const payload = await apiFetch("/private/profile");
     state.profile = payload.profile;
     renderProfile();
@@ -4992,12 +5048,12 @@ async function loadWorlds() {
     state.worldsLoading = false;
     state.worldsError = "";
     state.worlds = [];
-    renderWorldList();
+    renderLauncherWorldBrowser();
     return;
   }
   state.worldsLoading = true;
   state.worldsError = "";
-  renderWorldList();
+  renderLauncherWorldBrowser();
   try {
     const payload = await apiFetch("/private/worlds", {
       search: {
@@ -5010,7 +5066,7 @@ async function loadWorlds() {
     state.worldsError = String(error?.message || "Could not load your private worlds.");
   } finally {
     state.worldsLoading = false;
-    renderWorldList();
+    renderLauncherWorldBrowser();
     if (state.launcherOpen && !state.selectedWorld && !state.worldsError) {
       setLauncherTab(getPreferredLauncherTab());
     }
@@ -5018,56 +5074,65 @@ async function loadWorlds() {
 }
 
 async function loadPublicWorlds() {
-  const payload = await apiFetch("/public/private-worlds", {
-    search: {
-      q: elements.publicWorldSearch?.value || "",
-      worldType: elements.publicWorldType?.value || "",
-    },
-  });
-  state.publicWorlds = payload.worlds ?? [];
-  renderPublicWorldList();
+  state.publicWorldsLoading = true;
+  state.publicWorldsError = "";
+  renderLauncherWorldBrowser();
+  try {
+    const payload = await apiFetch("/public/private-worlds", {
+      search: {
+        q: elements.worldSearch?.value || "",
+        worldType: elements.publicWorldType?.value || "",
+      },
+    });
+    state.publicWorlds = payload.worlds ?? [];
+    state.publicWorldsError = "";
+  } catch (error) {
+    state.publicWorldsError = String(error?.message || "Could not load all private worlds.");
+  } finally {
+    state.publicWorldsLoading = false;
+    renderLauncherWorldBrowser();
+  }
 }
 
-function renderPublicWorldList() {
-  if (!elements.publicWorldList) {
-    return;
-  }
-  if (!state.publicWorlds.length) {
-    elements.publicWorldList.innerHTML = '<div class="pw-world-card"><p>No worlds match this search yet.</p></div>';
-    return;
-  }
-  elements.publicWorldList.innerHTML = state.publicWorlds.map((world) => `
-    <article class="pw-world-card ${state.selectedWorld?.world_id === world.world_id ? "is-active" : ""}" data-world-card="${htmlEscape(world.world_id)}" data-world-creator="${htmlEscape(world.creator.username)}">
-      <h3>${htmlEscape(world.name)}</h3>
-      <p>${htmlEscape(world.about)}</p>
-      <small>${htmlEscape(world.creator.username)} · ${htmlEscape(world.world_type)} · ${Number(world.width)}×${Number(world.length)}×${Number(world.height)}${world.active_instance ? ` · ${htmlEscape(world.active_instance.status)}` : ""}</small>
-    </article>
-  `).join("");
-}
-
-function renderWorldList() {
+function renderLauncherWorldBrowser() {
   if (!elements.worldList) {
     return;
   }
-  if (state.worldsLoading) {
-    elements.worldList.innerHTML = '<div class="pw-world-card"><p>Loading your private worlds.</p></div>';
+  renderLauncherWorldTabs();
+  const activeTab = normalizeLauncherWorldTab(state.launcherWorldTab);
+  const worlds = activeTab === "all" ? state.publicWorlds : state.worlds;
+  const loading = activeTab === "all" ? state.publicWorldsLoading : state.worldsLoading;
+  const error = activeTab === "all" ? state.publicWorldsError : state.worldsError;
+  if (loading) {
+    elements.worldList.innerHTML = [
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+    ].join("");
     return;
   }
-  if (state.worldsError) {
-    elements.worldList.innerHTML = `<div class="pw-world-card"><p>${htmlEscape(state.worldsError)}</p></div>`;
+  if (error) {
+    elements.worldList.innerHTML = `<p class="world-empty">${htmlEscape(error)}</p>`;
     return;
   }
-  if (!state.worlds.length) {
-    elements.worldList.innerHTML = '<div class="pw-world-card"><p>No private worlds yet. Create or import one to get started.</p></div>';
+  if (!worlds.length) {
+    elements.worldList.innerHTML = activeTab === "all"
+      ? '<p class="world-empty">No private worlds match this search right now.</p>'
+      : '<div class="pw-world-card"><p>No private worlds yet. Create one to get started.</p></div>';
     return;
   }
-  elements.worldList.innerHTML = state.worlds.map((world) => `
-    <article class="pw-world-card ${state.selectedWorld?.world_id === world.world_id ? "is-active" : ""}" data-world-card="${htmlEscape(world.world_id)}" data-world-creator="${htmlEscape(world.creator.username)}">
-      <h3>${htmlEscape(world.name)}</h3>
-      <p>${htmlEscape(world.about)}</p>
-      <small>${htmlEscape(world.creator.username)} · ${htmlEscape(world.world_type)} · ${Number(world.width)}×${Number(world.length)}×${Number(world.height)}</small>
-    </article>
-  `).join("");
+  elements.worldList.innerHTML = buildPrivateWorldBrowserResultsMarkup(worlds, {
+    selectedKey: state.selectedWorld ? getPrivateWorldBrowserKey(state.selectedWorld) : "",
+    resultDataAttribute: "data-launcher-world-result",
+    includeCreator: activeTab === "all",
+    includeOccupancy: activeTab === "all",
+    includeLineage: activeTab === "all",
+    includeStatus: activeTab !== "all",
+  });
+}
+
+function renderWorldList() {
+  renderLauncherWorldBrowser();
 }
 
 function buildMetaRows(world) {
@@ -12714,40 +12779,43 @@ function bindEvents() {
   });
   elements.profileForm.addEventListener("submit", saveProfile);
   elements.createWorldForm.addEventListener("submit", handleCreateWorld);
-  elements.refreshPublicWorlds.addEventListener("click", () => {
-    void loadPublicWorlds();
-  });
-  elements.publicWorldSearch.addEventListener("input", () => {
-    void loadPublicWorlds();
-  });
-  elements.publicWorldType.addEventListener("change", () => {
-    void loadPublicWorlds();
-  });
-  elements.publicWorldList.addEventListener("click", (event) => {
-    const card = event.target.closest("[data-world-card]");
-    if (!card) {
-      return;
-    }
-    void openWorld(card.getAttribute("data-world-card"), card.getAttribute("data-world-creator"), true, {
-      entryLoading: true,
-      loadingTitle: "Opening private world",
-      loadingNote: "Loading the world you picked.",
-    }).catch((error) => {
-      setStatus(error.message);
+  for (const button of elements.launcherWorldTabButtons ?? []) {
+    button.addEventListener("click", () => {
+      setLauncherWorldTab(button.getAttribute("data-launcher-world-tab") || "mine");
     });
+  }
+  elements.publicWorldType.addEventListener("change", () => {
+    if (normalizeLauncherWorldTab(state.launcherWorldTab) === "all") {
+      void loadPublicWorlds();
+    }
   });
   elements.refreshWorlds.addEventListener("click", () => {
+    if (normalizeLauncherWorldTab(state.launcherWorldTab) === "all") {
+      void loadPublicWorlds();
+      return;
+    }
     void loadWorlds();
   });
   elements.worldSearch.addEventListener("input", () => {
+    if (normalizeLauncherWorldTab(state.launcherWorldTab) === "all") {
+      void loadPublicWorlds();
+      return;
+    }
     void loadWorlds();
   });
   elements.worldList.addEventListener("click", (event) => {
-    const card = event.target.closest("[data-world-card]");
+    const card = event.target.closest("[data-launcher-world-result]");
     if (!card) {
       return;
     }
-    void openWorld(card.getAttribute("data-world-card"), card.getAttribute("data-world-creator"), true, {
+    const activeTab = normalizeLauncherWorldTab(state.launcherWorldTab);
+    const worlds = activeTab === "all" ? state.publicWorlds : state.worlds;
+    const key = card.getAttribute("data-launcher-world-result") || "";
+    const world = worlds.find((entry) => getPrivateWorldBrowserKey(entry) === key);
+    if (!world) {
+      return;
+    }
+    void openWorld(world.world_id, world.creator?.username || world.creator_username || "", true, {
       entryLoading: true,
       loadingTitle: "Opening private world",
       loadingNote: "Loading the world you picked.",
