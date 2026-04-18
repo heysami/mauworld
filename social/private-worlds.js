@@ -12387,6 +12387,15 @@ async function openWorld(worldId, creatorUsername, includeContent = true, option
     if (shouldAutoJoin) {
       await joinWorld({ switchPanelTab: false });
     }
+    if (options.entryMode === "play" && options.startRuntimeOnEntry !== false) {
+      try {
+        await ensurePlayRuntimeStarted({
+          keepPanelTab: state.privatePanelTab,
+        });
+      } catch (error) {
+        setStatus(error.message || "Could not start play mode.");
+      }
+    }
   } finally {
     if (showEntryLoading) {
       setEntryLoading(false);
@@ -12896,12 +12905,9 @@ async function enterPlayMode() {
     if (!getLocalParticipant()) {
       await joinWorld({ switchPanelTab: false });
     }
-    const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
-    const activeSceneId = runtime?.active_scene_id || state.selectedWorld?.active_instance?.active_scene_id || "";
     const targetSceneId = defaultScene?.id || state.selectedSceneId;
-    const sceneAlreadyRunning = runtime?.scene_started === true && activeSceneId === targetSceneId;
-    if (state.session && isEditor() && !sceneAlreadyRunning) {
-      await startScene({
+    if (state.session) {
+      await ensurePlayRuntimeStarted({
         sceneId: targetSceneId,
         keepPanelTab,
         pushEvent: false,
