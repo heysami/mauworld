@@ -898,7 +898,20 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 }
 
 .pw-action-grid--world {
-  margin-bottom: 8px;
+  margin-bottom: 0;
+}
+
+.pw-world-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.pw-world-actions__eyebrow {
+  color: var(--pw-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .pw-world-nav {
@@ -928,6 +941,13 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
     border-color 180ms ease,
     background 180ms ease,
     color 180ms ease;
+}
+
+.pw-world-nav button:focus-visible {
+  outline: none;
+  border-color: rgba(255, 79, 168, 0.24);
+  background: rgba(255, 79, 168, 0.08);
+  color: var(--pw-text);
 }
 
 .pw-world-nav button:hover {

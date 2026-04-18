@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418ah" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418ai" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -244,11 +244,14 @@
           </div>
 
           <section class="pw-world-section" id="pw-world-section-overview" data-world-section="overview" role="tabpanel">
-            <div class="pw-action-grid pw-action-grid--world">
-              <button type="button" data-private-copy-link disabled>Copy Entry</button>
-              <button type="button" data-private-native-share disabled>Share Entry</button>
-              <button type="button" data-private-panel-library disabled>Library</button>
-              <button type="button" data-private-panel-export disabled>Export</button>
+            <div class="pw-world-actions">
+              <span class="pw-world-actions__eyebrow">Actions</span>
+              <div class="pw-action-grid pw-action-grid--world">
+                <button type="button" data-private-copy-link disabled>Copy Entry</button>
+                <button type="button" data-private-native-share disabled>Share Entry</button>
+                <button type="button" data-private-panel-library disabled>Library</button>
+                <button type="button" data-private-panel-export disabled>Export</button>
+              </div>
             </div>
             <p class="world-live-status" data-private-share-status>Open a world to copy its entry link.</p>
             <div class="pw-world-meta" data-private-panel-world-meta></div>

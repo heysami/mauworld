@@ -11490,6 +11490,9 @@ async function openWorld(worldId, creatorUsername, includeContent = true, option
       resetViewerRig(payload.world);
       resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
     }
+    if (options.entryMode) {
+      setMode(options.entryMode, { syncPanelTab: false });
+    }
     syncRuntimeFromWorld(payload.world);
     renderSelectedWorld();
     connectWorldSocket();
@@ -11584,9 +11587,9 @@ async function handleCreateWorld(event) {
   });
   pushEvent("world:created", `${payload.world.name} created`);
   await loadWorlds();
-  state.mode = "build";
   await openWorld(payload.world.world_id, payload.world.creator.username, true, {
     entryLoading: true,
+    entryMode: "play",
     loadingTitle: "Creating private world",
     loadingNote: "Preparing your default scene.",
   });
@@ -11700,10 +11703,10 @@ async function forkSelectedWorld() {
     body: payload.package,
   });
   pushEvent("world:forked", `${imported.world.world_id} from ${state.selectedWorld.world_id}`);
-  state.mode = "build";
   await loadWorlds();
   await openWorld(imported.world.world_id, imported.world.creator.username, true, {
     entryLoading: true,
+    entryMode: "play",
     loadingTitle: "Opening forked world",
     loadingNote: "Loading your new private copy.",
   });
@@ -11735,6 +11738,7 @@ async function importPackage(event) {
   await loadWorlds();
   await openWorld(payload.world.world_id, payload.world.creator.username, true, {
     entryLoading: true,
+    entryMode: "play",
     loadingTitle: "Opening imported world",
     loadingNote: "Loading the imported scene.",
   });
@@ -11749,6 +11753,7 @@ async function resolveWorld(event) {
   const creatorUsername = String(formData.get("creatorUsername") ?? "").trim();
   await openWorld(worldId, creatorUsername, true, {
     entryLoading: true,
+    entryMode: "play",
     loadingTitle: "Opening private world",
     loadingNote: "Loading the world you picked.",
   });
@@ -12828,6 +12833,7 @@ function bindEvents() {
     }
     void openWorld(world.world_id, world.creator?.username || world.creator_username || "", true, {
       entryLoading: true,
+      entryMode: "play",
       loadingTitle: "Opening private world",
       loadingNote: "Loading the world you picked.",
     }).catch((error) => {
@@ -13467,6 +13473,7 @@ async function handleLaunchRequest(options = {}) {
       state.launchHandled = true;
       await openWorld(launch.worldId, launch.creatorUsername, true, {
         entryLoading: true,
+        entryMode: "play",
         loadingTitle: launch.fork ? "Preparing private world" : "Opening private world",
         loadingNote: launch.fork ? "Loading the source world before the fork opens." : "Loading the scene you picked.",
       });
