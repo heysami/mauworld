@@ -27,14 +27,14 @@ import {
   syncDisplayShareExpandButton,
   syncWorldPanelTabLabels,
   updateChatBubbleGhosts,
-} from "./world-interactions.js?v=20260418a";
+} from "./world-interactions.js?v=20260418f";
 import {
   SHARED_BROWSER_SHARE_LAYOUT,
   SHARED_CHAT_BUBBLE_LAYOUT,
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
-import { createWorldRealtimeClient } from "./world-realtime.js?v=20260418a";
+import { createWorldRealtimeClient } from "./world-realtime.js?v=20260418f";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
@@ -2312,10 +2312,14 @@ function renderShareJoinRequests() {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-share-join-decision") === "approve";
+      const sent = state.realtimeClient?.decideShareJoin?.(anchorSessionId, requesterSessionId, approved) === true;
+      if (!sent) {
+        showToast("Realtime share is offline.");
+        return;
+      }
       state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) =>
         !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
       updateBrowserPanel();
-      state.realtimeClient?.decideShareJoin(anchorSessionId, requesterSessionId, approved);
     });
   }
 }
@@ -2348,7 +2352,11 @@ function renderVoiceJoinOffers() {
   for (const button of elements.voiceOfferStack.querySelectorAll("[data-voice-offer-decision]")) {
     button.addEventListener("click", () => {
       const accepted = button.getAttribute("data-voice-offer-decision") === "accept";
-      state.realtimeClient?.respondVoiceJoinOffer(offer.anchorSessionId, accepted);
+      const sent = state.realtimeClient?.respondVoiceJoinOffer?.(offer.anchorSessionId, accepted) === true;
+      if (!sent) {
+        showToast("Realtime share is offline.");
+        return;
+      }
       if (!accepted) {
         state.voiceJoinOffer = null;
         updateVoicePanel();
@@ -2383,10 +2391,14 @@ function renderVoiceJoinRequests() {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-voice-join-decision") === "approve";
+      const sent = state.realtimeClient?.decideVoiceJoin?.(anchorSessionId, requesterSessionId, approved) === true;
+      if (!sent) {
+        showToast("Realtime share is offline.");
+        return;
+      }
       state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
         !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
       renderVoiceJoinRequests();
-      state.realtimeClient?.decideVoiceJoin(anchorSessionId, requesterSessionId, approved);
     });
   }
 }
@@ -2459,7 +2471,7 @@ async function handleNearbyShareLaunch({ defaultLaunch, getLocalSession, getSele
     shareKind,
     approved: false,
   };
-  const requested = state.realtimeClient.requestShareJoin(joinTarget.sessionId, shareKind);
+  const requested = state.realtimeClient?.requestShareJoin?.(joinTarget.sessionId, shareKind) === true;
   if (!requested) {
     state.pendingShareJoin = null;
     updateBrowserPanel();

@@ -26,7 +26,7 @@ import {
   syncDisplayShareExpandButton,
   syncWorldPanelTabLabels,
   updateChatBubbleGhosts,
-} from "./world-interactions.js";
+} from "./world-interactions.js?v=20260418f";
 import {
   SHARED_BROWSER_SHARE_LAYOUT,
   SHARED_CHAT_BUBBLE_LAYOUT,
@@ -4447,15 +4447,19 @@ function renderPrivateShareJoinRequests() {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-private-share-join-decision") === "approve";
-      state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) =>
-        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
-      updatePrivateBrowserPanel();
-      sendWorldSocketMessage({
+      const sent = sendWorldSocketMessage({
         type: "share:join-decision",
         anchorSessionId,
         requesterSessionId,
         approved,
       });
+      if (!sent) {
+        setPrivateBrowserStatus("Private world share is offline right now.");
+        return;
+      }
+      state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) =>
+        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+      updatePrivateBrowserPanel();
     });
   }
 }
@@ -4487,11 +4491,15 @@ function renderPrivateVoiceJoinOffers() {
   for (const button of elements.panelVoiceOfferStack.querySelectorAll("[data-private-voice-offer-decision]")) {
     button.addEventListener("click", () => {
       const accepted = button.getAttribute("data-private-voice-offer-decision") === "accept";
-      sendWorldSocketMessage({
+      const sent = sendWorldSocketMessage({
         type: "voice:join-offer-response",
         anchorSessionId: offer.anchorSessionId,
         accepted,
       });
+      if (!sent) {
+        setPrivateBrowserStatus("Private world share is offline right now.");
+        return;
+      }
       if (!accepted) {
         state.voiceJoinOffer = null;
         updatePrivateVoicePanel();
@@ -4526,15 +4534,19 @@ function renderPrivateVoiceJoinRequests() {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-private-voice-join-decision") === "approve";
-      state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
-        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
-      renderPrivateVoiceJoinRequests();
-      sendWorldSocketMessage({
+      const sent = sendWorldSocketMessage({
         type: "voice:join-decision",
         anchorSessionId,
         requesterSessionId,
         approved,
       });
+      if (!sent) {
+        setPrivateBrowserStatus("Private world share is offline right now.");
+        return;
+      }
+      state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
+        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+      renderPrivateVoiceJoinRequests();
     });
   }
 }
@@ -4608,6 +4620,7 @@ async function handlePrivateNearbyShareLaunch({ defaultLaunch, getLocalSession, 
   if (!sent) {
     state.pendingShareJoin = null;
     updatePrivateBrowserPanel();
+    setPrivateBrowserStatus("Private world share is offline right now.");
     return true;
   }
   updatePrivateBrowserPanel();
@@ -4955,6 +4968,7 @@ async function startPrivatePersistentVoiceChat() {
       if (!sent) {
         clearPendingPrivateVoiceShare({ stopTracks: true });
         updatePrivateVoicePanel();
+        setPrivateBrowserStatus("Private world share is offline right now.");
         return false;
       }
       updatePrivateVoicePanel();
