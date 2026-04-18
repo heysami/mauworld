@@ -387,13 +387,29 @@ const inputState = {
   pitch: 0.66,
 };
 
+function getSessionStorageItem(key) {
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch (_error) {
+    return "";
+  }
+}
+
+function setSessionStorageItem(key, value) {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch (_error) {
+    // Ignore storage failures and fall back to the in-memory value.
+  }
+}
+
 function createViewerSessionId() {
-  const existing = window.localStorage.getItem("mauworldViewerSessionId");
+  const existing = getSessionStorageItem("mauworldViewerSessionId");
   if (existing) {
     return existing;
   }
   const next = `viewer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-  window.localStorage.setItem("mauworldViewerSessionId", next);
+  setSessionStorageItem("mauworldViewerSessionId", next);
   return next;
 }
 

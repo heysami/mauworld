@@ -42,6 +42,7 @@ const { mauworldApiUrl } = window.MauworldSocial;
 
 const AI_KEY_STORAGE_KEY = "mauworldPrivateWorldAiKey";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
+const PRIVATE_VIEWER_INSTANCE_KEY = "mauworldPrivateWorldViewerInstance";
 const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
 const TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY = "mauworldPrivateWorldToolPresetPanelCollapsed";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
@@ -931,6 +932,48 @@ function getGuestSessionId() {
   return next;
 }
 
+function getPrivateViewerInstanceId() {
+  const existing = window.sessionStorage.getItem(PRIVATE_VIEWER_INSTANCE_KEY);
+  if (existing) {
+    return existing;
+  }
+  const next = `viewer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  window.sessionStorage.setItem(PRIVATE_VIEWER_INSTANCE_KEY, next);
+  return next;
+}
+
+function parsePrivateViewerSessionId(viewerSessionId = "") {
+  const raw = String(viewerSessionId ?? "").trim();
+  if (!raw) {
+    return {
+      kind: "",
+      subjectId: "",
+      instanceId: "",
+    };
+  }
+  if (raw.startsWith("profile:")) {
+    const [, profileId = "", instanceId = ""] = raw.split(":");
+    return {
+      kind: "profile",
+      subjectId: String(profileId ?? "").trim(),
+      instanceId: String(instanceId ?? "").trim(),
+    };
+  }
+  if (raw.startsWith("guest:")) {
+    const [, guestSessionId = "", instanceId = ""] = raw.split(":");
+    return {
+      kind: "guest",
+      subjectId: String(guestSessionId ?? "").trim(),
+      instanceId: String(instanceId ?? "").trim(),
+    };
+  }
+  return {
+    kind: raw.startsWith("guest_") ? "guest" : "",
+    subjectId: raw,
+    instanceId: "",
+  };
+}
+
 function setStatus(text) {
   if (elements.authStatus) {
     elements.authStatus.textContent = text || "";
@@ -1011,10 +1054,11 @@ async function copyTextToClipboard(text) {
 }
 
 function getPrivateViewerSessionId() {
+  const instanceId = getPrivateViewerInstanceId();
   if (state.profile?.id) {
-    return `profile:${state.profile.id}`;
+    return `profile:${state.profile.id}:${instanceId}`;
   }
-  return getGuestSessionId();
+  return `guest:${getGuestSessionId()}:${instanceId}`;
 }
 
 function getPrivateDisplayName() {
@@ -1762,16 +1806,16 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
   };
   const participants = state.selectedWorld?.active_instance?.participants ?? [];
   const getParticipantByViewerSessionId = (viewerSessionId = "") => {
-    const sessionId = String(viewerSessionId ?? "").trim();
-    if (!sessionId) {
+    const identity = parsePrivateViewerSessionId(viewerSessionId);
+    if (!identity.subjectId) {
       return null;
     }
-    if (sessionId.startsWith("profile:")) {
-      const profileId = sessionId.slice("profile:".length).trim();
+    if (identity.kind === "profile") {
+      const profileId = identity.subjectId;
       return participants.find((entry) => String(entry.profile?.id ?? entry.profile_id ?? "").trim() === profileId) ?? null;
     }
     return participants.find(
-      (entry) => String(entry.guest_session_id ?? entry.guestSessionId ?? "").trim() === sessionId,
+      (entry) => String(entry.guest_session_id ?? entry.guestSessionId ?? "").trim() === identity.subjectId,
     ) ?? null;
   };
   if (normalized === getPrivateViewerSessionId()) {
