@@ -41,6 +41,7 @@ const ALLOWED_TEXTURE_PRESETS = new Set(["none", "grass", "wood", "wall", "floor
 const ALLOWED_PRIMITIVE_SHAPES = new Set(["box", "sphere", "capsule", "cylinder", "cone", "plane"]);
 const ALLOWED_PLAYER_CAMERA_MODES = new Set(["first_person", "third_person", "top_down"]);
 const ALLOWED_PLAYER_BODY_MODES = new Set(["rigid", "ghost"]);
+const ALLOWED_FACING_MODES = new Set(["fixed", "billboard", "upright_billboard"]);
 const ALLOWED_SCENE_SKYBOXES = new Set(["blank", "day", "sunset", "night"]);
 const ALLOWED_SCENE_AMBIENT_LIGHT_MODES = new Set(["even", "dim"]);
 const ALLOWED_RULE_TRIGGERS = new Set([
@@ -117,6 +118,17 @@ function sanitizeColor(input, fallback = "#b8bec8") {
 function sanitizeTexturePreset(input, fallback = "none") {
   const value = String(input ?? "").trim().toLowerCase();
   return ALLOWED_TEXTURE_PRESETS.has(value) ? value : fallback;
+}
+
+function sanitizeFacingMode(input, fallback = "fixed") {
+  const value = String(input ?? fallback).trim().toLowerCase();
+  if (value === "billboard") {
+    return "billboard";
+  }
+  if (value === "upright_billboard" || value === "billboard_y") {
+    return "upright_billboard";
+  }
+  return ALLOWED_FACING_MODES.has(value) ? value : fallback;
 }
 
 function sanitizeVector3(input = {}, fallback = { x: 0, y: 0, z: 0 }, limits = { min: -4096, max: 4096 }) {
@@ -290,6 +302,20 @@ function sanitizePrimitiveEntry(entry = {}, index = 0) {
   };
 }
 
+function sanitizePanelEntry(entry = {}, index = 0) {
+  return {
+    id: ensureEntityId("panel", entry.id || `panel-${index + 1}`),
+    label: String(entry.label ?? `Panel ${index + 1}`).trim().slice(0, 80) || `Panel ${index + 1}`,
+    position: sanitizeVector3(entry.position, { x: 0, y: 2, z: 0 }),
+    rotation: sanitizeEuler3(entry.rotation),
+    scale: sanitizeScale3(entry.scale, { x: 4, y: 2.25, z: 0.1 }),
+    material: sanitizeMaterial(entry.material, "#f4f7fb"),
+    facing_mode: sanitizeFacingMode(entry.facing_mode ?? entry.facingMode, "fixed"),
+    invisible: entry.invisible === true,
+    group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
+  };
+}
+
 function sanitizeModelEntry(entry = {}, index = 0) {
   return {
     id: ensureEntityId("model", entry.id || `model-${index + 1}`),
@@ -336,6 +362,7 @@ function sanitizeScreenEntry(entry = {}, index = 0) {
     rotation: sanitizeEuler3(entry.rotation),
     scale: sanitizeScale3(entry.scale, { x: 4, y: 2.25, z: 0.2 }),
     material: sanitizeMaterial(entry.material, "#ffffff"),
+    facing_mode: sanitizeFacingMode(entry.facing_mode ?? entry.facingMode, "fixed"),
     html,
     html_hash: crypto.createHash("sha256").update(html).digest("hex"),
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
@@ -366,6 +393,7 @@ function sanitizeText3Entry(entry = {}, index = 0) {
     rotation: sanitizeEuler3(entry.rotation),
     scale: Number(clampNumber(entry.scale, 1, 0.2, 8).toFixed(4)),
     material: sanitizeMaterial(entry.material, "#ffffff"),
+    facing_mode: sanitizeFacingMode(entry.facing_mode ?? entry.facingMode, "fixed"),
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
   };
 }
@@ -712,6 +740,11 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}) {
     id: registerId(entry.id),
     group_id: instance.id,
   }));
+  const panels = doc.panels.map((entry) => applyCommonOverrides({
+    ...transformPrefabEntity(entry, instance),
+    id: registerId(entry.id),
+    group_id: instance.id,
+  }));
   const models = doc.models.map((entry) => ({
     ...applyCommonOverrides({
       ...transformPrefabEntity(entry, instance),
@@ -769,6 +802,7 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}) {
   return {
     voxels,
     primitives,
+    panels,
     models,
     screens,
     players,
@@ -790,6 +824,7 @@ function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = []) {
     settings: cloneJson(doc.settings),
     voxels: cloneJson(doc.voxels),
     primitives: cloneJson(doc.primitives),
+    panels: cloneJson(doc.panels),
     models: cloneJson(doc.models),
     screens: cloneJson(doc.screens),
     players: cloneJson(doc.players),
@@ -813,6 +848,7 @@ function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = []) {
     const instanced = instantiatePrefabSceneDoc(prefab.prefab_doc, instance);
     flattened.voxels.push(...instanced.voxels);
     flattened.primitives.push(...instanced.primitives);
+    flattened.panels.push(...instanced.panels);
     flattened.models.push(...instanced.models);
     flattened.screens.push(...instanced.screens);
     flattened.players.push(...instanced.players);
@@ -835,6 +871,7 @@ export function createDefaultSceneDoc() {
     },
     voxels: [],
     primitives: [],
+    panels: [],
     models: [],
     screens: [],
     players: [],
@@ -867,6 +904,11 @@ export function normalizeSceneDoc(input = {}) {
   });
   const primitives = (Array.isArray(source.primitives) ? source.primitives : []).slice(0, 512).map((entry, index) => {
     const value = sanitizePrimitiveEntry(entry, index);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
+  const panels = (Array.isArray(source.panels) ? source.panels : []).slice(0, 256).map((entry, index) => {
+    const value = sanitizePanelEntry(entry, index);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
@@ -950,6 +992,7 @@ export function normalizeSceneDoc(input = {}) {
     },
     voxels,
     primitives,
+    panels,
     models,
     screens,
     players,
@@ -972,6 +1015,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       [
         ...resolvedDoc.voxels,
         ...resolvedDoc.primitives,
+        ...resolvedDoc.panels,
         ...resolvedDoc.models,
         ...resolvedDoc.screens,
         ...resolvedDoc.players,
@@ -991,6 +1035,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
     stats: {
       solid_voxel_count: solidVoxelCount,
       primitive_count: resolvedDoc.primitives.length,
+      panel_count: resolvedDoc.panels.length,
       model_count: resolvedDoc.models.length,
       dynamic_object_count: dynamicObjectCount,
       screen_count: resolvedDoc.screens.length,
@@ -1076,12 +1121,21 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         bounds: entry.bounds,
         material: entry.material,
       })),
+      panels: resolvedDoc.panels.map((entry) => ({
+        id: entry.id,
+        position: entry.position,
+        rotation: entry.rotation,
+        scale: entry.scale,
+        material: entry.material,
+        facing_mode: entry.facing_mode,
+      })),
       screens: resolvedDoc.screens.map((entry) => ({
         id: entry.id,
         position: entry.position,
         scale: entry.scale,
         html: entry.html,
         html_hash: entry.html_hash,
+        facing_mode: entry.facing_mode,
       })),
       players: resolvedDoc.players.map((entry) => ({
         id: entry.id,
@@ -1119,6 +1173,7 @@ export function collectPrivateWorldAssetIds(sceneDoc = {}) {
   for (const collection of [
     normalized.voxels,
     normalized.primitives,
+    normalized.panels,
     normalized.models,
     normalized.screens,
     normalized.texts,

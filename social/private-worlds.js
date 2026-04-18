@@ -132,10 +132,11 @@ const PRIVATE_LOCAL_PREVIEW_SESSION_ID = "__private_local_preview__";
 const BUILD_PLACEMENT_SHORTCUTS = new Map([
   ["1", "voxel"],
   ["2", "primitive"],
-  ["3", "player"],
-  ["4", "screen"],
-  ["5", "text"],
-  ["6", "trigger"],
+  ["3", "panel"],
+  ["4", "player"],
+  ["5", "screen"],
+  ["6", "text"],
+  ["7", "trigger"],
 ]);
 const BUILD_TRANSFORM_SHORTCUTS = new Map([
   ["q", "move"],
@@ -149,13 +150,18 @@ const BUILD_TRANSFORM_AXIS_SHORTCUTS = new Map([
   ["2", "z"],
   ["3", "y"],
 ]);
-const TOOL_PRESET_KINDS = ["voxel", "primitive", "player", "screen", "text", "trigger"];
+const TOOL_PRESET_KINDS = ["voxel", "primitive", "panel", "player", "screen", "text", "trigger"];
 const AI_PROVIDER_SESSION_KEYS = {
   reasoning: AI_REASONING_STORAGE_KEY,
   image: AI_IMAGE_STORAGE_KEY,
   model: AI_MODEL_STORAGE_KEY,
 };
-const MATERIALIZABLE_ENTITY_KINDS = new Set(["voxel", "primitive", "model", "screen", "text"]);
+const MATERIALIZABLE_ENTITY_KINDS = new Set(["voxel", "primitive", "panel", "model", "screen", "text"]);
+const FACING_MODE_OPTIONS = [
+  { value: "fixed", label: "Fixed" },
+  { value: "billboard", label: "Billboard" },
+  { value: "upright_billboard", label: "Upright billboard" },
+];
 
 const gltfLoader = new GLTFLoader();
 const previewTextureAssetCache = new Map();
@@ -237,6 +243,36 @@ const TOOL_PRESET_BUILTINS = {
         physics: { gravity_scale: 1, restitution: 0.2, friction: 0.8, mass: 1 },
         particle_effect: "",
         trail_effect: "",
+      },
+    },
+  ],
+  panel: [
+    {
+      id: "poster-panel",
+      name: "Poster Panel",
+      builtin: true,
+      entry: {
+        label: "Panel",
+        scale: { x: 4, y: 2.25, z: 0.1 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#f4f7fb", texture_preset: "none", emissive_intensity: 0 },
+        facing_mode: "fixed",
+        invisible: false,
+        group_id: "",
+      },
+    },
+    {
+      id: "wide-panel",
+      name: "Wide Panel",
+      builtin: true,
+      entry: {
+        label: "Wide Panel",
+        scale: { x: 6, y: 2.5, z: 0.1 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#f4f7fb", texture_preset: "none", emissive_intensity: 0 },
+        facing_mode: "fixed",
+        invisible: false,
+        group_id: "",
       },
     },
   ],
@@ -609,6 +645,7 @@ const elements = {
   worldSectionNav: document.querySelector("[aria-label=\"World tools\"]"),
   addVoxel: document.querySelector("[data-add-voxel]"),
   addPrimitive: document.querySelector("[data-add-primitive]"),
+  addPanel: document.querySelector("[data-add-panel]"),
   addPlayer: document.querySelector("[data-add-player]"),
   addScreen: document.querySelector("[data-add-screen]"),
   addText: document.querySelector("[data-add-text]"),
@@ -675,6 +712,17 @@ function createBaseToolPresetEntry(kind) {
       group_id: "",
     };
   }
+  if (kind === "panel") {
+    return {
+      label: "Panel",
+      scale: { x: 4, y: 2.25, z: 0.1 },
+      rotation: { x: 0, y: 0, z: 0 },
+      material: { color: "#f4f7fb", texture_preset: "none", emissive_intensity: 0 },
+      facing_mode: "fixed",
+      invisible: false,
+      group_id: "",
+    };
+  }
   if (kind === "player") {
     return {
       label: "Player",
@@ -690,6 +738,7 @@ function createBaseToolPresetEntry(kind) {
       scale: { x: 4, y: 2.25, z: 0.2 },
       rotation: { x: 0, y: 0, z: 0 },
       material: { color: "#ffffff", texture_preset: "none" },
+      facing_mode: "fixed",
       html: "<div style=\"padding:24px\"><h1>Hello world</h1><p>Static world screen.</p></div>",
     };
   }
@@ -699,6 +748,7 @@ function createBaseToolPresetEntry(kind) {
       rotation: { x: 0, y: 0, z: 0 },
       scale: 1,
       material: { color: "#ffffff", texture_preset: "none" },
+      facing_mode: "fixed",
       group_id: "",
     };
   }
@@ -735,7 +785,7 @@ function extractToolPresetEntry(kind, entry = {}) {
   const normalized = deepMerge(createBaseToolPresetEntry(kind), deepClone(entry));
   delete normalized.id;
   delete normalized.position;
-  if (kind !== "voxel" && kind !== "player" && kind !== "screen" && kind !== "text" && kind !== "trigger" && kind !== "primitive") {
+  if (kind !== "voxel" && kind !== "panel" && kind !== "player" && kind !== "screen" && kind !== "text" && kind !== "trigger" && kind !== "primitive") {
     return normalized;
   }
   return normalized;
@@ -1330,7 +1380,7 @@ function updateShellState() {
   for (const mode of ["move", "scale", "rotate", "multi", "delete"]) {
     document.body.classList.toggle(`is-build-${mode}`, buildTransformMode === mode);
   }
-  for (const kind of ["voxel", "primitive", "player", "screen", "text", "trigger"]) {
+  for (const kind of ["voxel", "primitive", "panel", "player", "screen", "text", "trigger"]) {
     const button = getPlacementToolButton(kind);
     if (!button) {
       continue;
@@ -2943,6 +2993,7 @@ function describeVector3(input = {}) {
 const ENTITY_COLLECTIONS = [
   { kind: "voxel", key: "voxels", label: "Voxels", singular: "Voxel" },
   { kind: "primitive", key: "primitives", label: "Objects", singular: "Object" },
+  { kind: "panel", key: "panels", label: "Panels", singular: "Panel" },
   { kind: "model", key: "models", label: "Models", singular: "Model" },
   { kind: "player", key: "players", label: "Players", singular: "Player" },
   { kind: "screen", key: "screens", label: "Screens", singular: "Screen" },
@@ -2974,6 +3025,7 @@ const SCRIPT_FUNCTION_HEADER_RE = /^#\s*function(?:\[([a-z0-9_-]+)\])?:\s*(.*)$/
 function isPlacementToolKind(kind) {
   return kind === "voxel"
     || kind === "primitive"
+    || kind === "panel"
     || kind === "player"
     || kind === "screen"
     || kind === "text"
@@ -3039,6 +3091,9 @@ function buildToolPresetDisplayName(kind) {
   }
   if (kind === "primitive") {
     return "Object";
+  }
+  if (kind === "panel") {
+    return "Panel";
   }
   if (kind === "player") {
     return "Player";
@@ -3147,6 +3202,9 @@ function getPlacementToolButton(kind) {
   if (kind === "primitive") {
     return elements.addPrimitive;
   }
+  if (kind === "panel") {
+    return elements.addPanel;
+  }
   if (kind === "player") {
     return elements.addPlayer;
   }
@@ -3236,6 +3294,9 @@ function buildPlacementToolLabel(kind) {
   }
   if (kind === "primitive") {
     return `${shortcut ? `Object (${shortcut})` : "Object"}${suffix}`;
+  }
+  if (kind === "panel") {
+    return `${shortcut ? `Panel (${shortcut})` : "Panel"}${suffix}`;
   }
   if (kind === "player") {
     return `${shortcut ? `Player (${shortcut})` : "Player"}${suffix}`;
@@ -3536,6 +3597,9 @@ function getDisplayNameForEntity(kind, entry = {}, index = 0) {
   if (kind === "primitive") {
     return entry.label || entry.id || `Object ${index + 1}`;
   }
+  if (kind === "panel") {
+    return entry.label || entry.id || `Panel ${index + 1}`;
+  }
   if (kind === "model") {
     return entry.label || entry.id || `Model ${index + 1}`;
   }
@@ -3587,6 +3651,9 @@ function buildCompactEntityTitle(kind, entry = {}, index = 0) {
   }
   if (kind === "screen") {
     return `Screen ${index + 1}`;
+  }
+  if (kind === "panel") {
+    return `Panel ${index + 1}`;
   }
   if (kind === "primitive") {
     return `Object ${index + 1}`;
@@ -6893,6 +6960,7 @@ function buildEmptySceneDoc() {
     },
     voxels: [],
     primitives: [],
+    panels: [],
     models: [],
     screens: [],
     players: [],
@@ -7360,6 +7428,8 @@ function buildSceneLibrarySummary(scene = {}) {
   const entityCount =
     Number(stats.solid_voxel_count ?? 0)
     + Number(stats.primitive_count ?? 0)
+    + Number(stats.panel_count ?? 0)
+    + Number(stats.model_count ?? 0)
     + Number(stats.screen_count ?? 0)
     + Number(stats.player_count ?? 0)
     + Number(stats.text_count ?? 0)
@@ -7498,6 +7568,42 @@ function buildOptions(options = [], selectedValue = "") {
   `).join("");
 }
 
+function buildLabeledOptions(options = [], selectedValue = "") {
+  return options.map((option) => `
+    <option value="${htmlEscape(option.value)}" ${String(selectedValue) === String(option.value) ? "selected" : ""}>${htmlEscape(option.label || option.value || "none")}</option>
+  `).join("");
+}
+
+function normalizeFacingMode(value = "") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "billboard") {
+    return "billboard";
+  }
+  if (normalized === "upright_billboard" || normalized === "billboard_y") {
+    return "upright_billboard";
+  }
+  return "fixed";
+}
+
+function getFacingModeLabel(value = "") {
+  const normalized = normalizeFacingMode(value);
+  return FACING_MODE_OPTIONS.find((entry) => entry.value === normalized)?.label || "Fixed";
+}
+
+function buildFacingModeOptions(selectedValue = "fixed") {
+  return buildLabeledOptions(FACING_MODE_OPTIONS, normalizeFacingMode(selectedValue));
+}
+
+function buildFacingModeEditor(entry = {}, note = "Fixed uses the saved rotation. Billboard turns toward each viewer, and upright billboard only turns around Y.") {
+  return `
+    <label>
+      <span>Facing</span>
+      <select data-entity-field="facing_mode" data-value-type="text">${buildFacingModeOptions(entry.facing_mode || "fixed")}</select>
+    </label>
+    <p class="pw-inspector-note">${htmlEscape(note)}</p>
+  `;
+}
+
 function buildEntitySummary(kind, entry = {}) {
   if (kind === "particle") {
     return `${entry.target_id || "no target"} · ${describeVector3(entry.position)} · ${entry.enabled === false ? "off" : "on"}`;
@@ -7510,11 +7616,16 @@ function buildEntitySummary(kind, entry = {}) {
     const textureLabel = entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none");
     return `${describeVector3(entry.position)} · ${textureLabel} · ${Number(bounds.x ?? 1).toFixed(1)} x ${Number(bounds.y ?? 1).toFixed(1)} x ${Number(bounds.z ?? 1).toFixed(1)}`;
   }
+  if (kind === "panel") {
+    const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.1 };
+    const textureLabel = entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none");
+    return `${describeVector3(entry.position)} · ${getFacingModeLabel(entry.facing_mode)} · ${textureLabel} · ${Number(scale.x ?? 4).toFixed(1)} x ${Number(scale.y ?? 2.25).toFixed(1)}`;
+  }
   if (kind === "screen") {
-    return `${describeVector3(entry.position)} · ${String(entry.html || "").slice(0, 18) || "empty html"}`;
+    return `${describeVector3(entry.position)} · ${getFacingModeLabel(entry.facing_mode)} · ${String(entry.html || "").slice(0, 18) || "empty html"}`;
   }
   if (kind === "text") {
-    return `${describeVector3(entry.position)} · scale ${Number(entry.scale ?? 1).toFixed(1)}`;
+    return `${describeVector3(entry.position)} · ${getFacingModeLabel(entry.facing_mode)} · scale ${Number(entry.scale ?? 1).toFixed(1)}`;
   }
   const details = [];
   if (entry.material?.texture_preset) {
@@ -8090,15 +8201,31 @@ function buildToolPresetSummary(kind, entry = {}) {
     }
     return [entry.shape || "box", entry.rigid_mode || "rigid", `${roundPrivateValue(scale.x ?? 1, 1)} x ${roundPrivateValue(scale.y ?? 1, 1)} x ${roundPrivateValue(scale.z ?? 1, 1)}`, ...extra].join(" · ");
   }
+  if (kind === "panel") {
+    const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.1 };
+    const extra = [];
+    if ((Number(entry.material?.emissive_intensity) || 0) > 0) {
+      extra.push(`light ${roundPrivateValue(entry.material.emissive_intensity, 1)}`);
+    }
+    if (entry.invisible === true) {
+      extra.push("hidden in play");
+    }
+    return [
+      getFacingModeLabel(entry.facing_mode),
+      `${roundPrivateValue(scale.x ?? 4, 1)} x ${roundPrivateValue(scale.y ?? 2.25, 1)}`,
+      entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"),
+      ...extra,
+    ].join(" · ");
+  }
   if (kind === "player") {
     return `${entry.camera_mode || "third_person"} · ${entry.body_mode || "rigid"} · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
   }
   if (kind === "screen") {
     const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.2 };
-    return `${roundPrivateValue(scale.x ?? 4, 1)} x ${roundPrivateValue(scale.y ?? 2.25, 1)} screen · ${stripHtmlTags(entry.html || "").slice(0, 40) || "custom html"}`;
+    return `${getFacingModeLabel(entry.facing_mode)} · ${roundPrivateValue(scale.x ?? 4, 1)} x ${roundPrivateValue(scale.y ?? 2.25, 1)} screen · ${stripHtmlTags(entry.html || "").slice(0, 40) || "custom html"}`;
   }
   if (kind === "text") {
-    return `"${String(entry.value || "").slice(0, 36) || "Text"}" · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
+    return `${getFacingModeLabel(entry.facing_mode)} · "${String(entry.value || "").slice(0, 36) || "Text"}" · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
   }
   if (kind === "trigger") {
     const scale = entry.scale ?? { x: 2, y: 2, z: 2 };
@@ -8208,6 +8335,7 @@ function getPrefabEntryCounts(prefabDoc = {}) {
   return {
     voxel: (prefabDoc.voxels ?? []).length,
     primitive: (prefabDoc.primitives ?? []).length,
+    panel: (prefabDoc.panels ?? []).length,
     model: (prefabDoc.models ?? []).length,
     screen: (prefabDoc.screens ?? []).length,
     player: (prefabDoc.players ?? []).length,
@@ -8225,6 +8353,9 @@ function getPrefabTypeSummary(counts = {}) {
   }
   if (counts.primitive) {
     labels.push("objects");
+  }
+  if (counts.panel) {
+    labels.push("panels");
   }
   if (counts.model) {
     labels.push("models");
@@ -8261,6 +8392,13 @@ function getEntityApproxRenderSize(kind, entry = {}) {
       return new THREE.Vector3(scale.x || 1, Math.max(0.1, (scale.y || 1) * 0.1), scale.z || 1);
     }
     return new THREE.Vector3(scale.x || 1, scale.y || 1, scale.z || 1);
+  }
+  if (kind === "panel") {
+    return new THREE.Vector3(
+      Math.max(0.2, Number(entry.scale?.x ?? 4) || 4),
+      Math.max(0.2, Number(entry.scale?.y ?? 2.25) || 2.25),
+      Math.max(0.05, Number(entry.scale?.z ?? 0.1) || 0.1),
+    );
   }
   if (kind === "model") {
     const scale = entry.scale ?? { x: 1, y: 1, z: 1 };
@@ -8340,6 +8478,7 @@ function getPrefabDocBounds(prefabDoc = {}, visitedIds = new Set()) {
   const collections = [
     ["voxel", prefabDoc.voxels ?? []],
     ["primitive", prefabDoc.primitives ?? []],
+    ["panel", prefabDoc.panels ?? []],
     ["model", prefabDoc.models ?? []],
     ["screen", prefabDoc.screens ?? []],
     ["player", prefabDoc.players ?? []],
@@ -8558,6 +8697,34 @@ function renderEntityInspector(sceneDoc, selected = null) {
     return;
   }
 
+  if (kind === "panel") {
+    elements.entityEditor.innerHTML = `
+      <p class="pw-inspector-note">Panels are flat material surfaces for posters, decals, signs, and framed art. Use Facing when it should stay in world space or turn toward each viewer.</p>
+      <label>
+        <span>Label</span>
+        <input type="text" data-entity-field="label" data-value-type="text" value="${htmlEscape(entry.label || "")}" />
+      </label>
+      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
+      ${buildFacingModeEditor(entry)}
+      <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
+      <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
+      <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale || { x: 4, y: 2.25, z: 0.1 })}</div>
+      <div class="pw-inspector-grid pw-inspector-grid--2">
+        <div>
+          <label>
+            <span>Group</span>
+            <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" placeholder="optional group name" />
+          </label>
+        </div>
+        <div class="pw-checkbox">
+          <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible === true ? "checked" : ""} />
+          <span>Invisible in play</span>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
   if (kind === "model") {
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Custom model assets use their stored GLB for rendering and an approximate box collider from the saved bounds.</p>
@@ -8669,6 +8836,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Static HTML and CSS only. No custom JavaScript or remote resources. Width and height changes now reflow the HTML to match the new viewport instead of just stretching it.</p>
       ${buildMaterialEditor(entry.material, { textureTargetKind: kind, textureTargetId: entry.id })}
+      ${buildFacingModeEditor(entry)}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
@@ -8691,6 +8859,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
   if (kind === "text") {
     elements.entityEditor.innerHTML = `
       ${buildMaterialEditor(entry.material, { textureTargetKind: kind, textureTargetId: entry.id })}
+      ${buildFacingModeEditor(entry)}
       <label>
         <span>Text</span>
         <input type="text" data-entity-field="value" data-value-type="text" value="${htmlEscape(entry.value || "")}" />
@@ -9480,6 +9649,7 @@ function renderSelectedWorld() {
   for (const button of [
     elements.addVoxel,
     elements.addPrimitive,
+    elements.addPanel,
     elements.addPlayer,
     elements.addScreen,
     elements.addText,
@@ -9684,6 +9854,9 @@ function clampPlacementCenterY(value, size, world = state.selectedWorld) {
 function getToolPlacementDimensions(kind) {
   if (kind === "voxel" || kind === "primitive") {
     return { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT };
+  }
+  if (kind === "panel") {
+    return { x: 4, y: 2.25, z: 0.1 };
   }
   if (kind === "player") {
     return {
@@ -9934,6 +10107,7 @@ function getEntityRefFromHit(hit) {
 function canMoveEntityKind(kind) {
   return kind === "voxel"
     || kind === "primitive"
+    || kind === "panel"
     || kind === "player"
     || kind === "screen"
     || kind === "text"
@@ -9944,6 +10118,7 @@ function canMoveEntityKind(kind) {
 
 function canScaleEntityKind(kind) {
   return kind === "primitive"
+    || kind === "panel"
     || kind === "screen"
     || kind === "text"
     || kind === "trigger"
@@ -9953,6 +10128,7 @@ function canScaleEntityKind(kind) {
 
 function canRotateEntityKind(kind) {
   return kind === "primitive"
+    || kind === "panel"
     || kind === "player"
     || kind === "screen"
     || kind === "text"
@@ -10823,6 +10999,9 @@ function buildPlacementGhost(preview, placement) {
       y: PRIVATE_PLAYER_DEFAULT_SCALE,
       z: PRIVATE_PLAYER_DEFAULT_SCALE,
     };
+  } else if (placement.kind === "panel") {
+    geometry = new THREE.PlaneGeometry(1, 1);
+    scale = { x: dimensions.x, y: dimensions.y, z: 1 };
   } else if (placement.kind === "screen") {
     geometry = new THREE.BoxGeometry(1, 1, 0.1);
   } else if (placement.kind === "prefab") {
@@ -10869,6 +11048,8 @@ function buildPlacementGhost(preview, placement) {
     new THREE.EdgesGeometry(
       placement.kind === "text"
         ? new THREE.BoxGeometry(4.5, 1.2, 0.12)
+        : placement.kind === "panel"
+          ? new THREE.BoxGeometry(dimensions.x, dimensions.y, Math.max(0.05, dimensions.z))
         : placement.kind === "screen"
           ? new THREE.BoxGeometry(dimensions.x, dimensions.y, Math.max(0.1, dimensions.z))
           : placement.kind === "prefab"
@@ -11443,6 +11624,9 @@ function getBuildScaleStep(kind) {
 }
 
 function getBuildScaleMinimum(kind, axis = "x") {
+  if (kind === "panel" && axis === "z") {
+    return 0.05;
+  }
   if (kind === "screen" && axis === "z") {
     return 0.05;
   }
@@ -11987,6 +12171,25 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
           id: nextId,
           position: deepClone(placement.position),
           ...deepClone(presetEntry),
+        });
+      },
+    };
+  }
+  if (kind === "panel") {
+    const nextId = `panel_${(sceneDoc.panels?.length ?? 0) + 1}`;
+    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
+    return {
+      kind,
+      id: nextId,
+      push() {
+        sceneDoc.panels = sceneDoc.panels || [];
+        sceneDoc.panels.push({
+          id: nextId,
+          position: deepClone(placement.position),
+          ...deepClone(presetEntry),
+          label: presetEntry.label && !/^panel(?:\s+\d+)?$/i.test(String(presetEntry.label).trim())
+            ? presetEntry.label
+            : `Panel ${(sceneDoc.panels?.length ?? 0) + 1}`,
         });
       },
     };
@@ -12672,6 +12875,7 @@ function ensurePreview() {
     entityPickables: [],
     transformPickables: [],
     entityMeshes: new Map(),
+    billboards: [],
     effectSystems: [],
     animatedChatBubbleGhosts: [],
     trailPuffs: [],
@@ -12723,6 +12927,7 @@ function ensurePreview() {
     updatePrivateChatBubbleGhosts(state.preview, deltaSeconds, state.preview.camera);
     updatePreviewEffects(state.preview, timestamp / 1000);
     updateViewerTrailPuffs(state.preview, deltaSeconds);
+    updatePrivateWorldBillboards(state.preview);
     state.preview.renderer.render(state.preview.scene, state.preview.camera);
     window.requestAnimationFrame(render);
   };
@@ -12930,6 +13135,7 @@ function clearPreviewRoot() {
   preview.entityPickables = [];
   preview.transformPickables = [];
   preview.entityMeshes.clear();
+  preview.billboards = [];
   disposePreviewEffects(preview);
   for (const child of [...preview.root.children]) {
     preview.root.remove(child);
@@ -13193,6 +13399,58 @@ function addTextBillboard(preview, value, position, options = {}) {
   mesh.scale.setScalar(Math.max(0.2, Number(options.scale ?? 1) || 1));
   (options.parent ?? preview.root).add(mesh);
   return mesh;
+}
+
+function buildPanelPreviewMaterial(material = {}, scale = { x: 4, y: 2.25 }, options = {}) {
+  const built = makeMaterial(
+    material,
+    {
+      x: Math.max(0.2, Number(scale?.x ?? 4) || 4),
+      y: Math.max(0.2, Number(scale?.y ?? 2.25) || 2.25),
+      z: Math.max(0.2, Number(scale?.y ?? 2.25) || 2.25),
+    },
+    options,
+  );
+  built.side = THREE.DoubleSide;
+  built.needsUpdate = true;
+  return built;
+}
+
+function registerPreviewBillboard(preview, object, facingMode = "fixed") {
+  if (!preview || !object) {
+    return;
+  }
+  const mode = normalizeFacingMode(facingMode);
+  if (mode === "fixed") {
+    return;
+  }
+  preview.billboards = Array.isArray(preview.billboards) ? preview.billboards : [];
+  preview.billboards.push({ object, mode });
+}
+
+function updatePrivateWorldBillboards(preview) {
+  if (!preview?.camera || !Array.isArray(preview.billboards) || !preview.billboards.length) {
+    return;
+  }
+  const cameraWorld = preview.camera.position.clone();
+  for (const entry of preview.billboards) {
+    const object = entry?.object;
+    if (!object?.parent) {
+      continue;
+    }
+    if (entry.mode === "billboard") {
+      object.lookAt(cameraWorld);
+      continue;
+    }
+    const localTarget = cameraWorld.clone();
+    object.parent.worldToLocal(localTarget);
+    const dx = localTarget.x - object.position.x;
+    const dz = localTarget.z - object.position.z;
+    if (Math.abs(dx) < 0.0001 && Math.abs(dz) < 0.0001) {
+      continue;
+    }
+    object.rotation.set(0, Math.atan2(dx, dz), 0);
+  }
 }
 
 function createParticleSystem(preview, anchorId, effectName, color, particleId = anchorId, options = {}) {
@@ -13743,6 +14001,25 @@ function updatePreviewFromSelection() {
       }
     }
 
+    for (const [index, panel] of (prefabDoc.panels ?? []).entries()) {
+      renderedAny = true;
+      const panelScale = panel.scale ?? { x: 4, y: 2.25, z: 0.1 };
+      const mesh = addPrefabMesh(
+        parent,
+        new THREE.PlaneGeometry(1, 1),
+        buildPanelPreviewMaterial(getMergedMaterial(panel.material), panelScale, { selected }),
+        panel.position || { x: 0, y: 2, z: 0 },
+        panel.rotation || { x: 0, y: 0, z: 0 },
+        { x: panelScale.x || 4, y: panelScale.y || 2.25, z: 1 },
+        metadata ?? { id: panel.id || `prefab_panel_${index}`, kind: "panel" },
+      );
+      applyRenderableVisibility(mesh, {
+        invisibleInPlay: panel.invisible === true,
+      });
+      attachEmissionLight(mesh, getMergedMaterial(panel.material), panelScale);
+      registerPreviewBillboard(preview, mesh, panel.facing_mode);
+    }
+
     for (const [index, model] of (prefabDoc.models ?? []).entries()) {
       renderedAny = true;
       const modelGroup = new THREE.Group();
@@ -13842,6 +14119,7 @@ function updatePreviewFromSelection() {
       }).catch(() => {
         // ignore transient screen texture failures
       });
+      registerPreviewBillboard(preview, mesh, screen.facing_mode);
     }
 
     for (const [index, text] of (prefabDoc.texts ?? []).entries()) {
@@ -13853,6 +14131,7 @@ function updatePreviewFromSelection() {
         selected,
       });
       attachPrefabPickable(mesh, metadata ?? { id: text.id || `prefab_text_${index}`, kind: "text" });
+      registerPreviewBillboard(preview, mesh, text.facing_mode);
     }
 
     for (const [index, trigger] of (prefabDoc.trigger_zones ?? prefabDoc.triggerZones ?? []).entries()) {
@@ -13976,6 +14255,29 @@ function updatePreviewFromSelection() {
     }
     return mesh;
   };
+  const renderPanelMesh = (panelEntry = {}, options = {}) => {
+    const panelScale = panelEntry.scale ?? { x: 4, y: 2.25, z: 0.1 };
+    const resolvedMaterial = panelEntry.material ?? { color: "#f4f7fb", texture_preset: "none", emissive_intensity: 0 };
+    const mesh = addMesh(
+      new THREE.PlaneGeometry(1, 1),
+      buildPanelPreviewMaterial(resolvedMaterial, panelScale, {
+        selected: options.selected === true,
+      }),
+      panelEntry.position || { x: 0, y: 2, z: 0 },
+      panelEntry.rotation || { x: 0, y: 0, z: 0 },
+      { x: panelScale.x || 4, y: panelScale.y || 2.25, z: 1 },
+      options.id ? { id: options.id, kind: "panel" } : null,
+    );
+    applyRenderableVisibility(mesh, {
+      invisibleInPlay: panelEntry.invisible === true,
+      runtimeVisible: options.runtimeVisible,
+    });
+    attachEmissionLight(mesh, resolvedMaterial, panelScale, {
+      runtimeVisible: options.runtimeVisible,
+    });
+    registerPreviewBillboard(preview, mesh, panelEntry.facing_mode);
+    return mesh;
+  };
   const renderModelMesh = (modelEntry = {}, options = {}) => {
     const metadata = options.id ? { id: options.id, kind: "model" } : null;
     const group = new THREE.Group();
@@ -14048,6 +14350,7 @@ function updatePreviewFromSelection() {
   const hasPlacedGeometry = Boolean(
     (sceneDoc.voxels?.length ?? 0)
     || (sceneDoc.primitives?.length ?? 0)
+    || (sceneDoc.panels?.length ?? 0)
     || (sceneDoc.models?.length ?? 0)
     || (sceneDoc.screens?.length ?? 0)
     || (sceneDoc.texts?.length ?? 0)
@@ -14093,6 +14396,13 @@ function updatePreviewFromSelection() {
         : (runtimePrimitive?.material ?? primitive.material),
       runtimeVisible: runtimePrimitive?.visible !== false,
       selected: isSelected("primitive", primitive.id),
+    });
+  }
+
+  for (const panel of sceneDoc.panels ?? []) {
+    renderPanelMesh(panel, {
+      id: panel.id,
+      selected: isSelected("panel", panel.id),
     });
   }
 
@@ -14249,6 +14559,7 @@ function updatePreviewFromSelection() {
     }).catch(() => {
       // ignore transient screen texture failures
     });
+    registerPreviewBillboard(preview, mesh, screen.facing_mode);
   }
 
   for (const runtimePrimitive of runtimeTransforms.dynamicObjects) {
@@ -14291,6 +14602,7 @@ function updatePreviewFromSelection() {
     mesh.userData.privateWorldEntityKind = "text";
     preview.entityPickables.push(mesh);
     preview.entityMeshes.set(text.id, mesh);
+    registerPreviewBillboard(preview, mesh, text.facing_mode);
   }
 
   for (const trigger of sceneDoc.trigger_zones ?? sceneDoc.triggerZones ?? []) {
@@ -15442,6 +15754,7 @@ function buildPrefabDocFromSelection(selection) {
       },
       voxels: key === "voxels" ? [localEntry] : [],
       primitives: key === "primitives" ? [localEntry] : [],
+      panels: key === "panels" ? [localEntry] : [],
       models: key === "models" ? [localEntry] : [],
       screens: key === "screens" ? [localEntry] : [],
       players: key === "players" ? [localEntry] : [],
@@ -15614,6 +15927,10 @@ function attachQuickAddButtons() {
 
   elements.addPrimitive.addEventListener("click", () => {
     setPlacementTool("primitive");
+  });
+
+  elements.addPanel.addEventListener("click", () => {
+    setPlacementTool("panel");
   });
 
   elements.addPlayer.addEventListener("click", () => {

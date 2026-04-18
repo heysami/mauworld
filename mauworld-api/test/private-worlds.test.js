@@ -26,6 +26,7 @@ test("default private world scenes start empty until the builder places entities
   const scene = createDefaultSceneDoc();
   assert.deepEqual(scene.voxels, []);
   assert.deepEqual(scene.primitives, []);
+  assert.deepEqual(scene.panels, []);
   assert.deepEqual(scene.players, []);
 });
 
@@ -151,6 +152,48 @@ test("normalizeSceneDoc preserves texture asset ids on materials", () => {
 
   assert.equal(scene.primitives[0].material.texture_asset_id, "asset_texture_123");
   assert.equal(scene.primitives[0].material.texture_preset, "none");
+});
+
+test("normalizeSceneDoc keeps panels and facing modes for flat authored surfaces", () => {
+  const scene = normalizeSceneDoc({
+    panels: [
+      {
+        id: "poster one",
+        facing_mode: "billboard",
+        material: {
+          texture_asset_id: "asset_texture_panel",
+        },
+      },
+    ],
+    screens: [
+      {
+        id: "screen a",
+        facingMode: "billboard_y",
+        html: "<div>hello</div>",
+      },
+    ],
+    texts: [
+      {
+        id: "text a",
+        value: "Look here",
+        facing_mode: "upright_billboard",
+      },
+    ],
+  });
+
+  assert.equal(scene.panels[0].id, "panel_poster-one");
+  assert.equal(scene.panels[0].facing_mode, "billboard");
+  assert.equal(scene.panels[0].material.texture_asset_id, "asset_texture_panel");
+  assert.equal(scene.screens[0].facing_mode, "upright_billboard");
+  assert.equal(scene.texts[0].facing_mode, "upright_billboard");
+});
+
+test("compileSceneDoc reports panel counts for scene summaries", () => {
+  const compiled = compileSceneDoc({
+    panels: [{ id: "panel-one", label: "Poster" }],
+  });
+
+  assert.equal(compiled.stats.panel_count, 1);
 });
 
 test("normalizeSceneDoc remaps raw entity references onto normalized ids", () => {
