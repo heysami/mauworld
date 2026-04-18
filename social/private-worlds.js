@@ -12972,7 +12972,8 @@ async function ensurePlayRuntimeStarted(options = {}) {
   }
   const runtime = state.runtimeSnapshot ?? state.selectedWorld.active_instance?.runtime ?? null;
   const activeSceneId = String(runtime?.active_scene_id || state.selectedWorld.active_instance?.active_scene_id || "").trim();
-  const targetSceneId = String(options.sceneId ?? activeSceneId || getDefaultScene(state.selectedWorld)?.id || state.selectedSceneId || "").trim();
+  const targetSceneSeed = options.sceneId ?? activeSceneId ?? getDefaultScene(state.selectedWorld)?.id ?? state.selectedSceneId ?? "";
+  const targetSceneId = String(targetSceneSeed).trim();
   const sceneAlreadyRunning = runtime?.scene_started === true && (!targetSceneId || activeSceneId === targetSceneId);
   if (sceneAlreadyRunning) {
     return false;
