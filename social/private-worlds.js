@@ -6193,6 +6193,8 @@ function renderSelectedWorld() {
   state.joined = Boolean(localParticipant);
   state.joinedAsGuest = !state.session && localParticipant?.join_role === "guest";
   const joinedAsPlayer = localParticipant?.join_role === "player";
+  const showEnterControl = hasWorld && Boolean(state.session) && !localParticipant;
+  const showLeaveControl = hasWorld && Boolean(localParticipant) && !joinedAsPlayer;
   const showReadyControl = hasWorld && state.session && joinedAsPlayer;
   const showReleaseControl = hasWorld && state.session && joinedAsPlayer;
   const showResetControl = hasWorld && canEdit;
@@ -6240,10 +6242,12 @@ function renderSelectedWorld() {
     elements.panelExport.disabled = !hasWorld || !state.session;
   }
   if (elements.panelEnter) {
-    elements.panelEnter.disabled = !hasWorld || Boolean(localParticipant);
+    elements.panelEnter.hidden = !showEnterControl;
+    elements.panelEnter.disabled = !showEnterControl;
   }
   if (elements.panelLeave) {
-    elements.panelLeave.disabled = !hasWorld || !localParticipant;
+    elements.panelLeave.hidden = !showLeaveControl;
+    elements.panelLeave.disabled = !showLeaveControl;
   }
   if (elements.panelReady) {
     elements.panelReady.hidden = !showReadyControl;
@@ -6259,13 +6263,18 @@ function renderSelectedWorld() {
     elements.panelReset.disabled = !showResetControl;
   }
   if (elements.panelRuntimeActions) {
-    elements.panelRuntimeActions.hidden = !showReadyControl && !showReleaseControl && !showResetControl;
+    elements.panelRuntimeActions.hidden =
+      !showEnterControl
+      && !showLeaveControl
+      && !showReadyControl
+      && !showReleaseControl
+      && !showResetControl;
   }
   if (elements.panelRuntimeNote) {
     elements.panelRuntimeNote.textContent = !hasWorld
       ? "Open or create a world to enter."
       : !localParticipant
-        ? "Enter the world to walk around. Click a player capsule when you want to inhabit it."
+        ? "Opening a world should place you inside it. If you ever leave, Enter World brings you back."
         : joinedAsPlayer
           ? `${readyLabel} changes this player's ready state. Leave Player returns you to viewer mode.${showResetControl ? " Reset Scene is editor-only." : ""}`
           : `Click a player capsule to inhabit it. ${showResetControl ? "Reset Scene returns everyone to the world's default scene." : "Ready Up appears after you take a player."}`;
@@ -9919,6 +9928,13 @@ async function openWorld(worldId, creatorUsername, includeContent = true, option
     syncRuntimeFromWorld(payload.world);
     renderSelectedWorld();
     connectWorldSocket();
+    const shouldAutoJoin =
+      options.autoJoin !== false
+      && Boolean(state.session)
+      && !getLocalParticipant(payload.world);
+    if (shouldAutoJoin) {
+      await joinWorld({ switchPanelTab: false });
+    }
   } finally {
     if (showEntryLoading) {
       setEntryLoading(false);
@@ -10178,6 +10194,16 @@ async function joinWorld(options = {}) {
   if (!state.selectedWorld) {
     return;
   }
+  const localParticipant = getLocalParticipant(state.selectedWorld);
+  if (localParticipant) {
+    state.joined = true;
+    state.joinedAsGuest = !state.session && localParticipant.join_role === "guest";
+    renderSelectedWorld();
+    if (options.switchPanelTab !== false) {
+      setPrivatePanelTab("chat");
+    }
+    return;
+  }
   if (!state.session) {
     setLauncherTab("access");
     setLauncherOpen(true);
@@ -10263,7 +10289,9 @@ async function leaveWorld() {
   state.viewerSuppressClickAt = 0;
   state.buildSuppressedClick = null;
   pushEvent("world:left", state.selectedWorld.name);
-  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true, {
+    autoJoin: false,
+  });
 }
 
 async function setReadyState(nextReady, options = {}) {
