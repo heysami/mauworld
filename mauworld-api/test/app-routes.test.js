@@ -140,11 +140,48 @@ function createStubStore() {
     },
     async exportPrivateWorld() {
       return {
-        package: {
-          format: "mauworld.private-world.v1",
-          world: {
-            name: "Lantern Hall",
-          },
+        archiveBuffer: Buffer.from("zip-bytes"),
+        filename: "mw_origin123.mauworld.zip",
+        contentType: "application/zip",
+      };
+    },
+    async listPrivateWorldAssets() {
+      return {
+        assets: [],
+      };
+    },
+    async getPrivateWorldAsset(_profile, payload) {
+      return {
+        asset: {
+          id: payload.assetId,
+          asset_type: "texture",
+          status: "ready",
+          files: [],
+        },
+      };
+    },
+    async createPrivateWorldAsset(_profile, payload) {
+      return {
+        asset: {
+          id: "asset_123",
+          ...payload,
+          files: [],
+        },
+      };
+    },
+    async updatePrivateWorldAsset(_profile, payload) {
+      return {
+        asset: {
+          id: payload.assetId,
+          ...payload,
+          files: payload.files ?? [],
+        },
+      };
+    },
+    async importPrivateWorldArchive() {
+      return {
+        world: {
+          world_id: "mw_imported123",
         },
       };
     },
@@ -464,7 +501,7 @@ test("public moltbook import endpoint swallows background job rejection", async 
   }
 });
 
-test("private world export endpoint returns a forkable package attachment", async () => {
+test("private world export endpoint returns a zip archive by default", async () => {
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
     store: createStubStore(),
@@ -476,8 +513,41 @@ test("private world export endpoint returns a forkable package attachment", asyn
     .set("Authorization", "Bearer token");
 
   assert.equal(response.status, 200);
+  assert.equal(response.text, "zip-bytes");
+  assert.equal(response.headers["content-type"], "application/zip");
+  assert.match(String(response.headers["content-disposition"] || ""), /mw_origin123\.mauworld\.zip/i);
+});
+
+test("private world export endpoint still exposes JSON package mode for fork flows", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: {
+      ...createStubStore(),
+      async exportPrivateWorld(_profile, payload) {
+        if (payload.format === "json") {
+          return {
+            package: {
+              format: "mauworld.private-world.v2",
+              world: {
+                name: "Lantern Hall",
+              },
+              assets: [],
+            },
+          };
+        }
+        return createStubStore().exportPrivateWorld();
+      },
+    },
+  });
+
+  const response = await request(app)
+    .get("/api/private/worlds/mw_origin123/export")
+    .query({ creatorUsername: "maker", format: "json" })
+    .set("Authorization", "Bearer token");
+
+  assert.equal(response.status, 200);
   assert.equal(response.body.ok, true);
-  assert.equal(response.body.package.format, "mauworld.private-world.v1");
+  assert.equal(response.body.package.format, "mauworld.private-world.v2");
   assert.match(String(response.headers["content-disposition"] || ""), /mw_origin123\.mauworld\.json/i);
 });
 
@@ -552,6 +622,43 @@ test("private world runtime input endpoint accepts player controls", async () =>
   assert.equal(response.body.ok, true);
   assert.equal(response.body.accepted, true);
   assert.equal(response.body.player_entity_id, "player_one");
+});
+
+test("texture asset generation requires session-passed provider keys", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/private/assets/ai/texture")
+    .set("Authorization", "Bearer token")
+    .send({
+      worldName: "Lantern Hall",
+      objective: "Create a mossy stone tile texture",
+      reasoningProvider: "openai",
+      imageProvider: "openai",
+    });
+
+  assert.equal(response.status, 400);
+  assert.match(String(response.body.error || ""), /Missing text reasoning API key/i);
+});
+
+test("archive import route accepts zip uploads", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/private/worlds/import-archive")
+    .set("Authorization", "Bearer token")
+    .set("Content-Type", "application/zip")
+    .send(Buffer.from("fake-zip"));
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.world.world_id, "mw_imported123");
 });
 
 test("private world occupy endpoint claims a player slot explicitly", async () => {

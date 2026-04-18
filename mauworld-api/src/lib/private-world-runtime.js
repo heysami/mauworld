@@ -80,10 +80,11 @@ function getBodyHalfExtents(body) {
       z: (PLAYER_DIMENSIONS.width / 2) * scale,
     };
   }
+  const bodyScale = body.collider_scale ?? body.scale;
   return {
-    x: Math.max(0.16, mustFinite(body.scale?.x, 1) / 2),
-    y: Math.max(0.16, mustFinite(body.scale?.y, 1) / 2),
-    z: Math.max(0.16, mustFinite(body.scale?.z, 1) / 2),
+    x: Math.max(0.16, mustFinite(bodyScale?.x, 1) / 2),
+    y: Math.max(0.16, mustFinite(bodyScale?.y, 1) / 2),
+    z: Math.max(0.16, mustFinite(bodyScale?.z, 1) / 2),
   };
 }
 
@@ -493,8 +494,10 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   const dynamicObjects = (sceneDoc.primitives ?? []).map((entry) => ({
     kind: "dynamic_object",
     id: entry.id,
+    entity_kind: "primitive",
     shape: entry.shape,
     scale: cloneJson(entry.scale),
+    collider_scale: cloneJson(entry.scale),
     position: vec3(entry.position, { x: 0, y: 1, z: 0 }),
     initialPosition: vec3(entry.position, { x: 0, y: 1, z: 0 }),
     rotation: vec3(entry.rotation),
@@ -505,7 +508,30 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     visibility: true,
     material_override: null,
     material: cloneJson(entry.material ?? {}),
-  }));
+  })).concat((sceneDoc.models ?? []).map((entry) => ({
+    kind: "dynamic_object",
+    entity_kind: "model",
+    id: entry.id,
+    asset_id: entry.asset_id ?? null,
+    shape: "box",
+    scale: cloneJson(entry.scale),
+    bounds: cloneJson(entry.bounds ?? { x: 1, y: 1, z: 1 }),
+    collider_scale: {
+      x: Math.max(0.1, mustFinite(entry.scale?.x, 1) * mustFinite(entry.bounds?.x, 1)),
+      y: Math.max(0.1, mustFinite(entry.scale?.y, 1) * mustFinite(entry.bounds?.y, 1)),
+      z: Math.max(0.1, mustFinite(entry.scale?.z, 1) * mustFinite(entry.bounds?.z, 1)),
+    },
+    position: vec3(entry.position, { x: 0, y: 1, z: 0 }),
+    initialPosition: vec3(entry.position, { x: 0, y: 1, z: 0 }),
+    rotation: vec3(entry.rotation),
+    velocity: { x: 0, y: 0, z: 0 },
+    angular_velocity: { x: 0, y: 0, z: 0 },
+    rigid_mode: entry.rigid_mode,
+    physics: cloneJson(entry.physics ?? {}),
+    visibility: true,
+    material_override: null,
+    material: cloneJson(entry.material ?? {}),
+  })));
   const triggerZones = (sceneDoc.trigger_zones ?? []).map((entry) => ({
     id: entry.id,
     label: entry.label,
@@ -924,8 +950,12 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     })),
     dynamic_objects: runtime.dynamicObjects.map((entry) => ({
       id: entry.id,
+      entity_kind: entry.entity_kind ?? "primitive",
+      asset_id: entry.asset_id ?? null,
       shape: entry.shape,
       scale: cloneJson(entry.scale),
+      bounds: cloneJson(entry.bounds ?? null),
+      collider_scale: cloneJson(entry.collider_scale ?? entry.scale),
       position: cloneJson(entry.position),
       rotation: cloneJson(entry.rotation),
       velocity: cloneJson(entry.velocity),

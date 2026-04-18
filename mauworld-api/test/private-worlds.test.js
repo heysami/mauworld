@@ -136,6 +136,23 @@ test("normalizeSceneDoc keeps emissive material settings and invisible play-stat
   assert.equal(scene.primitives[0].material.emissive_intensity, 2.4);
 });
 
+test("normalizeSceneDoc preserves texture asset ids on materials", () => {
+  const scene = normalizeSceneDoc({
+    primitives: [
+      {
+        id: "crate",
+        material: {
+          color: "#abcdef",
+          texture_asset_id: "asset_texture_123",
+        },
+      },
+    ],
+  });
+
+  assert.equal(scene.primitives[0].material.texture_asset_id, "asset_texture_123");
+  assert.equal(scene.primitives[0].material.texture_preset, "none");
+});
+
 test("normalizeSceneDoc remaps raw entity references onto normalized ids", () => {
   const scene = normalizeSceneDoc({
     primitives: [
@@ -223,6 +240,64 @@ test("export validation preserves prefab docs and locked lineage credits", () =>
   assert.equal(parsed.scenes[0].name, "Main Scene");
 });
 
+test("v2 export validation preserves asset manifests for archive/json package flows", () => {
+  const exported = buildPrivateWorldExportPackage({
+    format: "mauworld.private-world.v2",
+    world: {
+      world_id: "mw_origin123",
+      world_type: "room",
+      template_size: "medium",
+      width: 40,
+      length: 20,
+      height: 10,
+      name: "Lantern Hall",
+      about: "A social room",
+      max_viewers: 20,
+      max_players: 8,
+    },
+    creator: {
+      username: "maker",
+    },
+    prefabs: [],
+    scenes: [
+      {
+        name: "Main Scene",
+        scene_doc: {
+          models: [
+            {
+              id: "banner",
+              asset_id: "asset_model_123",
+            },
+          ],
+        },
+      },
+    ],
+    assets: [
+      {
+        source_asset_id: "asset_model_123",
+        asset_type: "model",
+        name: "Festival Banner",
+        bounds: { x: 2, y: 3, z: 1 },
+        files: [
+          {
+            role: "model_glb",
+            filename: "model.glb",
+            content_type: "model/gltf-binary",
+            path: "assets/asset_model_123/model_glb.glb",
+          },
+        ],
+      },
+    ],
+  });
+
+  const parsed = validatePrivateWorldExportPackage(exported);
+  assert.equal(parsed.format, "mauworld.private-world.v2");
+  assert.equal(parsed.assets.length, 1);
+  assert.equal(parsed.assets[0].asset_type, "model");
+  assert.deepEqual(parsed.assets[0].bounds, { x: 2, y: 3, z: 1 });
+  assert.equal(parsed.assets[0].files[0].path, "assets/asset_model_123/model_glb.glb");
+});
+
 test("compilePrivateWorldScriptDsl translates DSL triggers and actions", () => {
   const compiled = compilePrivateWorldScriptDsl(`
     zone_enter from trigger_start -> apply_force to crate force(0,4,0)
@@ -287,4 +362,32 @@ test("compileSceneDoc flattens linked prefab instances into runtime scene data",
   assert.equal(compiled.runtime.resolved_scene_doc.primitives[0].position.x, 6);
   assert.equal(compiled.runtime.resolved_scene_doc.screens[0].position.y, 3);
   assert.equal(compiled.stats.prefab_instance_count, 1);
+});
+
+test("compileSceneDoc keeps model entities with bounds metadata and runtime colliders", () => {
+  const compiled = compileSceneDoc({
+    models: [
+      {
+        id: "dragon statue",
+        asset_id: "asset_model_abc",
+        position: { x: 4, y: 2, z: -1 },
+        scale: { x: 2, y: 1.5, z: 2 },
+        bounds: { x: 1.2, y: 3, z: 1.1 },
+        rigid_mode: "ghost",
+      },
+    ],
+  }, {
+    world_type: "room",
+    width: 40,
+    length: 20,
+    height: 10,
+  });
+
+  assert.equal(compiled.stats.model_count, 1);
+  assert.equal(compiled.runtime.resolved_scene_doc.models.length, 1);
+  assert.equal(compiled.runtime.dynamic_objects.length, 1);
+  assert.equal(compiled.runtime.dynamic_objects[0].entity_kind, "model");
+  assert.equal(compiled.runtime.dynamic_objects[0].asset_id, "asset_model_abc");
+  assert.deepEqual(compiled.runtime.dynamic_objects[0].bounds, { x: 1.2, y: 3, z: 1.1 });
+  assert.deepEqual(compiled.runtime.dynamic_objects[0].collider_scale, { x: 2.4, y: 4.5, z: 2.2 });
 });

@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418ai" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260418assets" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -277,25 +277,65 @@
               </div>
             </div>
             <form class="pw-ai-form" data-ai-form>
-              <label>
-                <span>Provider</span>
-                <select name="provider">
-                  <option value="openai">OpenAI</option>
-                </select>
-              </label>
-              <label>
-                <span>Model</span>
-                <input type="text" name="model" value="gpt-5.4-mini" />
-              </label>
-              <label>
-                <span>API Key</span>
-                <input type="password" name="apiKey" autocomplete="off" placeholder="Stored only in this browser session" />
-                <small class="pw-ai-form__help">
-                  Get an OpenAI API key from
-                  <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">platform.openai.com/api-keys</a>.
-                  Stored only in this browser session.
-                </small>
-              </label>
+              <div class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Text reasoning</h3>
+                </div>
+                <label>
+                  <span>Provider</span>
+                  <select name="reasoningProvider">
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Model</span>
+                  <input type="text" name="reasoningModel" value="gpt-5.4-mini" />
+                </label>
+                <label>
+                  <span>API Key</span>
+                  <input type="password" name="reasoningApiKey" autocomplete="off" placeholder="Stored only in this browser session" />
+                </label>
+              </div>
+              <div class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Image texture</h3>
+                </div>
+                <label>
+                  <span>Provider</span>
+                  <select name="imageProvider">
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Model</span>
+                  <input type="text" name="imageModel" value="gpt-image-1" />
+                </label>
+                <label>
+                  <span>API Key</span>
+                  <input type="password" name="imageApiKey" autocomplete="off" placeholder="Stored only in this browser session" />
+                </label>
+              </div>
+              <div class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>3D model</h3>
+                </div>
+                <label>
+                  <span>Provider</span>
+                  <select name="modelProvider">
+                    <option value="meshy">Meshy</option>
+                    <option value="tripo">Tripo</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Model</span>
+                  <input type="text" name="modelModel" value="meshy-4" />
+                </label>
+                <label>
+                  <span>API Key</span>
+                  <input type="password" name="modelApiKey" autocomplete="off" placeholder="Stored only in this browser session" />
+                </label>
+                <small class="pw-ai-form__help">All provider keys stay in this browser session only.</small>
+              </div>
               <label>
                 <span>Starting brief</span>
                 <textarea name="objective" rows="4" placeholder="Optional starting brief for the brainstorm thread."></textarea>
@@ -533,7 +573,7 @@
             <form class="pw-import-form" data-import-form>
               <label class="pw-file">
                 <span>World package</span>
-                <input type="file" accept=".json,.mauworld.json,application/json" name="packageFile" required />
+                <input type="file" accept=".json,.mauworld.json,.zip,.mauworld.zip,application/json,application/zip" name="packageFile" required />
               </label>
               <button type="submit">Import Package</button>
             </form>
@@ -668,6 +708,7 @@
         <div class="world-panel__tabs pw-drawer-tabs" role="tablist" aria-label="Build library sections">
           <button type="button" class="world-panel__tab is-active" data-scene-drawer-tab="scenes" role="tab" aria-selected="true">Scenes</button>
           <button type="button" class="world-panel__tab" data-scene-drawer-tab="items" role="tab" aria-selected="false">Items</button>
+          <button type="button" class="world-panel__tab" data-scene-drawer-tab="assets" role="tab" aria-selected="false">Assets</button>
           <button type="button" class="world-panel__tab" data-scene-drawer-tab="prefabs" role="tab" aria-selected="false">Prefabs</button>
           <button type="button" class="world-panel__tab" data-scene-drawer-tab="logic" role="tab" aria-selected="false">Logic</button>
         </div>
@@ -746,6 +787,7 @@
                     <option value="all">All items</option>
                     <option value="voxel">Voxels</option>
                     <option value="primitive">Objects</option>
+                    <option value="model">Models</option>
                     <option value="player">Players</option>
                     <option value="screen">Screens</option>
                     <option value="text">3D Text</option>
@@ -764,6 +806,41 @@
                   <h3>Scene items</h3>
                 </div>
                 <div class="pw-builder-list pw-builder-list--items" data-entity-sections></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="pw-drawer-view pw-drawer-view--assets" data-scene-drawer-view="assets" role="tabpanel" hidden>
+            <div class="pw-item-sidebar">
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Shared assets</h3>
+                  <div class="pw-inline-actions">
+                    <button type="button" class="is-muted" data-asset-generate-texture disabled>New texture</button>
+                    <button type="button" class="is-muted" data-asset-generate-model disabled>New model</button>
+                  </div>
+                </div>
+                <label class="pw-entity-search">
+                  <span>Find asset</span>
+                  <input type="search" data-asset-search placeholder="Search textures and models" />
+                </label>
+                <label class="pw-entity-filter">
+                  <span>Type</span>
+                  <select data-asset-type-filter>
+                    <option value="all">All assets</option>
+                    <option value="texture">Textures</option>
+                    <option value="model">Models</option>
+                  </select>
+                </label>
+                <p class="pw-entity-search__hint" data-asset-status>Shared across your private worlds.</p>
+              </section>
+            </div>
+            <div class="pw-item-list-stack">
+              <section class="pw-builder-panel">
+                <div class="pw-panel__header">
+                  <h3>Library</h3>
+                </div>
+                <div class="pw-prefab-list" data-asset-sections></div>
               </section>
             </div>
           </section>
@@ -853,6 +930,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/private-worlds.js?v=20260418ay"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260418assets"></script>
   </body>
 </html>

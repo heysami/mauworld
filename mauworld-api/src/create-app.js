@@ -1,7 +1,12 @@
 import express from "express";
 import { HttpError, asyncRoute, installCors, installErrorHandler, jsonOk, requireArray, requireString } from "./lib/http.js";
 import { createBrowserMediaToken } from "./lib/livekit-media.js";
-import { brainstormPrivateWorldAiArtifact, generatePrivateWorldAiArtifact } from "./lib/private-world-ai.js";
+import {
+  brainstormPrivateWorldAiArtifact,
+  generatePrivateWorldAiArtifact,
+  generatePrivateWorldModelAsset,
+  generatePrivateWorldTextureAsset,
+} from "./lib/private-world-ai.js";
 
 function extractBearerToken(req) {
   const header = req.headers.authorization || "";
@@ -486,7 +491,14 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     const payload = await store.exportPrivateWorld(profile, {
       worldId: requireString(req.params.worldId, "worldId"),
       creatorUsername: requireString(req.query.creatorUsername, "creatorUsername"),
+      format: req.query.format,
     });
+    if (payload.archiveBuffer) {
+      res.setHeader("Content-Type", payload.contentType || "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${payload.filename || `${req.params.worldId}.mauworld.zip`}"`);
+      res.status(200).send(payload.archiveBuffer);
+      return;
+    }
     const filename = `${req.params.worldId}.mauworld.json`;
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.status(200).json({
@@ -501,6 +513,37 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       package: req.body?.package ?? req.body,
     });
     jsonOk(res, payload, 201);
+  }));
+
+  app.post(
+    "/api/private/worlds/import-archive",
+    express.raw({ type: "*/*", limit: "50mb" }),
+    asyncRoute(async (req, res) => {
+      const { profile } = await requireUser(req, store);
+      const payload = await store.importPrivateWorldArchive(profile, {
+        archiveBuffer: req.body,
+      });
+      jsonOk(res, payload, 201);
+    }),
+  );
+
+  app.get("/api/private/assets", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.listPrivateWorldAssets(profile, {
+      q: req.query.q,
+      assetType: req.query.assetType,
+      status: req.query.status,
+      limit: req.query.limit,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/private/assets/:assetId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.getPrivateWorldAsset(profile, {
+      assetId: requireString(req.params.assetId, "assetId"),
+    });
+    jsonOk(res, payload);
   }));
 
   app.post("/api/private/worlds/:worldId/join", asyncRoute(async (req, res) => {
@@ -681,6 +724,144 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       viewportSummary: req.body?.viewportSummary,
     });
     jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/assets/ai/brainstorm", asyncRoute(async (req, res) => {
+    await requireUser(req, store);
+    const payload = await brainstormPrivateWorldAiArtifact({
+      artifactType: req.body?.artifactType,
+      provider: req.body?.provider ?? "openai",
+      model: req.body?.model,
+      apiKey: req.body?.apiKey,
+      worldName: req.body?.worldName,
+      worldAbout: req.body?.worldAbout,
+      objective: req.body?.objective,
+      sceneSummary: req.body?.sceneSummary,
+      messages: req.body?.messages,
+      targetLabel: req.body?.targetLabel,
+      currentArtifact: req.body?.currentArtifact,
+      viewportSummary: req.body?.viewportSummary,
+      entityContext: req.body?.entityContext,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/assets/ai/texture", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const pending = await store.createPrivateWorldAsset(profile, {
+      asset_type: "texture",
+      status: "processing",
+      name: req.body?.name ?? "Texture Asset",
+      provider: req.body?.imageProvider ?? "openai",
+      reasoning_provider: req.body?.reasoningProvider ?? "openai",
+      provider_model: req.body?.imageModel,
+      reasoning_model: req.body?.reasoningModel,
+      intended_use: req.body?.objective,
+      world_context_summary: req.body?.sceneSummary,
+      source_world_id: req.body?.worldId,
+      source_world_name: req.body?.worldName,
+      context: {
+        target_label: req.body?.targetLabel ?? null,
+      },
+    });
+    try {
+      const generated = await generatePrivateWorldTextureAsset({
+        artifactType: "texture",
+        reasoningProvider: req.body?.reasoningProvider ?? "openai",
+        reasoningModel: req.body?.reasoningModel,
+        reasoningApiKey: req.body?.reasoningApiKey,
+        imageProvider: req.body?.imageProvider ?? "openai",
+        imageModel: req.body?.imageModel,
+        imageApiKey: req.body?.imageApiKey,
+        worldName: req.body?.worldName,
+        worldAbout: req.body?.worldAbout,
+        objective: req.body?.objective,
+        sceneSummary: req.body?.sceneSummary,
+        messages: req.body?.messages,
+        targetLabel: req.body?.targetLabel,
+        currentArtifact: req.body?.currentArtifact,
+        entityContext: req.body?.entityContext,
+      });
+      const payload = await store.updatePrivateWorldAsset(profile, {
+        ...pending.asset,
+        ...generated,
+        assetId: pending.asset.id,
+        asset_type: "texture",
+        status: "ready",
+        source_world_id: req.body?.worldId,
+        source_world_name: req.body?.worldName,
+        files: generated.files,
+      });
+      jsonOk(res, payload, 201);
+    } catch (error) {
+      await store.updatePrivateWorldAsset(profile, {
+        ...pending.asset,
+        assetId: pending.asset.id,
+        asset_type: "texture",
+        status: "failed",
+        error_message: error.message,
+      });
+      throw error;
+    }
+  }));
+
+  app.post("/api/private/assets/ai/model", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const pending = await store.createPrivateWorldAsset(profile, {
+      asset_type: "model",
+      status: "processing",
+      name: req.body?.name ?? "Model Asset",
+      provider: req.body?.modelProvider ?? "meshy",
+      reasoning_provider: req.body?.reasoningProvider ?? "openai",
+      provider_model: req.body?.modelModel,
+      reasoning_model: req.body?.reasoningModel,
+      intended_use: req.body?.objective,
+      world_context_summary: req.body?.sceneSummary,
+      source_world_id: req.body?.worldId,
+      source_world_name: req.body?.worldName,
+      context: {
+        target_label: req.body?.targetLabel ?? null,
+      },
+    });
+    try {
+      const generated = await generatePrivateWorldModelAsset({
+        artifactType: "3d_model",
+        reasoningProvider: req.body?.reasoningProvider ?? "openai",
+        reasoningModel: req.body?.reasoningModel,
+        reasoningApiKey: req.body?.reasoningApiKey,
+        modelProvider: req.body?.modelProvider ?? "meshy",
+        modelModel: req.body?.modelModel,
+        modelApiKey: req.body?.modelApiKey,
+        worldName: req.body?.worldName,
+        worldAbout: req.body?.worldAbout,
+        objective: req.body?.objective,
+        sceneSummary: req.body?.sceneSummary,
+        messages: req.body?.messages,
+        targetLabel: req.body?.targetLabel,
+        currentArtifact: req.body?.currentArtifact,
+        entityContext: req.body?.entityContext,
+      });
+      const payload = await store.updatePrivateWorldAsset(profile, {
+        ...pending.asset,
+        ...generated,
+        assetId: pending.asset.id,
+        asset_type: "model",
+        status: "ready",
+        source_world_id: req.body?.worldId,
+        source_world_name: req.body?.worldName,
+        files: generated.files,
+      });
+      jsonOk(res, payload, 201);
+    } catch (error) {
+      await store.updatePrivateWorldAsset(profile, {
+        ...pending.asset,
+        assetId: pending.asset.id,
+        asset_type: "model",
+        status: "failed",
+        error_message: error.message,
+      });
+      throw error;
+    }
   }));
 
   installErrorHandler(app);

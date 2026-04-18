@@ -252,6 +252,7 @@ function sanitizeMaterial(input = {}, fallbackColor = "#c8d0d8") {
   return {
     color: sanitizeColor(input.color, fallbackColor),
     texture_preset: sanitizeTexturePreset(input.texture_preset ?? input.texturePreset, "none"),
+    texture_asset_id: String(input.texture_asset_id ?? input.textureAssetId ?? "").trim() || null,
     emissive_intensity: Number(clampNumber(input.emissive_intensity ?? input.emissiveIntensity, 0, 0, 8).toFixed(4)),
   };
 }
@@ -286,6 +287,25 @@ function sanitizePrimitiveEntry(entry = {}, index = 0) {
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
     particle_effect: String(entry.particle_effect ?? entry.particleEffect ?? "").trim() || null,
     trail_effect: String(entry.trail_effect ?? entry.trailEffect ?? "").trim() || null,
+  };
+}
+
+function sanitizeModelEntry(entry = {}, index = 0) {
+  return {
+    id: ensureEntityId("model", entry.id || `model-${index + 1}`),
+    asset_id: String(entry.asset_id ?? entry.assetId ?? entry.model_asset_id ?? entry.modelAssetId ?? "").trim() || null,
+    label: String(entry.label ?? `Model ${index + 1}`).trim().slice(0, 80) || `Model ${index + 1}`,
+    position: sanitizeVector3(entry.position, { x: 0, y: 1, z: 0 }),
+    rotation: sanitizeEuler3(entry.rotation),
+    scale: sanitizeScale3(entry.scale, { x: 1, y: 1, z: 1 }),
+    bounds: sanitizeScale3(entry.bounds ?? entry.model_bounds ?? entry.modelBounds, { x: 1, y: 1, z: 1 }),
+    material: sanitizeMaterial(entry.material, "#ffffff"),
+    physics: sanitizePhysics(entry.physics, { rigid: entry.rigid !== false }),
+    rigid_mode: String(entry.rigid_mode ?? entry.rigidMode ?? (entry.rigid === false ? "ghost" : "rigid")).trim().toLowerCase() === "ghost"
+      ? "ghost"
+      : "rigid",
+    invisible: entry.invisible === true,
+    group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
   };
 }
 
@@ -692,6 +712,14 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}) {
     id: registerId(entry.id),
     group_id: instance.id,
   }));
+  const models = doc.models.map((entry) => ({
+    ...applyCommonOverrides({
+      ...transformPrefabEntity(entry, instance),
+      id: registerId(entry.id),
+      group_id: instance.id,
+    }),
+    bounds: multiplyScale3(entry.bounds, instance.scale),
+  }));
   const screens = doc.screens.map((entry) => applyCommonOverrides({
     ...transformPrefabEntity(entry, instance),
     id: registerId(entry.id),
@@ -741,6 +769,7 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}) {
   return {
     voxels,
     primitives,
+    models,
     screens,
     players,
     texts,
@@ -761,6 +790,7 @@ function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = []) {
     settings: cloneJson(doc.settings),
     voxels: cloneJson(doc.voxels),
     primitives: cloneJson(doc.primitives),
+    models: cloneJson(doc.models),
     screens: cloneJson(doc.screens),
     players: cloneJson(doc.players),
     texts: cloneJson(doc.texts),
@@ -783,6 +813,7 @@ function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = []) {
     const instanced = instantiatePrefabSceneDoc(prefab.prefab_doc, instance);
     flattened.voxels.push(...instanced.voxels);
     flattened.primitives.push(...instanced.primitives);
+    flattened.models.push(...instanced.models);
     flattened.screens.push(...instanced.screens);
     flattened.players.push(...instanced.players);
     flattened.texts.push(...instanced.texts);
@@ -804,6 +835,7 @@ export function createDefaultSceneDoc() {
     },
     voxels: [],
     primitives: [],
+    models: [],
     screens: [],
     players: [],
     texts: [],
@@ -835,6 +867,11 @@ export function normalizeSceneDoc(input = {}) {
   });
   const primitives = (Array.isArray(source.primitives) ? source.primitives : []).slice(0, 512).map((entry, index) => {
     const value = sanitizePrimitiveEntry(entry, index);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
+  const models = (Array.isArray(source.models) ? source.models : []).slice(0, 256).map((entry, index) => {
+    const value = sanitizeModelEntry(entry, index);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
@@ -913,6 +950,7 @@ export function normalizeSceneDoc(input = {}) {
     },
     voxels,
     primitives,
+    models,
     screens,
     players,
     texts,
@@ -934,6 +972,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       [
         ...resolvedDoc.voxels,
         ...resolvedDoc.primitives,
+        ...resolvedDoc.models,
         ...resolvedDoc.screens,
         ...resolvedDoc.players,
         ...resolvedDoc.texts,
@@ -944,11 +983,15 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
   });
   resolvedDoc.rules = dsl.rules.length > 0 ? dsl.rules : resolvedDoc.rules;
   const solidVoxelCount = resolvedDoc.voxels.length;
-  const dynamicObjectCount = resolvedDoc.primitives.filter((entry) => entry.rigid_mode === "rigid").length;
+  const dynamicObjectCount = [
+    ...resolvedDoc.primitives,
+    ...resolvedDoc.models,
+  ].filter((entry) => entry.rigid_mode === "rigid").length;
   return {
     stats: {
       solid_voxel_count: solidVoxelCount,
       primitive_count: resolvedDoc.primitives.length,
+      model_count: resolvedDoc.models.length,
       dynamic_object_count: dynamicObjectCount,
       screen_count: resolvedDoc.screens.length,
       player_count: resolvedDoc.players.length,
@@ -983,14 +1026,33 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       })),
       dynamic_objects: resolvedDoc.primitives.map((entry) => ({
         id: entry.id,
+        entity_kind: "primitive",
         position: entry.position,
         rotation: entry.rotation,
+        shape: entry.shape,
+        scale: entry.scale,
+        collider_scale: entry.scale,
         velocity: { x: 0, y: 0, z: 0 },
         angular_velocity: { x: 0, y: 0, z: 0 },
         physics: entry.physics,
         rigid_mode: entry.rigid_mode,
         material: entry.material,
-      })),
+      })).concat(resolvedDoc.models.map((entry) => ({
+        id: entry.id,
+        entity_kind: "model",
+        asset_id: entry.asset_id,
+        position: entry.position,
+        rotation: entry.rotation,
+        shape: "box",
+        scale: entry.scale,
+        bounds: entry.bounds,
+        collider_scale: multiplyScale3(entry.scale, entry.bounds),
+        velocity: { x: 0, y: 0, z: 0 },
+        angular_velocity: { x: 0, y: 0, z: 0 },
+        physics: entry.physics,
+        rigid_mode: entry.rigid_mode,
+        material: entry.material,
+      }))),
       trigger_zones: resolvedDoc.trigger_zones,
       rules: resolvedDoc.rules,
       structured_rules: structuredRules,
@@ -1004,6 +1066,14 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         id: entry.id,
         position: entry.position,
         scale: entry.scale,
+        material: entry.material,
+      })),
+      models: resolvedDoc.models.map((entry) => ({
+        id: entry.id,
+        asset_id: entry.asset_id,
+        position: entry.position,
+        scale: entry.scale,
+        bounds: entry.bounds,
         material: entry.material,
       })),
       screens: resolvedDoc.screens.map((entry) => ({
@@ -1035,10 +1105,70 @@ export function computeMiniatureDimensions(world = {}) {
   };
 }
 
+function collectAssetIdsFromMaterial(material = {}, assetIds = new Set()) {
+  const textureAssetId = String(material?.texture_asset_id ?? "").trim();
+  if (textureAssetId) {
+    assetIds.add(textureAssetId);
+  }
+  return assetIds;
+}
+
+export function collectPrivateWorldAssetIds(sceneDoc = {}) {
+  const normalized = normalizeSceneDoc(sceneDoc);
+  const assetIds = new Set();
+  for (const collection of [
+    normalized.voxels,
+    normalized.primitives,
+    normalized.models,
+    normalized.screens,
+    normalized.texts,
+  ]) {
+    for (const entry of collection) {
+      collectAssetIdsFromMaterial(entry.material, assetIds);
+    }
+  }
+  for (const entry of normalized.models) {
+    if (entry.asset_id) {
+      assetIds.add(entry.asset_id);
+    }
+  }
+  return Array.from(assetIds);
+}
+
+function sanitizeAssetManifestEntry(entry = {}, index = 0) {
+  const assetType = String(entry.asset_type ?? entry.assetType ?? entry.type ?? "").trim().toLowerCase();
+  const sourceAssetId = String(entry.source_asset_id ?? entry.sourceAssetId ?? entry.id ?? "").trim() || null;
+  const files = Array.isArray(entry.files)
+    ? entry.files.map((fileEntry, fileIndex) => ({
+        role: String(fileEntry?.role ?? `file_${fileIndex + 1}`).trim().toLowerCase() || `file_${fileIndex + 1}`,
+        filename: String(fileEntry?.filename ?? `${assetType || "asset"}-${fileIndex + 1}`).trim() || `${assetType || "asset"}-${fileIndex + 1}`,
+        content_type: String(fileEntry?.content_type ?? fileEntry?.contentType ?? "application/octet-stream").trim() || "application/octet-stream",
+        path: String(fileEntry?.path ?? "").trim() || null,
+      }))
+    : [];
+  return {
+    source_asset_id: sourceAssetId,
+    asset_type: assetType === "model" ? "model" : "texture",
+    name: String(entry.name ?? `Asset ${index + 1}`).trim().slice(0, 120) || `Asset ${index + 1}`,
+    status: String(entry.status ?? "ready").trim().toLowerCase() || "ready",
+    provider: String(entry.provider ?? "").trim().toLowerCase() || null,
+    intended_use: String(entry.intended_use ?? entry.intendedUse ?? "").trim() || null,
+    world_context_summary: String(entry.world_context_summary ?? entry.worldContextSummary ?? "").trim() || null,
+    source_world_id: String(entry.source_world_id ?? entry.sourceWorldId ?? "").trim() || null,
+    bounds: sanitizeScale3(entry.bounds ?? entry.bounds_hint ?? entry.boundsHint, { x: 1, y: 1, z: 1 }),
+    spec: cloneJson(entry.spec ?? {}),
+    provider_metadata: cloneJson(entry.provider_metadata ?? entry.providerMetadata ?? {}),
+    context: cloneJson(entry.context ?? {}),
+    files,
+  };
+}
+
 export function buildPrivateWorldExportPackage(input = {}) {
   const exportedAt = nowIso();
-  return {
-    format: "mauworld.private-world.v1",
+  const hasAssets = Array.isArray(input.assets) && input.assets.length > 0;
+  const format = String(input.format ?? (hasAssets ? "mauworld.private-world.v2" : "mauworld.private-world.v1")).trim();
+  const payload = {
+    format,
     exported_at: exportedAt,
     credits: {
       origin_world_id: input.world.world_id,
@@ -1066,11 +1196,15 @@ export function buildPrivateWorldExportPackage(input = {}) {
     prefabs: cloneJson(input.prefabs ?? []),
     scenes: cloneJson(input.scenes ?? []),
   };
+  if (hasAssets || format === "mauworld.private-world.v2") {
+    payload.assets = cloneJson(input.assets ?? []);
+  }
+  return payload;
 }
 
 export function validatePrivateWorldExportPackage(input = {}) {
   const format = String(input.format ?? "").trim();
-  if (format !== "mauworld.private-world.v1") {
+  if (format !== "mauworld.private-world.v1" && format !== "mauworld.private-world.v2") {
     throw new HttpError(400, "Invalid Mauworld world package");
   }
   const world = input.world ?? {};
@@ -1098,6 +1232,9 @@ export function validatePrivateWorldExportPackage(input = {}) {
     name: sanitizeWorldText(entry.name ?? `Scene ${index + 1}`, "scene name", 80),
     scene_doc: normalizeSceneDoc(entry.scene_doc ?? entry.sceneDoc ?? entry),
   }));
+  const assets = format === "mauworld.private-world.v2" && Array.isArray(input.assets)
+    ? input.assets.slice(0, 1024).map((entry, index) => sanitizeAssetManifestEntry(entry, index))
+    : [];
   return {
     format,
     world: {
@@ -1120,5 +1257,6 @@ export function validatePrivateWorldExportPackage(input = {}) {
     },
     prefabs,
     scenes,
+    assets,
   };
 }

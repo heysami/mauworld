@@ -1845,6 +1845,15 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
   padding: 12px;
 }
 
+.pw-asset-thumb {
+  width: 100%;
+  aspect-ratio: 1.4;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--pw-line);
+  background: rgba(255, 255, 255, 0.7);
+}
+
 .pw-prefab-card__meta,
 .pw-prefab-card__actions {
   display: flex;

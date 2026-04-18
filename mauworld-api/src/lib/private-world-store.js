@@ -1,8 +1,11 @@
+import crypto from "node:crypto";
+import JSZip from "jszip";
 import { HttpError } from "./http.js";
 import {
   PRIVATE_WORLD_LIMITS,
   buildPrivateWorldExportPackage,
   buildPrivateWorldSearchText,
+  collectPrivateWorldAssetIds,
   compileSceneDoc,
   computeMiniatureDimensions,
   createDefaultSceneDoc,
@@ -59,6 +62,456 @@ function lower(value) {
 function asNumber(value, fallback = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function buildAssetSearchText(values = []) {
+  return values
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeFilename(filename = "asset.bin") {
+  const cleaned = String(filename ?? "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 96);
+  return cleaned || "asset.bin";
+}
+
+function inferExtensionFromContentType(contentType = "", fallback = "bin") {
+  const normalized = String(contentType ?? "").trim().toLowerCase();
+  const explicit = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/avif": "avif",
+    "image/svg+xml": "svg",
+    "model/gltf-binary": "glb",
+    "model/gltf+json": "gltf",
+    "application/octet-stream": fallback,
+    "application/json": "json",
+    "application/zip": "zip",
+  };
+  return explicit[normalized] ?? fallback;
+}
+
+function inferContentTypeFromFilename(filename = "") {
+  const lowerFilename = String(filename ?? "").trim().toLowerCase();
+  if (lowerFilename.endsWith(".png")) {
+    return "image/png";
+  }
+  if (lowerFilename.endsWith(".jpg") || lowerFilename.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (lowerFilename.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (lowerFilename.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (lowerFilename.endsWith(".glb")) {
+    return "model/gltf-binary";
+  }
+  if (lowerFilename.endsWith(".gltf")) {
+    return "model/gltf+json";
+  }
+  if (lowerFilename.endsWith(".json")) {
+    return "application/json";
+  }
+  return "application/octet-stream";
+}
+
+function buildAssetBounds(input = {}) {
+  return {
+    x: Math.max(0.1, asNumber(input.x, 1)),
+    y: Math.max(0.1, asNumber(input.y, 1)),
+    z: Math.max(0.1, asNumber(input.z, 1)),
+  };
+}
+
+function buildPrivateWorldAssetPayload(input = {}, profileId) {
+  const assetType = lower(input.asset_type ?? input.assetType) === "model" ? "model" : "texture";
+  const name = String(input.name ?? `${assetType === "model" ? "Model" : "Texture"} Asset`).trim().slice(0, 120)
+    || `${assetType === "model" ? "Model" : "Texture"} Asset`;
+  return {
+    owner_profile_id: profileId,
+    asset_type: assetType,
+    status: lower(input.status) === "failed" ? "failed" : lower(input.status) === "ready" ? "ready" : "processing",
+    name,
+    search_text: buildAssetSearchText([
+      name,
+      input.intended_use,
+      input.world_context_summary,
+      input.source_world_name,
+      input.provider,
+    ]),
+    provider: String(input.provider ?? "").trim().toLowerCase() || null,
+    reasoning_provider: String(input.reasoning_provider ?? input.reasoningProvider ?? "").trim().toLowerCase() || null,
+    provider_model: String(input.provider_model ?? input.providerModel ?? "").trim() || null,
+    reasoning_model: String(input.reasoning_model ?? input.reasoningModel ?? "").trim() || null,
+    intended_use: String(input.intended_use ?? input.intendedUse ?? "").trim() || null,
+    world_context_summary: String(input.world_context_summary ?? input.worldContextSummary ?? "").trim() || null,
+    source_world_id: String(input.source_world_id ?? input.sourceWorldId ?? "").trim() || null,
+    source_world_name: String(input.source_world_name ?? input.sourceWorldName ?? "").trim() || null,
+    context: cloneJson(input.context ?? {}),
+    spec: cloneJson(input.spec ?? {}),
+    provider_metadata: cloneJson(input.provider_metadata ?? input.providerMetadata ?? {}),
+    bounds: buildAssetBounds(input.bounds ?? {}),
+    error_message: String(input.error_message ?? input.errorMessage ?? "").trim() || null,
+    updated_at: nowIso(),
+  };
+}
+
+function serializePrivateWorldAssetFile(store, row) {
+  const storage = store.serviceClient.storage.from(row.bucket ?? store.config.mediaBucket);
+  const { data } = storage.getPublicUrl(row.object_path);
+  return {
+    id: row.id,
+    role: row.role,
+    bucket: row.bucket,
+    object_path: row.object_path,
+    filename: row.filename,
+    content_type: row.content_type,
+    size_bytes: row.size_bytes,
+    url: data?.publicUrl ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function serializePrivateWorldAsset(store, row, files = []) {
+  return {
+    id: row.id,
+    owner_profile_id: row.owner_profile_id,
+    asset_type: row.asset_type,
+    status: row.status,
+    name: row.name,
+    provider: row.provider,
+    reasoning_provider: row.reasoning_provider,
+    provider_model: row.provider_model,
+    reasoning_model: row.reasoning_model,
+    intended_use: row.intended_use,
+    world_context_summary: row.world_context_summary,
+    source_world_id: row.source_world_id,
+    source_world_name: row.source_world_name,
+    context: cloneJson(row.context),
+    spec: cloneJson(row.spec),
+    provider_metadata: cloneJson(row.provider_metadata),
+    bounds: buildAssetBounds(row.bounds ?? {}),
+    error_message: row.error_message ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    files: files.map((entry) => serializePrivateWorldAssetFile(store, entry)),
+  };
+}
+
+function mapAssetFilesByAssetId(rows = []) {
+  const grouped = new Map();
+  for (const row of rows) {
+    if (!grouped.has(row.asset_id)) {
+      grouped.set(row.asset_id, []);
+    }
+    grouped.get(row.asset_id).push(row);
+  }
+  return grouped;
+}
+
+function buildAssetStoragePath(profileId, assetId, role, filename) {
+  return `private-world-assets/${profileId}/${assetId}/${role}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${sanitizeFilename(filename)}`;
+}
+
+async function loadPrivateWorldAssetFiles(store, assetIds = []) {
+  const ids = dedupe(assetIds);
+  if (ids.length === 0) {
+    return [];
+  }
+  return await must(
+    store.serviceClient.from("private_world_asset_files").select("*").in("asset_id", ids),
+    "Could not load private world asset files",
+  );
+}
+
+async function loadPrivateWorldAssetsByIds(store, assetIds = []) {
+  const ids = dedupe(assetIds);
+  if (ids.length === 0) {
+    return [];
+  }
+  return await must(
+    store.serviceClient.from("private_world_assets").select("*").in("id", ids),
+    "Could not load private world assets",
+  );
+}
+
+async function persistPrivateWorldAssetFiles(store, assetRow, files = []) {
+  const normalizedFiles = Array.isArray(files) ? files : [];
+  if (normalizedFiles.length === 0) {
+    return [];
+  }
+  const storage = store.serviceClient.storage.from(store.config.mediaBucket);
+  const insertedRows = [];
+  for (const file of normalizedFiles) {
+    const role = String(file.role ?? "").trim().toLowerCase();
+    if (!role) {
+      continue;
+    }
+    const contentType = String(file.content_type ?? file.contentType ?? inferContentTypeFromFilename(file.filename)).trim() || "application/octet-stream";
+    const extension = inferExtensionFromContentType(contentType, sanitizeFilename(file.filename).split(".").pop() || "bin");
+    const filename = sanitizeFilename(file.filename || `${role}.${extension}`);
+    const buffer = Buffer.isBuffer(file.buffer)
+      ? file.buffer
+      : Buffer.from(String(file.base64 ?? ""), "base64");
+    const objectPath = buildAssetStoragePath(assetRow.owner_profile_id, assetRow.id, role, filename);
+    const { error } = await storage.upload(objectPath, buffer, {
+      contentType,
+      upsert: false,
+    });
+    if (error) {
+      throw new HttpError(500, "Could not upload private world asset file", error.message);
+    }
+    const inserted = await must(
+      store.serviceClient
+        .from("private_world_asset_files")
+        .insert({
+          asset_id: assetRow.id,
+          role,
+          bucket: store.config.mediaBucket,
+          object_path: objectPath,
+          filename,
+          content_type: contentType,
+          size_bytes: buffer.length,
+          file_meta: cloneJson(file.file_meta ?? file.fileMeta ?? {}),
+        })
+        .select("*")
+        .single(),
+      "Could not store private world asset file metadata",
+    );
+    insertedRows.push(inserted);
+  }
+  return insertedRows;
+}
+
+async function downloadPrivateWorldAssetFileBuffer(store, fileRow) {
+  const storage = store.serviceClient.storage.from(fileRow.bucket ?? store.config.mediaBucket);
+  const { data, error } = await storage.download(fileRow.object_path);
+  if (error || !data) {
+    throw new HttpError(500, "Could not download private world asset file", error?.message);
+  }
+  const arrayBuffer = await data.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+function rewriteSceneDocAssetIds(sceneDoc = {}, assetIdMap = new Map()) {
+  const doc = cloneJson(sceneDoc ?? {});
+  const rewriteMaterial = (material = null) => {
+    if (!material || typeof material !== "object") {
+      return material;
+    }
+    const textureAssetId = String(material.texture_asset_id ?? "").trim();
+    if (textureAssetId && assetIdMap.has(textureAssetId)) {
+      material.texture_asset_id = assetIdMap.get(textureAssetId);
+    }
+    return material;
+  };
+  for (const collectionKey of ["voxels", "primitives", "models", "screens", "texts"]) {
+    doc[collectionKey] = Array.isArray(doc[collectionKey]) ? doc[collectionKey] : [];
+    doc[collectionKey] = doc[collectionKey].map((entry) => ({
+      ...entry,
+      material: rewriteMaterial(cloneJson(entry.material ?? {})),
+    }));
+  }
+  doc.models = (doc.models ?? []).map((entry) => ({
+    ...entry,
+    asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,
+  }));
+  return doc;
+}
+
+function buildPackageAssetManifest(store, assetRows = [], fileMap = new Map(), { includeFilePaths = false } = {}) {
+  return assetRows.map((row) => {
+    const files = (fileMap.get(row.id) ?? []).map((fileRow) => {
+      const extension = sanitizeFilename(fileRow.filename).includes(".")
+        ? sanitizeFilename(fileRow.filename).split(".").pop()
+        : inferExtensionFromContentType(fileRow.content_type);
+      return {
+        role: fileRow.role,
+        filename: fileRow.filename,
+        content_type: fileRow.content_type,
+        path: includeFilePaths ? `assets/${row.id}/${fileRow.role}.${extension}` : null,
+      };
+    });
+    return {
+      source_asset_id: row.id,
+      asset_type: row.asset_type,
+      name: row.name,
+      status: row.status,
+      provider: row.provider,
+      intended_use: row.intended_use,
+      world_context_summary: row.world_context_summary,
+      source_world_id: row.source_world_id,
+      spec: cloneJson(row.spec),
+      provider_metadata: cloneJson(row.provider_metadata),
+      context: cloneJson(row.context),
+      bounds: buildAssetBounds(row.bounds ?? {}),
+      files,
+    };
+  });
+}
+
+async function loadReferencedPrivateWorldAssets(store, scenes = [], prefabs = []) {
+  const assetIds = dedupe([
+    ...scenes.flatMap((scene) => collectPrivateWorldAssetIds(scene.scene_doc ?? scene)),
+    ...prefabs.flatMap((prefab) => collectPrivateWorldAssetIds(prefab.prefab_doc ?? prefab)),
+  ]);
+  const assetRows = await loadPrivateWorldAssetsByIds(store, assetIds);
+  const fileRows = await loadPrivateWorldAssetFiles(store, assetRows.map((row) => row.id));
+  return {
+    assetRows,
+    fileRows,
+    fileMap: mapAssetFilesByAssetId(fileRows),
+  };
+}
+
+async function clonePrivateWorldAssetForProfile(store, profile, sourceAsset, sourceFiles = []) {
+  const createdAsset = await must(
+    store.serviceClient
+      .from("private_world_assets")
+      .insert(buildPrivateWorldAssetPayload({
+        ...sourceAsset,
+        status: "ready",
+      }, profile.id))
+      .select("*")
+      .single(),
+    "Could not clone private world asset",
+  );
+  const files = [];
+  for (const fileRow of sourceFiles) {
+    const buffer = await downloadPrivateWorldAssetFileBuffer(store, fileRow);
+    files.push({
+      role: fileRow.role,
+      filename: fileRow.filename,
+      content_type: fileRow.content_type,
+      buffer,
+      file_meta: cloneJson(fileRow.file_meta ?? {}),
+    });
+  }
+  const createdFiles = await persistPrivateWorldAssetFiles(store, createdAsset, files);
+  return serializePrivateWorldAsset(store, createdAsset, createdFiles);
+}
+
+async function importPrivateWorldPackageData(store, profile, parsed, { assetIdMap = new Map() } = {}) {
+  const worldId = generatePrivateWorldId();
+  const world = await must(
+    store.serviceClient
+      .from("private_worlds")
+      .insert({
+        world_id: worldId,
+        creator_profile_id: profile.id,
+        world_type: parsed.world.worldType,
+        template_size: parsed.world.templateSize,
+        width: parsed.world.width,
+        length: parsed.world.length,
+        height: parsed.world.height,
+        name: parsed.world.name,
+        about: parsed.world.about,
+        max_viewers: parsed.world.max_viewers,
+        max_players: parsed.world.max_players,
+        origin_world_id: parsed.credits.origin_world_id ?? parsed.world.lineage.origin_world_id,
+        origin_creator_username: parsed.credits.origin_creator_username ?? parsed.world.lineage.origin_creator_username,
+        origin_world_name: parsed.credits.origin_world_name ?? parsed.world.lineage.origin_world_name,
+        imported_at: nowIso(),
+        imported_by_profile_id: profile.id,
+        search_text: buildPrivateWorldSearchText({
+          name: parsed.world.name,
+          about: parsed.world.about,
+          creatorUsername: profile.username,
+          originWorldId: parsed.credits.origin_world_id ?? parsed.world.lineage.origin_world_id,
+          originCreatorUsername: parsed.credits.origin_creator_username ?? parsed.world.lineage.origin_creator_username,
+          originWorldName: parsed.credits.origin_world_name ?? parsed.world.lineage.origin_world_name,
+        }),
+      })
+      .select("*")
+      .single(),
+    "Could not import private world",
+  );
+
+  await must(
+    store.serviceClient
+      .from("private_world_collaborators")
+      .insert({
+        world_id: world.id,
+        profile_id: profile.id,
+        role: "creator",
+      }),
+    "Could not create imported-world owner row",
+  );
+
+  const prefabIdMap = new Map();
+  for (const prefabEntry of parsed.prefabs) {
+    const prefabDoc = rewriteSceneDocAssetIds(prefabEntry.prefab_doc, assetIdMap);
+    const createdPrefab = await must(
+      store.serviceClient
+        .from("private_world_prefabs")
+        .insert({
+          world_id: world.id,
+          name: prefabEntry.name,
+          prefab_doc: prefabDoc,
+          created_by_profile_id: profile.id,
+        })
+        .select("*")
+        .single(),
+      "Could not import private world prefab",
+    );
+    if (prefabEntry.id && createdPrefab?.id) {
+      prefabIdMap.set(prefabEntry.id, createdPrefab.id);
+    }
+  }
+
+  let defaultSceneId = null;
+  const importedPrefabs = await loadWorldPrefabs(store, world.id);
+  for (const [index, sceneEntry] of parsed.scenes.entries()) {
+    const sceneDoc = rewriteSceneDocAssetIds(sceneEntry.scene_doc, assetIdMap);
+    sceneDoc.prefab_instances = (sceneDoc.prefab_instances ?? []).map((entry) => ({
+      ...entry,
+      prefab_id: prefabIdMap.get(entry.prefab_id) ?? entry.prefab_id,
+    }));
+    const scene = await must(
+      store.serviceClient
+        .from("private_world_scenes")
+        .insert({
+          world_id: world.id,
+          name: sceneEntry.name,
+          scene_doc: sceneDoc,
+          compiled_doc: compileSceneDoc(sceneDoc, world, { prefabs: importedPrefabs }),
+          version: 1,
+          is_default: sceneEntry.name === parsed.world.default_scene_name || index === 0,
+        })
+        .select("*")
+        .single(),
+      "Could not import private world scene",
+    );
+    if (!defaultSceneId || scene.is_default === true) {
+      defaultSceneId = scene.id;
+    }
+  }
+
+  const updatedWorld = await must(
+    store.serviceClient
+      .from("private_worlds")
+      .update({ default_scene_id: defaultSceneId, updated_at: nowIso() })
+      .eq("id", world.id)
+      .select("*")
+      .single(),
+    "Could not finalize imported private world",
+  );
+
+  return {
+    world: updatedWorld,
+  };
 }
 
 function getMiniatureLongestSide(entry = {}) {
@@ -801,6 +1254,83 @@ export function installPrivateWorldStore(MauworldStore) {
     };
   };
 
+  MauworldStore.prototype.listPrivateWorldAssets = async function listPrivateWorldAssets(profile, input = {}) {
+    const queryText = lower(input.q);
+    const assetType = lower(input.assetType ?? input.asset_type);
+    const status = lower(input.status);
+    const limit = clampLimit(input.limit, 48, 200);
+    const rows = await must(
+      this.serviceClient
+        .from("private_world_assets")
+        .select("*")
+        .eq("owner_profile_id", profile.id)
+        .order("updated_at", { ascending: false })
+        .limit(limit),
+      "Could not load private world assets",
+    );
+    const filtered = rows
+      .filter((row) => !assetType || row.asset_type === assetType)
+      .filter((row) => !status || row.status === status)
+      .filter((row) => !queryText || String(row.search_text ?? "").includes(queryText));
+    const files = await loadPrivateWorldAssetFiles(this, filtered.map((row) => row.id));
+    const fileMap = mapAssetFilesByAssetId(files);
+    return {
+      assets: filtered.map((row) => serializePrivateWorldAsset(this, row, fileMap.get(row.id) ?? [])),
+    };
+  };
+
+  MauworldStore.prototype.getPrivateWorldAsset = async function getPrivateWorldAsset(profile, input = {}) {
+    const asset = await maybeSingle(
+      this.serviceClient
+        .from("private_world_assets")
+        .select("*")
+        .eq("id", input.assetId)
+        .eq("owner_profile_id", profile.id)
+        .maybeSingle(),
+      "Could not load private world asset",
+    );
+    if (!asset) {
+      throw new HttpError(404, "Private world asset not found");
+    }
+    const files = await loadPrivateWorldAssetFiles(this, [asset.id]);
+    return {
+      asset: serializePrivateWorldAsset(this, asset, files),
+    };
+  };
+
+  MauworldStore.prototype.createPrivateWorldAsset = async function createPrivateWorldAsset(profile, input = {}) {
+    const createdAsset = await must(
+      this.serviceClient
+        .from("private_world_assets")
+        .insert(buildPrivateWorldAssetPayload(input, profile.id))
+        .select("*")
+        .single(),
+      "Could not create private world asset",
+    );
+    const createdFiles = await persistPrivateWorldAssetFiles(this, createdAsset, input.files ?? []);
+    return {
+      asset: serializePrivateWorldAsset(this, createdAsset, createdFiles),
+    };
+  };
+
+  MauworldStore.prototype.updatePrivateWorldAsset = async function updatePrivateWorldAsset(profile, input = {}) {
+    const updatedAsset = await must(
+      this.serviceClient
+        .from("private_world_assets")
+        .update(buildPrivateWorldAssetPayload(input, profile.id))
+        .eq("id", input.assetId)
+        .eq("owner_profile_id", profile.id)
+        .select("*")
+        .single(),
+      "Could not update private world asset",
+    );
+    const createdFiles = await persistPrivateWorldAssetFiles(this, updatedAsset, input.files ?? []);
+    const files = createdFiles.length > 0 ? createdFiles : await loadPrivateWorldAssetFiles(this, [updatedAsset.id]);
+    return {
+      asset: serializePrivateWorldAsset(this, updatedAsset, files),
+    };
+  };
+
   MauworldStore.prototype.listPrivateWorlds = async function listPrivateWorlds(profile, input = {}) {
     const collaboratorRows = await must(
       this.serviceClient.from("private_world_collaborators").select("*").eq("profile_id", profile.id),
@@ -1407,131 +1937,81 @@ export function installPrivateWorldStore(MauworldStore) {
     const scenes = await loadWorldScenes(this, world.id);
     const prefabs = await loadWorldPrefabs(this, world.id);
     const defaultScene = scenes.find((row) => row.id === world.default_scene_id) ?? scenes.find((row) => row.is_default) ?? scenes[0] ?? null;
-    return {
-      package: buildPrivateWorldExportPackage({
-        world,
-        creator,
-        exportedBy: profile,
-        defaultSceneName: defaultScene?.name ?? null,
-        prefabs: prefabs.map((row) => ({
-          id: row.id,
-          name: row.name,
-          prefab_doc: cloneJson(row.prefab_doc),
-        })),
-        scenes: scenes.map((row) => ({
-          name: row.name,
-          scene_doc: cloneJson(row.scene_doc),
-        })),
+    const exportFormat = lower(input.format) === "json" ? "json" : "archive";
+    const { assetRows, fileMap } = await loadReferencedPrivateWorldAssets(this, scenes, prefabs);
+    const packagePayload = buildPrivateWorldExportPackage({
+      format: exportFormat === "archive" ? "mauworld.private-world.v2" : (assetRows.length > 0 ? "mauworld.private-world.v2" : "mauworld.private-world.v1"),
+      world,
+      creator,
+      exportedBy: profile,
+      defaultSceneName: defaultScene?.name ?? null,
+      prefabs: prefabs.map((row) => ({
+        id: row.id,
+        name: row.name,
+        prefab_doc: cloneJson(row.prefab_doc),
+      })),
+      scenes: scenes.map((row) => ({
+        name: row.name,
+        scene_doc: cloneJson(row.scene_doc),
+      })),
+      assets: buildPackageAssetManifest(this, assetRows, fileMap, {
+        includeFilePaths: exportFormat === "archive",
       }),
+    });
+
+    if (exportFormat === "json") {
+      return {
+        package: packagePayload,
+      };
+    }
+
+    const zip = new JSZip();
+    zip.file("world.json", JSON.stringify(packagePayload, null, 2));
+    for (const assetRow of assetRows) {
+      for (const fileRow of fileMap.get(assetRow.id) ?? []) {
+        const extension = sanitizeFilename(fileRow.filename).includes(".")
+          ? sanitizeFilename(fileRow.filename).split(".").pop()
+          : inferExtensionFromContentType(fileRow.content_type);
+        const filePath = `assets/${assetRow.id}/${fileRow.role}.${extension}`;
+        zip.file(filePath, await downloadPrivateWorldAssetFileBuffer(this, fileRow));
+      }
+    }
+    return {
+      archiveBuffer: await zip.generateAsync({
+        type: "nodebuffer",
+        compression: "DEFLATE",
+      }),
+      filename: `${world.world_id}.mauworld.zip`,
+      contentType: "application/zip",
     };
   };
 
   MauworldStore.prototype.importPrivateWorld = async function importPrivateWorld(profile, input = {}) {
     const parsed = validatePrivateWorldExportPackage(input.package ?? input);
-    const worldId = generatePrivateWorldId();
-    const world = await must(
-      this.serviceClient
-        .from("private_worlds")
-        .insert({
-          world_id: worldId,
-          creator_profile_id: profile.id,
-          world_type: parsed.world.worldType,
-          template_size: parsed.world.templateSize,
-          width: parsed.world.width,
-          length: parsed.world.length,
-          height: parsed.world.height,
-          name: parsed.world.name,
-          about: parsed.world.about,
-          max_viewers: parsed.world.max_viewers,
-          max_players: parsed.world.max_players,
-          origin_world_id: parsed.credits.origin_world_id ?? parsed.world.lineage.origin_world_id,
-          origin_creator_username: parsed.credits.origin_creator_username ?? parsed.world.lineage.origin_creator_username,
-          origin_world_name: parsed.credits.origin_world_name ?? parsed.world.lineage.origin_world_name,
-          imported_at: nowIso(),
-          imported_by_profile_id: profile.id,
-          search_text: buildPrivateWorldSearchText({
-            name: parsed.world.name,
-            about: parsed.world.about,
-            creatorUsername: profile.username,
-            originWorldId: parsed.credits.origin_world_id ?? parsed.world.lineage.origin_world_id,
-            originCreatorUsername: parsed.credits.origin_creator_username ?? parsed.world.lineage.origin_creator_username,
-            originWorldName: parsed.credits.origin_world_name ?? parsed.world.lineage.origin_world_name,
-          }),
-        })
-        .select("*")
-        .single(),
-      "Could not import private world",
-    );
-
-    await must(
-      this.serviceClient
-        .from("private_world_collaborators")
-        .insert({
-          world_id: world.id,
-          profile_id: profile.id,
-          role: "creator",
-        }),
-      "Could not create imported-world owner row",
-    );
-
-    const prefabIdMap = new Map();
-    for (const prefabEntry of parsed.prefabs) {
-      const createdPrefab = await must(
-        this.serviceClient
-          .from("private_world_prefabs")
-          .insert({
-            world_id: world.id,
-            name: prefabEntry.name,
-            prefab_doc: prefabEntry.prefab_doc,
-            created_by_profile_id: profile.id,
-          })
-          .select("*")
-          .single(),
-          "Could not import private world prefab",
+    const assetIdMap = new Map();
+    if (parsed.assets.length > 0) {
+      const sourceAssets = await loadPrivateWorldAssetsByIds(
+        this,
+        parsed.assets.map((entry) => entry.source_asset_id).filter(Boolean),
       );
-      const insertedPrefab = Array.isArray(createdPrefab) ? createdPrefab[0] : createdPrefab;
-      if (prefabEntry.id && insertedPrefab?.id) {
-        prefabIdMap.set(prefabEntry.id, insertedPrefab.id);
+      const fileRows = await loadPrivateWorldAssetFiles(this, sourceAssets.map((entry) => entry.id));
+      const fileMap = mapAssetFilesByAssetId(fileRows);
+      const sourceAssetMap = new Map(sourceAssets.map((entry) => [entry.id, entry]));
+      for (const assetEntry of parsed.assets) {
+        const sourceAssetId = assetEntry.source_asset_id;
+        if (!sourceAssetId) {
+          continue;
+        }
+        const sourceAsset = sourceAssetMap.get(sourceAssetId) ?? null;
+        if (!sourceAsset) {
+          throw new HttpError(400, `Missing source asset for package entry ${assetEntry.name}`);
+        }
+        const clonedAsset = await clonePrivateWorldAssetForProfile(this, profile, sourceAsset, fileMap.get(sourceAssetId) ?? []);
+        assetIdMap.set(sourceAssetId, clonedAsset.id);
       }
     }
-
-    let defaultSceneId = null;
-    const importedPrefabs = await loadWorldPrefabs(this, world.id);
-    for (const [index, sceneEntry] of parsed.scenes.entries()) {
-      const sceneDoc = cloneJson(sceneEntry.scene_doc);
-      sceneDoc.prefab_instances = (sceneDoc.prefab_instances ?? []).map((entry) => ({
-        ...entry,
-        prefab_id: prefabIdMap.get(entry.prefab_id) ?? entry.prefab_id,
-      }));
-      const scene = await must(
-        this.serviceClient
-          .from("private_world_scenes")
-          .insert({
-            world_id: world.id,
-            name: sceneEntry.name,
-            scene_doc: sceneDoc,
-            compiled_doc: compileSceneDoc(sceneDoc, world, { prefabs: importedPrefabs }),
-            version: 1,
-            is_default: sceneEntry.name === parsed.world.default_scene_name || index === 0,
-          })
-          .select("*")
-          .single(),
-          "Could not import private world scene",
-        );
-      if (!defaultSceneId && scene.is_default) {
-        defaultSceneId = scene.id;
-      }
-    }
-
-    const updatedWorld = await must(
-      this.serviceClient
-        .from("private_worlds")
-        .update({ default_scene_id: defaultSceneId, updated_at: nowIso() })
-        .eq("id", world.id)
-        .select("*")
-        .single(),
-      "Could not update imported private world default scene",
-    );
+    const imported = await importPrivateWorldPackageData(this, profile, parsed, { assetIdMap });
+    const updatedWorld = imported.world;
     emitPrivateWorldEvent(this, {
       type: "world:imported",
       world_id: updatedWorld.world_id,
@@ -1541,6 +2021,69 @@ export function installPrivateWorldStore(MauworldStore) {
     });
     return await buildWorldDetail(this, {
       world: updatedWorld,
+      creator: profile,
+      requesterProfile: profile,
+      includeContent: true,
+    });
+  };
+
+  MauworldStore.prototype.importPrivateWorldArchive = async function importPrivateWorldArchive(profile, input = {}) {
+    const archiveBuffer = Buffer.isBuffer(input.archiveBuffer)
+      ? input.archiveBuffer
+      : Buffer.from(input.archiveBuffer ?? []);
+    const zip = await JSZip.loadAsync(archiveBuffer);
+    const worldFile = zip.file("world.json");
+    if (!worldFile) {
+      throw new HttpError(400, "Archive is missing world.json");
+    }
+    const parsed = validatePrivateWorldExportPackage(JSON.parse(await worldFile.async("string")));
+    const assetIdMap = new Map();
+    for (const assetEntry of parsed.assets) {
+      const files = [];
+      for (const fileEntry of assetEntry.files ?? []) {
+        const path = String(fileEntry.path ?? "").trim();
+        if (!path) {
+          continue;
+        }
+        const archiveEntry = zip.file(path);
+        if (!archiveEntry) {
+          throw new HttpError(400, `Archive asset file missing: ${path}`);
+        }
+        files.push({
+          role: fileEntry.role,
+          filename: fileEntry.filename,
+          content_type: fileEntry.content_type,
+          buffer: await archiveEntry.async("nodebuffer"),
+        });
+      }
+      const created = await this.createPrivateWorldAsset(profile, {
+        asset_type: assetEntry.asset_type,
+        status: "ready",
+        name: assetEntry.name,
+        provider: assetEntry.provider,
+        intended_use: assetEntry.intended_use,
+        world_context_summary: assetEntry.world_context_summary,
+        source_world_id: assetEntry.source_world_id,
+        spec: assetEntry.spec,
+        provider_metadata: assetEntry.provider_metadata,
+        context: assetEntry.context,
+        bounds: assetEntry.bounds,
+        files,
+      });
+      if (assetEntry.source_asset_id) {
+        assetIdMap.set(assetEntry.source_asset_id, created.asset.id);
+      }
+    }
+    const imported = await importPrivateWorldPackageData(this, profile, parsed, { assetIdMap });
+    emitPrivateWorldEvent(this, {
+      type: "world:imported",
+      world_id: imported.world.world_id,
+      creator_username: profile.username,
+      origin_world_id: imported.world.origin_world_id,
+      origin_creator_username: imported.world.origin_creator_username,
+    });
+    return await buildWorldDetail(this, {
+      world: imported.world,
       creator: profile,
       requesterProfile: profile,
       includeContent: true,

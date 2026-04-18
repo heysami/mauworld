@@ -1,4 +1,5 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
+import { GLTFLoader } from "https://unpkg.com/three@0.165.0/examples/jsm/loaders/GLTFLoader.js";
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 import { createPatternedMaterial } from "./private-world-materials.js";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
@@ -40,7 +41,9 @@ import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
-const AI_KEY_STORAGE_KEY = "mauworldPrivateWorldAiKey";
+const AI_REASONING_STORAGE_KEY = "mauworldPrivateWorldAiReasoning";
+const AI_IMAGE_STORAGE_KEY = "mauworldPrivateWorldAiImage";
+const AI_MODEL_STORAGE_KEY = "mauworldPrivateWorldAiModel";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
 const PRIVATE_VIEWER_INSTANCE_KEY = "mauworldPrivateWorldViewerInstance";
 const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
@@ -49,7 +52,7 @@ const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "ar
 const LAUNCHER_TABS = new Set(["worlds", "access"]);
 const LAUNCHER_WORLD_BROWSER_TABS = new Set(["mine", "all"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "world"]);
-const SCENE_DRAWER_TABS = new Set(["scenes", "items", "prefabs", "logic"]);
+const SCENE_DRAWER_TABS = new Set(["scenes", "items", "assets", "prefabs", "logic"]);
 const WORLD_PANEL_SECTIONS = new Set(["overview", "ai", "editors", "feed"]);
 const PRIVATE_CAMERA = {
   minY: 0,
@@ -142,6 +145,16 @@ const BUILD_TRANSFORM_SHORTCUTS = new Map([
   ["t", "delete"],
 ]);
 const TOOL_PRESET_KINDS = ["voxel", "primitive", "player", "screen", "text", "trigger"];
+const AI_PROVIDER_SESSION_KEYS = {
+  reasoning: AI_REASONING_STORAGE_KEY,
+  image: AI_IMAGE_STORAGE_KEY,
+  model: AI_MODEL_STORAGE_KEY,
+};
+const MATERIALIZABLE_ENTITY_KINDS = new Set(["voxel", "primitive", "model", "screen", "text"]);
+
+const gltfLoader = new GLTFLoader();
+const previewTextureAssetCache = new Map();
+const previewModelAssetCache = new Map();
 const TOOL_PRESET_BUILTINS = {
   voxel: [
     {
@@ -546,6 +559,12 @@ const elements = {
   entityEditor: document.querySelector("[data-entity-editor]"),
   entityEmpty: document.querySelector("[data-entity-empty]"),
   selectionLabel: document.querySelector("[data-selection-label]"),
+  assetSearch: document.querySelector("[data-asset-search]"),
+  assetTypeFilter: document.querySelector("[data-asset-type-filter]"),
+  assetStatus: document.querySelector("[data-asset-status]"),
+  assetSections: document.querySelector("[data-asset-sections]"),
+  assetGenerateTexture: document.querySelector("[data-asset-generate-texture]"),
+  assetGenerateModel: document.querySelector("[data-asset-generate-model]"),
   prefabList: document.querySelector("[data-prefab-list]"),
   prefabDetail: document.querySelector("[data-prefab-detail]"),
   prefabSearch: document.querySelector("[data-prefab-search]"),
@@ -798,6 +817,7 @@ function createEmptyAiDialogState() {
     messages: [],
     input: "",
     result: "",
+    generatedAsset: null,
     status: "",
     statusTone: "",
     busy: false,
@@ -830,6 +850,10 @@ const state = {
   scriptFunctionQuery: "",
   entityQuery: "",
   entityFilterKind: "all",
+  assets: [],
+  assetsLoading: false,
+  assetQuery: "",
+  assetFilterType: "all",
   sceneDrafts: new Map(),
   screenAiPromptDrafts: new Map(),
   aiThreadDrafts: new Map(),
@@ -1178,7 +1202,7 @@ function renderWorldPanelSections(options = {}) {
   window.requestAnimationFrame(() => {
     const field = elements.aiForm?.elements?.[fieldName];
     field?.focus?.();
-    if (fieldName === "apiKey" && typeof field?.select === "function") {
+    if (fieldName.toLowerCase().includes("apikey") && typeof field?.select === "function") {
       field.select();
     }
   });
@@ -2912,6 +2936,7 @@ function describeVector3(input = {}) {
 const ENTITY_COLLECTIONS = [
   { kind: "voxel", key: "voxels", label: "Voxels", singular: "Voxel" },
   { kind: "primitive", key: "primitives", label: "Objects", singular: "Object" },
+  { kind: "model", key: "models", label: "Models", singular: "Model" },
   { kind: "player", key: "players", label: "Players", singular: "Player" },
   { kind: "screen", key: "screens", label: "Screens", singular: "Screen" },
   { kind: "text", key: "texts", label: "3D Text", singular: "3D Text" },
@@ -3010,6 +3035,9 @@ function buildToolPresetDisplayName(kind) {
   }
   if (kind === "player") {
     return "Player";
+  }
+  if (kind === "model") {
+    return "Model";
   }
   if (kind === "screen") {
     return "Screen";
@@ -3468,6 +3496,9 @@ function getDisplayNameForEntity(kind, entry = {}, index = 0) {
   if (kind === "primitive") {
     return entry.label || entry.id || `Object ${index + 1}`;
   }
+  if (kind === "model") {
+    return entry.label || entry.id || `Model ${index + 1}`;
+  }
   if (kind === "player") {
     return entry.label || entry.id || `Player ${index + 1}`;
   }
@@ -3541,16 +3572,91 @@ function setBuilderSelection(kind, id, options = {}) {
   updatePreviewFromSelection();
 }
 
-function setAiKey(value) {
-  if (value) {
-    window.sessionStorage.setItem(AI_KEY_STORAGE_KEY, value);
-  } else {
-    window.sessionStorage.removeItem(AI_KEY_STORAGE_KEY);
+function getAiProviderFieldNames(group) {
+  if (group === "image") {
+    return {
+      provider: "imageProvider",
+      model: "imageModel",
+      apiKey: "imageApiKey",
+    };
+  }
+  if (group === "model") {
+    return {
+      provider: "modelProvider",
+      model: "modelModel",
+      apiKey: "modelApiKey",
+    };
+  }
+  return {
+    provider: "reasoningProvider",
+    model: "reasoningModel",
+    apiKey: "reasoningApiKey",
+  };
+}
+
+function readAiProviderState(group) {
+  const storageKey = AI_PROVIDER_SESSION_KEYS[group];
+  if (!storageKey) {
+    return { provider: "openai", model: "", apiKey: "" };
+  }
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(storageKey) || "{}");
+    return {
+      provider: String(parsed.provider ?? "openai").trim() || "openai",
+      model: String(parsed.model ?? "").trim(),
+      apiKey: String(parsed.apiKey ?? "").trim(),
+    };
+  } catch (_error) {
+    return {
+      provider: group === "model" ? "meshy" : "openai",
+      model: "",
+      apiKey: "",
+    };
   }
 }
 
-function getAiKey() {
-  return window.sessionStorage.getItem(AI_KEY_STORAGE_KEY) || "";
+function writeAiProviderState(group, value = {}) {
+  const storageKey = AI_PROVIDER_SESSION_KEYS[group];
+  if (!storageKey) {
+    return;
+  }
+  const nextValue = {
+    provider: String(value.provider ?? "").trim(),
+    model: String(value.model ?? "").trim(),
+    apiKey: String(value.apiKey ?? "").trim(),
+  };
+  if (!nextValue.provider && !nextValue.model && !nextValue.apiKey) {
+    window.sessionStorage.removeItem(storageKey);
+    return;
+  }
+  window.sessionStorage.setItem(storageKey, JSON.stringify(nextValue));
+}
+
+function getAiProviderState(group) {
+  const names = getAiProviderFieldNames(group);
+  const stored = readAiProviderState(group);
+  return {
+    provider: String(elements.aiForm?.elements?.[names.provider]?.value ?? stored.provider ?? "").trim() || stored.provider || (group === "model" ? "meshy" : "openai"),
+    model: String(elements.aiForm?.elements?.[names.model]?.value ?? stored.model ?? "").trim() || stored.model || "",
+    apiKey: String(elements.aiForm?.elements?.[names.apiKey]?.value ?? stored.apiKey ?? "").trim() || stored.apiKey || "",
+  };
+}
+
+function syncAiProviderFormFromSession() {
+  for (const group of ["reasoning", "image", "model"]) {
+    const names = getAiProviderFieldNames(group);
+    const value = readAiProviderState(group);
+    if (elements.aiForm?.elements?.[names.provider] && !elements.aiForm.elements[names.provider].value) {
+      elements.aiForm.elements[names.provider].value = value.provider || (group === "model" ? "meshy" : "openai");
+    }
+    if (elements.aiForm?.elements?.[names.model] && !elements.aiForm.elements[names.model].value) {
+      elements.aiForm.elements[names.model].value = value.model
+        || (group === "reasoning" ? "gpt-5.4-mini" : group === "image" ? "gpt-image-1" : "meshy-4");
+    }
+    if (elements.aiForm?.elements?.[names.apiKey]) {
+      elements.aiForm.elements[names.apiKey].value = value.apiKey || "";
+    }
+  }
 }
 
 function setAiBuilderStatus(text = "", tone = "") {
@@ -3566,18 +3672,23 @@ function setAiBuilderStatus(text = "", tone = "") {
 }
 
 function refreshAiBuilderStatus() {
-  const provider = String(elements.aiForm?.elements?.provider?.value ?? "openai").trim() || "openai";
-  const model = String(elements.aiForm?.elements?.model?.value ?? "gpt-5.4-mini").trim() || "gpt-5.4-mini";
-  const apiKey = String(elements.aiForm?.elements?.apiKey?.value ?? "").trim();
+  const reasoning = getAiProviderState("reasoning");
+  const image = getAiProviderState("image");
+  const model = getAiProviderState("model");
   if (!state.session) {
     setAiBuilderStatus("Sign in to use AI Builder.", "error");
     return;
   }
-  if (!apiKey) {
-    setAiBuilderStatus("Add your OpenAI API key to enable generation.", "error");
+  if (!reasoning.apiKey) {
+    setAiBuilderStatus("Add your text reasoning API key to enable brainstorming and generation.", "error");
     return;
   }
-  setAiBuilderStatus(`Ready with ${provider} · ${model}.`, "success");
+  const readyBits = [
+    `Reasoning ${reasoning.provider}${reasoning.model ? ` · ${reasoning.model}` : ""}`,
+    image.apiKey ? `Texture ${image.provider}${image.model ? ` · ${image.model}` : ""}` : "Texture key missing",
+    model.apiKey ? `3D ${model.provider}${model.model ? ` · ${model.model}` : ""}` : "3D key missing",
+  ];
+  setAiBuilderStatus(readyBits.join(" | "), image.apiKey && model.apiKey ? "success" : "");
 }
 
 function cloneAiDialogMessages(messages = []) {
@@ -3596,6 +3707,7 @@ function cloneAiDialogState(dialog = {}) {
     ...createEmptyAiDialogState(),
     ...dialog,
     messages: cloneAiDialogMessages(dialog.messages),
+    generatedAsset: dialog.generatedAsset ? deepClone(dialog.generatedAsset) : null,
   };
 }
 
@@ -3669,7 +3781,9 @@ function renderAiDialog() {
     elements.aiDialogGenerate.disabled = !dialog.open || dialog.busy || !canGenerate || !state.selectedWorld || !state.session;
   }
   if (elements.aiDialogApply) {
-    const canApply = Boolean(dialog.result) && dialog.targetKind !== "world";
+    const canApply = dialog.artifactType === "texture"
+      ? Boolean(dialog.generatedAsset) && dialog.targetKind !== "world"
+      : Boolean(dialog.result) && dialog.targetKind !== "world";
     elements.aiDialogApply.hidden = !canApply;
     elements.aiDialogApply.disabled = !canApply || dialog.busy;
     if (canApply) {
@@ -3680,7 +3794,14 @@ function renderAiDialog() {
     elements.aiDialogResultPanel.hidden = !dialog.result;
   }
   if (elements.aiDialogResultTitle) {
-    elements.aiDialogResultTitle.textContent = dialog.artifactType === "screen_html" ? "Generated HTML" : "Generated script";
+    elements.aiDialogResultTitle.textContent =
+      dialog.artifactType === "screen_html"
+        ? "Generated HTML"
+        : dialog.artifactType === "world_script"
+          ? "Generated script"
+          : dialog.artifactType === "texture"
+            ? "Generated texture asset"
+            : "Generated model asset";
   }
   if (elements.aiDialogResult && elements.aiDialogResult.value !== dialog.result) {
     elements.aiDialogResult.value = dialog.result || "";
@@ -3746,6 +3867,54 @@ function getAiDialogTargetContext(dialog = state.aiDialog) {
       viewportSummary: "",
     };
   }
+  if (dialog.artifactType === "texture") {
+    if (dialog.targetKind === "world" || !dialog.targetId) {
+      return {
+        valid: true,
+        error: "",
+        objective: [
+          String(elements.aiForm?.elements?.objective?.value ?? "").trim(),
+          "Generate a reusable texture asset for this world.",
+        ].filter(Boolean).join(" "),
+        targetLabel: "Texture library asset",
+        currentArtifact: "",
+        viewportSummary: "",
+        entityContext: "",
+      };
+    }
+    const sceneDoc = parseSceneTextarea();
+    const found = findEntityByRef(sceneDoc, { kind: dialog.targetKind, id: dialog.targetId });
+    const entry = found?.entry ?? null;
+    return {
+      valid: Boolean(entry),
+      error: entry ? "" : "That object is no longer available.",
+      objective: [
+        String(elements.aiForm?.elements?.objective?.value ?? "").trim(),
+        `Generate a reusable texture for ${getDisplayNameForEntity(dialog.targetKind, entry || {}, found?.index ?? 0)}.`,
+      ].filter(Boolean).join(" "),
+      targetLabel: entry ? getDisplayNameForEntity(dialog.targetKind, entry, found?.index ?? 0) : "Texture target",
+      currentArtifact: entry ? JSON.stringify(entry.material ?? {}, null, 2) : "",
+      viewportSummary: "",
+      entityContext: entry ? buildEntitySummary(dialog.targetKind, entry) : "",
+    };
+  }
+  if (dialog.artifactType === "3d_model") {
+    const sceneDoc = parseSceneTextarea();
+    const found = dialog.targetId ? findEntityByRef(sceneDoc, { kind: dialog.targetKind, id: dialog.targetId }) : null;
+    const entry = found?.entry ?? null;
+    return {
+      valid: true,
+      error: "",
+      objective: [
+        String(elements.aiForm?.elements?.objective?.value ?? "").trim(),
+        "Generate a reusable Mauworld 3D model library asset.",
+      ].filter(Boolean).join(" "),
+      targetLabel: entry ? getDisplayNameForEntity(dialog.targetKind, entry, found?.index ?? 0) : "Model library asset",
+      currentArtifact: entry ? JSON.stringify(entry, null, 2) : "",
+      viewportSummary: "",
+      entityContext: entry ? buildEntitySummary(dialog.targetKind, entry) : "",
+    };
+  }
   return {
     valid: true,
     error: "",
@@ -3753,6 +3922,7 @@ function getAiDialogTargetContext(dialog = state.aiDialog) {
     targetLabel: dialog.artifactType === "screen_html" ? "Scratch screen output" : "Scratch script output",
     currentArtifact: String(elements.aiOutput?.value ?? "").trim(),
     viewportSummary: "",
+    entityContext: "",
   };
 }
 
@@ -3763,21 +3933,19 @@ function buildAiRequestOptions(dialog = state.aiDialog) {
   if (!state.session) {
     throw new Error("Sign in to use AI Builder.");
   }
-  const provider = String(elements.aiForm?.elements?.provider?.value ?? "openai").trim() || "openai";
-  const model = String(elements.aiForm?.elements?.model?.value ?? "gpt-5.4-mini").trim() || "gpt-5.4-mini";
-  const apiKey = String(elements.aiForm?.elements?.apiKey?.value ?? "").trim();
-  setAiKey(apiKey);
-  if (!apiKey) {
-    throw new Error("Missing AI provider API key");
+  const reasoning = getAiProviderState("reasoning");
+  writeAiProviderState("reasoning", reasoning);
+  if (!reasoning.apiKey) {
+    throw new Error("Missing text reasoning API key");
   }
   const targetContext = getAiDialogTargetContext(dialog);
   if (!targetContext.valid) {
     throw new Error(targetContext.error || "That AI target is no longer available.");
   }
   return {
-    provider,
-    model,
-    apiKey,
+    provider: reasoning.provider,
+    model: reasoning.model || "gpt-5.4-mini",
+    apiKey: reasoning.apiKey,
     artifactType: dialog.artifactType,
     worldName: state.selectedWorld.name,
     worldAbout: state.selectedWorld.about,
@@ -3786,6 +3954,7 @@ function buildAiRequestOptions(dialog = state.aiDialog) {
     targetLabel: targetContext.targetLabel,
     currentArtifact: targetContext.currentArtifact,
     viewportSummary: targetContext.viewportSummary,
+    entityContext: targetContext.entityContext,
   };
 }
 
@@ -3802,6 +3971,7 @@ function openAiDialog(config = {}) {
     statusTone: "",
     messages: stored.messages,
     result: stored.result || "",
+    generatedAsset: stored.generatedAsset || null,
     input: stored.input || "",
   });
   updateShellState();
@@ -3834,7 +4004,10 @@ async function sendAiDialogMessage(seedText = "") {
   renderAiDialog();
   try {
     const request = buildAiRequestOptions();
-    const payload = await apiFetch("/private/worlds/ai/brainstorm", {
+    const endpoint = state.aiDialog.artifactType === "texture" || state.aiDialog.artifactType === "3d_model"
+      ? "/private/assets/ai/brainstorm"
+      : "/private/worlds/ai/brainstorm";
+    const payload = await apiFetch(endpoint, {
       method: "POST",
       body: {
         ...request,
@@ -3871,23 +4044,80 @@ async function generateAiDialogResult() {
     elements.aiDialogInput?.focus?.();
     return;
   }
-  const kind = state.aiDialog.artifactType === "screen_html" ? "html" : "script";
+  const kind = state.aiDialog.artifactType === "screen_html"
+    ? "html"
+    : state.aiDialog.artifactType === "world_script"
+      ? "script"
+      : state.aiDialog.artifactType;
   state.aiDialog.busy = true;
-  setAiDialogStatus(kind === "html" ? "Generating final HTML..." : "Generating final script...", "");
+  setAiDialogStatus(
+    kind === "html"
+      ? "Generating final HTML..."
+      : kind === "script"
+        ? "Generating final script..."
+        : kind === "texture"
+          ? "Generating texture asset..."
+          : "Generating 3D model asset...",
+    "",
+  );
   renderAiDialog();
   try {
     const request = buildAiRequestOptions();
-    const generatedText = await generateAi(kind, {
-      objective: request.objective,
-      sceneSummary: request.sceneSummary,
-      messages: state.aiDialog.messages,
-      targetLabel: request.targetLabel,
-      currentArtifact: request.currentArtifact,
-      viewportSummary: request.viewportSummary,
-      outputTarget: elements.aiDialogResult,
-      mirrorToAiOutput: state.aiDialog.targetKind === "world",
-    });
-    state.aiDialog.result = String(generatedText ?? "").trim();
+    if (kind === "texture" || kind === "3d_model") {
+      const reasoning = getAiProviderState("reasoning");
+      const generationSettings = kind === "texture" ? getAiProviderState("image") : getAiProviderState("model");
+      const endpoint = kind === "texture" ? "/private/assets/ai/texture" : "/private/assets/ai/model";
+      if (!generationSettings.apiKey) {
+        throw new Error(kind === "texture" ? "Missing image texture API key" : "Missing 3D model API key");
+      }
+      writeAiProviderState(kind === "texture" ? "image" : "model", generationSettings);
+      const payload = await apiFetch(endpoint, {
+        method: "POST",
+        timeoutMs: kind === "3d_model" ? 300000 : 60000,
+        body: {
+          worldId: state.selectedWorld.world_id,
+          worldName: state.selectedWorld.name,
+          worldAbout: state.selectedWorld.about,
+          objective: request.objective,
+          sceneSummary: request.sceneSummary,
+          messages: state.aiDialog.messages,
+          targetLabel: request.targetLabel,
+          currentArtifact: request.currentArtifact,
+          entityContext: request.entityContext,
+          reasoningProvider: reasoning.provider,
+          reasoningModel: reasoning.model || "gpt-5.4-mini",
+          reasoningApiKey: reasoning.apiKey,
+          imageProvider: kind === "texture" ? generationSettings.provider : undefined,
+          imageModel: kind === "texture" ? generationSettings.model : undefined,
+          imageApiKey: kind === "texture" ? generationSettings.apiKey : undefined,
+          modelProvider: kind === "3d_model" ? generationSettings.provider : undefined,
+          modelModel: kind === "3d_model" ? generationSettings.model : undefined,
+          modelApiKey: kind === "3d_model" ? generationSettings.apiKey : undefined,
+        },
+      });
+      state.aiDialog.generatedAsset = payload.asset || null;
+      state.aiDialog.result = payload.asset ? JSON.stringify(payload.asset, null, 2) : "";
+      await loadAssets();
+      if (kind === "texture" && state.aiDialog.generatedAsset && state.aiDialog.targetId) {
+        applyTextureAssetToSelection(state.aiDialog.generatedAsset.id, {
+          targetKind: state.aiDialog.targetKind,
+          targetId: state.aiDialog.targetId,
+        });
+      }
+    } else {
+      const generatedText = await generateAi(kind, {
+        objective: request.objective,
+        sceneSummary: request.sceneSummary,
+        messages: state.aiDialog.messages,
+        targetLabel: request.targetLabel,
+        currentArtifact: request.currentArtifact,
+        viewportSummary: request.viewportSummary,
+        outputTarget: elements.aiDialogResult,
+        mirrorToAiOutput: state.aiDialog.targetKind === "world",
+      });
+      state.aiDialog.result = String(generatedText ?? "").trim();
+      state.aiDialog.generatedAsset = null;
+    }
     state.aiDialog.busy = false;
     setAiDialogStatus("Final result ready. Review it, then apply it when you are happy.", "success");
     persistAiDialogThreadState();
@@ -3905,6 +4135,21 @@ function applyAiDialogResult() {
   const result = String(elements.aiDialogResult?.value ?? state.aiDialog.result ?? "").trim();
   if (!result) {
     setAiDialogStatus("Generate something first.", "error");
+    renderAiDialog();
+    return;
+  }
+  if (state.aiDialog.artifactType === "texture") {
+    if (!state.aiDialog.generatedAsset?.id) {
+      setAiDialogStatus("Generate a texture asset first.", "error");
+      renderAiDialog();
+      return;
+    }
+    applyTextureAssetToSelection(state.aiDialog.generatedAsset.id, {
+      targetKind: state.aiDialog.targetKind,
+      targetId: state.aiDialog.targetId,
+    });
+    setAiDialogStatus("Applied texture to the selected item.", "success");
+    persistAiDialogThreadState();
     renderAiDialog();
     return;
   }
@@ -3961,12 +4206,12 @@ function applyAiDialogResult() {
   renderAiDialog();
 }
 
-function focusAiBuilder(fieldName = "apiKey") {
+function focusAiBuilder(fieldName = "reasoningApiKey") {
   setWorldPanelSection("ai", { fieldName });
 }
 
 function promptForAiBuilder(message, options = {}) {
-  const fieldName = options.fieldName || "apiKey";
+  const fieldName = options.fieldName || "reasoningApiKey";
   setAiBuilderStatus(message, "error");
   setStatus(message);
   if (state.selectedWorld) {
@@ -3983,16 +4228,30 @@ function promptForAiBuilder(message, options = {}) {
 
 function handleAiGenerationError(error, options = {}) {
   const message = String(error?.message || "Could not generate with AI.");
-  if (/missing ai provider api key/i.test(message)) {
-    promptForAiBuilder("AI Builder needs your OpenAI API key before it can generate.", {
-      fieldName: "apiKey",
+  if (/missing text reasoning api key/i.test(message)) {
+    promptForAiBuilder("AI Builder needs your text reasoning API key before it can generate.", {
+      fieldName: "reasoningApiKey",
+      confirm: options.confirm !== false,
+    });
+    return;
+  }
+  if (/missing image texture api key/i.test(message)) {
+    promptForAiBuilder("AI Builder needs your image texture API key before it can generate textures.", {
+      fieldName: "imageApiKey",
+      confirm: options.confirm !== false,
+    });
+    return;
+  }
+  if (/missing 3d model api key/i.test(message)) {
+    promptForAiBuilder("AI Builder needs your 3D model API key before it can generate models.", {
+      fieldName: "modelApiKey",
       confirm: options.confirm !== false,
     });
     return;
   }
   if (/unsupported ai provider/i.test(message)) {
     promptForAiBuilder(message, {
-      fieldName: "provider",
+      fieldName: "reasoningProvider",
       confirm: options.confirm !== false,
     });
     return;
@@ -5985,6 +6244,8 @@ async function runRefreshAuthState() {
     state.worlds = [];
     state.worldsLoading = false;
     state.worldsError = "";
+    state.assets = [];
+    state.assetsLoading = false;
     state.selectedWorld = null;
     state.selectedSceneId = "";
     state.selectedPrefabId = "";
@@ -6007,6 +6268,7 @@ async function runRefreshAuthState() {
     renderProfile();
     renderLauncherWorldBrowser();
     renderSelectedWorld();
+    renderAssetsLibrary();
     setLauncherTab("access");
     setLauncherOpen(true);
     disconnectWorldSocket();
@@ -6021,6 +6283,7 @@ async function runRefreshAuthState() {
     renderProfile();
     renderAccessSection();
     renderSessionSummary();
+    await loadAssets();
     await loadWorlds();
     const launch = getLaunchRequest();
     const launcherIntent = getLauncherIntent();
@@ -6174,6 +6437,31 @@ async function loadWorlds() {
     if (state.launcherOpen && !state.selectedWorld && !state.worldsError) {
       setLauncherTab(getPreferredLauncherTab());
     }
+  }
+}
+
+async function loadAssets() {
+  if (!state.session) {
+    state.assetsLoading = false;
+    state.assets = [];
+    renderAssetsLibrary();
+    return;
+  }
+  state.assetsLoading = true;
+  renderAssetsLibrary();
+  try {
+    const payload = await apiFetch("/private/assets", {
+      search: {
+        q: state.assetQuery || "",
+        assetType: state.assetFilterType === "all" ? undefined : state.assetFilterType,
+      },
+    });
+    state.assets = payload.assets ?? [];
+  } catch (_error) {
+    state.assets = [];
+  } finally {
+    state.assetsLoading = false;
+    renderAssetsLibrary();
   }
 }
 
@@ -6516,6 +6804,7 @@ function buildEmptySceneDoc() {
     },
     voxels: [],
     primitives: [],
+    models: [],
     screens: [],
     players: [],
     texts: [],
@@ -7127,6 +7416,11 @@ function buildEntitySummary(kind, entry = {}) {
   if (kind === "prefab_instance") {
     return `${entry.prefab_id || "choose prefab"} · ${describeVector3(entry.position)}`;
   }
+  if (kind === "model") {
+    const bounds = entry.bounds ?? { x: 1, y: 1, z: 1 };
+    const textureLabel = entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none");
+    return `${describeVector3(entry.position)} · ${textureLabel} · ${Number(bounds.x ?? 1).toFixed(1)} x ${Number(bounds.y ?? 1).toFixed(1)} x ${Number(bounds.z ?? 1).toFixed(1)}`;
+  }
   if (kind === "screen") {
     return `${describeVector3(entry.position)} · ${String(entry.html || "").slice(0, 18) || "empty html"}`;
   }
@@ -7179,6 +7473,7 @@ function renderSceneBuilder() {
   renderEntitySections(sceneDoc, selected);
   renderEntityInspector(sceneDoc, selected);
   renderPrefabList(sceneDoc);
+  renderAssetsLibrary();
   renderToolPresetPanel();
   const inspectorDisabled = !isEditor() || state.mode !== "build";
   for (const field of elements.entityEditor.querySelectorAll("input, select, textarea")) {
@@ -7324,6 +7619,9 @@ function buildVectorFields(label, basePath, value = {}) {
 function buildMaterialEditor(material = {}, options = {}) {
   const fieldPrefix = String(options.pathPrefix ?? "material.");
   const allowEmission = options.allowEmission === true;
+  const assetTextureLabel = material.texture_asset_id
+    ? `Asset texture: ${material.texture_asset_id}`
+    : "No asset texture linked";
   return `
     <div class="pw-inspector-grid pw-inspector-grid--2">
       <div>
@@ -7341,6 +7639,7 @@ function buildMaterialEditor(material = {}, options = {}) {
         </label>
       </div>
     </div>
+    <p class="pw-inspector-note">${htmlEscape(assetTextureLabel)}</p>
     ${allowEmission ? `
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
@@ -7352,6 +7651,191 @@ function buildMaterialEditor(material = {}, options = {}) {
       </div>
     ` : ""}
   `;
+}
+
+function getPrivateAssetById(assetId = "") {
+  const normalizedAssetId = String(assetId ?? "").trim();
+  if (!normalizedAssetId) {
+    return null;
+  }
+  return (state.assets ?? []).find((asset) => asset.id === normalizedAssetId) ?? null;
+}
+
+function getPrivateAssetFile(asset, role = "") {
+  const normalizedRole = String(role ?? "").trim().toLowerCase();
+  if (!asset || !normalizedRole) {
+    return null;
+  }
+  return (asset.files ?? []).find((file) => String(file.role ?? "").trim().toLowerCase() === normalizedRole) ?? null;
+}
+
+function canApplyTextureToRef(targetKind = "", targetId = "") {
+  if (!MATERIALIZABLE_ENTITY_KINDS.has(String(targetKind ?? "").trim())) {
+    return false;
+  }
+  try {
+    const sceneDoc = parseSceneTextarea();
+    return Boolean(findEntityByRef(sceneDoc, { kind: targetKind, id: targetId })?.entry);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function applyTextureAssetToSelection(assetId, options = {}) {
+  const targetKind = String(options.targetKind ?? state.builderSelection?.kind ?? "").trim();
+  const targetId = String(options.targetId ?? state.builderSelection?.id ?? "").trim();
+  if (!assetId || !canApplyTextureToRef(targetKind, targetId)) {
+    return false;
+  }
+  mutateSceneDoc((sceneDoc) => {
+    const found = findEntityByRef(sceneDoc, { kind: targetKind, id: targetId });
+    if (!found?.entry) {
+      return;
+    }
+    found.entry.material = found.entry.material || { color: "#c8d0d8", texture_preset: "none", emissive_intensity: 0 };
+    found.entry.material.texture_asset_id = assetId;
+    found.entry.material.texture_preset = "none";
+  });
+  pushEvent("asset:texture-applied", assetId);
+  return true;
+}
+
+function placeModelAsset(assetId, options = {}) {
+  const asset = getPrivateAssetById(assetId);
+  if (!asset || asset.asset_type !== "model") {
+    return false;
+  }
+  let placed = false;
+  void acquireSceneLock();
+  mutateSceneDoc((sceneDoc) => {
+    sceneDoc.models = Array.isArray(sceneDoc.models) ? sceneDoc.models : [];
+    const nextId = `model_${slugToken(asset.name || asset.id)}_${sceneDoc.models.length + 1}`;
+    sceneDoc.models.push({
+      id: nextId,
+      asset_id: asset.id,
+      label: asset.name || `Model ${sceneDoc.models.length + 1}`,
+      position: options.position ?? { x: sceneDoc.models.length * 3, y: 1, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      bounds: asset.bounds ?? { x: 1, y: 1, z: 1 },
+      material: { color: "#ffffff", texture_preset: "none", texture_asset_id: null, emissive_intensity: 0 },
+      rigid_mode: "rigid",
+      physics: { gravity_scale: 1, restitution: 0.12, friction: 0.72, mass: 1 },
+      invisible: false,
+      group_id: null,
+    });
+    writeBuilderSelection([{ kind: "model", id: nextId }], { kind: "model", id: nextId });
+    placed = true;
+  });
+  if (placed) {
+    setSceneDrawerTab("assets");
+    pushEvent("asset:model-placed", asset.name || asset.id);
+  }
+  return placed;
+}
+
+function buildAssetSummary(asset = {}) {
+  const fileRoles = (asset.files ?? []).map((file) => String(file.role ?? "").trim()).filter(Boolean);
+  const roleSummary = fileRoles.slice(0, 3).join(", ") || "no files";
+  return [
+    asset.asset_type === "model"
+      ? `${Number(asset.bounds?.x ?? 1).toFixed(1)} x ${Number(asset.bounds?.y ?? 1).toFixed(1)} x ${Number(asset.bounds?.z ?? 1).toFixed(1)}`
+      : "texture",
+    asset.provider || "manual",
+    roleSummary,
+    asset.status || "ready",
+  ].join(" · ");
+}
+
+function openAssetAiDialog(kind = "texture") {
+  if (!state.selectedWorld || !state.session) {
+    focusAiBuilder();
+    return;
+  }
+  const selected = (() => {
+    try {
+      return getSelectedEntity(parseSceneTextarea());
+    } catch (_error) {
+      return null;
+    }
+  })();
+  const supportsTextureTarget = kind === "texture" && MATERIALIZABLE_ENTITY_KINDS.has(selected?.kind || "");
+  const targetKind = kind === "texture"
+    ? (supportsTextureTarget ? selected.kind : "world")
+    : (selected?.kind || "world");
+  const targetId = kind === "texture"
+    ? (supportsTextureTarget ? selected.entry.id : "")
+    : (selected?.entry?.id || "");
+  openAiDialog({
+    artifactType: kind === "texture" ? "texture" : "3d_model",
+    targetKind,
+    targetId,
+    title: kind === "texture" ? "Texture brainstorm" : "3D model brainstorm",
+    note: kind === "texture"
+      ? "Let the text model ask a few sharp questions first, then it writes a structured texture spec and hands it to the image provider."
+      : "Let the text model frame the model first, then it writes a structured 3D spec and hands it to the model provider.",
+    applyLabel: kind === "texture" ? "Apply texture" : "",
+  });
+}
+
+function renderAssetsLibrary() {
+  if (!elements.assetSections) {
+    return;
+  }
+  if (!state.session) {
+    elements.assetSections.innerHTML = '<div class="pw-builder-group"><p class="pw-builder-empty">Sign in to use account assets.</p></div>';
+    if (elements.assetStatus) {
+      elements.assetStatus.textContent = "";
+    }
+    return;
+  }
+  const query = String(state.assetQuery ?? "").trim().toLowerCase();
+  const filterType = String(state.assetFilterType ?? "all").trim() || "all";
+  const assets = (state.assets ?? [])
+    .filter((asset) => filterType === "all" || asset.asset_type === filterType)
+    .filter((asset) => {
+      if (!query) {
+        return true;
+      }
+      const haystack = [
+        asset.name,
+        asset.asset_type,
+        asset.provider,
+        asset.intended_use,
+        asset.world_context_summary,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  if (elements.assetStatus) {
+    elements.assetStatus.textContent = state.assetsLoading
+      ? "Loading shared assets..."
+      : `${assets.length} asset${assets.length === 1 ? "" : "s"} shown.`;
+  }
+  if (!assets.length) {
+    elements.assetSections.innerHTML = '<div class="pw-builder-group"><p class="pw-builder-empty">No shared assets match this filter yet.</p></div>';
+    return;
+  }
+  elements.assetSections.innerHTML = assets.map((asset) => {
+    const isReady = String(asset.status ?? "ready").trim().toLowerCase() === "ready";
+    const canApplyTexture = isReady && asset.asset_type === "texture" && canApplyTextureToRef(state.builderSelection?.kind, state.builderSelection?.id);
+    const thumbnail = getPrivateAssetFile(asset, asset.asset_type === "model" ? "thumbnail" : "base_color");
+    return `
+      <article class="pw-prefab-card">
+        <div class="pw-prefab-card__head">
+          <strong>${htmlEscape(asset.name || asset.id)}</strong>
+          <span>${htmlEscape(asset.asset_type === "model" ? "Model" : "Texture")}</span>
+        </div>
+        ${thumbnail?.url ? `<img class="pw-asset-thumb" src="${htmlEscape(thumbnail.url)}" alt="${htmlEscape(asset.name || asset.id)}" />` : ""}
+        <p>${htmlEscape(buildAssetSummary(asset))}</p>
+        <small>${htmlEscape(asset.intended_use || asset.world_context_summary || "Ready across your private worlds.")}</small>
+        <div class="pw-inline-actions">
+          ${asset.asset_type === "texture"
+            ? `<button type="button" ${canApplyTexture ? `data-apply-texture-asset="${htmlEscape(asset.id)}"` : "disabled"}>${!isReady ? "Waiting for ready" : canApplyTexture ? "Apply to selection" : "Pick a material item"}</button>`
+            : `<button type="button" ${isReady ? `data-place-model-asset="${htmlEscape(asset.id)}"` : "disabled"}>${isReady ? "Place in world" : "Waiting for ready"}</button>`}
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 function buildTargetOptions(sceneDoc, selectedValue = "") {
@@ -7510,6 +7994,7 @@ function getPrefabEntryCounts(prefabDoc = {}) {
   return {
     voxel: (prefabDoc.voxels ?? []).length,
     primitive: (prefabDoc.primitives ?? []).length,
+    model: (prefabDoc.models ?? []).length,
     screen: (prefabDoc.screens ?? []).length,
     player: (prefabDoc.players ?? []).length,
     text: (prefabDoc.texts ?? []).length,
@@ -7526,6 +8011,9 @@ function getPrefabTypeSummary(counts = {}) {
   }
   if (counts.primitive) {
     labels.push("objects");
+  }
+  if (counts.model) {
+    labels.push("models");
   }
   if (counts.screen) {
     labels.push("screens");
@@ -7559,6 +8047,15 @@ function getEntityApproxRenderSize(kind, entry = {}) {
       return new THREE.Vector3(scale.x || 1, Math.max(0.1, (scale.y || 1) * 0.1), scale.z || 1);
     }
     return new THREE.Vector3(scale.x || 1, scale.y || 1, scale.z || 1);
+  }
+  if (kind === "model") {
+    const scale = entry.scale ?? { x: 1, y: 1, z: 1 };
+    const bounds = entry.bounds ?? { x: 1, y: 1, z: 1 };
+    return new THREE.Vector3(
+      (scale.x || 1) * (bounds.x || 1),
+      (scale.y || 1) * (bounds.y || 1),
+      (scale.z || 1) * (bounds.z || 1),
+    );
   }
   if (kind === "player") {
     const scale = Math.max(0.2, Number(entry.scale ?? 1) || 1);
@@ -7629,6 +8126,7 @@ function getPrefabDocBounds(prefabDoc = {}, visitedIds = new Set()) {
   const collections = [
     ["voxel", prefabDoc.voxels ?? []],
     ["primitive", prefabDoc.primitives ?? []],
+    ["model", prefabDoc.models ?? []],
     ["screen", prefabDoc.screens ?? []],
     ["player", prefabDoc.players ?? []],
     ["text", prefabDoc.texts ?? []],
@@ -7840,6 +8338,72 @@ function renderEntityInspector(sceneDoc, selected = null) {
             <span>Trail Effect</span>
             <select data-entity-field="trail_effect" data-value-type="text">${buildOptions(TRAIL_OPTIONS, entry.trail_effect || "")}</select>
           </label>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (kind === "model") {
+    elements.entityEditor.innerHTML = `
+      <p class="pw-inspector-note">Custom model assets use their stored GLB for rendering and an approximate box collider from the saved bounds.</p>
+      <label>
+        <span>Label</span>
+        <input type="text" data-entity-field="label" data-value-type="text" value="${htmlEscape(entry.label || "")}" />
+      </label>
+      <label>
+        <span>Asset ID</span>
+        <input type="text" data-entity-field="asset_id" data-value-type="text" value="${htmlEscape(entry.asset_id || "")}" />
+      </label>
+      ${buildMaterialEditor(entry.material, { allowEmission: true })}
+      <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
+      <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
+      <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
+      <div class="pw-inspector-grid">${buildVectorFields("Bounds", "bounds", entry.bounds || { x: 1, y: 1, z: 1 })}</div>
+      <div class="pw-inspector-grid pw-inspector-grid--2">
+        <div>
+          <label>
+            <span>Rigid Mode</span>
+            <select data-entity-field="rigid_mode" data-value-type="text">${buildOptions(["rigid", "ghost"], entry.rigid_mode || "rigid")}</select>
+          </label>
+        </div>
+        <div>
+          <label>
+            <span>Group</span>
+            <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" placeholder="optional group name" />
+          </label>
+        </div>
+      </div>
+      <div class="pw-inspector-grid">
+        <div>
+          <label>
+            <span>Gravity</span>
+            <input type="number" step="0.1" data-entity-field="physics.gravity_scale" data-value-type="number" value="${htmlEscape(entry.physics?.gravity_scale ?? 1)}" />
+          </label>
+        </div>
+        <div>
+          <label>
+            <span>Bounce</span>
+            <input type="number" step="0.05" data-entity-field="physics.restitution" data-value-type="number" value="${htmlEscape(entry.physics?.restitution ?? 0.12)}" />
+          </label>
+        </div>
+        <div>
+          <label>
+            <span>Friction</span>
+            <input type="number" step="0.05" data-entity-field="physics.friction" data-value-type="number" value="${htmlEscape(entry.physics?.friction ?? 0.72)}" />
+          </label>
+        </div>
+      </div>
+      <div class="pw-inspector-grid pw-inspector-grid--2">
+        <div>
+          <label>
+            <span>Mass</span>
+            <input type="number" step="0.1" data-entity-field="physics.mass" data-value-type="number" value="${htmlEscape(entry.physics?.mass ?? 1)}" />
+          </label>
+        </div>
+        <div class="pw-checkbox">
+          <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible === true ? "checked" : ""} />
+          <span>Invisible in play</span>
         </div>
       </div>
     `;
@@ -8538,6 +9102,7 @@ function renderSelectedWorld() {
   renderSceneDrawerTabs();
   renderSceneDrawerSceneIndicator();
   renderSceneEditor();
+  renderAssetsLibrary();
   renderCollaborators();
   renderPrivateShare();
   updatePrivateBrowserPanel();
@@ -8599,6 +9164,12 @@ function renderSelectedWorld() {
   elements.saveCollaborator.disabled = !hasWorld || !canEdit;
   elements.generateHtml.disabled = !hasWorld || !state.session;
   elements.generateScript.disabled = !hasWorld || !state.session;
+  if (elements.assetGenerateTexture) {
+    elements.assetGenerateTexture.disabled = !hasWorld || !state.session || !canEdit || state.mode !== "build";
+  }
+  if (elements.assetGenerateModel) {
+    elements.assetGenerateModel.disabled = !hasWorld || !state.session || !canEdit || state.mode !== "build";
+  }
   for (const button of elements.worldSectionJumpButtons ?? []) {
     button.disabled = !hasWorld;
   }
@@ -11430,11 +12001,143 @@ function disposePreviewEffects(preview) {
   preview.effectSystems = [];
 }
 
+function cloneMaterialForPreview(material) {
+  if (!material?.clone) {
+    return material;
+  }
+  const clone = material.clone();
+  clone.map = material.map || null;
+  clone.normalMap = material.normalMap || null;
+  clone.roughnessMap = material.roughnessMap || null;
+  clone.metalnessMap = material.metalnessMap || null;
+  clone.aoMap = material.aoMap || null;
+  return clone;
+}
+
+function clonePreviewModelScene(scene) {
+  const clone = scene.clone(true);
+  clone.traverse((node) => {
+    if (!node.isMesh) {
+      return;
+    }
+    if (Array.isArray(node.material)) {
+      node.material = node.material.map((material) => cloneMaterialForPreview(material));
+    } else {
+      node.material = cloneMaterialForPreview(node.material);
+    }
+  });
+  return clone;
+}
+
+async function loadTextureFromUrl(url) {
+  return await new Promise((resolve, reject) => {
+    new THREE.TextureLoader().load(
+      url,
+      (texture) => {
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        resolve(texture);
+      },
+      undefined,
+      reject,
+    );
+  });
+}
+
+function getTextureAssetRepeat(scale = { x: 1, y: 1, z: 1 }) {
+  return {
+    x: Math.max(1, Number(scale?.x ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
+    y: Math.max(1, Number(scale?.z ?? scale?.y ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
+  };
+}
+
+async function applyTextureAssetMapsToMaterial(material, textureAssetId, scale = { x: 1, y: 1, z: 1 }) {
+  if (!material || !textureAssetId) {
+    return;
+  }
+  const asset = getPrivateAssetById(textureAssetId);
+  if (!asset) {
+    return;
+  }
+  const cacheKey = textureAssetId;
+  let cached = previewTextureAssetCache.get(cacheKey);
+  if (!cached) {
+    cached = (async () => {
+      const roles = ["base_color", "normal", "roughness", "metallic", "ambient_occlusion", "emissive"];
+      const mapEntries = await Promise.all(roles.map(async (role) => {
+        const file = getPrivateAssetFile(asset, role);
+        if (!file?.url) {
+          return [role, null];
+        }
+        try {
+          return [role, await loadTextureFromUrl(file.url)];
+        } catch (_error) {
+          return [role, null];
+        }
+      }));
+      return Object.fromEntries(mapEntries);
+    })();
+    previewTextureAssetCache.set(cacheKey, cached);
+  }
+  const textures = await cached;
+  const repeat = getTextureAssetRepeat(scale);
+  if (textures.base_color) {
+    textures.base_color.repeat.set(repeat.x, repeat.y);
+    material.map = textures.base_color;
+    material.color?.set?.("#ffffff");
+  }
+  if (textures.normal) {
+    textures.normal.repeat.set(repeat.x, repeat.y);
+    material.normalMap = textures.normal;
+  }
+  if (textures.roughness) {
+    textures.roughness.repeat.set(repeat.x, repeat.y);
+    material.roughnessMap = textures.roughness;
+  }
+  if (textures.metallic) {
+    textures.metallic.repeat.set(repeat.x, repeat.y);
+    material.metalnessMap = textures.metallic;
+  }
+  if (textures.ambient_occlusion) {
+    textures.ambient_occlusion.repeat.set(repeat.x, repeat.y);
+    material.aoMap = textures.ambient_occlusion;
+  }
+  if (textures.emissive) {
+    textures.emissive.repeat.set(repeat.x, repeat.y);
+    material.emissiveMap = textures.emissive;
+  }
+  material.needsUpdate = true;
+}
+
+async function loadPreviewModelAssetScene(asset) {
+  const glbFile = getPrivateAssetFile(asset, "model_glb");
+  if (!glbFile?.url) {
+    return null;
+  }
+  let cached = previewModelAssetCache.get(asset.id);
+  if (!cached) {
+    cached = new Promise((resolve, reject) => {
+      gltfLoader.load(
+        glbFile.url,
+        (gltf) => resolve(gltf.scene || null),
+        undefined,
+        reject,
+      );
+    });
+    previewModelAssetCache.set(asset.id, cached);
+  }
+  return await cached;
+}
+
 function makeMaterial(material = {}, scale = { x: 1, y: 1, z: 1 }, { selected = false } = {}) {
   const built = createPatternedMaterial(THREE, material, {
     repeatX: Math.max(1, Number(scale?.x ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
     repeatY: Math.max(1, Number(scale?.z ?? scale?.y ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
   });
+  if (material?.texture_asset_id) {
+    void applyTextureAssetMapsToMaterial(built, material.texture_asset_id, scale);
+  }
   const baseEmissiveIntensity = Math.max(0, Number(material?.emissive_intensity ?? material?.emissiveIntensity ?? 0) || 0);
   if (selected) {
     if (baseEmissiveIntensity <= 0) {
@@ -11461,6 +12164,7 @@ function applyRenderableVisibility(object, {
   const shouldGhost = invisibleInPlay === true && state.mode === "build" && isEditor();
   const shouldHideVisual = runtimeVisible === false || (invisibleInPlay === true && state.mode === "play");
   object.userData.privateWorldRenderVisible = !shouldHideVisual || shouldGhost;
+  object.visible = !shouldHideVisual || shouldGhost;
   for (const material of materials) {
     if (!material) {
       continue;
@@ -11851,6 +12555,9 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
   if (runtimeMaterial?.color) {
     for (const material of getObjectMaterials(mesh)) {
       material.color?.set?.(runtimeMaterial.color);
+      if (runtimeMaterial.texture_asset_id) {
+        void applyTextureAssetMapsToMaterial(material, runtimeMaterial.texture_asset_id, runtimeEntry.scale ?? options.fallbackScale ?? { x: 1, y: 1, z: 1 });
+      }
       if (material.emissiveIntensity !== undefined) {
         material.emissiveIntensity = Math.max(
           Number(material.emissiveIntensity || 0),
@@ -12078,6 +12785,52 @@ function updatePreviewFromSelection() {
       }
     }
 
+    for (const [index, model] of (prefabDoc.models ?? []).entries()) {
+      renderedAny = true;
+      const modelGroup = new THREE.Group();
+      modelGroup.position.set(model.position?.x || 0, model.position?.y || 1, model.position?.z || 0);
+      modelGroup.rotation.set(model.rotation?.x || 0, model.rotation?.y || 0, model.rotation?.z || 0);
+      modelGroup.scale.set(model.scale?.x || 1, model.scale?.y || 1, model.scale?.z || 1);
+      attachPrefabPickable(modelGroup, metadata ?? { id: model.id || `prefab_model_${index}`, kind: "model" });
+      parent.add(modelGroup);
+      const bounds = model.bounds ?? { x: 1, y: 1, z: 1 };
+      const placeholder = new THREE.Mesh(
+        new THREE.BoxGeometry(Math.max(0.2, bounds.x || 1), Math.max(0.2, bounds.y || 1), Math.max(0.2, bounds.z || 1)),
+        makeMaterial(getMergedMaterial(model.material), bounds, { selected }),
+      );
+      modelGroup.add(placeholder);
+      const asset = getPrivateAssetById(model.asset_id);
+      if (asset) {
+        void loadPreviewModelAssetScene(asset).then((loadedScene) => {
+          if (!loadedScene || !modelGroup.parent) {
+            return;
+          }
+          const clone = clonePreviewModelScene(loadedScene);
+          clone.scale.set(bounds.x || 1, bounds.y || 1, bounds.z || 1);
+          clone.traverse((node) => {
+            if (!node.isMesh) {
+              return;
+            }
+            if (Array.isArray(node.material)) {
+              node.material.forEach((material) => {
+                if (model.material?.texture_asset_id) {
+                  void applyTextureAssetMapsToMaterial(material, model.material.texture_asset_id, bounds);
+                }
+              });
+            } else if (node.material && model.material?.texture_asset_id) {
+              void applyTextureAssetMapsToMaterial(node.material, model.material.texture_asset_id, bounds);
+            }
+          });
+          placeholder.removeFromParent();
+          placeholder.geometry?.dispose?.();
+          placeholder.material?.dispose?.();
+          modelGroup.add(clone);
+        }).catch(() => {
+          // keep placeholder
+        });
+      }
+    }
+
     for (const [index, player] of (prefabDoc.players ?? []).entries()) {
       renderedAny = true;
       const tint = getMergedMaterial({ color: player.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f", texture_preset: "none" });
@@ -12210,6 +12963,11 @@ function updatePreviewFromSelection() {
       .filter((entry) => entry?.id != null)
       .map((entry) => [String(entry.id), entry]),
   );
+  const authoredModelById = new Map(
+    (sceneDoc.models ?? [])
+      .filter((entry) => entry?.id != null)
+      .map((entry) => [String(entry.id), entry]),
+  );
   const useRuntimePrimitivePreview = state.mode === "play" && runtimeTransforms.dynamicObjects.length > 0;
   const renderPrimitiveMesh = (primitiveSource = {}, options = {}) => {
     const authoredPrimitive = options.authoredPrimitive ?? null;
@@ -12260,9 +13018,79 @@ function updatePreviewFromSelection() {
     }
     return mesh;
   };
+  const renderModelMesh = (modelEntry = {}, options = {}) => {
+    const metadata = options.id ? { id: options.id, kind: "model" } : null;
+    const group = new THREE.Group();
+    group.position.set(
+      modelEntry.position?.x || 0,
+      modelEntry.position?.y || 1,
+      modelEntry.position?.z || 0,
+    );
+    group.rotation.set(
+      modelEntry.rotation?.x || 0,
+      modelEntry.rotation?.y || 0,
+      modelEntry.rotation?.z || 0,
+    );
+    group.scale.set(
+      modelEntry.scale?.x || 1,
+      modelEntry.scale?.y || 1,
+      modelEntry.scale?.z || 1,
+    );
+    if (metadata?.id) {
+      group.userData.privateWorldEntityId = metadata.id;
+      group.userData.privateWorldEntityKind = metadata.kind;
+      preview.entityPickables.push(group);
+      preview.entityMeshes.set(metadata.id, group);
+    }
+    preview.root.add(group);
+    const bounds = modelEntry.bounds ?? { x: 1, y: 1, z: 1 };
+    const placeholder = new THREE.Mesh(
+      new THREE.BoxGeometry(Math.max(0.2, bounds.x || 1), Math.max(0.2, bounds.y || 1), Math.max(0.2, bounds.z || 1)),
+      makeMaterial(modelEntry.material ?? { color: "#dde7f2", texture_preset: "none" }, bounds, {
+        selected: options.selected === true,
+      }),
+    );
+    group.add(placeholder);
+    applyRenderableVisibility(group, {
+      invisibleInPlay: modelEntry.invisible === true,
+      runtimeVisible: options.runtimeVisible,
+    });
+    const asset = getPrivateAssetById(modelEntry.asset_id);
+    if (asset) {
+      void loadPreviewModelAssetScene(asset).then((loadedScene) => {
+        if (!loadedScene || !group.parent) {
+          return;
+        }
+        const clone = clonePreviewModelScene(loadedScene);
+        clone.scale.set(bounds.x || 1, bounds.y || 1, bounds.z || 1);
+        clone.traverse((node) => {
+          if (!node.isMesh) {
+            return;
+          }
+          if (Array.isArray(node.material)) {
+            node.material.forEach((material) => {
+              if (modelEntry.material?.texture_asset_id) {
+                void applyTextureAssetMapsToMaterial(material, modelEntry.material.texture_asset_id, bounds);
+              }
+            });
+          } else if (node.material && modelEntry.material?.texture_asset_id) {
+            void applyTextureAssetMapsToMaterial(node.material, modelEntry.material.texture_asset_id, bounds);
+          }
+        });
+        placeholder.removeFromParent();
+        placeholder.geometry?.dispose?.();
+        placeholder.material?.dispose?.();
+        group.add(clone);
+      }).catch(() => {
+        // keep placeholder
+      });
+    }
+    return group;
+  };
   const hasPlacedGeometry = Boolean(
     (sceneDoc.voxels?.length ?? 0)
     || (sceneDoc.primitives?.length ?? 0)
+    || (sceneDoc.models?.length ?? 0)
     || (sceneDoc.screens?.length ?? 0)
     || (sceneDoc.texts?.length ?? 0)
     || (sceneDoc.prefab_instances?.length ?? 0),
@@ -12307,6 +13135,15 @@ function updatePreviewFromSelection() {
         : (runtimePrimitive?.material ?? primitive.material),
       runtimeVisible: runtimePrimitive?.visible !== false,
       selected: isSelected("primitive", primitive.id),
+    });
+  }
+
+  for (const model of sceneDoc.models ?? []) {
+    const runtimeModel = runtimeTransforms.dynamicById.get(model.id);
+    renderModelMesh(runtimeModel ?? model, {
+      id: model.id,
+      selected: isSelected("model", model.id),
+      runtimeVisible: runtimeModel?.visible !== false,
     });
   }
 
@@ -12458,6 +13295,18 @@ function updatePreviewFromSelection() {
 
   for (const runtimePrimitive of runtimeTransforms.dynamicObjects) {
     const objectId = runtimePrimitive.id;
+    if (String(runtimePrimitive?.entity_kind ?? "").trim() === "model") {
+      const authoredModel = authoredModelById.get(String(objectId ?? "")) ?? null;
+      if (authoredModel) {
+        continue;
+      }
+      renderModelMesh(runtimePrimitive, {
+        id: objectId,
+        runtimeVisible: runtimePrimitive?.visible !== false,
+        selected: isSelected("model", objectId),
+      });
+      continue;
+    }
     const authoredPrimitive = authoredPrimitiveById.get(String(objectId ?? "")) ?? null;
     if (!useRuntimePrimitivePreview && authoredPrimitive) {
       continue;
@@ -13059,15 +13908,15 @@ async function exportWorld() {
       Authorization: `Bearer ${state.session.access_token}`,
     },
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.ok === false) {
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || `Export failed (${response.status})`);
   }
-  const blob = new Blob([JSON.stringify(payload.package, null, 2)], { type: "application/json" });
+  const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${state.selectedWorld.world_id}.mauworld.json`;
+  link.download = `${state.selectedWorld.world_id}.mauworld.zip`;
   link.click();
   URL.revokeObjectURL(url);
   pushEvent("world:exported", state.selectedWorld.world_id);
@@ -13079,6 +13928,7 @@ async function forkSelectedWorld() {
   }
   const response = await fetch(mauworldApiUrl(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/export`, {
     creatorUsername: state.selectedWorld.creator.username,
+    format: "json",
   }), {
     headers: {
       Authorization: `Bearer ${state.session.access_token}`,
@@ -13093,6 +13943,7 @@ async function forkSelectedWorld() {
     body: payload.package,
   });
   pushEvent("world:forked", `${imported.world.world_id} from ${state.selectedWorld.world_id}`);
+  await loadAssets();
   await loadWorlds();
   await openWorld(imported.world.world_id, imported.world.creator.username, true, {
     entryLoading: true,
@@ -13119,12 +13970,29 @@ async function importPackage(event) {
   if (!file) {
     return;
   }
-  const content = JSON.parse(await file.text());
-  const payload = await apiFetch("/private/worlds/import", {
-    method: "POST",
-    body: content,
-  });
+  let payload = null;
+  if (file.name.endsWith(".zip") || file.type.includes("zip")) {
+    const response = await fetch(mauworldApiUrl("/private/worlds/import-archive"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${state.session.access_token}`,
+        "Content-Type": file.type || "application/zip",
+      },
+      body: await file.arrayBuffer(),
+    });
+    payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `Import failed (${response.status})`);
+    }
+  } else {
+    const content = JSON.parse(await file.text());
+    payload = await apiFetch("/private/worlds/import", {
+      method: "POST",
+      body: content,
+    });
+  }
   pushEvent("world:imported", payload.world.world_id);
+  await loadAssets();
   await loadWorlds();
   await openWorld(payload.world.world_id, payload.world.creator.username, true, {
     entryLoading: true,
@@ -13499,7 +14367,7 @@ function updateSelectedEntityField(path, rawValue, valueType = "text", options =
     }
     setByPath(selected.entry, path, value);
     if (valueType === "text" && String(value).trim() === "") {
-      if (path === "group_id" || path === "particle_effect" || path === "trail_effect" || path === "prefab_id" || path === "target_id") {
+      if (path === "group_id" || path === "particle_effect" || path === "trail_effect" || path === "prefab_id" || path === "target_id" || path.endsWith("texture_asset_id") || path === "asset_id") {
         setByPath(selected.entry, path, null);
       }
       if (path === "overrides.material.texture_preset") {
@@ -13616,6 +14484,7 @@ function buildPrefabDocFromSelection(selection) {
       },
       voxels: key === "voxels" ? [localEntry] : [],
       primitives: key === "primitives" ? [localEntry] : [],
+      models: key === "models" ? [localEntry] : [],
       screens: key === "screens" ? [localEntry] : [],
       players: key === "players" ? [localEntry] : [],
       texts: key === "texts" ? [localEntry] : [],
@@ -13852,12 +14721,13 @@ async function generateAi(kind, options = {}) {
   if (!state.session) {
     throw new Error("Sign in to use AI Builder.");
   }
-  const provider = String(options.provider ?? elements.aiForm?.elements?.provider?.value ?? "openai").trim() || "openai";
-  const model = String(options.model ?? elements.aiForm?.elements?.model?.value ?? "gpt-5.4-mini").trim() || "gpt-5.4-mini";
-  const apiKey = String(options.apiKey ?? elements.aiForm?.elements?.apiKey?.value ?? "").trim();
-  setAiKey(apiKey);
+  const reasoning = getAiProviderState("reasoning");
+  const provider = String(options.provider ?? reasoning.provider ?? "openai").trim() || "openai";
+  const model = String(options.model ?? reasoning.model ?? "gpt-5.4-mini").trim() || "gpt-5.4-mini";
+  const apiKey = String(options.apiKey ?? reasoning.apiKey ?? "").trim();
+  writeAiProviderState("reasoning", { provider, model, apiKey });
   if (!apiKey) {
-    throw new Error("Missing AI provider API key");
+    throw new Error("Missing text reasoning API key");
   }
   setAiBuilderStatus(kind === "html" ? "Generating screen HTML..." : "Generating script...", "");
   const path = kind === "html" ? "/private/worlds/ai/screen-html" : "/private/worlds/ai/script";
@@ -14414,6 +15284,31 @@ function bindEvents() {
     state.entityFilterKind = elements.entityFilter.value || "all";
     renderSceneBuilder();
   });
+  elements.assetSearch?.addEventListener("input", () => {
+    state.assetQuery = elements.assetSearch.value || "";
+    void loadAssets();
+  });
+  elements.assetTypeFilter?.addEventListener("change", () => {
+    state.assetFilterType = elements.assetTypeFilter.value || "all";
+    void loadAssets();
+  });
+  elements.assetGenerateTexture?.addEventListener("click", () => {
+    openAssetAiDialog("texture");
+  });
+  elements.assetGenerateModel?.addEventListener("click", () => {
+    openAssetAiDialog("model");
+  });
+  elements.assetSections?.addEventListener("click", (event) => {
+    const textureButton = event.target.closest("[data-apply-texture-asset]");
+    if (textureButton) {
+      applyTextureAssetToSelection(textureButton.getAttribute("data-apply-texture-asset"));
+      return;
+    }
+    const modelButton = event.target.closest("[data-place-model-asset]");
+    if (modelButton) {
+      placeModelAsset(modelButton.getAttribute("data-place-model-asset"));
+    }
+  });
   elements.scriptFunctionList?.addEventListener("click", (event) => {
     const card = event.target.closest("[data-script-function-id]");
     if (!card) {
@@ -14632,18 +15527,23 @@ function bindEvents() {
       setStatus(error.message);
     });
   });
-  elements.aiForm.elements.apiKey.value = getAiKey();
+  syncAiProviderFormFromSession();
   refreshAiBuilderStatus();
-  elements.aiForm.elements.provider?.addEventListener("change", () => {
-    refreshAiBuilderStatus();
-  });
-  elements.aiForm.elements.model?.addEventListener("input", () => {
-    refreshAiBuilderStatus();
-  });
-  elements.aiForm.elements.apiKey.addEventListener("input", (event) => {
-    setAiKey(event.target.value);
-    refreshAiBuilderStatus();
-  });
+  for (const group of ["reasoning", "image", "model"]) {
+    const names = getAiProviderFieldNames(group);
+    elements.aiForm.elements[names.provider]?.addEventListener("change", () => {
+      writeAiProviderState(group, getAiProviderState(group));
+      refreshAiBuilderStatus();
+    });
+    elements.aiForm.elements[names.model]?.addEventListener("input", () => {
+      writeAiProviderState(group, getAiProviderState(group));
+      refreshAiBuilderStatus();
+    });
+    elements.aiForm.elements[names.apiKey]?.addEventListener("input", () => {
+      writeAiProviderState(group, getAiProviderState(group));
+      refreshAiBuilderStatus();
+    });
+  }
   for (const button of elements.worldSectionJumpButtons ?? []) {
     button.addEventListener("click", () => {
       const sectionName = button.getAttribute("data-world-section-jump") || "";
