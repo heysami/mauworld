@@ -10320,6 +10320,13 @@ function getTransformHandleHit(pointerSource) {
   const axisLock = getBuildTransformAxisLock(resolvedTransformMode);
   preview.raycaster.setFromCamera(pointer, preview.camera);
   if (handleSelectionFrame && axisLock) {
+    const projectedPivot = projectWorldPoint(baseSelectionFrame?.center ?? handleSelectionFrame.center);
+    const pointerVector = projectedPivot
+      ? new THREE.Vector2(pointerX - projectedPivot.x, pointerY - projectedPivot.y)
+      : null;
+    const pointerDirection = pointerVector && pointerVector.lengthSq() > 36
+      ? pointerVector.clone().normalize()
+      : null;
     const lockedCandidates = (handleType === "rotate"
       ? getRotateHandleSpecs(handleSelectionFrame)
       : getTransformHandleSpecs(handleSelectionFrame)
@@ -10342,12 +10349,19 @@ function getTransformHandleHit(pointerSource) {
           handle: object.userData.privateWorldTransformHandle,
           object,
           depth: screenPoint.depth,
+          alignment: pointerDirection
+            ? new THREE.Vector2(
+              screenPoint.x - projectedPivot.x,
+              screenPoint.y - projectedPivot.y,
+            ).normalize().dot(pointerDirection)
+            : -Infinity,
           screenDistance: Math.hypot(screenPoint.x - pointerX, screenPoint.y - pointerY),
         };
       })
       .filter(Boolean)
       .sort((left, right) =>
-        left.screenDistance - right.screenDistance
+        (pointerDirection ? right.alignment - left.alignment : 0)
+        || left.screenDistance - right.screenDistance
         || left.depth - right.depth
       );
     const bestLockedCandidate = lockedCandidates[0] ?? null;
@@ -10357,7 +10371,11 @@ function getTransformHandleHit(pointerSource) {
     const lockedCandidate = stickyLockedCandidate
       && bestLockedCandidate
       && bestLockedCandidate.handle?.key !== stickyLockedCandidate.handle?.key
-      && bestLockedCandidate.screenDistance + 14 >= stickyLockedCandidate.screenDistance
+      && (
+        pointerDirection
+          ? bestLockedCandidate.alignment - stickyLockedCandidate.alignment <= 0.12
+          : bestLockedCandidate.screenDistance + 14 >= stickyLockedCandidate.screenDistance
+      )
       ? stickyLockedCandidate
       : bestLockedCandidate;
     if (lockedCandidate) {
