@@ -876,6 +876,8 @@ const state = {
   pendingShareJoinCancellationAnchorSessionId: "",
   incomingShareJoinRequests: [],
   voiceJoinOffer: null,
+  pendingVoiceJoin: null,
+  pendingVoiceJoinCancellationAnchorSessionId: "",
   incomingVoiceJoinRequests: [],
   browserOverlayOpen: false,
   browserMediaState: createEmptyPrivateBrowserMediaState(),
@@ -4613,10 +4615,14 @@ function bindPrivatePanelPress(button, handler) {
 function updatePrivateVoicePanel() {
   const localVoiceSession = getLocalPrivateVoiceSession();
   const localContributionSession = getLocalPrivateBrowserSession();
-  if (!localVoiceSession && !state.pendingVoiceShare && state.voiceJoinOffer) {
+  if (!localVoiceSession && !state.pendingVoiceShare) {
     state.voiceJoinOffer = null;
+    clearPendingPrivateVoiceJoinState();
   }
   const canToggle = Boolean(state.session && isPrivateWorldReadyForShare());
+  const pendingVoiceJoinAnchorSessionId = String(state.pendingVoiceJoin?.anchorSessionId ?? "").trim();
+  const cancelingVoiceJoinRequest = pendingVoiceJoinAnchorSessionId
+    && isPrivateVoiceJoinCancellationPending(pendingVoiceJoinAnchorSessionId);
   if (elements.panelVoiceToggle) {
     elements.panelVoiceToggle.disabled = !canToggle && !localVoiceSession && !state.pendingVoiceShare;
     elements.panelVoiceToggle.textContent = getPrivateVoiceShareActionLabel();
@@ -4630,6 +4636,11 @@ function updatePrivateVoicePanel() {
       elements.panelVoiceStatus.textContent = "Enter this private world to use persistent voice chat.";
     } else if (state.pendingVoiceShare) {
       elements.panelVoiceStatus.textContent = "Starting persistent voice chat...";
+    } else if (pendingVoiceJoinAnchorSessionId) {
+      const hostName = getPrivateDisplayNameForSessionId(state.pendingVoiceJoin?.anchorHostSessionId) || "nearby host";
+      elements.panelVoiceStatus.textContent = cancelingVoiceJoinRequest
+        ? `Canceling your request to join ${hostName}'s live voice group...`
+        : `Waiting for ${hostName} to approve your voice join.`;
     } else if (localVoiceSession) {
       elements.panelVoiceStatus.textContent = Boolean(
         localContributionSession
@@ -4644,17 +4655,34 @@ function updatePrivateVoicePanel() {
   }
 }
 
+function handlePrivateIncomingVoiceJoinDecision(anchorSessionId, requesterSessionId, approved) {
+  const sent = sendWorldSocketMessage({
+    type: "voice:join-decision",
+    anchorSessionId,
+    requesterSessionId,
+    approved,
+  });
+  if (!sent) {
+    setPrivateBrowserStatus("Private world share is offline right now.");
+    return false;
+  }
+  state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
+    !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+  updatePrivateBrowserPanel();
+  return true;
+}
+
 function renderPrivateShareJoinRequests() {
   if (!elements.panelShareRequestStack) {
     return;
   }
-  if (state.incomingShareJoinRequests.length === 0) {
+  if (state.incomingShareJoinRequests.length === 0 && state.incomingVoiceJoinRequests.length === 0) {
     elements.panelShareRequestStack.innerHTML = "";
     elements.panelShareRequestStack.hidden = true;
     return;
   }
   elements.panelShareRequestStack.hidden = false;
-  elements.panelShareRequestStack.innerHTML = state.incomingShareJoinRequests.map((request) => `
+  const shareRequestCards = state.incomingShareJoinRequests.map((request) => `
     <div class="world-request-card">
       <div class="world-request-card__title">${htmlEscape(request.requesterDisplayName || "Nearby visitor")}</div>
       <div class="world-request-card__body">Wants to join with ${htmlEscape(getBrowserShareKindLabel(request.shareKind || "screen").toLowerCase())}.</div>
@@ -4663,7 +4691,18 @@ function renderPrivateShareJoinRequests() {
         <button type="button" data-private-share-join-decision="decline" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Decline</button>
       </div>
     </div>
-  `).join("");
+  `);
+  const voiceRequestCards = state.incomingVoiceJoinRequests.map((request) => `
+    <div class="world-request-card">
+      <div class="world-request-card__title">${htmlEscape(request.requesterDisplayName || "Nearby visitor")}</div>
+      <div class="world-request-card__body">Wants their persistent voice chat heard in your live group.</div>
+      <div class="world-request-card__actions">
+        <button type="button" data-private-share-panel-voice-join-decision="approve" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Approve</button>
+        <button type="button" data-private-share-panel-voice-join-decision="decline" data-anchor-session-id="${htmlEscape(request.anchorSessionId)}" data-requester-session-id="${htmlEscape(request.requesterSessionId)}">Decline</button>
+      </div>
+    </div>
+  `);
+  elements.panelShareRequestStack.innerHTML = [...shareRequestCards, ...voiceRequestCards].join("");
   for (const button of elements.panelShareRequestStack.querySelectorAll("[data-private-share-join-decision]")) {
     bindPrivatePanelPress(button, () => {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
@@ -4684,6 +4723,42 @@ function renderPrivateShareJoinRequests() {
       updatePrivateBrowserPanel();
     });
   }
+  for (const button of elements.panelShareRequestStack.querySelectorAll("[data-private-share-panel-voice-join-decision]")) {
+    bindPrivatePanelPress(button, () => {
+      const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
+      const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
+      const approved = button.getAttribute("data-private-share-panel-voice-join-decision") === "approve";
+      handlePrivateIncomingVoiceJoinDecision(anchorSessionId, requesterSessionId, approved);
+    });
+  }
+}
+
+function isPrivateVoiceJoinCancellationPending(anchorSessionId = "") {
+  return String(state.pendingVoiceJoinCancellationAnchorSessionId ?? "").trim() === String(anchorSessionId ?? "").trim()
+    && Boolean(anchorSessionId);
+}
+
+function clearPendingPrivateVoiceJoinState() {
+  state.pendingVoiceJoin = null;
+  state.pendingVoiceJoinCancellationAnchorSessionId = "";
+}
+
+function cancelPendingPrivateVoiceJoinRequest() {
+  const anchorSessionId = String(state.pendingVoiceJoin?.anchorSessionId ?? "").trim();
+  if (!anchorSessionId || isPrivateVoiceJoinCancellationPending(anchorSessionId)) {
+    return false;
+  }
+  const cancelled = sendWorldSocketMessage({
+    type: "voice:join-cancel",
+    anchorSessionId,
+  });
+  if (!cancelled) {
+    setPrivateBrowserStatus("Private world share is offline right now.");
+    return false;
+  }
+  state.pendingVoiceJoinCancellationAnchorSessionId = anchorSessionId;
+  updatePrivateBrowserPanel();
+  return true;
 }
 
 function renderPrivateVoiceJoinOffers() {
@@ -4691,25 +4766,46 @@ function renderPrivateVoiceJoinOffers() {
     return;
   }
   const offer = state.voiceJoinOffer;
-  if (!offer?.anchorSessionId) {
+  const pendingJoin = state.pendingVoiceJoin;
+  const activeAnchorSessionId = String(pendingJoin?.anchorSessionId ?? offer?.anchorSessionId ?? "").trim();
+  if (!activeAnchorSessionId) {
     elements.panelVoiceOfferStack.innerHTML = "";
     elements.panelVoiceOfferStack.hidden = true;
     return;
   }
-  const title = offer.anchorSession?.title
-    ? `"${offer.anchorSession.title}"`
+  const anchorHostSessionId = String(pendingJoin?.anchorHostSessionId ?? offer?.anchorHostSessionId ?? "").trim();
+  const hostName = getPrivateDisplayNameForSessionId(anchorHostSessionId);
+  const anchorSession = pendingJoin?.anchorSession ?? offer?.anchorSession ?? null;
+  const title = anchorSession?.title
+    ? `"${anchorSession.title}"`
     : "this nearby live share";
+  const canceling = isPrivateVoiceJoinCancellationPending(activeAnchorSessionId);
   elements.panelVoiceOfferStack.hidden = false;
-  elements.panelVoiceOfferStack.innerHTML = `
-    <div class="world-request-card">
-      <div class="world-request-card__title">Join Nearby Voice Group?</div>
-      <div class="world-request-card__body">Your persistent voice can join ${htmlEscape(title)} after approval.</div>
-      <div class="world-request-card__actions">
-        <button type="button" data-private-voice-offer-decision="accept">Join</button>
-        <button type="button" data-private-voice-offer-decision="decline">Stay Nearby</button>
+  elements.panelVoiceOfferStack.innerHTML = pendingJoin
+    ? `
+      <div class="world-request-card">
+        <div class="world-request-card__title">Voice Join Requested</div>
+        <div class="world-request-card__body">Waiting for ${htmlEscape(hostName || "Nearby host")} to approve ${htmlEscape(title)}.</div>
+        <div class="world-request-card__actions">
+          <button type="button" data-private-voice-join-cancel="true" ${canceling ? "disabled" : ""}>${canceling ? "Canceling..." : "Cancel Request"}</button>
+        </div>
       </div>
-    </div>
-  `;
+    `
+    : `
+      <div class="world-request-card">
+        <div class="world-request-card__title">Join Nearby Voice Group?</div>
+        <div class="world-request-card__body">${htmlEscape(hostName || "Nearby host")} is live with ${htmlEscape(title)}.</div>
+        <div class="world-request-card__actions">
+          <button type="button" data-private-voice-offer-decision="accept">Join</button>
+          <button type="button" data-private-voice-offer-decision="decline">Stay Nearby</button>
+        </div>
+      </div>
+    `;
+  for (const button of elements.panelVoiceOfferStack.querySelectorAll("[data-private-voice-join-cancel]")) {
+    bindPrivatePanelPress(button, () => {
+      cancelPendingPrivateVoiceJoinRequest();
+    });
+  }
   for (const button of elements.panelVoiceOfferStack.querySelectorAll("[data-private-voice-offer-decision]")) {
     bindPrivatePanelPress(button, () => {
       const localVoiceSession = getLocalPrivateVoiceSession();
@@ -4728,6 +4824,17 @@ function renderPrivateVoiceJoinOffers() {
       });
       if (!sent) {
         setPrivateBrowserStatus("Private world share is offline right now.");
+        return;
+      }
+      if (accepted) {
+        state.pendingVoiceJoin = {
+          anchorSessionId: offer.anchorSessionId,
+          anchorHostSessionId: offer.anchorHostSessionId,
+          anchorSession: offer.anchorSession ?? null,
+        };
+        state.pendingVoiceJoinCancellationAnchorSessionId = "";
+        state.voiceJoinOffer = null;
+        updatePrivateBrowserPanel();
         return;
       }
       if (!accepted) {
@@ -4764,19 +4871,7 @@ function renderPrivateVoiceJoinRequests() {
       const anchorSessionId = String(button.getAttribute("data-anchor-session-id") ?? "").trim();
       const requesterSessionId = String(button.getAttribute("data-requester-session-id") ?? "").trim();
       const approved = button.getAttribute("data-private-voice-join-decision") === "approve";
-      const sent = sendWorldSocketMessage({
-        type: "voice:join-decision",
-        anchorSessionId,
-        requesterSessionId,
-        approved,
-      });
-      if (!sent) {
-        setPrivateBrowserStatus("Private world share is offline right now.");
-        return;
-      }
-      state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
-        !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
-      renderPrivateVoiceJoinRequests();
+      handlePrivateIncomingVoiceJoinDecision(anchorSessionId, requesterSessionId, approved);
     });
   }
 }
@@ -5395,6 +5490,12 @@ function handlePrivateBrowserStop(payload = {}) {
   if (state.pendingShareJoinCancellationAnchorSessionId === sessionId) {
     state.pendingShareJoinCancellationAnchorSessionId = "";
   }
+  if (state.pendingVoiceJoin?.anchorSessionId === sessionId) {
+    clearPendingPrivateVoiceJoinState();
+  }
+  if (state.pendingVoiceJoinCancellationAnchorSessionId === sessionId) {
+    state.pendingVoiceJoinCancellationAnchorSessionId = "";
+  }
   if (state.voiceJoinOffer?.anchorSessionId === sessionId) {
     state.voiceJoinOffer = null;
   }
@@ -5425,6 +5526,8 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
   state.pendingShareJoinCancellationAnchorSessionId = "";
   state.incomingShareJoinRequests = [];
   state.voiceJoinOffer = null;
+  state.pendingVoiceJoin = null;
+  state.pendingVoiceJoinCancellationAnchorSessionId = "";
   state.incomingVoiceJoinRequests = [];
   state.browserMediaState = createEmptyPrivateBrowserMediaState();
   setLocalPrivateBrowserPreviewStream(null);
@@ -12591,8 +12694,23 @@ function connectWorldSocket() {
           anchorHostSessionId: String(payload.anchorHostSessionId ?? "").trim(),
           anchorSession: payload.anchorSession ?? null,
         };
+        clearPendingPrivateVoiceJoinState();
         updatePrivateVoicePanel();
         renderPrivateVoiceJoinOffers();
+      } else if (payload.type === "voice:join-requested") {
+        const anchorSessionId = String(payload.anchorSessionId ?? state.pendingVoiceJoin?.anchorSessionId ?? "").trim();
+        if (isPrivateVoiceJoinCancellationPending(anchorSessionId)) {
+          return;
+        }
+        state.pendingVoiceJoin = {
+          ...(state.pendingVoiceJoin ?? {}),
+          anchorSessionId,
+          anchorHostSessionId: String(payload.anchorHostSessionId ?? state.pendingVoiceJoin?.anchorHostSessionId ?? "").trim(),
+          anchorSession: payload.anchorSession ?? state.pendingVoiceJoin?.anchorSession ?? state.voiceJoinOffer?.anchorSession ?? null,
+        };
+        state.pendingVoiceJoinCancellationAnchorSessionId = "";
+        state.voiceJoinOffer = null;
+        updatePrivateBrowserPanel();
       } else if (payload.type === "voice:join-request") {
         const requestKey = `${String(payload.anchorSessionId ?? "").trim()}:${String(payload.requesterSessionId ?? "").trim()}`;
         state.incomingVoiceJoinRequests = [
@@ -12605,9 +12723,33 @@ function connectWorldSocket() {
             sessionId: String(payload.sessionId ?? "").trim(),
           },
         ];
-        renderPrivateVoiceJoinRequests();
+        updatePrivateBrowserPanel();
+      } else if (payload.type === "voice:join-cancelled") {
+        const anchorSessionId = String(payload.anchorSessionId ?? "").trim();
+        const requesterSessionId = String(payload.requesterSessionId ?? "").trim();
+        if (requesterSessionId && requesterSessionId !== getPrivateViewerSessionId()) {
+          state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
+            !(request.anchorSessionId === anchorSessionId && request.requesterSessionId === requesterSessionId));
+          updatePrivateBrowserPanel();
+          return;
+        }
+        if (
+          state.pendingVoiceJoin?.anchorSessionId === anchorSessionId
+          || isPrivateVoiceJoinCancellationPending(anchorSessionId)
+          || state.voiceJoinOffer?.anchorSessionId === anchorSessionId
+        ) {
+          clearPendingPrivateVoiceJoinState();
+          if (state.voiceJoinOffer?.anchorSessionId === anchorSessionId) {
+            state.voiceJoinOffer = null;
+          }
+          updatePrivateBrowserPanel();
+          if (payload.message) {
+            setPrivateBrowserStatus(payload.message);
+          }
+        }
       } else if (payload.type === "voice:join-resolved") {
         const approved = payload.approved === true;
+        clearPendingPrivateVoiceJoinState();
         state.voiceJoinOffer = null;
         updatePrivateVoicePanel();
         renderPrivateVoiceJoinOffers();

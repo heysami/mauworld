@@ -666,3 +666,80 @@ test("approved private persistent voice join grants a member audio share without
     true,
   );
 });
+
+test("private persistent voice acceptance notifies the anchor host", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const voiceHost = createClient({
+    viewerSessionId: "profile:voice",
+    displayName: "voice",
+    position: { x: 24, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(voiceHost);
+
+  const anchorSession = {
+    id: "anchor_session",
+    sessionId: "anchor_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([host.viewerSessionId, voiceHost.viewerSessionId]),
+  };
+  const voiceSession = {
+    id: "voice_session",
+    sessionId: "voice_session",
+    hostSessionId: voiceHost.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    sessionSlot: "persistent-voice",
+    groupRole: "origin",
+    listedLive: false,
+    movementLocked: false,
+    groupJoined: false,
+    anchorSessionId: "",
+    anchorHostSessionId: "",
+    subscribers: new Set([voiceHost.viewerSessionId]),
+  };
+  gateway.browserManager.getSession = (sessionId) => {
+    if (sessionId === anchorSession.id) {
+      return anchorSession;
+    }
+    if (sessionId === voiceSession.id) {
+      return voiceSession;
+    }
+    return null;
+  };
+  gateway.browserManager.getSessionByHost = (hostSessionId, options = {}) => {
+    if (hostSessionId === voiceHost.viewerSessionId && options.sessionSlot === "persistent-voice") {
+      return voiceSession;
+    }
+    return null;
+  };
+  gateway.voiceJoinOffers.set(voiceSession.id, {
+    anchorSessionId: anchorSession.id,
+    state: "offered",
+  });
+
+  await gateway.handleVoiceJoinOfferResponse(voiceHost, {
+    anchorSessionId: anchorSession.id,
+    accepted: true,
+  });
+
+  assert.equal(
+    host.socket.sent.some((message) =>
+      message.type === "voice:join-request" && message.requesterSessionId === voiceHost.viewerSessionId),
+    true,
+  );
+  assert.equal(
+    voiceHost.socket.sent.some((message) =>
+      message.type === "voice:join-requested" && message.anchorSessionId === anchorSession.id),
+    true,
+  );
+});

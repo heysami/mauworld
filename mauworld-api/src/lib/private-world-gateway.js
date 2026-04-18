@@ -261,6 +261,10 @@ export class PrivateWorldGateway {
       await this.handleVoiceJoinOfferResponse(client, message);
       return;
     }
+    if (type === "voice:join-cancel") {
+      await this.handleVoiceJoinCancel(client, message);
+      return;
+    }
     if (type === "voice:join-decision") {
       await this.handleVoiceJoinDecision(client, message);
       return;
@@ -675,6 +679,51 @@ export class PrivateWorldGateway {
     this.voiceJoinOffers.delete(String(sessionId ?? "").trim());
   }
 
+  cancelVoiceJoinOffer(sessionLike, {
+    message = "Returned to standalone voice chat.",
+    notifyRequester = true,
+    notifyAnchor = true,
+  } = {}) {
+    const sessionId = String(sessionLike?.id ?? sessionLike?.sessionId ?? "").trim();
+    if (!sessionId) {
+      return false;
+    }
+    const offer = this.voiceJoinOffers.get(sessionId);
+    if (!offer) {
+      return false;
+    }
+    const anchorSessionId = String(offer.anchorSessionId ?? "").trim();
+    const requesterSessionId = String(sessionLike?.hostSessionId ?? "").trim();
+    const browserWorldKey = String(sessionLike?.worldSnapshotId ?? "").trim();
+    const anchorSession = anchorSessionId ? this.browserManager.getSession(anchorSessionId) : null;
+    const anchorHostSessionId = String(anchorSession?.hostSessionId ?? "").trim();
+    this.clearApprovedShareJoin(anchorSessionId, requesterSessionId);
+    this.clearVoiceJoinOffer(sessionId);
+    if (notifyAnchor && anchorHostSessionId) {
+      const anchorClient = this.findBrowserClient(browserWorldKey, anchorHostSessionId);
+      if (anchorClient) {
+        sendJson(anchorClient, {
+          type: "voice:join-cancelled",
+          anchorSessionId,
+          requesterSessionId,
+        });
+      }
+    }
+    if (notifyRequester && requesterSessionId) {
+      const requesterClient = this.findBrowserClient(browserWorldKey, requesterSessionId);
+      if (requesterClient) {
+        sendJson(requesterClient, {
+          type: "voice:join-cancelled",
+          anchorSessionId,
+          anchorHostSessionId,
+          requesterSessionId,
+          message,
+        });
+      }
+    }
+    return true;
+  }
+
   async handleVoiceStart(client) {
     if (!client?.profile) {
       sendJson(client, {
@@ -724,6 +773,10 @@ export class PrivateWorldGateway {
     if (!session || session.hostSessionId !== client.viewerSessionId) {
       return;
     }
+    this.cancelVoiceJoinOffer(session, {
+      message: "Persistent voice chat stopped.",
+      notifyRequester: false,
+    });
     this.clearVoiceJoinOffer(session.id ?? session.sessionId);
     await this.browserManager.stopSession(session.id ?? session.sessionId);
   }
@@ -761,6 +814,13 @@ export class PrivateWorldGateway {
     }
     const anchorClient = this.findBrowserClient(client.browserWorldKey, anchorSession.hostSessionId);
     if (!anchorClient) {
+      this.clearVoiceJoinOffer(voiceSession.id ?? voiceSession.sessionId);
+      sendJson(client, {
+        type: "voice:join-resolved",
+        approved: false,
+        anchorSessionId,
+        message: "That nearby live session is no longer available.",
+      });
       return;
     }
     offer.state = "pending-origin";
@@ -770,6 +830,34 @@ export class PrivateWorldGateway {
       requesterSessionId: client.viewerSessionId,
       requesterDisplayName: this.getClientDisplayName(client),
       sessionId: voiceSession.id ?? voiceSession.sessionId,
+    });
+    sendJson(client, {
+      type: "voice:join-requested",
+      anchorSessionId,
+      anchorHostSessionId: anchorSession.hostSessionId,
+      anchorSession: this.buildSessionContextPayload(anchorSession),
+    });
+  }
+
+  async handleVoiceJoinCancel(client, message) {
+    if (!client?.profile) {
+      return;
+    }
+    const voiceSession = this.getHostedPersistentVoiceSession(client.viewerSessionId);
+    if (!voiceSession) {
+      return;
+    }
+    const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    if (!anchorSessionId) {
+      return;
+    }
+    const offer = this.voiceJoinOffers.get(voiceSession.id ?? voiceSession.sessionId);
+    if (!offer || offer.anchorSessionId !== anchorSessionId || offer.state === "joined") {
+      return;
+    }
+    this.cancelVoiceJoinOffer(voiceSession, {
+      message: "Stayed in standalone voice chat.",
+      notifyAnchor: offer.state === "pending-origin",
     });
   }
 
@@ -1113,7 +1201,10 @@ export class PrivateWorldGateway {
       }
 
       if (offer && !stillInOfferedRange) {
-        this.clearVoiceJoinOffer(sessionId);
+        this.cancelVoiceJoinOffer(session, {
+          message: "Returned to standalone voice chat.",
+          notifyAnchor: offer.state === "pending-origin",
+        });
       }
 
       const nearestOrigin = this.getNearestOriginSessionForClient(hostClient, browserWorldKey);
@@ -1269,8 +1360,22 @@ export class PrivateWorldGateway {
           await this.broadcastBrowserSession(session, { rebalance: false });
         }
       }
+      for (const session of this.browserManager.listSessionsForWorld(browserWorldKey)) {
+        const offer = this.voiceJoinOffers.get(session.id ?? session.sessionId) ?? null;
+        if (!offer || offer.anchorSessionId !== payload.sessionId || isJoinedPersistentVoiceSession(session)) {
+          continue;
+        }
+        this.cancelVoiceJoinOffer(session, {
+          message: "That nearby live session is no longer available.",
+          notifyAnchor: false,
+        });
+      }
     }
     if (isPersistentVoiceSession(payload)) {
+      this.cancelVoiceJoinOffer(payload, {
+        message: "Persistent voice chat stopped.",
+        notifyRequester: false,
+      });
       this.clearVoiceJoinOffer(payload.sessionId);
     }
     this.broadcastToBrowserWorld(browserWorldKey, {

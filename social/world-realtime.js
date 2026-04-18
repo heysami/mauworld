@@ -177,6 +177,9 @@ export function createWorldRealtimeClient(options = {}) {
     respondVoiceJoinOffer(anchorSessionId, accepted) {
       return send("voice:join-offer-response", { anchorSessionId, accepted });
     },
+    cancelVoiceJoin(anchorSessionId) {
+      return send("voice:join-cancel", { anchorSessionId });
+    },
     decideVoiceJoin(anchorSessionId, requesterSessionId, approved) {
       return send("voice:join-decision", { anchorSessionId, requesterSessionId, approved });
     },
