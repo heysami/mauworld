@@ -1403,6 +1403,90 @@ function getPrivateGameSessionDeliveryMode(session = {}) {
   return String(session?.deliveryMode ?? "").trim() === "full" ? "full" : "placeholder";
 }
 
+function isPrivateLocalHostedGameShareSession(session = {}) {
+  return getPrivateGameSessionHostViewerSessionId(session) === getPrivateViewerSessionId();
+}
+
+function getPrivateLocalGamePreviewCanvas(sessionId = "") {
+  return state.gamePreviewMedia.get(String(sessionId ?? "").trim())?.canvas ?? null;
+}
+
+function hasPrivateSiblingNearbyMediaForGameHost(session = {}) {
+  const hostSessionId = getPrivateGameSessionHostViewerSessionId(session);
+  const sessionId = String(session?.session_id ?? "").trim();
+  const browserWorldKey = getPrivateBrowserWorldKey();
+  if (!hostSessionId) {
+    return false;
+  }
+  for (const browserSession of state.browserSessions.values()) {
+    const browserHostSessionId = String(browserSession?.hostSessionId ?? "").trim();
+    const bindingKey = String(browserSession?.bindingKey ?? browserSession?.binding_key ?? "").trim();
+    const countsAsNearbyShare = isPrivateListedLiveSession(browserSession)
+      || (isPrivatePersistentVoiceSession(browserSession) && !isPrivateBrowserMemberSession(browserSession));
+    if (
+      !countsAsNearbyShare
+      || browserHostSessionId !== hostSessionId
+      || (browserWorldKey && bindingKey && bindingKey !== browserWorldKey)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  for (const gameSession of state.gameSessions.values()) {
+    const otherSessionId = String(gameSession?.session_id ?? "").trim();
+    const bindingKey = String(gameSession?.binding_key ?? "").trim();
+    if (
+      !isPrivateListedLiveGameSession(gameSession)
+      || !otherSessionId
+      || otherSessionId === sessionId
+      || getPrivateGameSessionHostViewerSessionId(gameSession) !== hostSessionId
+      || (browserWorldKey && bindingKey && bindingKey !== browserWorldKey)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function getPrivateGameShareLaneOffset(session = {}) {
+  if (!hasPrivateSiblingNearbyMediaForGameHost(session)) {
+    return { x: 0, y: 0, z: 0 };
+  }
+  const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
+  return {
+    x: laneOffset.x + (SHARED_BROWSER_SHARE_LAYOUT.screenWidth * 0.24),
+    y: laneOffset.y,
+    z: laneOffset.z - 0.9,
+  };
+}
+
+function getPrivateGameShareLocalCanvasTexture(entry) {
+  if (!entry) {
+    return null;
+  }
+  const canvas = isPrivateLocalHostedGameShareSession(entry.session)
+    ? getPrivateLocalGamePreviewCanvas(entry.sessionId)
+    : null;
+  if (!canvas) {
+    entry.localCanvasTexture?.dispose?.();
+    entry.localCanvasTexture = null;
+    entry.localCanvas = null;
+    return null;
+  }
+  if (entry.localCanvas !== canvas || !entry.localCanvasTexture) {
+    entry.localCanvasTexture?.dispose?.();
+    entry.localCanvas = canvas;
+    entry.localCanvasTexture = new THREE.CanvasTexture(canvas);
+    entry.localCanvasTexture.colorSpace = THREE.SRGBColorSpace;
+    entry.localCanvasTexture.generateMipmaps = false;
+    entry.localCanvasTexture.minFilter = THREE.LinearFilter;
+    entry.localCanvasTexture.magFilter = THREE.LinearFilter;
+  }
+  entry.localCanvasTexture.needsUpdate = true;
+  return entry.localCanvasTexture;
+}
+
 function updateLocalPrivateGamePreview(sessionId, preview = null) {
   const normalizedSessionId = String(sessionId ?? "").trim();
   const existing = state.gameSessions.get(normalizedSessionId);
@@ -2780,6 +2864,7 @@ function removePrivateGameBubbleEntry(sessionId = "") {
     return;
   }
   clearPrivateGameShareVideo(entry.sessionId);
+  entry.localCanvasTexture?.dispose?.();
   preview.gameShareEntries.delete(entry.sessionId);
   preview.entityPickables = preview.entityPickables.filter((mesh) => mesh !== entry.frame && mesh !== entry.hitTarget);
   entry.group.parent?.remove(entry.group);
@@ -2874,6 +2959,8 @@ function ensurePrivateGameBubbleEntry(session = {}) {
     liveTexture,
     videoElement: null,
     videoTexture: null,
+    localCanvas: null,
+    localCanvasTexture: null,
     placeholderTexture,
     position: new THREE.Vector3(),
     targetPosition: new THREE.Vector3(),
@@ -2936,7 +3023,10 @@ function updatePrivateGameBubblePresentation(entry) {
   }
   const deliveryMode = getPrivateGameSessionDeliveryMode(entry.session);
   const showLiveMedia = deliveryMode === "full";
-  const desiredMap = showLiveMedia && entry.videoTexture
+  const localCanvasTexture = showLiveMedia ? getPrivateGameShareLocalCanvasTexture(entry) : null;
+  const desiredMap = showLiveMedia && localCanvasTexture
+    ? localCanvasTexture
+    : showLiveMedia && entry.videoTexture
     ? entry.videoTexture
     : showLiveMedia && previewFrame?.data_url
       ? entry.liveTexture
@@ -3000,12 +3090,16 @@ function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
       continue;
     }
     const showingLiveMedia = getPrivateGameSessionDeliveryMode(entry.session) === "full"
-      && Boolean(entry.videoTexture || entry.session?.latest_preview?.data_url);
-    const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
+      && Boolean(
+        (isPrivateLocalHostedGameShareSession(entry.session) && getPrivateLocalGamePreviewCanvas(entry.sessionId))
+        || entry.videoTexture
+        || entry.session?.latest_preview?.data_url,
+      );
+    const laneOffset = getPrivateGameShareLaneOffset(entry.session);
     entry.targetPosition.copy(hostPosition);
     entry.targetPosition.x += laneOffset.x;
     entry.targetPosition.z += laneOffset.z;
-    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds) + laneOffset.y;
     entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);

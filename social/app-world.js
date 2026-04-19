@@ -2206,6 +2206,91 @@ function getGameSessionDeliveryMode(session = {}) {
   return String(session?.deliveryMode ?? "").trim() === "full" ? "full" : "placeholder";
 }
 
+function isLocalHostedGameShareSession(session = {}) {
+  return getGameSessionHostViewerSessionId(session) === state.viewerSessionId;
+}
+
+function getLocalGamePreviewCanvas(sessionId = "") {
+  return state.gamePreviewMedia.get(String(sessionId ?? "").trim())?.canvas ?? null;
+}
+
+function hasSiblingNearbyMediaForGameHost(session = {}) {
+  const hostSessionId = getGameSessionHostViewerSessionId(session);
+  const sessionId = String(session?.session_id ?? "").trim();
+  const worldSnapshotId = String(state.meta?.worldSnapshotId ?? "").trim();
+  if (!hostSessionId) {
+    return false;
+  }
+  for (const browserSession of state.browserSessions.values()) {
+    const browserHostSessionId = String(browserSession?.hostSessionId ?? "").trim();
+    const bindingKey = String(browserSession?.bindingKey ?? browserSession?.binding_key ?? "").trim();
+    const countsAsNearbyShare = isListedLiveSession(browserSession)
+      || (isBrowserPersistentVoiceSession(browserSession) && !isBrowserMemberSession(browserSession));
+    if (
+      !countsAsNearbyShare
+      || browserHostSessionId !== hostSessionId
+      || (worldSnapshotId && bindingKey && bindingKey !== worldSnapshotId)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  for (const gameSession of state.gameSessions.values()) {
+    const otherSessionId = String(gameSession?.session_id ?? "").trim();
+    if (
+      !isListedLiveGameSession(gameSession)
+      || !otherSessionId
+      || otherSessionId === sessionId
+      || getGameSessionHostViewerSessionId(gameSession) !== hostSessionId
+      || (worldSnapshotId
+        && String(gameSession?.binding_key ?? "").trim()
+        && String(gameSession?.binding_key ?? "").trim() !== worldSnapshotId)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function getGameShareLaneOffset(session = {}) {
+  if (!hasSiblingNearbyMediaForGameHost(session)) {
+    return { x: 0, y: 0, z: 0 };
+  }
+  const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
+  return {
+    x: laneOffset.x + (SHARED_BROWSER_SHARE_LAYOUT.screenWidth * 0.24),
+    y: laneOffset.y,
+    z: laneOffset.z - 0.9,
+  };
+}
+
+function getGameShareLocalCanvasTexture(entry) {
+  if (!entry) {
+    return null;
+  }
+  const canvas = isLocalHostedGameShareSession(entry.session)
+    ? getLocalGamePreviewCanvas(entry.sessionId)
+    : null;
+  if (!canvas) {
+    entry.localCanvasTexture?.dispose?.();
+    entry.localCanvasTexture = null;
+    entry.localCanvas = null;
+    return null;
+  }
+  if (entry.localCanvas !== canvas || !entry.localCanvasTexture) {
+    entry.localCanvasTexture?.dispose?.();
+    entry.localCanvas = canvas;
+    entry.localCanvasTexture = new THREE.CanvasTexture(canvas);
+    entry.localCanvasTexture.colorSpace = THREE.SRGBColorSpace;
+    entry.localCanvasTexture.generateMipmaps = false;
+    entry.localCanvasTexture.minFilter = THREE.LinearFilter;
+    entry.localCanvasTexture.magFilter = THREE.LinearFilter;
+  }
+  entry.localCanvasTexture.needsUpdate = true;
+  return entry.localCanvasTexture;
+}
+
 function updateLocalGamePreview(sessionId, preview = null) {
   const normalizedSessionId = String(sessionId ?? "").trim();
   const existing = state.gameSessions.get(normalizedSessionId);
@@ -7561,7 +7646,7 @@ function getGameShareRenderTarget(entry) {
   if (!hostPosition) {
     return null;
   }
-  const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
+  const laneOffset = getGameShareLaneOffset(entry.session ?? {});
   return hostPosition.clone().add(new THREE.Vector3(
     laneOffset.x,
     BROWSER_SHARE.liveOffsetY + laneOffset.y,
@@ -7989,6 +8074,7 @@ function removeGameShareEntry(sessionId) {
   }
   handleNearbyMediaFocusTargetRemoved(normalizedSessionId, entry.hostSessionId);
   clearGameShareVideo(normalizedSessionId);
+  entry.localCanvasTexture?.dispose?.();
   entry.liveTexture?.dispose?.();
   entry.placeholderTexture?.dispose?.();
   if (Array.isArray(entry.clickablePayloads) && entry.clickablePayloads.length > 0) {
@@ -8103,6 +8189,8 @@ function ensureGameShareEntry(session) {
     liveTexture,
     videoElement: null,
     videoTexture: null,
+    localCanvas: null,
+    localCanvasTexture: null,
     placeholderTexture,
     position: new THREE.Vector3(),
     targetPosition: new THREE.Vector3(),
@@ -8166,7 +8254,10 @@ function updateGameSharePresentation(entry) {
   }
   const deliveryMode = getGameSessionDeliveryMode(entry.session);
   const showLiveMedia = deliveryMode === "full";
-  const desiredTexture = showLiveMedia && entry.videoTexture
+  const localCanvasTexture = showLiveMedia ? getGameShareLocalCanvasTexture(entry) : null;
+  const desiredTexture = showLiveMedia && localCanvasTexture
+    ? localCanvasTexture
+    : showLiveMedia && entry.videoTexture
     ? entry.videoTexture
     : showLiveMedia && preview?.data_url
       ? entry.liveTexture
@@ -8222,12 +8313,16 @@ function updateGameShareEntries(elapsedSeconds = 0) {
       continue;
     }
     const showingLiveMedia = getGameSessionDeliveryMode(entry.session) === "full"
-      && Boolean(entry.videoTexture || entry.session?.latest_preview?.data_url);
-    const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
+      && Boolean(
+        (isLocalHostedGameShareSession(entry.session) && getLocalGamePreviewCanvas(entry.sessionId))
+        || entry.videoTexture
+        || entry.session?.latest_preview?.data_url,
+      );
+    const laneOffset = getGameShareLaneOffset(entry.session);
     entry.targetPosition.copy(hostPosition);
     entry.targetPosition.x += laneOffset.x;
     entry.targetPosition.z += laneOffset.z;
-    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds) + laneOffset.y;
     entry.position.lerp(entry.targetPosition, 0.18);
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);
