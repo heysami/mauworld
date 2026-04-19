@@ -1178,6 +1178,7 @@ export function createWorldGameLibrary(options = {}) {
 export function createWorldGameShell(options = {}) {
   const state = {
     open: false,
+    acceptPreviews: false,
     loading: false,
     status: "",
     session: null,
@@ -1450,13 +1451,18 @@ export function createWorldGameShell(options = {}) {
     renderSummary();
   }
 
-  function syncPreviewVisibility() {
+  function syncPreviewVisibility(active = state.open === true) {
     if (!state.session || !state.iframeReady) {
       return;
     }
     sendToFrame("preview-visibility", {
-      active: state.open === true,
+      active: active === true,
     });
+  }
+
+  function setPreviewCaptureActive(active) {
+    state.acceptPreviews = active === true;
+    syncPreviewVisibility(state.acceptPreviews);
   }
 
   function loadIframe() {
@@ -1483,6 +1489,7 @@ export function createWorldGameShell(options = {}) {
       return;
     }
     state.open = true;
+    state.acceptPreviews = true;
     state.loading = true;
     state.status = "";
     state.session = cloneJson(session);
@@ -1500,6 +1507,7 @@ export function createWorldGameShell(options = {}) {
 
   function openPayload(payload = {}) {
     state.open = true;
+    state.acceptPreviews = true;
     state.loading = false;
     state.status = "";
     state.session = cloneJson(payload.session ?? null);
@@ -1545,6 +1553,7 @@ export function createWorldGameShell(options = {}) {
   }
 
   function close() {
+    state.acceptPreviews = false;
     if (state.iframeReady) {
       sendToFrame("destroy");
     }
@@ -1608,6 +1617,9 @@ export function createWorldGameShell(options = {}) {
       return;
     }
     if (payload.type === "preview") {
+      if (!state.open || !state.acceptPreviews) {
+        return;
+      }
       const now = performance.now();
       if (now - state.lastPreviewSentAt < 220) {
         return;
@@ -1616,6 +1628,16 @@ export function createWorldGameShell(options = {}) {
       options.onPreview?.(sessionId, cloneJson(payload.preview));
     }
   }
+
+  overlay.addEventListener("pointerdown", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (target.hasAttribute("data-game-shell-close")) {
+      setPreviewCaptureActive(false);
+    }
+  }, true);
 
   overlay.addEventListener("click", (event) => {
     const target = event.target;
@@ -1644,9 +1666,9 @@ export function createWorldGameShell(options = {}) {
   render();
 
   function hide() {
+    setPreviewCaptureActive(false);
     state.open = false;
     render();
-    syncPreviewVisibility();
   }
 
   return {

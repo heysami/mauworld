@@ -3715,10 +3715,14 @@ function getBrowserMediaController() {
     fetchToken: ({ canPublish = false } = {}) => fetchBrowserMediaToken({ canPublish }),
     onRemoteTrack: ({ sessionId, track, element }) => {
       if (state.gameSessions.has(sessionId) || state.gameMediaSubscriptions.has(sessionId)) {
+        const session = state.gameSessions.get(sessionId) ?? null;
+        const isHostedByViewer = getGameSessionHostViewerSessionId(session) === state.viewerSessionId;
         updateCachedGameSession(sessionId, {
-          _remoteElement: element ?? null,
+          _remoteElement: isHostedByViewer ? null : (element ?? null),
         });
-        if (element) {
+        if (isHostedByViewer) {
+          clearGameShareVideo(sessionId);
+        } else if (element) {
           setGameShareVideo(sessionId, element);
         }
         state.browserMediaTransport = "livekit";
@@ -8213,8 +8217,10 @@ function updateGameShareEntries(elapsedSeconds = 0) {
     }
     entry.session = session;
     entry.hostSessionId = String(session?.host_viewer_session_id ?? "").trim();
-    if (session?._remoteElement) {
+    if (session?._remoteElement && getGameSessionHostViewerSessionId(session) !== state.viewerSessionId) {
       setGameShareVideo(entry.sessionId, session._remoteElement);
+    } else {
+      clearGameShareVideo(entry.sessionId);
     }
     const hostPosition = getBrowserHostPosition(entry.hostSessionId);
     if (!hostPosition) {

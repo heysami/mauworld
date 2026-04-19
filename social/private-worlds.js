@@ -2991,8 +2991,10 @@ function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
     }
     entry.session = session;
     entry.hostSessionId = String(session.host_viewer_session_id ?? entry.hostSessionId ?? "").trim();
-    if (session._remoteElement) {
+    if (session._remoteElement && getPrivateGameSessionHostViewerSessionId(session) !== getPrivateViewerSessionId()) {
       setPrivateGameShareVideo(entry.sessionId, session._remoteElement);
+    } else {
+      clearPrivateGameShareVideo(entry.sessionId);
     }
     const hostPosition = getPrivateBrowserHostPosition(entry.hostSessionId);
     if (!hostPosition) {
@@ -6639,10 +6641,14 @@ function getPrivateBrowserMediaController() {
     fetchToken: ({ canPublish = false } = {}) => fetchPrivateBrowserMediaToken({ canPublish }),
     onRemoteTrack: ({ sessionId, track, element }) => {
       if (state.gameSessions.has(sessionId) || state.gameMediaSubscriptions.has(sessionId)) {
+        const session = state.gameSessions.get(sessionId) ?? null;
+        const isHostedByViewer = getPrivateGameSessionHostViewerSessionId(session) === getPrivateViewerSessionId();
         updateCachedPrivateGameSession(sessionId, {
-          _remoteElement: element ?? null,
+          _remoteElement: isHostedByViewer ? null : (element ?? null),
         });
-        if (element) {
+        if (isHostedByViewer) {
+          clearPrivateGameShareVideo(sessionId);
+        } else if (element) {
           setPrivateGameShareVideo(sessionId, element);
         }
         return;
