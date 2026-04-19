@@ -11647,6 +11647,11 @@ function handleGamePreview(payload = {}) {
   if (!sessionId) {
     return;
   }
+  const existing = state.gameSessions.get(sessionId) ?? null;
+  const isLocalHostSession = String(existing?.host_viewer_session_id ?? "").trim() === state.viewerSessionId;
+  if (isLocalHostSession && getLocalGamePreviewCanvas(sessionId)) {
+    return;
+  }
   state.gameMediaSubscriptions.add(sessionId);
   updateCachedGameSession(sessionId, {
     deliveryMode: "full",

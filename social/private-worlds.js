@@ -7206,6 +7206,11 @@ function handlePrivateGamePreview(payload = {}) {
   if (!sessionId) {
     return;
   }
+  const existing = state.gameSessions.get(sessionId) ?? null;
+  const isLocalHostSession = String(existing?.host_viewer_session_id ?? "").trim() === getPrivateViewerSessionId();
+  if (isLocalHostSession && getPrivateLocalGamePreviewCanvas(sessionId)) {
+    return;
+  }
   state.gameMediaSubscriptions.add(sessionId);
   updateCachedPrivateGameSession(sessionId, {
     deliveryMode: "full",
