@@ -426,17 +426,17 @@ function injectShellBridge(sourceHtml = "") {
 export function createWorldGamesApi(options = {}) {
   return {
     async listGames(limit = 60) {
-      return apiRequest(`/api/games?limit=${encodeURIComponent(String(limit))}`, {
+      return apiRequest(`/games?limit=${encodeURIComponent(String(limit))}`, {
         getAccessToken: options.getAccessToken,
       });
     },
     async getGame(gameId) {
-      return apiRequest(`/api/games/${encodeURIComponent(String(gameId ?? "").trim())}`, {
+      return apiRequest(`/games/${encodeURIComponent(String(gameId ?? "").trim())}`, {
         getAccessToken: options.getAccessToken,
       });
     },
     async generateGame(input = {}) {
-      return apiRequest("/api/games/generate", {
+      return apiRequest("/games/generate", {
         method: "POST",
         getAccessToken: options.getAccessToken,
         body: {
@@ -448,7 +448,7 @@ export function createWorldGamesApi(options = {}) {
       });
     },
     async copyGame(gameId, title = "") {
-      return apiRequest(`/api/games/${encodeURIComponent(String(gameId ?? "").trim())}/copy`, {
+      return apiRequest(`/games/${encodeURIComponent(String(gameId ?? "").trim())}/copy`, {
         method: "POST",
         getAccessToken: options.getAccessToken,
         body: title ? { title } : {},
