@@ -29,6 +29,7 @@ import {
   dedupePostTags,
 } from "./world-layout.js";
 import { installPrivateWorldStore } from "./private-world-store.js";
+import { installWorldGamesStore } from "./world-games-store.js";
 
 const CURRENT_ORGANIZATION_SLOT = "current";
 const NEXT_ORGANIZATION_SLOT = "next";
@@ -3937,5 +3938,7 @@ export class MauworldStore {
     };
   }
 }
+
+installWorldGamesStore(MauworldStore);
 
 installPrivateWorldStore(MauworldStore);

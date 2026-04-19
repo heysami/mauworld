@@ -1514,6 +1514,296 @@ body.is-world-loading .world-panel {
   text-transform: uppercase;
 }
 
+.world-browser-panel.is-game-mode .world-browser-share__field {
+  display: none;
+}
+
+.world-browser-panel.is-game-mode .world-browser-stage {
+  min-height: 220px;
+}
+
+.world-browser-panel.is-game-mode .world-browser-stage__placeholder {
+  padding: 28px 20px;
+  text-align: left;
+}
+
+.mw-game-modal,
+.mw-game-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+}
+
+.mw-game-modal__backdrop,
+.mw-game-shell__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 10, 22, 0.72);
+  backdrop-filter: blur(12px);
+}
+
+.mw-game-modal__dialog,
+.mw-game-shell__dialog {
+  position: relative;
+  z-index: 1;
+  width: min(1120px, calc(100vw - 32px));
+  margin: 24px auto;
+  background: rgba(7, 16, 34, 0.96);
+  border: 1px solid rgba(125, 170, 255, 0.2);
+  border-radius: 8px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+}
+
+.mw-game-modal__header,
+.mw-game-shell__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(125, 170, 255, 0.14);
+}
+
+.mw-game-modal__header h2,
+.mw-game-shell__header h2 {
+  margin: 4px 0 0;
+  font-size: 1.2rem;
+}
+
+.mw-game-modal__eyebrow,
+.mw-game-shell__eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(156, 191, 255, 0.74);
+}
+
+.mw-game-modal__close,
+.mw-game-shell__actions button,
+.mw-game-library__detail-actions button,
+.mw-game-generator__actions button,
+.mw-game-shell__controls button,
+.mw-game-shell__seat button {
+  border: 1px solid rgba(125, 170, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(20, 36, 72, 0.78);
+  color: #f4f8ff;
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.mw-game-modal__close.is-muted,
+.mw-game-shell__actions .is-muted {
+  background: rgba(13, 24, 50, 0.78);
+}
+
+.mw-game-library {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  min-height: min(76vh, 720px);
+}
+
+.mw-game-library__column {
+  padding: 20px;
+}
+
+.mw-game-library__column--list {
+  border-right: 1px solid rgba(125, 170, 255, 0.14);
+}
+
+.mw-game-library__toolbar,
+.mw-game-library__detail-head,
+.mw-game-generator__header,
+.mw-game-shell__seat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mw-game-library__status {
+  min-height: 1.3em;
+  margin: 12px 0 16px;
+  color: rgba(201, 220, 255, 0.76);
+  font-size: 0.94rem;
+}
+
+.mw-game-library__list {
+  display: grid;
+  gap: 10px;
+  max-height: calc(76vh - 120px);
+  overflow: auto;
+}
+
+.mw-game-library__item {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 170, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(10, 21, 44, 0.8);
+  text-align: left;
+  color: #f4f8ff;
+  cursor: pointer;
+}
+
+.mw-game-library__item.is-active {
+  border-color: rgba(93, 180, 255, 0.54);
+  box-shadow: inset 0 0 0 1px rgba(93, 180, 255, 0.28);
+}
+
+.mw-game-library__item span,
+.mw-game-library__detail-head p,
+.mw-game-library__empty,
+.mw-game-shell__summary p,
+.mw-game-shell__subtitle,
+.mw-game-shell__seat span {
+  color: rgba(201, 220, 255, 0.76);
+}
+
+.mw-game-library__meta,
+.mw-game-library__detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.84rem;
+}
+
+.mw-game-library__detail {
+  min-height: 180px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.mw-game-library__badge,
+.mw-game-shell__badge,
+.mw-game-shell__seat-ready {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(53, 92, 168, 0.34);
+  color: #dbe8ff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mw-game-generator {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(125, 170, 255, 0.14);
+}
+
+.mw-game-generator label {
+  display: grid;
+  gap: 8px;
+}
+
+.mw-game-generator textarea,
+.mw-game-generator input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(125, 170, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(10, 20, 40, 0.88);
+  color: #f4f8ff;
+  padding: 11px 12px;
+  font: inherit;
+}
+
+.mw-game-generator textarea {
+  min-height: 128px;
+  resize: vertical;
+}
+
+.mw-game-generator__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mw-game-shell__dialog {
+  width: min(1240px, calc(100vw - 24px));
+}
+
+.mw-game-shell__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0;
+  min-height: min(78vh, 760px);
+}
+
+.mw-game-shell__stage {
+  position: relative;
+  min-height: 520px;
+  background: #050d1c;
+}
+
+.mw-game-shell__loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(221, 233, 255, 0.78);
+  background: linear-gradient(180deg, rgba(6, 14, 30, 0.9), rgba(6, 14, 30, 0.72));
+}
+
+.mw-game-shell__frame {
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  border: 0;
+  background: #071122;
+}
+
+.mw-game-shell__sidebar {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 20px;
+  border-left: 1px solid rgba(125, 170, 255, 0.14);
+}
+
+.mw-game-shell__summary,
+.mw-game-shell__controls,
+.mw-game-shell__seats {
+  display: grid;
+  gap: 12px;
+}
+
+.mw-game-shell__seat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(125, 170, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(9, 19, 41, 0.82);
+}
+
+.mw-game-shell__seat.is-open {
+  border-color: rgba(93, 180, 255, 0.28);
+}
+
+.mw-game-shell__seat-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.has-mw-game-modal,
+.has-mw-game-shell {
+  overflow: hidden;
+}
+
 .world-result__title {
   font-size: 1rem;
   font-weight: 800;
@@ -1910,6 +2200,24 @@ body.is-world-loading .world-panel {
     right: 10px;
     bottom: 10px;
     transform: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .mw-game-library,
+  .mw-game-shell__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mw-game-library__column--list,
+  .mw-game-shell__sidebar {
+    border-right: 0;
+    border-left: 0;
+    border-bottom: 1px solid rgba(125, 170, 255, 0.14);
+  }
+
+  .mw-game-generator__grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

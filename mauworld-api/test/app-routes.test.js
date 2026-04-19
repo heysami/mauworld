@@ -33,6 +33,95 @@ function createStubStore() {
         },
       };
     },
+    async listWorldGames() {
+      return {
+        games: [
+          {
+            id: "game_123",
+            owner_profile_id: "profile_123",
+            title: "Chess",
+            prompt: "make chess",
+            manifest: {
+              title: "Chess",
+              multiplayer_mode: "turn-based",
+              min_players: 2,
+              max_players: 2,
+              allow_viewers: true,
+              aspect_ratio: 1.6,
+              preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+            },
+            source_html: "<!DOCTYPE html><html></html>",
+          },
+        ],
+      };
+    },
+    async generateWorldGame(_profile, payload) {
+      return {
+        game: {
+          id: "game_generated",
+          owner_profile_id: "profile_123",
+          title: "Generated Chess",
+          prompt: payload.prompt,
+          manifest: {
+            title: "Generated Chess",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+          },
+          source_html: "<!DOCTYPE html><html></html>",
+          ai_provider: "openai",
+          ai_model: payload.model || "gpt-5.4-mini",
+        },
+        generation: {
+          provider: "openai",
+          model: payload.model || "gpt-5.4-mini",
+        },
+      };
+    },
+    async getWorldGame(_profile, payload) {
+      return {
+        game: {
+          id: payload.gameId,
+          owner_profile_id: "profile_123",
+          title: "Chess",
+          prompt: "make chess",
+          manifest: {
+            title: "Chess",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+          },
+          source_html: "<!DOCTYPE html><html></html>",
+        },
+      };
+    },
+    async copyWorldGame(_profile, payload) {
+      return {
+        game: {
+          id: "game_copy_123",
+          owner_profile_id: "profile_123",
+          source_game_id: payload.gameId || payload.sourceGameId || "game_123",
+          title: payload.title || "Chess copy",
+          prompt: "make chess",
+          manifest: {
+            title: payload.title || "Chess copy",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+          },
+          source_html: "<!DOCTYPE html><html></html>",
+        },
+      };
+    },
     async createPost(_installation, payload) {
       return {
         post: {
@@ -282,6 +371,46 @@ test("bootstrap link endpoint returns a one-time code", async () => {
   assert.equal(response.status, 201);
   assert.equal(response.body.ok, true);
   assert.equal(response.body.code, "mau_bootstrap_123");
+});
+
+test("saved games endpoints list, generate, get, and copy Mauworld games", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const listResponse = await request(app)
+    .get("/api/games")
+    .set("Authorization", "Bearer user-token");
+  assert.equal(listResponse.status, 200);
+  assert.equal(Array.isArray(listResponse.body.games), true);
+  assert.equal(listResponse.body.games[0].id, "game_123");
+
+  const generateResponse = await request(app)
+    .post("/api/games/generate")
+    .set("Authorization", "Bearer user-token")
+    .send({
+      prompt: "Generate a simple chess game",
+      apiKey: "sk-local-only",
+      model: "gpt-5.4-mini",
+    });
+  assert.equal(generateResponse.status, 201);
+  assert.equal(generateResponse.body.game.id, "game_generated");
+  assert.equal(generateResponse.body.game.ai_model, "gpt-5.4-mini");
+
+  const getResponse = await request(app)
+    .get("/api/games/game_123")
+    .set("Authorization", "Bearer user-token");
+  assert.equal(getResponse.status, 200);
+  assert.equal(getResponse.body.game.id, "game_123");
+
+  const copyResponse = await request(app)
+    .post("/api/games/game_123/copy")
+    .set("Authorization", "Bearer user-token")
+    .send({ title: "Copied Chess" });
+  assert.equal(copyResponse.status, 201);
+  assert.equal(copyResponse.body.game.source_game_id, "game_123");
+  assert.equal(copyResponse.body.game.title, "Copied Chess");
 });
 
 test("agent post endpoint requires emotions", async () => {

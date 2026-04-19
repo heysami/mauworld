@@ -22,7 +22,7 @@ export function sanitizeBrowserShareTitle(rawTitle, fallback = "") {
 
 export function normalizeBrowserShareKind(rawKind, fallback = "screen") {
   const value = String(rawKind ?? "").trim().toLowerCase();
-  if (value === "screen" || value === "camera" || value === "audio" || value === "browser") {
+  if (value === "screen" || value === "camera" || value === "audio" || value === "browser" || value === "game") {
     return value;
   }
   return fallback;
@@ -48,6 +48,9 @@ export function getDefaultBrowserShareTitle(shareKind, videoTrack = null) {
   if (kind === "audio") {
     return "Live voice";
   }
+  if (kind === "game") {
+    return "Nearby game";
+  }
   return getDisplayShareLabel(videoTrack);
 }
 
@@ -62,6 +65,9 @@ export function getBrowserShareKindLabel(shareKind) {
   if (kind === "browser") {
     return "Browser";
   }
+  if (kind === "game") {
+    return "Game";
+  }
   return "Screen";
 }
 
@@ -72,6 +78,9 @@ function getDisplaySharePrimaryActionLabel(shareKind) {
   }
   if (kind === "audio") {
     return "Share Voice";
+  }
+  if (kind === "game") {
+    return "Choose Game";
   }
   return "Pick Screen";
 }
@@ -1008,6 +1017,8 @@ export function getDisplayShareStagePlaceholderText(options = {}) {
     remoteDisplay: (entry) => `Watching ${entry?.title || "nearby share"} nearby.`,
     localBrowser: "This browser session is live nearby.",
     remoteBrowser: (entry) => `Viewing ${entry?.title || "nearby share"} nearby.`,
+    localGame: "Your game share is live nearby.",
+    remoteGame: (entry) => `Open ${entry?.title || "nearby game"} to watch or play.`,
   };
 
   if (needsManualPlaybackStart) {
@@ -1036,6 +1047,11 @@ export function getDisplayShareStagePlaceholderText(options = {}) {
     return isLocal
       ? resolveStageCopy(strings.localDisplay ?? defaults.localDisplay, session)
       : resolveStageCopy(strings.remoteDisplay ?? defaults.remoteDisplay, session);
+  }
+  if (shareKind === "game") {
+    return isLocal
+      ? resolveStageCopy(strings.localGame ?? defaults.localGame, session)
+      : resolveStageCopy(strings.remoteGame ?? defaults.remoteGame, session);
   }
   return isLocal
     ? resolveStageCopy(strings.localBrowser ?? defaults.localBrowser, session)

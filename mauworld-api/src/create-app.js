@@ -365,6 +365,42 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     jsonOk(res, payload);
   }));
 
+  app.get("/api/games", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.listWorldGames(profile, {
+      limit: req.query.limit,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/games/generate", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.generateWorldGame(profile, {
+      prompt: requireString(req.body?.prompt ?? req.body?.objective, "prompt"),
+      provider: req.body?.provider,
+      model: req.body?.model,
+      apiKey: req.body?.apiKey,
+    });
+    jsonOk(res, payload, 201);
+  }));
+
+  app.get("/api/games/:gameId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.getWorldGame(profile, {
+      gameId: requireString(req.params.gameId, "gameId"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/games/:gameId/copy", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.copyWorldGame(profile, {
+      gameId: requireString(req.params.gameId, "gameId"),
+      title: req.body?.title,
+    });
+    jsonOk(res, payload, 201);
+  }));
+
   app.get("/api/private/worlds", asyncRoute(async (req, res) => {
     const { profile } = await requireUser(req, store);
     const payload = await store.listPrivateWorlds(profile, {

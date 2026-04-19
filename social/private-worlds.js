@@ -38,6 +38,11 @@ import {
   getPrivateWorldBrowserKey,
 } from "./private-world-browser.js";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
+import {
+  createWorldGamesApi,
+  createWorldGameLibrary,
+  createWorldGameShell,
+} from "./world-games-ui.js?v=20260419a";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -965,6 +970,9 @@ const state = {
   pendingVoiceJoin: null,
   pendingVoiceJoinCancellationAnchorSessionId: "",
   incomingVoiceJoinRequests: [],
+  gameSessions: new Map(),
+  selectedWorldGameId: "",
+  pendingGameShareGameId: "",
   browserOverlayOpen: false,
   browserMediaState: createEmptyPrivateBrowserMediaState(),
   browserMediaCanvas: null,
@@ -1152,6 +1160,106 @@ function getPrivateViewerSessionId() {
 function getPrivateDisplayName() {
   return state.profile?.display_name || state.profile?.username || "guest viewer";
 }
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value ?? null));
+}
+
+function getPrivateProfileId() {
+  return String(state.profile?.id ?? "").trim();
+}
+
+const privateWorldGamesApi = createWorldGamesApi({
+  getAccessToken: () => String(state.session?.access_token ?? "").trim(),
+});
+
+const privateGameLibrary = createWorldGameLibrary({
+  api: privateWorldGamesApi,
+  storagePrefix: "mauworld-private-world-games",
+  onSelect(game) {
+    state.selectedWorldGameId = String(game?.id ?? "").trim();
+    updatePrivateBrowserPanel();
+  },
+  onGenerated(game) {
+    state.selectedWorldGameId = String(game?.id ?? "").trim();
+    updatePrivateBrowserPanel();
+  },
+  onShare(game) {
+    void startPrivateWorldGameShare(game);
+  },
+});
+
+const privateGameShell = createWorldGameShell({
+  getViewerSessionId: getPrivateViewerSessionId,
+  getProfileId: getPrivateProfileId,
+  onOpenSession(sessionId) {
+    const sent = sendWorldSocketMessage({
+      type: "game:open",
+      sessionId,
+    });
+    if (!sent) {
+      privateGameShell.setStatus("Private world share is offline.");
+      setPrivateBrowserStatus("Private world share is offline.");
+    }
+  },
+  onClaimSeat(sessionId, seatId) {
+    sendWorldSocketMessage({
+      type: "game:seat-claim",
+      sessionId,
+      seatId,
+    });
+  },
+  onReleaseSeat(sessionId) {
+    sendWorldSocketMessage({
+      type: "game:seat-release",
+      sessionId,
+    });
+  },
+  onReady(sessionId, ready) {
+    sendWorldSocketMessage({
+      type: "game:ready",
+      sessionId,
+      ready,
+    });
+  },
+  onStartMatch(sessionId) {
+    sendWorldSocketMessage({
+      type: "game:start-match",
+      sessionId,
+    });
+  },
+  onAction(sessionId, action) {
+    sendWorldSocketMessage({
+      type: "game:action",
+      sessionId,
+      action,
+    });
+  },
+  onState(sessionId, nextState) {
+    sendWorldSocketMessage({
+      type: "game:state",
+      sessionId,
+      state: nextState,
+    });
+  },
+  onPreview(sessionId, preview) {
+    sendWorldSocketMessage({
+      type: "game:preview",
+      sessionId,
+      preview,
+    });
+  },
+  onCopy(sessionId) {
+    if (!state.session) {
+      setPrivateBrowserStatus("Sign in to copy this game.");
+      return;
+    }
+    sendWorldSocketMessage({
+      type: "game:copy",
+      sessionId,
+    });
+  },
+});
 
 function getPrivateBrowserMediaCanvas() {
   if (!state.browserMediaCanvas) {
@@ -2381,6 +2489,160 @@ function reconcilePrivateShareBubbles() {
       setPrivateShareBubbleVideo(session.sessionId, elements.panelBrowserVideo);
     }
     updatePrivateShareBubblePresentation(entry);
+  }
+}
+
+function createPrivateGameBubbleTexture(session = {}) {
+  return createBubbleTexture("🎮", {
+    accent: PRIVATE_WORLD_STYLE.accents[1],
+    stroke: PRIVATE_WORLD_STYLE.outline,
+    text: `${getPrivateGameSessionTitle(session)}${getPrivateGameSessionDescription(session) ? `\n${getPrivateGameSessionDescription(session)}` : ""}`,
+    label: "Live Game",
+    width: 420,
+    height: 300,
+    maxLines: 4,
+  });
+}
+
+function removePrivateGameBubbleEntry(sessionId = "") {
+  const preview = state.preview;
+  const entry = preview?.gameShareEntries?.get(String(sessionId ?? "").trim());
+  if (!entry) {
+    return;
+  }
+  preview.gameShareEntries.delete(entry.sessionId);
+  preview.entityPickables = preview.entityPickables.filter((mesh) => mesh !== entry.frame);
+  entry.group.parent?.remove(entry.group);
+  entry.liveTexture?.dispose?.();
+  entry.placeholderTexture?.dispose?.();
+  entry.frame.geometry?.dispose?.();
+  entry.frameShell.geometry?.dispose?.();
+  entry.frame.material?.dispose?.();
+  entry.frameShell.material?.dispose?.();
+}
+
+function ensurePrivateGameBubbleEntry(session = {}) {
+  const preview = state.preview;
+  if (!preview?.gameShares) {
+    return null;
+  }
+  const sessionId = String(session.session_id ?? "").trim();
+  if (!sessionId) {
+    return null;
+  }
+  const existing = preview.gameShareEntries.get(sessionId);
+  if (existing) {
+    existing.session = { ...existing.session, ...session };
+    existing.hostSessionId = String(session.host_viewer_session_id ?? existing.hostSessionId ?? "").trim();
+    return existing;
+  }
+  const previewFrame = session?.latest_preview ?? null;
+  const aspectRatio = previewFrame?.width && previewFrame?.height
+    ? Math.max(0.6, Math.min(2.4, Number(previewFrame.width) / Math.max(1, Number(previewFrame.height))))
+    : Math.max(0.6, Math.min(2.4, Number(session?.game?.manifest?.aspect_ratio) || PRIVATE_BROWSER_SHARE.aspectRatio));
+  const width = PRIVATE_BROWSER_SHARE.screenWidth * 0.62;
+  const height = width / aspectRatio;
+  const group = new THREE.Group();
+  const frameShell = new THREE.Mesh(
+    new THREE.PlaneGeometry(width + 0.7, height + 0.7),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#0d1537"),
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  frameShell.renderOrder = 9;
+  group.add(frameShell);
+  const liveImage = new Image();
+  const liveTexture = new THREE.Texture(liveImage);
+  liveTexture.colorSpace = THREE.SRGBColorSpace;
+  liveImage.addEventListener("load", () => {
+    liveTexture.needsUpdate = true;
+  });
+  const placeholderTexture = createPrivateGameBubbleTexture(session);
+  const frame = createPrivateBillboard(placeholderTexture, width, height, {
+    opacity: 1,
+    fog: false,
+    depthTest: false,
+    renderOrder: 10,
+    persistent: true,
+  });
+  frame.frustumCulled = false;
+  frame.userData.privateWorldGameSessionId = sessionId;
+  preview.entityPickables.push(frame);
+  group.add(frame);
+  preview.gameShares.add(group);
+  const entry = {
+    sessionId,
+    hostSessionId: String(session.host_viewer_session_id ?? "").trim(),
+    session,
+    group,
+    frameShell,
+    frame,
+    liveImage,
+    liveTexture,
+    placeholderTexture,
+    position: new THREE.Vector3(),
+    targetPosition: new THREE.Vector3(),
+    currentPreviewAt: "",
+  };
+  preview.gameShareEntries.set(sessionId, entry);
+  return entry;
+}
+
+function updatePrivateGameBubblePresentation(entry) {
+  if (!entry?.frame) {
+    return;
+  }
+  const previewFrame = entry.session?.latest_preview ?? null;
+  if (previewFrame?.data_url && previewFrame.updated_at && previewFrame.updated_at !== entry.currentPreviewAt) {
+    entry.currentPreviewAt = previewFrame.updated_at;
+    entry.liveImage.src = previewFrame.data_url;
+  }
+  const desiredMap = previewFrame?.data_url ? entry.liveTexture : entry.placeholderTexture;
+  if (entry.frame.material.map !== desiredMap) {
+    entry.frame.material.map = desiredMap;
+    entry.frame.material.needsUpdate = true;
+  }
+}
+
+function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
+  const preview = state.preview;
+  if (!preview?.gameShareEntries) {
+    return;
+  }
+  const activeSessions = [...state.gameSessions.values()];
+  const activeIds = new Set(activeSessions.map((session) => String(session?.session_id ?? "").trim()).filter(Boolean));
+  for (const sessionId of [...preview.gameShareEntries.keys()]) {
+    if (!activeIds.has(sessionId)) {
+      removePrivateGameBubbleEntry(sessionId);
+    }
+  }
+  for (const session of activeSessions) {
+    const entry = ensurePrivateGameBubbleEntry(session);
+    if (!entry) {
+      continue;
+    }
+    if (!preview.entityPickables.includes(entry.frame)) {
+      preview.entityPickables.push(entry.frame);
+    }
+    entry.session = session;
+    entry.hostSessionId = String(session.host_viewer_session_id ?? entry.hostSessionId ?? "").trim();
+    const hostPosition = getPrivateBrowserHostPosition(entry.hostSessionId);
+    if (!hostPosition) {
+      entry.group.visible = false;
+      continue;
+    }
+    const showingLiveMedia = Boolean(session?.latest_preview?.data_url);
+    entry.targetPosition.copy(hostPosition);
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds) + 2.8;
+    entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
+    entry.group.position.copy(entry.position);
+    entry.group.rotation.set(0, 0, 0);
+    entry.group.visible = true;
+    updatePrivateGameBubblePresentation(entry);
   }
 }
 
@@ -5370,6 +5632,16 @@ function cancelPendingPrivateShareJoinRequest() {
 }
 
 async function handlePrivateNearbyShareLaunch({ defaultLaunch, getLocalSession, getSelectedMode }) {
+  const selectedMode = normalizeBrowserShareKind(getSelectedMode?.(), state.browserShareMode);
+  if (selectedMode === "game") {
+    const localGameSession = getLocalPrivateGameSession();
+    if (localGameSession) {
+      requestOpenPrivateGameSession(localGameSession);
+      return true;
+    }
+    await startPrivateWorldGameShare();
+    return true;
+  }
   const localSession = getLocalSession();
   if (localSession) {
     return defaultLaunch();
@@ -5383,7 +5655,7 @@ async function handlePrivateNearbyShareLaunch({ defaultLaunch, getLocalSession, 
     updatePrivateBrowserPanel();
     return true;
   }
-  const shareKind = normalizeBrowserShareKind(getSelectedMode?.(), state.browserShareMode);
+  const shareKind = selectedMode;
   state.pendingShareJoin = {
     anchorSessionId: joinTarget.sessionId,
     anchorHostSessionId: joinTarget.hostSessionId,
@@ -5417,6 +5689,9 @@ const privateBrowserShareFeature = createNearbyDisplayShareFeature({
     state.browserShareMode = mode;
   },
   onModeChanged() {
+    if (state.browserShareMode === "game" && state.browserOverlayOpen) {
+      setPrivateBrowserOverlayOpen(false);
+    }
     updatePrivateBrowserPanel();
   },
   handleLaunch: handlePrivateNearbyShareLaunch,
@@ -5928,6 +6203,71 @@ function handlePrivateBrowserStop(payload = {}) {
   renderPrivateLiveSharesList();
 }
 
+function updatePrivateGameSessionState(sessionPatch = {}) {
+  const sessionId = String(sessionPatch?.session_id ?? "").trim();
+  if (!sessionId) {
+    return;
+  }
+  const previous = state.gameSessions.get(sessionId) ?? {};
+  const next = {
+    ...previous,
+    ...cloneJson(sessionPatch),
+    session_id: sessionId,
+  };
+  state.gameSessions.set(sessionId, next);
+  if (
+    state.pendingGameShareGameId
+    && String(next?.host_viewer_session_id ?? "").trim() === getPrivateViewerSessionId()
+    && String(next?.game?.id ?? "").trim() === state.pendingGameShareGameId
+  ) {
+    state.pendingGameShareGameId = "";
+    requestOpenPrivateGameSession(next);
+  }
+  if (privateGameShell.isOpen(sessionId)) {
+    privateGameShell.updateSession(next);
+  }
+  updatePrivateBrowserPanel();
+  renderPrivateLiveSharesList();
+}
+
+function handlePrivateGamePreview(payload = {}) {
+  const sessionId = String(payload.sessionId ?? "").trim();
+  const existing = state.gameSessions.get(sessionId);
+  if (!existing) {
+    return;
+  }
+  state.gameSessions.set(sessionId, {
+    ...existing,
+    latest_preview: cloneJson(payload.preview ?? null),
+  });
+  if (privateGameShell.isOpen(sessionId)) {
+    privateGameShell.updateSession(state.gameSessions.get(sessionId));
+  }
+  updatePrivateBrowserPanel();
+  renderPrivateLiveSharesList();
+}
+
+function handlePrivateGameStop(payload = {}) {
+  const sessionId = String(payload.sessionId ?? "").trim();
+  if (!sessionId) {
+    return;
+  }
+  const stoppedSession = state.gameSessions.get(sessionId);
+  state.gameSessions.delete(sessionId);
+  if (
+    stoppedSession
+    && String(stoppedSession?.host_viewer_session_id ?? "").trim() === getPrivateViewerSessionId()
+  ) {
+    state.pendingGameShareGameId = "";
+  }
+  if (privateGameShell.isOpen(sessionId)) {
+    privateGameShell.close();
+    setPrivateBrowserStatus("That game share just ended.");
+  }
+  updatePrivateBrowserPanel();
+  renderPrivateLiveSharesList();
+}
+
 function resetPrivateBrowserState({ disconnectController = false, stopTracks = false } = {}) {
   if (state.browserOverlayOpen) {
     setPrivateBrowserOverlayOpen(false);
@@ -5966,6 +6306,120 @@ function resetPrivateBrowserState({ disconnectController = false, stopTracks = f
   renderPrivateLiveSharesList();
 }
 
+function updatePrivateGamePanel({ canShare, socketReady }) {
+  const localGameSession = getLocalPrivateGameSession();
+  const selectedGame = getSelectedPrivateWorldGame();
+  const previewUrl = String(localGameSession?.latest_preview?.data_url ?? "").trim();
+  elements.panelBrowserPanel?.classList.add("is-game-mode");
+  elements.panelBrowserPanel?.classList.remove("is-docked-compact");
+  elements.panelBrowserStage?.classList.add("is-active");
+  elements.panelBrowserStage?.classList.remove("is-collapsed", "is-permission-only", "needs-video-start");
+  elements.panelBrowserShare?.classList.remove("is-join-mode");
+  if (elements.panelBrowserStage) {
+    elements.panelBrowserStage.tabIndex = -1;
+    elements.panelBrowserStage.setAttribute("aria-hidden", "false");
+  }
+  if (elements.panelBrowserShareTitle) {
+    elements.panelBrowserShareTitle.disabled = true;
+    if (document.activeElement !== elements.panelBrowserShareTitle) {
+      elements.panelBrowserShareTitle.value = "";
+    }
+  }
+  renderPrivateShareJoinRequests();
+  renderPrivateShareGroupSummary();
+  updatePrivateVoicePanel();
+  renderPrivateVoiceJoinOffers();
+  renderPrivateVoiceJoinRequests();
+
+  if (!state.selectedWorld) {
+    setPrivateBrowserStatus("Open a world to share games.");
+    updatePrivateBrowserSummary({
+      state: "offline",
+      badge: "Offline",
+      current: "No world selected",
+      hint: "Open a world first.",
+    });
+  } else if (!state.session) {
+    setPrivateBrowserStatus("Sign in to save or share games.");
+    updatePrivateBrowserSummary({
+      state: "offline",
+      badge: "Signed out",
+      current: "Sign in to go live",
+      hint: "Signed-in participants can generate, save, and share HTML games.",
+    });
+  } else if (state.pendingGameShareGameId) {
+    setPrivateBrowserStatus("Starting your game share...");
+    updatePrivateBrowserSummary({
+      state: "starting",
+      badge: "Starting",
+      current: "Starting your game",
+      hint: "The host window opens as soon as the world socket confirms the share.",
+    });
+  } else if (localGameSession) {
+    const seatedPlayers = normalizePrivateGameSeats(localGameSession).filter((seat) => seat.viewer_session_id).length;
+    setPrivateBrowserStatus(localGameSession.started ? "Your game match is live in this world." : "Your game lobby is open in this world.");
+    updatePrivateBrowserSummary({
+      state: "live",
+      badge: localGameSession.started ? "Live" : "Lobby",
+      current: getPrivateGameSessionTitle(localGameSession),
+      hint: `${seatedPlayers} / ${Math.max(1, Number(localGameSession?.game?.manifest?.max_players) || 1)} seats claimed.`,
+    });
+  } else if (selectedGame) {
+    setPrivateBrowserStatus(`Selected ${getPrivateSavedGameTitle(selectedGame)}.`);
+    updatePrivateBrowserSummary({
+      state: "draft",
+      badge: "Ready",
+      current: getPrivateSavedGameTitle(selectedGame),
+      hint: "Share it nearby, or open the library to generate something new.",
+    });
+  } else {
+    setPrivateBrowserStatus("Pick or generate a game to share in this world.");
+    updatePrivateBrowserSummary({
+      state: "idle",
+      badge: "Library",
+      current: "No game selected",
+      hint: "Open the library to choose a saved game or generate one with your local AI key.",
+    });
+  }
+
+  if (elements.panelBrowserLaunch) {
+    elements.panelBrowserLaunch.textContent = localGameSession ? "Open Game" : (selectedGame ? "Share Game" : "Open Library");
+    elements.panelBrowserLaunch.disabled = !canShare;
+  }
+  if (elements.panelBrowserStop) {
+    elements.panelBrowserStop.hidden = !localGameSession;
+    elements.panelBrowserStop.textContent = "Stop";
+    elements.panelBrowserStop.disabled = !socketReady;
+  }
+  if (elements.panelBrowserExpand) {
+    elements.panelBrowserExpand.disabled = !localGameSession;
+    syncDisplayShareExpandButton(elements.panelBrowserExpand, false);
+  }
+  if (elements.panelBrowserResume) {
+    elements.panelBrowserResume.hidden = true;
+  }
+  if (elements.panelBrowserVideo) {
+    elements.panelBrowserVideo.hidden = true;
+  }
+  setPrivateBrowserPreviewStream(null);
+  if (elements.panelBrowserFrame && previewUrl) {
+    elements.panelBrowserFrame.hidden = false;
+    if (elements.panelBrowserFrame.getAttribute("src") !== previewUrl) {
+      elements.panelBrowserFrame.src = previewUrl;
+    }
+    elements.panelBrowserPlaceholder.hidden = true;
+  } else if (elements.panelBrowserFrame && elements.panelBrowserPlaceholder) {
+    elements.panelBrowserFrame.hidden = true;
+    elements.panelBrowserFrame.removeAttribute("src");
+    elements.panelBrowserPlaceholder.hidden = false;
+    elements.panelBrowserPlaceholder.textContent = localGameSession
+      ? "Open the game window to play, publish previews, and let nearby visitors claim seats."
+      : selectedGame
+        ? `${getPrivateSavedGameTitle(selectedGame)} is ready to share in this world.`
+        : "Open the game library to choose or generate a simple HTML game.";
+  }
+}
+
 function updatePrivateBrowserPanel() {
   if (state.localBrowserShare && !isLocalDisplayShareActive(state.localBrowserShare)) {
     const endedSessionId = String(state.localBrowserShare.sessionId ?? state.localBrowserSessionId ?? "").trim();
@@ -5990,6 +6444,7 @@ function updatePrivateBrowserPanel() {
     }
   }
   const world = state.selectedWorld;
+  const gameMode = state.browserShareMode === "game";
   const localParticipant = getLocalParticipant();
   const localSession = getLocalPrivateBrowserSession();
   const localVoiceSession = getLocalPrivateVoiceSession();
@@ -6017,6 +6472,11 @@ function updatePrivateBrowserPanel() {
           && !isPrivatePersistentVoiceSession(session),
       ) ?? null;
   const canShare = Boolean(state.session && world && localParticipant && mediaAvailable && socketReady && authStable);
+  if (gameMode) {
+    updatePrivateGamePanel({ canShare, socketReady });
+    return;
+  }
+  elements.panelBrowserPanel?.classList.remove("is-game-mode");
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
     : state.localBrowserShare?.hasVideo
@@ -9196,6 +9656,113 @@ function getPrivateBrowserSessionTitle(session = {}) {
   return `${getBrowserShareKindLabel(session?.shareKind || "screen")} live`;
 }
 
+function getPrivateSavedGameTitle(game = {}, fallback = "Nearby game") {
+  return sanitizeBrowserShareTitle(game?.title ?? game?.manifest?.title ?? "", fallback);
+}
+
+function normalizePrivateGameSeats(session = {}) {
+  return Array.isArray(session?.seats) ? session.seats : [];
+}
+
+function getPrivateGameSessionTitle(session = {}) {
+  return getPrivateSavedGameTitle(session?.game ?? {}, "Nearby game");
+}
+
+function getPrivateGameSessionDescription(session = {}) {
+  return sanitizeBrowserShareTitle(session?.game?.manifest?.description ?? "", "");
+}
+
+function getPrivateGameHostName(session = {}) {
+  return getPrivateDisplayNameForSessionId(session?.host_viewer_session_id)
+    || String(session?.host_display_name ?? "").trim()
+    || "nearby host";
+}
+
+function getLocalPrivateGameSession() {
+  const viewerSessionId = getPrivateViewerSessionId();
+  const browserWorldKey = state.worldSocketKey || (
+    state.selectedWorld
+      ? `private:${state.selectedWorld.world_id}:${String(state.selectedWorld.creator?.username ?? "").trim().toLowerCase()}`
+      : ""
+  );
+  return [...state.gameSessions.values()].find((session) =>
+    String(session?.binding_key ?? "").trim() === browserWorldKey
+    && String(session?.host_viewer_session_id ?? "").trim() === viewerSessionId) ?? null;
+}
+
+function getVisiblePrivateGameSessions(query = "") {
+  const normalizedQuery = String(query ?? "").trim().toLowerCase();
+  return [...state.gameSessions.values()]
+    .filter((session) => {
+      if (!normalizedQuery) {
+        return true;
+      }
+      const haystack = `${getPrivateGameSessionTitle(session)} ${getPrivateGameSessionDescription(session)} ${getPrivateGameHostName(session)}`.toLowerCase();
+      return haystack.includes(normalizedQuery);
+    })
+    .sort((left, right) =>
+      Number(String(right?.host_viewer_session_id ?? "").trim() === getPrivateViewerSessionId())
+      - Number(String(left?.host_viewer_session_id ?? "").trim() === getPrivateViewerSessionId())
+      || Number(right?.started === true) - Number(left?.started === true)
+      || Date.parse(right?.updated_at ?? 0) - Date.parse(left?.updated_at ?? 0)
+      || getPrivateGameSessionTitle(left).localeCompare(getPrivateGameSessionTitle(right)));
+}
+
+function getSelectedPrivateWorldGame() {
+  return privateGameLibrary.getSelectedGame();
+}
+
+async function openPrivateWorldGameLibrary(options = {}) {
+  if (!state.session) {
+    setPrivateBrowserStatus("Sign in to save or share games.");
+    return;
+  }
+  try {
+    await privateGameLibrary.open({
+      selectGameId: options.selectGameId ?? state.selectedWorldGameId,
+      forceRefresh: options.forceRefresh === true,
+    });
+  } catch (error) {
+    setPrivateBrowserStatus(error?.message || "Could not open the game library.");
+  }
+}
+
+async function startPrivateWorldGameShare(game = null) {
+  const targetGame = game ?? getSelectedPrivateWorldGame();
+  if (!state.session) {
+    setPrivateBrowserStatus("Sign in to share games in private worlds.");
+    return false;
+  }
+  if (!targetGame) {
+    await openPrivateWorldGameLibrary();
+    return true;
+  }
+  if (!isPrivateWorldReadyForShare()) {
+    updatePrivateBrowserPanel();
+    return true;
+  }
+  const sent = sendWorldSocketMessage({
+    type: "game:start-share",
+    gameId: targetGame.id,
+  });
+  if (!sent) {
+    setPrivateBrowserStatus("Private world share is offline right now.");
+    return false;
+  }
+  state.selectedWorldGameId = targetGame.id;
+  state.pendingGameShareGameId = targetGame.id;
+  updatePrivateBrowserPanel();
+  return true;
+}
+
+function requestOpenPrivateGameSession(session = {}) {
+  if (!session?.session_id) {
+    return false;
+  }
+  privateGameShell.requestOpen(session);
+  return true;
+}
+
 function getPrivateBrowserSessionViewerCount(session = {}) {
   const value = Number(session.viewerCount);
   if (Number.isFinite(value) && value >= 0) {
@@ -9387,26 +9954,30 @@ function renderPrivateLiveSharesList() {
     return;
   }
   const query = String(state.liveShareQuery ?? "");
-  const allSessions = getPrivateLiveShareSessions("");
-  const filteredSessions = query.trim() ? getPrivateLiveShareSessions(query) : allSessions;
+  const allBrowserSessions = getPrivateLiveShareSessions("");
+  const filteredBrowserSessions = query.trim() ? getPrivateLiveShareSessions(query) : allBrowserSessions;
+  const allGameSessions = getVisiblePrivateGameSessions("");
+  const filteredGameSessions = query.trim() ? getVisiblePrivateGameSessions(query) : allGameSessions;
+  const totalSessions = allBrowserSessions.length + allGameSessions.length;
+  const totalFiltered = filteredBrowserSessions.length + filteredGameSessions.length;
 
-  if (allSessions.length === 0) {
+  if (totalSessions === 0) {
     elements.panelLiveStatus.textContent = "No live shares right now.";
     elements.panelLiveResults.innerHTML = "";
     return;
   }
 
-  if (filteredSessions.length === 0) {
+  if (totalFiltered === 0) {
     elements.panelLiveStatus.textContent = "No live shares match that title.";
     elements.panelLiveResults.innerHTML = "";
     return;
   }
 
   elements.panelLiveStatus.textContent = query.trim()
-    ? `${filteredSessions.length} matching live ${filteredSessions.length === 1 ? "share" : "shares"}`
-    : `${filteredSessions.length} live ${filteredSessions.length === 1 ? "share" : "shares"}`;
+    ? `${totalFiltered} matching live ${totalFiltered === 1 ? "share" : "shares"}`
+    : `${totalFiltered} live ${totalFiltered === 1 ? "share" : "shares"}`;
 
-  elements.panelLiveResults.innerHTML = filteredSessions.map((session) => {
+  const browserMarkup = filteredBrowserSessions.map((session) => {
     const title = getPrivateBrowserSessionTitle(session);
     const shareKindLabel = getBrowserShareKindLabel(session.shareKind || "screen");
     const viewerCount = Math.min(getPrivateBrowserSessionViewerCount(session), getPrivateBrowserSessionMaxViewers(session));
@@ -9434,10 +10005,42 @@ function renderPrivateLiveSharesList() {
       </button>
     `;
   }).join("");
+  const gameMarkup = filteredGameSessions.map((session) => {
+    const title = getPrivateGameSessionTitle(session);
+    const playerCount = normalizePrivateGameSeats(session).filter((seat) => seat.viewer_session_id).length;
+    const maxPlayers = Math.max(1, Number(session?.game?.manifest?.max_players) || 1);
+    return `
+      <button
+        class="world-live-result"
+        type="button"
+        data-private-live-game-session-id="${htmlEscape(session.session_id)}"
+      >
+        <div class="world-live-result__top">
+          <div class="world-live-result__title">${htmlEscape(title)}</div>
+          <div class="world-live-result__count">${playerCount}/${maxPlayers} seats</div>
+        </div>
+        <div class="world-live-result__meta">
+          <span class="world-live-result__badge">Game</span>
+          <span>${htmlEscape(getPrivateGameHostName(session))} is hosting now.</span>
+          <span>${htmlEscape(session.started ? "Match live" : "Lobby open")}</span>
+        </div>
+      </button>
+    `;
+  }).join("");
+
+  elements.panelLiveResults.innerHTML = `${browserMarkup}${gameMarkup}`;
 
   for (const button of elements.panelLiveResults.querySelectorAll("[data-private-live-session-id]")) {
     button.addEventListener("click", () => {
       focusPrivateLiveShare(button.getAttribute("data-private-live-session-id"));
+    });
+  }
+  for (const button of elements.panelLiveResults.querySelectorAll("[data-private-live-game-session-id]")) {
+    button.addEventListener("click", () => {
+      const session = state.gameSessions.get(button.getAttribute("data-private-live-game-session-id"));
+      if (session) {
+        requestOpenPrivateGameSession(session);
+      }
     });
   }
 }
@@ -12958,6 +13561,7 @@ function ensurePreview() {
     chatBubbleGhosts: new THREE.Group(),
     browserAnchors: new THREE.Group(),
     browserShares: new THREE.Group(),
+    gameShares: new THREE.Group(),
     trails: new THREE.Group(),
     raycaster: new THREE.Raycaster(),
     entityPickables: [],
@@ -12970,6 +13574,7 @@ function ensurePreview() {
     presenceEntries: new Map(),
     browserAnchorEntries: new Map(),
     browserShareEntries: new Map(),
+    gameShareEntries: new Map(),
     lastFrameAt: performance.now(),
     viewportWidth: Math.round(initialWidth),
     viewportHeight: Math.round(initialHeight),
@@ -12983,6 +13588,7 @@ function ensurePreview() {
   state.preview.scene.add(state.preview.presence);
   state.preview.scene.add(state.preview.browserAnchors);
   state.preview.scene.add(state.preview.browserShares);
+  state.preview.scene.add(state.preview.gameShares);
   state.preview.scene.add(state.preview.trails);
   state.preview.scene.add(state.preview.chatBubbleGhosts);
   ensureViewerAvatar(state.preview);
@@ -13011,6 +13617,7 @@ function ensurePreview() {
     pruneExpiredPrivateChatEvents();
     updatePrivatePresenceScene(deltaSeconds, timestamp / 1000);
     updatePrivateShareBubbles(deltaSeconds, timestamp / 1000);
+    updatePrivateGameBubbles(deltaSeconds, timestamp / 1000);
     updatePrivateRemoteBrowserAudioMix();
     updatePrivateChatBubbleGhosts(state.preview, deltaSeconds, state.preview.camera);
     updatePreviewEffects(state.preview, timestamp / 1000);
@@ -13204,6 +13811,14 @@ function ensurePreview() {
       return;
     }
     if (state.mode !== "play" || !state.session || getLocalParticipant()?.join_role === "player") {
+      return;
+    }
+    const gameSessionId = String(hit?.object?.userData?.privateWorldGameSessionId ?? "").trim();
+    if (gameSessionId) {
+      const session = state.gameSessions.get(gameSessionId);
+      if (session) {
+        requestOpenPrivateGameSession(session);
+      }
       return;
     }
     const playerEntityId = hit?.object?.userData?.privateWorldPlayerId;
@@ -14827,6 +15442,34 @@ function connectWorldSocket() {
         pushEvent("chat:error", payload.message || "Could not send chat");
       } else if (payload.type === "browser:session") {
         updatePrivateBrowserSessionState(payload.session ?? {});
+      } else if (payload.type === "game:session") {
+        updatePrivateGameSessionState(payload.session ?? {});
+      } else if (payload.type === "game:preview") {
+        handlePrivateGamePreview(payload);
+      } else if (payload.type === "game:stop-share") {
+        handlePrivateGameStop(payload);
+      } else if (payload.type === "game:open") {
+        privateGameShell.openPayload(payload);
+        updatePrivateGameSessionState(payload.session ?? {});
+      } else if (payload.type === "game:state") {
+        const sessionId = String(payload.sessionId ?? "").trim();
+        const existing = state.gameSessions.get(sessionId);
+        if (existing) {
+          state.gameSessions.set(sessionId, {
+            ...existing,
+            authoritative_state: cloneJson(payload.state ?? null),
+          });
+        }
+        privateGameShell.updateState(sessionId, payload.state ?? null);
+      } else if (payload.type === "game:action") {
+        privateGameShell.deliverAction(payload.sessionId, payload.action ?? null, payload.actor ?? null);
+      } else if (payload.type === "game:copy") {
+        state.selectedWorldGameId = String(payload?.game?.id ?? "").trim();
+        privateGameLibrary.notifyCopied(payload.game ?? null);
+        setPrivateBrowserStatus(payload?.game?.title ? `Saved ${payload.game.title} to your library.` : "Game copied to your library.");
+      } else if (payload.type === "game:error") {
+        privateGameShell.setStatus(payload.message || "Game share failed.");
+        setPrivateBrowserStatus(payload.message || "Game share failed.");
       } else if (payload.type === "share:join-required") {
         clearPendingPrivateBrowserShare({ stopTracks: true });
         state.pendingShareJoin = {
@@ -15023,6 +15666,8 @@ function connectWorldSocket() {
   socket.addEventListener("close", () => {
     state.worldSocketKey = "";
     state.livePresence.clear();
+    state.gameSessions.clear();
+    privateGameShell.close();
     reconcilePrivatePresenceScene();
     renderPrivateChat();
     updatePrivateBrowserPanel();
@@ -15036,6 +15681,7 @@ function disconnectWorldSocket() {
     state.worldSocket = null;
   }
   state.worldSocketKey = "";
+  state.gameSessions.clear();
   renderPrivateChat();
   updatePrivateBrowserPanel();
 }
@@ -16381,6 +17027,15 @@ function bindEvents() {
   window.addEventListener("touchstart", resumePrivateBrowserMediaFromGesture, { capture: true, passive: true });
   window.addEventListener("keydown", resumePrivateBrowserMediaFromGesture, { capture: true });
   elements.panelBrowserExpand?.addEventListener("click", () => {
+    if (state.browserShareMode === "game") {
+      const localGameSession = getLocalPrivateGameSession();
+      if (localGameSession) {
+        requestOpenPrivateGameSession(localGameSession);
+      } else {
+        void openPrivateWorldGameLibrary();
+      }
+      return;
+    }
     setPrivateBrowserOverlayOpen(!state.browserOverlayOpen);
   });
   elements.panelBrowserBackdrop?.addEventListener("click", () => {
@@ -16388,6 +17043,16 @@ function bindEvents() {
   });
   privateBrowserShareFeature.bind();
   elements.panelBrowserStop?.addEventListener("click", () => {
+    if (state.browserShareMode === "game") {
+      const sessionId = getLocalPrivateGameSession()?.session_id || "";
+      if (sessionId) {
+        sendWorldSocketMessage({
+          type: "game:stop-share",
+          sessionId,
+        });
+      }
+      return;
+    }
     const sessionId = getLocalPrivateBrowserSession()?.sessionId || "";
     if (sessionId) {
       sendWorldSocketMessage({

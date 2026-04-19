@@ -236,6 +236,63 @@ test("private world connection preserves a per-client viewer session id for auth
   assert.equal(client?.viewerSessionId, "profile:profile_host:viewer_abc123");
 });
 
+test("private game share starts, opens, and relays player actions to the host", async () => {
+  const gateway = createGateway({
+    async getWorldGame() {
+      return {
+        game: {
+          id: "game_123",
+          owner_profile_id: "profile_profile:host",
+          title: "Chess",
+          prompt: "make chess",
+          source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+          manifest: {
+            title: "Chess",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+            seats: ["White", "Black"],
+          },
+        },
+      };
+    },
+  });
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const guest = createClient({
+    viewerSessionId: "profile:guest",
+    displayName: "guest",
+    position: { x: 8, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(guest);
+
+  await gateway.handleGameStartShare(host, { gameId: "game_123" });
+
+  const sessionMessage = guest.socket.sent.find((message) => message.type === "game:session");
+  assert.equal(sessionMessage?.session?.game?.title, "Chess");
+
+  await gateway.handleGameOpen(guest, { sessionId: sessionMessage.session.session_id });
+  const openMessage = guest.socket.sent.find((message) => message.type === "game:open");
+  assert.equal(openMessage?.game?.title, "Chess");
+
+  await gateway.handleGameSeatClaim(guest, { sessionId: sessionMessage.session.session_id, seatId: "white" });
+  await gateway.handleGameAction(guest, {
+    sessionId: sessionMessage.session.session_id,
+    action: { type: "move", from: "e2", to: "e4" },
+  });
+  const actionMessage = host.socket.sent.find((message) => message.type === "game:action");
+  assert.deepEqual(actionMessage?.action, { type: "move", from: "e2", to: "e4" });
+
+  await gateway.dispose();
+});
+
 test("private nearby share starts as an origin when no anchor is nearby", async () => {
   const gateway = createGateway();
   const host = createClient({

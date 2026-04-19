@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from "ws";
 import { BrowserSessionManager } from "./browser-session-manager.js";
+import { GameShareManager } from "./game-share-manager.js";
 import {
   findNearestOriginSession,
   getAnchorSessionId,
@@ -33,6 +34,14 @@ function parseJson(buffer) {
   } catch (_error) {
     return null;
   }
+}
+
+function clipText(value, maxLength) {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
 }
 
 function buildPrivateViewerSessionId(profile, guestSessionId = "", requestedViewerSessionId = "") {
@@ -111,6 +120,7 @@ export class PrivateWorldGateway {
     this.browserManager.on("error", (payload) => {
       this.notifyBrowserError(payload);
     });
+    this.gameShares = options.gameShares ?? new GameShareManager({ scope: "private" });
     this.unsubscribe = this.store?.subscribePrivateWorldEvents?.((event) => {
       void this.broadcastStoreEvent(event);
     }) ?? null;
@@ -193,6 +203,7 @@ export class PrivateWorldGateway {
       this.sendExistingPresence(client);
       await this.rebalanceBrowserSessions(client.browserWorldKey);
       this.sendExistingBrowserSessions(client);
+      this.sendExistingGameSessions(client);
     } catch (error) {
       socket.close(1008, error.message || "not allowed");
     }
@@ -271,6 +282,50 @@ export class PrivateWorldGateway {
     }
     if (type === "browser:input") {
       await this.handleBrowserInput(client, message);
+      return;
+    }
+    if (type === "game:start-share") {
+      await this.handleGameStartShare(client, message);
+      return;
+    }
+    if (type === "game:stop-share") {
+      await this.handleGameStopShare(client, message);
+      return;
+    }
+    if (type === "game:open") {
+      await this.handleGameOpen(client, message);
+      return;
+    }
+    if (type === "game:seat-claim") {
+      await this.handleGameSeatClaim(client, message);
+      return;
+    }
+    if (type === "game:seat-release") {
+      await this.handleGameSeatRelease(client, message);
+      return;
+    }
+    if (type === "game:ready") {
+      await this.handleGameReady(client, message);
+      return;
+    }
+    if (type === "game:start-match") {
+      await this.handleGameStartMatch(client, message);
+      return;
+    }
+    if (type === "game:action") {
+      await this.handleGameAction(client, message);
+      return;
+    }
+    if (type === "game:state") {
+      await this.handleGameState(client, message);
+      return;
+    }
+    if (type === "game:preview") {
+      await this.handleGamePreview(client, message);
+      return;
+    }
+    if (type === "game:copy") {
+      await this.handleGameCopy(client, message);
     }
   }
 
@@ -299,6 +354,10 @@ export class PrivateWorldGateway {
 
   getHostedPersistentVoiceSession(viewerSessionId) {
     return this.browserManager.getSessionByHost(viewerSessionId, { sessionSlot: "persistent-voice" });
+  }
+
+  getHostedGameSession(viewerSessionId, browserWorldKey = "") {
+    return this.gameShares.getSessionByHost(browserWorldKey, viewerSessionId);
   }
 
   async stopHostedSessions(viewerSessionId) {
@@ -492,6 +551,298 @@ export class PrivateWorldGateway {
         viewerCount: session.viewerCount,
         maxViewers: session.maxViewers,
       });
+    }
+  }
+
+  sendExistingGameSessions(client) {
+    for (const rawSession of this.gameShares.listSessionsForBinding(client.browserWorldKey)) {
+      const session = this.gameShares.toSessionSummary(rawSession);
+      if (!session) {
+        continue;
+      }
+      sendJson(client, {
+        type: "game:session",
+        session,
+      });
+      if (session.latest_preview) {
+        sendJson(client, {
+          type: "game:preview",
+          sessionId: session.session_id,
+          preview: session.latest_preview,
+        });
+      }
+    }
+  }
+
+  sendGameError(client, error) {
+    sendJson(client, {
+      type: "game:error",
+      message: clipText(error?.message ?? "Unable to update game share.", 160) || "Unable to update game share.",
+    });
+  }
+
+  broadcastGameSession(sessionLike) {
+    const session = this.gameShares.toSessionSummary(sessionLike);
+    if (!session?.binding_key) {
+      return;
+    }
+    this.broadcastToBrowserWorld(session.binding_key, {
+      type: "game:session",
+      session,
+    });
+  }
+
+  broadcastGamePreview(sessionLike) {
+    const session = this.gameShares.toSessionSummary(sessionLike);
+    if (!session?.binding_key || !session.latest_preview) {
+      return;
+    }
+    this.broadcastToBrowserWorld(session.binding_key, {
+      type: "game:preview",
+      sessionId: session.session_id,
+      preview: session.latest_preview,
+    });
+  }
+
+  broadcastGameStop(sessionLike) {
+    const session = this.gameShares.toSessionSummary(sessionLike);
+    if (!session?.binding_key) {
+      return;
+    }
+    this.broadcastToBrowserWorld(session.binding_key, {
+      type: "game:stop-share",
+      sessionId: session.session_id,
+      hostViewerSessionId: session.host_viewer_session_id,
+    });
+  }
+
+  async handleGameStartShare(client, message) {
+    if (!client?.profile) {
+      this.sendGameError(client, { message: "Sign in to share games in private worlds." });
+      return;
+    }
+    if (!client.browserWorldKey) {
+      this.sendGameError(client, { message: "Join the world before sharing a game." });
+      return;
+    }
+    try {
+      const payload = await this.store.getWorldGame(client.profile, {
+        gameId: String(message.gameId ?? "").trim(),
+      });
+      const session = this.gameShares.createSession({
+        scope: "private",
+        bindingKey: client.browserWorldKey,
+        hostViewerSessionId: client.viewerSessionId,
+        hostDisplayName: this.getClientDisplayName(client),
+        game: payload.game,
+      });
+      this.broadcastGameSession(session);
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameStopShare(client, message) {
+    try {
+      const requestedSessionId = String(message.sessionId ?? "").trim();
+      const session = requestedSessionId
+        ? this.gameShares.getSession(requestedSessionId)
+        : this.getHostedGameSession(client.viewerSessionId, client.browserWorldKey);
+      if (!session) {
+        return;
+      }
+      if (session.host_viewer_session_id !== client.viewerSessionId) {
+        throw new Error("Only the host can stop this game share");
+      }
+      const stopped = this.gameShares.stopSession(session.id ?? session.session_id);
+      if (stopped) {
+        this.broadcastGameStop(stopped);
+      }
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameOpen(client, message) {
+    try {
+      const payload = this.gameShares.buildOpenPayload(
+        String(message.sessionId ?? "").trim(),
+        client.viewerSessionId,
+      );
+      if (!payload || payload.session.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      sendJson(client, {
+        type: "game:open",
+        ...payload,
+      });
+      this.broadcastGameSession(payload.session);
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameSeatClaim(client, message) {
+    try {
+      const summary = this.gameShares.claimSeat(
+        String(message.sessionId ?? "").trim(),
+        client.viewerSessionId,
+        this.getClientDisplayName(client),
+        message.seatId,
+      );
+      if (summary.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      this.broadcastGameSession(summary);
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameSeatRelease(client, message) {
+    try {
+      const summary = this.gameShares.releaseSeat(
+        String(message.sessionId ?? "").trim(),
+        client.viewerSessionId,
+      );
+      if (summary.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      this.broadcastGameSession(summary);
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameReady(client, message) {
+    try {
+      const summary = this.gameShares.setReady(
+        String(message.sessionId ?? "").trim(),
+        client.viewerSessionId,
+        message.ready === true,
+      );
+      if (summary.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      this.broadcastGameSession(summary);
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameStartMatch(client, message) {
+    try {
+      const summary = this.gameShares.startMatch(
+        String(message.sessionId ?? "").trim(),
+        client.viewerSessionId,
+      );
+      if (summary.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      this.broadcastGameSession(summary);
+      const session = this.gameShares.getSession(summary.session_id);
+      this.broadcastToBrowserWorld(summary.binding_key, {
+        type: "game:state",
+        sessionId: summary.session_id,
+        state: session?.authoritative_state ?? null,
+      });
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameAction(client, message) {
+    try {
+      const payload = this.gameShares.acceptPlayerAction(
+        String(message.sessionId ?? "").trim(),
+        client.viewerSessionId,
+        message.action ?? null,
+      );
+      if (payload.session.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      const hostClient = this.findBrowserClient(
+        payload.session.binding_key,
+        payload.session.host_viewer_session_id,
+      );
+      if (!hostClient) {
+        throw new Error("Game host is offline");
+      }
+      sendJson(hostClient, {
+        type: "game:action",
+        sessionId: payload.session.session_id,
+        action: payload.action,
+        actor: payload.actor,
+      });
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameState(client, message) {
+    try {
+      const payload = this.gameShares.applyHostState(
+        String(message.sessionId ?? "").trim(),
+        client.viewerSessionId,
+        message.state ?? null,
+        { started: message.started === true },
+      );
+      if (payload.session.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      this.broadcastToBrowserWorld(payload.session.binding_key, {
+        type: "game:state",
+        sessionId: payload.session.session_id,
+        state: payload.state,
+      });
+      this.broadcastGameSession(payload.session);
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGamePreview(client, message) {
+    try {
+      const summary = this.gameShares.updatePreview(
+        String(message.sessionId ?? "").trim(),
+        client.viewerSessionId,
+        message.preview ?? {},
+      );
+      if (summary.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      this.broadcastGamePreview(summary);
+      this.broadcastGameSession(summary);
+    } catch (error) {
+      this.sendGameError(client, error);
+    }
+  }
+
+  async handleGameCopy(client, message) {
+    if (!client?.profile) {
+      this.sendGameError(client, { message: "Sign in to copy shared games." });
+      return;
+    }
+    try {
+      const session = this.gameShares.getSession(String(message.sessionId ?? "").trim());
+      if (!session || session.binding_key !== client.browserWorldKey) {
+        throw new Error("Game session not found");
+      }
+      const sourceGameId = session.game.source_game_id ?? session.game.id;
+      const payload = await this.store.copyWorldGame(client.profile, {
+        sourceGameId,
+        title: message.title,
+        game: {
+          ...session.game,
+          source_game_id: sourceGameId,
+        },
+      });
+      sendJson(client, {
+        type: "game:copy",
+        game: payload.game,
+      });
+    } catch (error) {
+      this.sendGameError(client, error);
     }
   }
 
@@ -1103,6 +1454,7 @@ export class PrivateWorldGateway {
         type: "world:snapshot",
         world: detail.world,
       });
+      this.sendExistingGameSessions(client);
     } catch (error) {
       sendJson(client, {
         type: "world:error",
@@ -1394,6 +1746,13 @@ export class PrivateWorldGateway {
       return;
     }
     this.clients.delete(client);
+    const gameCleanup = this.gameShares.removeViewerSession(client.viewerSessionId);
+    for (const session of gameCleanup.updated) {
+      this.broadcastGameSession(session);
+    }
+    for (const session of gameCleanup.stopped) {
+      this.broadcastGameStop(session);
+    }
     const remainingHostedSessions = this.browserManager.listSessionsForHost(client.viewerSessionId);
     if (remainingHostedSessions.length > 0) {
       await this.stopHostedSessions(client.viewerSessionId);

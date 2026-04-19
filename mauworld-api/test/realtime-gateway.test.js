@@ -170,6 +170,58 @@ test("presence snapshot normalizes browser session payloads for late joiners", a
   await gateway.dispose();
 });
 
+test("public game share starts, opens, and relays player actions to the host", async () => {
+  const gateway = createGateway();
+  gateway.store = {
+    async getWorldGame() {
+      return {
+        game: {
+          id: "game_123",
+          owner_profile_id: "profile_viewer_host",
+          title: "Chess",
+          prompt: "make chess",
+          source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+          manifest: {
+            title: "Chess",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+            seats: ["White", "Black"],
+          },
+        },
+      };
+    },
+  };
+  const host = createClient({ viewerSessionId: "viewer_host" });
+  const guest = createClient({ viewerSessionId: "viewer_guest" });
+  gateway.clients.set(host.viewerSessionId, host);
+  gateway.clients.set(guest.viewerSessionId, guest);
+  gateway.getWorldMemberIds(host.worldSnapshotId).add(host.viewerSessionId);
+  gateway.getWorldMemberIds(host.worldSnapshotId).add(guest.viewerSessionId);
+
+  await gateway.handleGameStartShare(host, { gameId: "game_123" });
+
+  const sessionMessage = guest.socket.sent.find((message) => message.type === "game:session");
+  assert.equal(sessionMessage?.session?.game?.title, "Chess");
+
+  await gateway.handleGameOpen(guest, { sessionId: sessionMessage.session.session_id });
+  const openMessage = guest.socket.sent.find((message) => message.type === "game:open");
+  assert.equal(openMessage?.game?.title, "Chess");
+
+  await gateway.handleGameSeatClaim(guest, { sessionId: sessionMessage.session.session_id, seatId: "white" });
+  await gateway.handleGameAction(guest, {
+    sessionId: sessionMessage.session.session_id,
+    action: { type: "move", from: "e2", to: "e4" },
+  });
+  const actionMessage = host.socket.sent.find((message) => message.type === "game:action");
+  assert.deepEqual(actionMessage?.action, { type: "move", from: "e2", to: "e4" });
+
+  await gateway.dispose();
+});
+
 test("public nearby share starts as an origin when no anchor is nearby", async () => {
   const gateway = createGateway();
   const host = createClient({ viewerSessionId: "viewer_host" });

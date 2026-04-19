@@ -186,6 +186,39 @@ export function createWorldRealtimeClient(options = {}) {
     sendBrowserInput(sessionId, input) {
       return send("browser:input", { sessionId, input });
     },
+    startGameShare(gameId) {
+      return send("game:start-share", { gameId });
+    },
+    stopGameShare(sessionId) {
+      return send("game:stop-share", { sessionId });
+    },
+    openGame(sessionId) {
+      return send("game:open", { sessionId });
+    },
+    claimGameSeat(sessionId, seatId) {
+      return send("game:seat-claim", { sessionId, seatId });
+    },
+    releaseGameSeat(sessionId) {
+      return send("game:seat-release", { sessionId });
+    },
+    setGameReady(sessionId, ready) {
+      return send("game:ready", { sessionId, ready: ready === true });
+    },
+    startGameMatch(sessionId) {
+      return send("game:start-match", { sessionId });
+    },
+    sendGameAction(sessionId, action) {
+      return send("game:action", { sessionId, action });
+    },
+    sendGameState(sessionId, state, started = false) {
+      return send("game:state", { sessionId, state, started: started === true });
+    },
+    sendGamePreview(sessionId, preview) {
+      return send("game:preview", { sessionId, preview });
+    },
+    copyGame(sessionId, title = "") {
+      return send("game:copy", { sessionId, title });
+    },
     isConnected() {
       return Boolean(client.socket && client.socket.readyState === WebSocket.OPEN);
     },
