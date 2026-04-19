@@ -304,6 +304,7 @@ const state = {
   pendingVoiceJoinCancellationAnchorSessionId: "",
   incomingVoiceJoinRequests: [],
   gameSessions: new Map(),
+  gamePreviewMedia: new Map(),
   selectedWorldGameId: "",
   pendingGameShareGameId: "",
   browserMediaState: {
@@ -511,6 +512,8 @@ const publicGameShell = createWorldGameShell({
     }
   },
   onPreview(sessionId, preview) {
+    updateLocalGamePreview(sessionId, preview);
+    queueGamePreviewMediaFrame(sessionId, preview);
     state.realtimeClient?.sendGamePreview(sessionId, preview);
   },
   onCopy(sessionId) {
@@ -1105,6 +1108,9 @@ function restartRealtimeClient(options = {}) {
   state.realtimeClient?.stop();
   state.realtimeClient = null;
   state.realtimeConnected = false;
+  clearAllGamePreviewMedia({ unpublish: true });
+  state.gameSessions.clear();
+  publicGameShell.close();
   resetPublicBrowserState({
     disconnectMediaController: options.disconnectMediaController === true,
     stopTracks: options.stopTracks === true,
@@ -2103,6 +2109,161 @@ function drawBrowserMediaFrame(frame) {
     context.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
   };
   image.src = frame.dataUrl;
+}
+
+function ensureGamePreviewMediaEntry(sessionId) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+  let entry = state.gamePreviewMedia.get(normalizedSessionId);
+  if (entry) {
+    return entry;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 480;
+  canvas.height = 270;
+  const context = canvas.getContext("2d");
+  const image = new Image();
+  entry = {
+    sessionId: normalizedSessionId,
+    canvas,
+    context,
+    image,
+    published: false,
+    publishing: false,
+    lastPublishAttemptAt: 0,
+    pendingPreview: null,
+  };
+  image.onload = () => {
+    const nextPreview = entry.pendingPreview;
+    if (!nextPreview?.data_url || !entry.context) {
+      return;
+    }
+    const width = Math.max(1, Math.floor(Number(nextPreview.width) || image.naturalWidth || canvas.width || 480));
+    const height = Math.max(1, Math.floor(Number(nextPreview.height) || image.naturalHeight || canvas.height || 270));
+    if (canvas.width !== width || canvas.height !== height) {
+      if (entry.published) {
+        void getBrowserMediaController().unpublishSession?.(normalizedSessionId);
+        entry.published = false;
+      }
+      canvas.width = width;
+      canvas.height = height;
+    }
+    entry.context.clearRect(0, 0, canvas.width, canvas.height);
+    entry.context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    void ensurePublishedGamePreviewMedia(normalizedSessionId);
+  };
+  state.gamePreviewMedia.set(normalizedSessionId, entry);
+  return entry;
+}
+
+function clearGamePreviewMedia(sessionId, { unpublish = true } = {}) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  if (!normalizedSessionId) {
+    return;
+  }
+  const entry = state.gamePreviewMedia.get(normalizedSessionId);
+  if (!entry) {
+    return;
+  }
+  if (unpublish) {
+    void getBrowserMediaController().unpublishSession?.(normalizedSessionId);
+  }
+  getBrowserMediaController().removeSession?.(normalizedSessionId);
+  state.gamePreviewMedia.delete(normalizedSessionId);
+}
+
+function clearAllGamePreviewMedia({ unpublish = true } = {}) {
+  for (const sessionId of [...state.gamePreviewMedia.keys()]) {
+    clearGamePreviewMedia(sessionId, { unpublish });
+  }
+}
+
+function updateLocalGamePreview(sessionId, preview = null) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  const existing = state.gameSessions.get(normalizedSessionId);
+  if (!existing || !preview?.data_url) {
+    return;
+  }
+  const updatedPreview = {
+    ...cloneJson(preview),
+    updated_at: String(preview.updated_at ?? "").trim() || new Date().toISOString(),
+  };
+  state.gameSessions.set(normalizedSessionId, {
+    ...existing,
+    latest_preview: updatedPreview,
+  });
+  if (publicGameShell.isOpen(normalizedSessionId)) {
+    publicGameShell.updateSession(state.gameSessions.get(normalizedSessionId));
+  }
+}
+
+async function ensurePublishedGamePreviewMedia(sessionId) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  const localSession = getLocalGameSession();
+  if (
+    !normalizedSessionId
+    || !localSession
+    || String(localSession.session_id ?? "").trim() !== normalizedSessionId
+    || String(localSession.host_viewer_session_id ?? "").trim() !== state.viewerSessionId
+    || !state.meta?.worldSnapshotId
+  ) {
+    return false;
+  }
+  const entry = state.gamePreviewMedia.get(normalizedSessionId);
+  if (!entry || entry.published || entry.publishing) {
+    return entry?.published === true;
+  }
+  const now = Date.now();
+  if (now - Number(entry.lastPublishAttemptAt || 0) < 3000) {
+    return entry.published === true;
+  }
+  entry.lastPublishAttemptAt = now;
+  entry.publishing = true;
+  try {
+    const published = await getBrowserMediaController().publishCanvas({
+      sessionId: normalizedSessionId,
+      canvas: entry.canvas,
+      fps: 12,
+      viewerSessionId: state.viewerSessionId,
+      worldSnapshotId: state.meta.worldSnapshotId,
+    });
+    entry.published = published === true;
+    return entry.published;
+  } finally {
+    entry.publishing = false;
+  }
+}
+
+function queueGamePreviewMediaFrame(sessionId, preview = null) {
+  if (!preview?.data_url) {
+    return;
+  }
+  const entry = ensureGamePreviewMediaEntry(sessionId);
+  if (!entry?.image) {
+    return;
+  }
+  entry.pendingPreview = cloneJson(preview);
+  entry.image.src = preview.data_url;
+}
+
+function syncGameMediaSubscription(sessionId, subscribed) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  if (!normalizedSessionId || !state.meta?.worldSnapshotId) {
+    return;
+  }
+  const session = state.gameSessions.get(normalizedSessionId) ?? null;
+  void getBrowserMediaController().setSubscribed({
+    sessionId: normalizedSessionId,
+    subscribed,
+    viewerSessionId: state.viewerSessionId,
+    worldSnapshotId: state.meta.worldSnapshotId,
+    canPublish: String(session?.host_viewer_session_id ?? "").trim() === state.viewerSessionId,
+  });
+  if (!subscribed) {
+    clearGameShareVideo(normalizedSessionId);
+  }
 }
 
 function stopMediaStream(stream) {
@@ -3237,6 +3398,11 @@ function getBrowserMediaController() {
   state.browserMediaController = createBrowserMediaController({
     fetchToken: ({ canPublish = false } = {}) => fetchBrowserMediaToken({ canPublish }),
     onRemoteTrack: ({ sessionId, track, element }) => {
+      if (state.gameSessions.has(sessionId)) {
+        setGameShareVideo(sessionId, element);
+        state.browserMediaTransport = "livekit";
+        return;
+      }
       const nextPanelSessionId = getRemoteBrowserPanelSessionId(sessionId);
       if (!state.localBrowserShare && elements.browserVideo && nextPanelSessionId) {
         state.browserPanelRemoteSessionId = nextPanelSessionId;
@@ -3256,6 +3422,10 @@ function getBrowserMediaController() {
       updateBrowserPanel();
     },
     onRemoteTrackRemoved: ({ sessionId }) => {
+      if (state.gameSessions.has(sessionId)) {
+        clearGameShareVideo(sessionId);
+        return;
+      }
       if (state.browserPanelRemoteSessionId === sessionId && elements.browserVideo) {
         state.browserPanelRemoteSessionId = "";
         restoreBrowserStageVideoElement();
@@ -7190,6 +7360,7 @@ function removeGameShareEntry(sessionId) {
   if (!entry) {
     return;
   }
+  clearGameShareVideo(normalizedSessionId);
   entry.liveTexture?.dispose?.();
   entry.placeholderTexture?.dispose?.();
   if (Array.isArray(entry.clickablePayloads) && entry.clickablePayloads.length > 0) {
@@ -7267,6 +7438,8 @@ function ensureGameShareEntry(session) {
     frame,
     liveImage,
     liveTexture,
+    videoElement: null,
+    videoTexture: null,
     placeholderTexture,
     position: new THREE.Vector3(),
     targetPosition: new THREE.Vector3(),
@@ -7279,6 +7452,36 @@ function ensureGameShareEntry(session) {
   sceneState.gameShareEntries.set(sessionId, entry);
   sceneState.animatedGameShares.push(entry);
   return entry;
+}
+
+function setGameShareVideo(sessionId, videoElement) {
+  const entry = sceneState.gameShareEntries.get(String(sessionId ?? "").trim());
+  if (!entry || !videoElement) {
+    return;
+  }
+  if (entry.videoElement === videoElement && entry.videoTexture) {
+    updateGameSharePresentation(entry);
+    return;
+  }
+  clearGameShareVideo(sessionId);
+  entry.videoElement = videoElement;
+  entry.videoTexture = new THREE.VideoTexture(videoElement);
+  entry.videoTexture.colorSpace = THREE.SRGBColorSpace;
+  entry.videoTexture.generateMipmaps = false;
+  entry.videoTexture.minFilter = THREE.LinearFilter;
+  entry.videoTexture.magFilter = THREE.LinearFilter;
+  updateGameSharePresentation(entry);
+}
+
+function clearGameShareVideo(sessionId) {
+  const entry = sceneState.gameShareEntries.get(String(sessionId ?? "").trim());
+  if (!entry) {
+    return;
+  }
+  entry.videoTexture?.dispose?.();
+  entry.videoTexture = null;
+  entry.videoElement = null;
+  updateGameSharePresentation(entry);
 }
 
 function updateGameSharePresentation(entry) {
@@ -7297,7 +7500,8 @@ function updateGameSharePresentation(entry) {
     entry.currentPreviewAt = preview.updated_at;
     entry.liveImage.src = preview.data_url;
   }
-  const desiredTexture = preview?.data_url ? entry.liveTexture : entry.placeholderTexture;
+  const desiredTexture = entry.videoTexture
+    || (preview?.data_url ? entry.liveTexture : entry.placeholderTexture);
   const showingPlaceholder = desiredTexture === entry.placeholderTexture;
   entry.frame.scale.set(1, 1, 1);
   entry.frame.position.set(0, 0, 0);
@@ -10386,6 +10590,7 @@ function handleGameStop(payload = {}) {
   if (!sessionId) {
     return;
   }
+  clearGamePreviewMedia(sessionId);
   const stoppedSession = state.gameSessions.get(sessionId);
   state.gameSessions.delete(sessionId);
   if (state.pendingShareJoin?.anchorSessionId === sessionId) {
@@ -10439,6 +10644,14 @@ function handleRealtimeMessage(payload) {
   }
   if (payload.type === "game:preview") {
     handleGamePreview(payload);
+    return;
+  }
+  if (payload.type === "game:subscribe") {
+    syncGameMediaSubscription(payload.sessionId, true);
+    return;
+  }
+  if (payload.type === "game:unsubscribe") {
+    syncGameMediaSubscription(payload.sessionId, false);
     return;
   }
   if (payload.type === "game:stop-share") {

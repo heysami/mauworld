@@ -606,6 +606,57 @@ export class PrivateWorldGateway {
     return recipients;
   }
 
+  getGameSessionAudienceRecipients(session, worldClients) {
+    const hostClient = this.getGameSessionHostClient(session);
+    if (!hostClient) {
+      return new Set([String(session?.host_viewer_session_id ?? "").trim()].filter(Boolean));
+    }
+    const anchorSession = String(session?.group_role ?? "").trim().toLowerCase() === "member"
+      ? this.getGameOriginSession(session)
+      : null;
+    const senderPosition = anchorSession
+      ? this.getGameSessionHostPosition(anchorSession)
+      : positionFromPrivateClient(hostClient);
+    const recipients = new Set(
+      selectNearestRecipients({
+        senderSessionId: hostClient.viewerSessionId,
+        senderPosition,
+        candidates: worldClients.map((entry) => ({
+          viewerSessionId: entry.viewerSessionId,
+          position: positionFromPrivateClient(entry),
+        })),
+        radius: PRIVATE_WORLD_BROWSER_RADIUS,
+        maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+      }),
+    );
+    recipients.add(hostClient.viewerSessionId);
+    return recipients;
+  }
+
+  buildGameSubscriptionPayload(sessionLike, subscribed) {
+    const session = this.gameShares.toSessionSummary(sessionLike);
+    if (!session) {
+      return null;
+    }
+    return {
+      type: subscribed ? "game:subscribe" : "game:unsubscribe",
+      sessionId: session.session_id,
+      hostViewerSessionId: session.host_viewer_session_id,
+      transport: this.browserManager.liveKitEnabled ? "livekit" : "snapshot",
+    };
+  }
+
+  buildGameSessionBroadcastPayload(sessionLike, options = {}) {
+    const session = this.gameShares.toSessionSummary(sessionLike);
+    if (!session) {
+      return null;
+    }
+    if (options.includePreview !== true) {
+      delete session.latest_preview;
+    }
+    return session;
+  }
+
   getClientDisplayName(client) {
     return String(client?.displayName ?? client?.profile?.display_name ?? client?.profile?.username ?? "viewer").trim() || "viewer";
   }
@@ -664,7 +715,7 @@ export class PrivateWorldGateway {
 
   sendExistingGameSessions(client) {
     for (const rawSession of this.gameShares.listSessionsForBinding(client.browserWorldKey)) {
-      const session = this.gameShares.toSessionSummary(rawSession);
+      const session = this.buildGameSessionBroadcastPayload(rawSession);
       if (!session) {
         continue;
       }
@@ -672,11 +723,19 @@ export class PrivateWorldGateway {
         type: "game:session",
         session,
       });
-      if (session.latest_preview) {
+      const subscriptionPayload = this.buildGameSubscriptionPayload(rawSession, true);
+      const recipients = rawSession?.preview_subscribers instanceof Set && rawSession.preview_subscribers.size > 0
+        ? rawSession.preview_subscribers
+        : new Set([String(rawSession?.host_viewer_session_id ?? "").trim()].filter(Boolean));
+      if (subscriptionPayload && recipients.has(client.viewerSessionId)) {
+        sendJson(client, subscriptionPayload);
+      }
+      const preview = this.gameShares.toSessionSummary(rawSession)?.latest_preview ?? null;
+      if (preview && recipients.has(client.viewerSessionId)) {
         sendJson(client, {
           type: "game:preview",
           sessionId: session.session_id,
-          preview: session.latest_preview,
+          preview,
         });
       }
     }
@@ -689,8 +748,8 @@ export class PrivateWorldGateway {
     });
   }
 
-  broadcastGameSession(sessionLike) {
-    const session = this.gameShares.toSessionSummary(sessionLike);
+  broadcastGameSession(sessionLike, options = {}) {
+    const session = this.buildGameSessionBroadcastPayload(sessionLike, options);
     if (!session?.binding_key) {
       return;
     }
@@ -705,11 +764,21 @@ export class PrivateWorldGateway {
     if (!session?.binding_key || !session.latest_preview) {
       return;
     }
-    this.broadcastToBrowserWorld(session.binding_key, {
-      type: "game:preview",
-      sessionId: session.session_id,
-      preview: session.latest_preview,
-    });
+    const rawSession = this.gameShares.getSession(session.session_id);
+    const recipients = rawSession?.preview_subscribers instanceof Set && rawSession.preview_subscribers.size > 0
+      ? rawSession.preview_subscribers
+      : new Set([session.host_viewer_session_id].filter(Boolean));
+    for (const viewerSessionId of recipients) {
+      const client = this.findBrowserClient(session.binding_key, viewerSessionId);
+      if (!client) {
+        continue;
+      }
+      sendJson(client, {
+        type: "game:preview",
+        sessionId: session.session_id,
+        preview: session.latest_preview,
+      });
+    }
   }
 
   broadcastGameStop(sessionLike) {
@@ -807,6 +876,7 @@ export class PrivateWorldGateway {
         this.clearApprovedShareJoin(anchorSession.id ?? anchorSession.session_id, client.viewerSessionId);
       }
       this.broadcastGameSession(session);
+      await this.rebalanceGameSessions(client.browserWorldKey);
     } catch (error) {
       this.sendGameError(client, error);
     }
@@ -981,7 +1051,6 @@ export class PrivateWorldGateway {
         throw new Error("Game session not found");
       }
       this.broadcastGamePreview(summary);
-      this.broadcastGameSession(summary);
     } catch (error) {
       this.sendGameError(client, error);
     }
@@ -1873,6 +1942,7 @@ export class PrivateWorldGateway {
   }
 
   async rebalanceGameSessions(browserWorldKey) {
+    const worldClients = this.getBrowserWorldClients(browserWorldKey);
     for (const session of this.gameShares.listSessionsForBinding(browserWorldKey)) {
       const hostClient = this.getGameSessionHostClient(session);
       if (!hostClient) {
@@ -1887,7 +1957,42 @@ export class PrivateWorldGateway {
           for (const stopped of this.gameShares.stopSessionTree(session.id ?? session.session_id)) {
             this.broadcastGameStop(stopped);
           }
+          continue;
         }
+      }
+      const fullRecipients = this.getGameSessionAudienceRecipients(session, worldClients);
+      const previousRecipients = new Set(session.preview_subscribers ?? []);
+      session.preview_subscribers = fullRecipients;
+      const subscribePayload = this.buildGameSubscriptionPayload(session, true);
+      const unsubscribePayload = this.buildGameSubscriptionPayload(session, false);
+      for (const viewerSessionId of fullRecipients) {
+        if (previousRecipients.has(viewerSessionId)) {
+          continue;
+        }
+        const client = this.findBrowserClient(browserWorldKey, viewerSessionId);
+        if (!client) {
+          continue;
+        }
+        if (subscribePayload) {
+          sendJson(client, subscribePayload);
+        }
+        if (session.latest_preview) {
+          sendJson(client, {
+            type: "game:preview",
+            sessionId: String(session.id ?? session.session_id ?? "").trim(),
+            preview: session.latest_preview,
+          });
+        }
+      }
+      for (const viewerSessionId of previousRecipients) {
+        if (fullRecipients.has(viewerSessionId)) {
+          continue;
+        }
+        const client = this.findBrowserClient(browserWorldKey, viewerSessionId);
+        if (!client || !unsubscribePayload) {
+          continue;
+        }
+        sendJson(client, unsubscribePayload);
       }
     }
   }

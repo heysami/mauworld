@@ -293,6 +293,96 @@ test("private game share starts, opens, and relays player actions to the host", 
   await gateway.dispose();
 });
 
+test("private game previews subscribe nearby viewers without rebroadcasting preview blobs in game sessions", async () => {
+  const gateway = createGateway({
+    async getWorldGame() {
+      return {
+        game: {
+          id: "game_preview",
+          owner_profile_id: "profile_profile:host",
+          title: "Preview Game",
+          prompt: "make preview game",
+          source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+          manifest: {
+            title: "Preview Game",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+          },
+        },
+      };
+    },
+  });
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const nearby = createClient({
+    viewerSessionId: "profile:nearby",
+    displayName: "nearby",
+    position: { x: 16, y: 0, z: 0 },
+  });
+  const far = createClient({
+    viewerSessionId: "profile:far",
+    displayName: "far",
+    position: { x: 320, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(nearby);
+  gateway.clients.add(far);
+
+  await gateway.handleGameStartShare(host, { gameId: "game_preview" });
+
+  const session = gateway.getHostedGameSession(host.viewerSessionId, host.browserWorldKey);
+  const sessionId = session?.id ?? session?.session_id;
+  assert.equal(Boolean(session), true);
+  assert.equal(session.preview_subscribers.has(host.viewerSessionId), true);
+  assert.equal(session.preview_subscribers.has(nearby.viewerSessionId), true);
+  assert.equal(session.preview_subscribers.has(far.viewerSessionId), false);
+  assert.equal(
+    nearby.socket.sent.some((message) => message.type === "game:subscribe" && message.sessionId === sessionId),
+    true,
+  );
+  assert.equal(
+    far.socket.sent.some((message) => message.type === "game:subscribe" && message.sessionId === sessionId),
+    false,
+  );
+
+  await gateway.handleGamePreview(host, {
+    sessionId,
+    preview: {
+      data_url: "data:image/png;base64,AAAA",
+      width: 480,
+      height: 270,
+    },
+  });
+
+  assert.equal(
+    host.socket.sent.some((message) => message.type === "game:preview" && message.sessionId === sessionId),
+    true,
+  );
+  assert.equal(
+    nearby.socket.sent.some((message) => message.type === "game:preview" && message.sessionId === sessionId),
+    true,
+  );
+  assert.equal(
+    far.socket.sent.some((message) => message.type === "game:preview" && message.sessionId === sessionId),
+    false,
+  );
+  assert.equal(
+    [...host.socket.sent, ...nearby.socket.sent, ...far.socket.sent]
+      .filter((message) => message.type === "game:session")
+      .every((message) => !("latest_preview" in (message.session ?? {}))),
+    true,
+  );
+
+  await gateway.dispose();
+});
+
 test("private game share inside an existing nearby game anchor returns join-required", async () => {
   const gateway = createGateway({
     async getWorldGame() {
