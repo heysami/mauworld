@@ -2492,6 +2492,22 @@ function reconcilePrivateShareBubbles() {
   }
 }
 
+function getPrivateGameBubbleAspectRatio(session = {}) {
+  const previewFrame = session?.latest_preview ?? null;
+  if (previewFrame?.width && previewFrame?.height) {
+    return Math.max(0.6, Math.min(2.4, Number(previewFrame.width) / Math.max(1, Number(previewFrame.height))));
+  }
+  return Math.max(0.6, Math.min(2.4, Number(session?.game?.manifest?.aspect_ratio) || PRIVATE_BROWSER_SHARE.aspectRatio));
+}
+
+function getPrivateGameBubblePlaceholderKey(session = {}) {
+  return [
+    getPrivateGameSessionTitle(session),
+    getPrivateGameSessionDescription(session),
+    String(session?.started === true),
+  ].join(":");
+}
+
 function createPrivateGameBubbleTexture(session = {}) {
   return createBubbleTexture("🎮", {
     accent: PRIVATE_WORLD_STYLE.accents[1],
@@ -2502,6 +2518,23 @@ function createPrivateGameBubbleTexture(session = {}) {
     height: 300,
     maxLines: 4,
   });
+}
+
+function updatePrivateGameBubbleGeometry(entry) {
+  if (!entry?.frame || !entry?.frameShell) {
+    return;
+  }
+  const aspectRatio = getPrivateGameBubbleAspectRatio(entry.session);
+  if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
+    return;
+  }
+  const width = PRIVATE_BROWSER_SHARE.screenWidth * 0.62;
+  const height = width / Math.max(0.1, aspectRatio);
+  entry.frame.geometry.dispose();
+  entry.frame.geometry = new THREE.PlaneGeometry(width, height);
+  entry.frameShell.geometry.dispose();
+  entry.frameShell.geometry = new THREE.PlaneGeometry(width + 0.7, height + 0.7);
+  entry.geometryAspectRatio = aspectRatio;
 }
 
 function removePrivateGameBubbleEntry(sessionId = "") {
@@ -2534,12 +2567,10 @@ function ensurePrivateGameBubbleEntry(session = {}) {
   if (existing) {
     existing.session = { ...existing.session, ...session };
     existing.hostSessionId = String(session.host_viewer_session_id ?? existing.hostSessionId ?? "").trim();
+    updatePrivateGameBubbleGeometry(existing);
     return existing;
   }
-  const previewFrame = session?.latest_preview ?? null;
-  const aspectRatio = previewFrame?.width && previewFrame?.height
-    ? Math.max(0.6, Math.min(2.4, Number(previewFrame.width) / Math.max(1, Number(previewFrame.height))))
-    : Math.max(0.6, Math.min(2.4, Number(session?.game?.manifest?.aspect_ratio) || PRIVATE_BROWSER_SHARE.aspectRatio));
+  const aspectRatio = getPrivateGameBubbleAspectRatio(session);
   const width = PRIVATE_BROWSER_SHARE.screenWidth * 0.62;
   const height = width / aspectRatio;
   const group = new THREE.Group();
@@ -2587,6 +2618,8 @@ function ensurePrivateGameBubbleEntry(session = {}) {
     position: new THREE.Vector3(),
     targetPosition: new THREE.Vector3(),
     currentPreviewAt: "",
+    geometryAspectRatio: aspectRatio,
+    placeholderKey: getPrivateGameBubblePlaceholderKey(session),
   };
   preview.gameShareEntries.set(sessionId, entry);
   return entry;
@@ -2596,16 +2629,37 @@ function updatePrivateGameBubblePresentation(entry) {
   if (!entry?.frame) {
     return;
   }
+  updatePrivateGameBubbleGeometry(entry);
+  const nextPlaceholderKey = getPrivateGameBubblePlaceholderKey(entry.session);
+  if (entry.placeholderKey !== nextPlaceholderKey) {
+    entry.placeholderTexture?.dispose?.();
+    entry.placeholderTexture = createPrivateGameBubbleTexture(entry.session);
+    entry.placeholderKey = nextPlaceholderKey;
+  }
   const previewFrame = entry.session?.latest_preview ?? null;
   if (previewFrame?.data_url && previewFrame.updated_at && previewFrame.updated_at !== entry.currentPreviewAt) {
     entry.currentPreviewAt = previewFrame.updated_at;
     entry.liveImage.src = previewFrame.data_url;
   }
   const desiredMap = previewFrame?.data_url ? entry.liveTexture : entry.placeholderTexture;
+  const showingPlaceholder = desiredMap === entry.placeholderTexture;
+  const baseWidth = PRIVATE_BROWSER_SHARE.screenWidth * 0.62;
+  const baseHeight = baseWidth / Math.max(0.1, getPrivateGameBubbleAspectRatio(entry.session));
+  const bubbleWidth = PRIVATE_BROWSER_SHARE.placeholderVideoWidth;
+  const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_SHARE.placeholderAspectRatio;
+  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
+  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
+  entry.frame.scale.set(scaleX, scaleY, 1);
+  entry.frame.position.set(0, 0, 0);
+  entry.frame.material.depthTest = false;
+  entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
+  entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
+  entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
   }
+  entry.frame.material.needsUpdate = true;
 }
 
 function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
@@ -2637,7 +2691,7 @@ function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
     }
     const showingLiveMedia = Boolean(session?.latest_preview?.data_url);
     entry.targetPosition.copy(hostPosition);
-    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds) + 2.8;
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
     entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);

@@ -6934,17 +6934,49 @@ function reconcileBrowserScreens() {
   }
 }
 
+function getGameShareAspectRatio(session = {}) {
+  const preview = session?.latest_preview ?? null;
+  if (preview?.width && preview?.height) {
+    return Math.max(0.6, Math.min(2.4, Number(preview.width) / Math.max(1, Number(preview.height))));
+  }
+  return Math.max(0.6, Math.min(2.4, Number(session?.game?.manifest?.aspect_ratio) || 16 / 9));
+}
+
+function getGameSharePlaceholderTextureKey(session = {}) {
+  return [
+    getGameSessionTitle(session),
+    getGameSessionDescription(session),
+    String(session?.started === true),
+  ].join(":");
+}
+
 function createGameSharePlaceholderTexture(session) {
   return createBubbleTexture("🎮", {
     label: "Live Game",
     text: `${getGameSessionTitle(session)}${getGameSessionDescription(session) ? `\n${getGameSessionDescription(session)}` : ""}`,
-    accent: "#58d7ff",
-    stroke: "#3556a2",
-    background: "rgba(248, 252, 255, 0.96)",
+    accent: WORLD_STYLE.accents[1],
+    stroke: WORLD_STYLE.outline,
     maxLines: 4,
     width: 420,
     height: 300,
   });
+}
+
+function updateGameShareGeometry(entry) {
+  if (!entry?.frame || !entry?.frameShell) {
+    return;
+  }
+  const aspectRatio = getGameShareAspectRatio(entry.session);
+  if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
+    return;
+  }
+  const width = BROWSER_SHARE.screenWidth * 0.62;
+  const height = width / Math.max(0.1, aspectRatio);
+  entry.frame.geometry.dispose();
+  entry.frame.geometry = new THREE.PlaneGeometry(width, height);
+  entry.frameShell.geometry.dispose();
+  entry.frameShell.geometry = new THREE.PlaneGeometry(width + 0.7, height + 0.7);
+  entry.geometryAspectRatio = aspectRatio;
 }
 
 function removeGameShareEntry(sessionId) {
@@ -6962,6 +6994,7 @@ function removeGameShareEntry(sessionId) {
     const payloadSet = new Set(entry.clickablePayloads);
     sceneState.clickable = sceneState.clickable.filter((payload) => !payloadSet.has(payload));
   }
+  unregisterBillboardsInGroup(entry.group, true);
   entry.group.parent?.remove(entry.group);
   entry.group.traverse((node) => {
     node.geometry?.dispose?.();
@@ -6983,12 +7016,10 @@ function ensureGameShareEntry(session) {
   let entry = sceneState.gameShareEntries.get(sessionId);
   if (entry) {
     entry.session = session;
+    updateGameShareGeometry(entry);
     return entry;
   }
-  const preview = session?.latest_preview ?? null;
-  const aspectRatio = preview?.width && preview?.height
-    ? Math.max(0.6, Math.min(2.4, Number(preview.width) / Math.max(1, Number(preview.height))))
-    : Math.max(0.6, Math.min(2.4, Number(session?.game?.manifest?.aspect_ratio) || 16 / 9));
+  const aspectRatio = getGameShareAspectRatio(session);
   const width = BROWSER_SHARE.screenWidth * 0.62;
   const height = width / aspectRatio;
   const group = new THREE.Group();
@@ -7038,6 +7069,8 @@ function ensureGameShareEntry(session) {
     position: new THREE.Vector3(),
     targetPosition: new THREE.Vector3(),
     currentPreviewAt: "",
+    geometryAspectRatio: aspectRatio,
+    placeholderKey: getGameSharePlaceholderTextureKey(session),
     clickablePayloads,
   };
   sceneState.gameShares.add(group);
@@ -7050,16 +7083,37 @@ function updateGameSharePresentation(entry) {
   if (!entry) {
     return;
   }
+  updateGameShareGeometry(entry);
+  const nextPlaceholderKey = getGameSharePlaceholderTextureKey(entry.session);
+  if (entry.placeholderKey !== nextPlaceholderKey) {
+    entry.placeholderTexture?.dispose?.();
+    entry.placeholderTexture = createGameSharePlaceholderTexture(entry.session);
+    entry.placeholderKey = nextPlaceholderKey;
+  }
   const preview = entry.session?.latest_preview ?? null;
   if (preview?.data_url && preview.updated_at && preview.updated_at !== entry.currentPreviewAt) {
     entry.currentPreviewAt = preview.updated_at;
     entry.liveImage.src = preview.data_url;
   }
   const desiredTexture = preview?.data_url ? entry.liveTexture : entry.placeholderTexture;
+  const showingPlaceholder = desiredTexture === entry.placeholderTexture;
+  const baseWidth = BROWSER_SHARE.screenWidth * 0.62;
+  const baseHeight = baseWidth / Math.max(0.1, getGameShareAspectRatio(entry.session));
+  const bubbleWidth = BROWSER_SHARE.placeholderVideoWidth;
+  const bubbleHeight = bubbleWidth / BROWSER_SHARE.placeholderAspectRatio;
+  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
+  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
+  entry.frame.scale.set(scaleX, scaleY, 1);
+  entry.frame.position.set(0, 0, 0);
+  entry.frame.material.depthTest = false;
+  entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
+  entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
+  entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredTexture) {
     entry.frame.material.map = desiredTexture;
     entry.frame.material.needsUpdate = true;
   }
+  entry.frame.material.needsUpdate = true;
 }
 
 function updateGameShareEntries(elapsedSeconds = 0) {
@@ -7086,7 +7140,7 @@ function updateGameShareEntries(elapsedSeconds = 0) {
     }
     const hasPreview = Boolean(session?.latest_preview?.data_url);
     entry.targetPosition.copy(hostPosition);
-    entry.targetPosition.y += getSharedBrowserScreenOffsetY(hasPreview, elapsedSeconds) + 2.8;
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(hasPreview, elapsedSeconds);
     entry.position.lerp(entry.targetPosition, 0.18);
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);
