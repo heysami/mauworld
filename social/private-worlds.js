@@ -1400,7 +1400,7 @@ function updateLocalPrivateGamePreview(sessionId, preview = null) {
     latest_preview: updatedPreview,
   });
   if (privateGameShell.isOpen(normalizedSessionId)) {
-    privateGameShell.updateSession(state.gameSessions.get(normalizedSessionId));
+    privateGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
   }
 }
 
@@ -6682,7 +6682,7 @@ function handlePrivateGamePreview(payload = {}) {
     latest_preview: cloneJson(payload.preview ?? null),
   });
   if (privateGameShell.isOpen(sessionId)) {
-    privateGameShell.updateSession(state.gameSessions.get(sessionId));
+    privateGameShell.updateSession(state.gameSessions.get(sessionId), { syncFrame: false });
   }
   updatePrivateBrowserPanel();
   renderPrivateLiveSharesList();

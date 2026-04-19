@@ -1483,13 +1483,16 @@ export function createWorldGameShell(options = {}) {
     loadIframe();
   }
 
-  function updateSession(session = null) {
+  function updateSession(session = null, options = {}) {
     if (!session || !state.session || String(session.session_id ?? "") !== String(state.session.session_id ?? "")) {
       return;
     }
+    const syncFrame = options?.syncFrame !== false;
     state.session = cloneJson(session);
     render();
-    syncFrameSession();
+    if (syncFrame) {
+      syncFrameSession();
+    }
   }
 
   function updateState(sessionId, nextState) {
