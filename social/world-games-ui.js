@@ -416,6 +416,70 @@ function buildShellBridgeScript() {
           return Math.max(250, Math.round(1000 / fps));
         }
 
+        function buildCompatibleSeatCollection(seats) {
+          const normalizedSeats = Array.isArray(seats)
+            ? seats.map((seat) => (seat && typeof seat === "object" ? { ...seat } : seat))
+            : [];
+          const legacyAliases = ["X", "O"];
+          for (let index = 0; index < normalizedSeats.length; index += 1) {
+            const seat = normalizedSeats[index];
+            if (!seat || typeof seat !== "object") {
+              continue;
+            }
+            const seatId = String(seat.seat_id || "").trim();
+            if (seatId && !Object.prototype.hasOwnProperty.call(normalizedSeats, seatId)) {
+              normalizedSeats[seatId] = seat;
+            }
+            const alias = legacyAliases[index];
+            if (alias && !Object.prototype.hasOwnProperty.call(normalizedSeats, alias)) {
+              normalizedSeats[alias] = seat.viewer_session_id ? { ...seat, legacy_seat_id: alias } : null;
+            }
+          }
+          return normalizedSeats;
+        }
+
+        function resolveLegacySeatId(seats, claimedSeatId) {
+          const normalizedClaimedSeatId = String(claimedSeatId || "").trim();
+          if (!normalizedClaimedSeatId || !Array.isArray(seats)) {
+            return null;
+          }
+          const seatIndex = seats.findIndex((seat) => String(seat && seat.seat_id || "").trim() === normalizedClaimedSeatId);
+          if (seatIndex === 0) {
+            return "X";
+          }
+          if (seatIndex === 1) {
+            return "O";
+          }
+          return null;
+        }
+
+        function normalizeSessionForGame(session) {
+          if (!session || typeof session !== "object") {
+            return null;
+          }
+          const normalized = clone(session) || {};
+          const rawSeats = Array.isArray(normalized.seats) ? normalized.seats : [];
+          const claimedSeatId = String(
+            normalized.claimed_seat_id
+            || normalized.claimedSeatId
+            || normalized.mySeatId
+            || ""
+          ).trim();
+          const legacySeatId = resolveLegacySeatId(rawSeats, claimedSeatId);
+          const claimedSeat = claimedSeatId
+            ? rawSeats.find((seat) => String(seat && seat.seat_id || "").trim() === claimedSeatId) || null
+            : null;
+          const role = String(normalized.role || "").trim().toLowerCase();
+          normalized.seats = buildCompatibleSeatCollection(rawSeats);
+          normalized.claimed_seat_id = claimedSeatId || null;
+          normalized.claimedSeatId = claimedSeatId || null;
+          normalized.mySeatId = legacySeatId || claimedSeatId || null;
+          normalized.role = role || (normalized.isHost ? "host" : (claimedSeatId ? "player" : "viewer"));
+          normalized.isHost = normalized.isHost === true || normalized.role === "host";
+          normalized.ready = normalized.ready === true || (claimedSeat ? claimedSeat.ready === true : false);
+          return normalized;
+        }
+
         async function publishAutomaticPreview() {
           if (
             state.previewPending
@@ -468,7 +532,7 @@ function buildShellBridgeScript() {
               return ensureRoot();
             },
             get session() {
-              return clone(state.session);
+              return clone(normalizeSessionForGame(state.session));
             },
             getState() {
               return clone(state.authoritativeState);
@@ -526,7 +590,7 @@ function buildShellBridgeScript() {
         function handleHostMessage(payload = {}) {
           const type = String(payload.type || "").trim();
           if (type === "session") {
-            state.session = clone(payload.session);
+            state.session = normalizeSessionForGame(payload.session);
             if (typeof state.hooks.onSession === "function") {
               state.hooks.onSession(clone(state.session));
             }
