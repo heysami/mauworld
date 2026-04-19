@@ -1124,7 +1124,7 @@ export class RealtimeGateway {
 
   broadcastGamePreview(sessionLike) {
     const session = this.gameShares.toSessionSummary(sessionLike);
-    if (!session?.binding_key || !session.latest_preview) {
+    if (!session?.binding_key) {
       return;
     }
     const rawSession = this.gameShares.getSession(session.session_id);
@@ -1139,7 +1139,7 @@ export class RealtimeGateway {
       sendJson(client, {
         type: "game:preview",
         sessionId: session.session_id,
-        preview: session.latest_preview,
+        preview: session.latest_preview ?? null,
       });
     }
   }

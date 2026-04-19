@@ -1608,6 +1608,9 @@ export function createWorldGameShell(options = {}) {
       return;
     }
     if (payload.type === "preview") {
+      if (!state.open) {
+        return;
+      }
       const now = performance.now();
       if (now - state.lastPreviewSentAt < 220) {
         return;
@@ -1644,6 +1647,10 @@ export function createWorldGameShell(options = {}) {
   render();
 
   function hide() {
+    const sessionId = String(state.session?.session_id ?? "").trim();
+    if (state.open && sessionId) {
+      options.onHideSession?.(sessionId);
+    }
     state.open = false;
     render();
     syncPreviewVisibility();

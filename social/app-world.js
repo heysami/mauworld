@@ -531,6 +531,15 @@ const publicGameShell = createWorldGameShell({
     queueGamePreviewMediaFrame(sessionId, preview);
     state.realtimeClient?.sendGamePreview(sessionId, preview);
   },
+  onHideSession(sessionId) {
+    const session = state.gameSessions.get(String(sessionId ?? "").trim());
+    if (String(session?.host_viewer_session_id ?? "").trim() !== state.viewerSessionId) {
+      return;
+    }
+    clearLocalGamePreview(sessionId, { broadcast: true });
+    updateBrowserPanel();
+    renderLiveSharesList();
+  },
   onCopy(sessionId) {
     if (!isPublicViewerSignedIn()) {
       showToast("Log in to copy this game.");
@@ -2223,6 +2232,25 @@ function updateLocalGamePreview(sessionId, preview = null) {
   });
   if (publicGameShell.isOpen(normalizedSessionId)) {
     publicGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
+  }
+}
+
+function clearLocalGamePreview(sessionId, { broadcast = false } = {}) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  const existing = state.gameSessions.get(normalizedSessionId);
+  if (!existing) {
+    return;
+  }
+  state.gameSessions.set(normalizedSessionId, {
+    ...existing,
+    latest_preview: null,
+  });
+  clearGamePreviewMedia(normalizedSessionId, { unpublish: true });
+  if (publicGameShell.isOpen(normalizedSessionId)) {
+    publicGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
+  }
+  if (broadcast) {
+    state.realtimeClient?.sendGamePreview(normalizedSessionId, null);
   }
 }
 

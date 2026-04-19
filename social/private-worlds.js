@@ -1264,6 +1264,15 @@ const privateGameShell = createWorldGameShell({
       preview,
     });
   },
+  onHideSession(sessionId) {
+    const session = state.gameSessions.get(String(sessionId ?? "").trim());
+    if (String(session?.host_viewer_session_id ?? "").trim() !== getPrivateViewerSessionId()) {
+      return;
+    }
+    clearLocalPrivateGamePreview(sessionId, { broadcast: true });
+    updatePrivateBrowserPanel();
+    renderPrivateLiveSharesList();
+  },
   onCopy(sessionId) {
     if (!state.session) {
       setPrivateBrowserStatus("Sign in to copy this game.");
@@ -1420,6 +1429,29 @@ function updateLocalPrivateGamePreview(sessionId, preview = null) {
   });
   if (privateGameShell.isOpen(normalizedSessionId)) {
     privateGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
+  }
+}
+
+function clearLocalPrivateGamePreview(sessionId, { broadcast = false } = {}) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  const existing = state.gameSessions.get(normalizedSessionId);
+  if (!existing) {
+    return;
+  }
+  state.gameSessions.set(normalizedSessionId, {
+    ...existing,
+    latest_preview: null,
+  });
+  clearPrivateGamePreviewMedia(normalizedSessionId, { unpublish: true });
+  if (privateGameShell.isOpen(normalizedSessionId)) {
+    privateGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
+  }
+  if (broadcast) {
+    sendWorldSocketMessage({
+      type: "game:preview",
+      sessionId: normalizedSessionId,
+      preview: null,
+    });
   }
 }
 
