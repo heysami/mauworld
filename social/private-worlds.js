@@ -139,7 +139,6 @@ const PRIVATE_BROWSER_RADIUS = PRIVATE_BROWSER_SHARE.radius;
 const PRIVATE_GAME_SHARE_HIT_PADDING = 3.2;
 const PRIVATE_GAME_SHARE_HIT_PROXY_OPACITY = 0.01;
 const PRIVATE_GAME_SHARE_PICK_PRIORITY = 12;
-const PRIVATE_GAME_SHARE_PREVIEW_MAX_AGE_MS = 2200;
 const PRIVATE_LOCAL_PREVIEW_SESSION_ID = "__private_local_preview__";
 const BUILD_PLACEMENT_SHORTCUTS = new Map([
   ["1", "voxel"],
@@ -1264,15 +1263,6 @@ const privateGameShell = createWorldGameShell({
       preview,
     });
   },
-  onHideSession(sessionId) {
-    const session = state.gameSessions.get(String(sessionId ?? "").trim());
-    if (String(session?.host_viewer_session_id ?? "").trim() !== getPrivateViewerSessionId()) {
-      return;
-    }
-    clearLocalPrivateGamePreview(sessionId, { broadcast: true });
-    updatePrivateBrowserPanel();
-    renderPrivateLiveSharesList();
-  },
   onCopy(sessionId) {
     if (!state.session) {
       setPrivateBrowserStatus("Sign in to copy this game.");
@@ -1429,29 +1419,6 @@ function updateLocalPrivateGamePreview(sessionId, preview = null) {
   });
   if (privateGameShell.isOpen(normalizedSessionId)) {
     privateGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
-  }
-}
-
-function clearLocalPrivateGamePreview(sessionId, { broadcast = false } = {}) {
-  const normalizedSessionId = String(sessionId ?? "").trim();
-  const existing = state.gameSessions.get(normalizedSessionId);
-  if (!existing) {
-    return;
-  }
-  state.gameSessions.set(normalizedSessionId, {
-    ...existing,
-    latest_preview: null,
-  });
-  clearPrivateGamePreviewMedia(normalizedSessionId, { unpublish: true });
-  if (privateGameShell.isOpen(normalizedSessionId)) {
-    privateGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
-  }
-  if (broadcast) {
-    sendWorldSocketMessage({
-      type: "game:preview",
-      sessionId: normalizedSessionId,
-      preview: null,
-    });
   }
 }
 
@@ -2778,14 +2745,6 @@ function createPrivateGameBubbleTexture(session = {}) {
   });
 }
 
-function hasFreshPrivateGameSharePreview(session = {}) {
-  const previewFrame = session?.latest_preview ?? null;
-  const updatedAt = Date.parse(String(previewFrame?.updated_at ?? ""));
-  return Boolean(previewFrame?.data_url)
-    && Number.isFinite(updatedAt)
-    && (Date.now() - updatedAt) <= PRIVATE_GAME_SHARE_PREVIEW_MAX_AGE_MS;
-}
-
 function updatePrivateGameBubbleGeometry(entry) {
   if (!entry?.frame || !entry?.frameShell) {
     return;
@@ -2975,12 +2934,11 @@ function updatePrivateGameBubblePresentation(entry) {
     entry.currentPreviewAt = previewFrame.updated_at;
     entry.liveImage.src = previewFrame.data_url;
   }
-  const hasFreshPreview = hasFreshPrivateGameSharePreview(entry.session);
   const deliveryMode = getPrivateGameSessionDeliveryMode(entry.session);
   const showLiveMedia = deliveryMode === "full";
   const desiredMap = showLiveMedia && entry.videoTexture
     ? entry.videoTexture
-    : showLiveMedia && hasFreshPreview
+    : showLiveMedia && previewFrame?.data_url
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
@@ -3042,7 +3000,7 @@ function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
       continue;
     }
     const showingLiveMedia = getPrivateGameSessionDeliveryMode(entry.session) === "full"
-      && Boolean(entry.videoTexture || hasFreshPrivateGameSharePreview(entry.session));
+      && Boolean(entry.videoTexture || entry.session?.latest_preview?.data_url);
     const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
     entry.targetPosition.copy(hostPosition);
     entry.targetPosition.x += laneOffset.x;
@@ -7240,9 +7198,7 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
   const joinMode = Boolean(!localGameSession && joinTarget);
   const joinStateMatches = String(state.pendingShareJoin?.anchorSessionId ?? "").trim() === String(joinTarget?.session_id ?? "").trim();
   const joinApproved = joinMode && joinStateMatches && state.pendingShareJoin?.approved === true;
-  const previewUrl = hasFreshPrivateGameSharePreview(localGameSession)
-    ? String(localGameSession?.latest_preview?.data_url ?? "").trim()
-    : "";
+  const previewUrl = String(localGameSession?.latest_preview?.data_url ?? "").trim();
   elements.panelBrowserPanel?.classList.add("is-game-mode");
   elements.panelBrowserPanel?.classList.remove("is-docked-compact");
   elements.panelBrowserStage?.classList.add("is-active");

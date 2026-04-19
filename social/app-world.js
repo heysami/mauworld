@@ -221,7 +221,6 @@ let toonGradientTexture = null;
 const GAME_SHARE_HIT_PADDING = 3.2;
 const GAME_SHARE_HIT_PROXY_OPACITY = 0.01;
 const GAME_SHARE_PICK_PRIORITY = 12;
-const GAME_SHARE_PREVIEW_MAX_AGE_MS = 2200;
 
 function createEmptyPrivateWorldGateState() {
   return {
@@ -530,15 +529,6 @@ const publicGameShell = createWorldGameShell({
     updateLocalGamePreview(sessionId, preview);
     queueGamePreviewMediaFrame(sessionId, preview);
     state.realtimeClient?.sendGamePreview(sessionId, preview);
-  },
-  onHideSession(sessionId) {
-    const session = state.gameSessions.get(String(sessionId ?? "").trim());
-    if (String(session?.host_viewer_session_id ?? "").trim() !== state.viewerSessionId) {
-      return;
-    }
-    clearLocalGamePreview(sessionId, { broadcast: true });
-    updateBrowserPanel();
-    renderLiveSharesList();
   },
   onCopy(sessionId) {
     if (!isPublicViewerSignedIn()) {
@@ -2232,25 +2222,6 @@ function updateLocalGamePreview(sessionId, preview = null) {
   });
   if (publicGameShell.isOpen(normalizedSessionId)) {
     publicGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
-  }
-}
-
-function clearLocalGamePreview(sessionId, { broadcast = false } = {}) {
-  const normalizedSessionId = String(sessionId ?? "").trim();
-  const existing = state.gameSessions.get(normalizedSessionId);
-  if (!existing) {
-    return;
-  }
-  state.gameSessions.set(normalizedSessionId, {
-    ...existing,
-    latest_preview: null,
-  });
-  clearGamePreviewMedia(normalizedSessionId, { unpublish: true });
-  if (publicGameShell.isOpen(normalizedSessionId)) {
-    publicGameShell.updateSession(state.gameSessions.get(normalizedSessionId), { syncFrame: false });
-  }
-  if (broadcast) {
-    state.realtimeClient?.sendGamePreview(normalizedSessionId, null);
   }
 }
 
@@ -7979,14 +7950,6 @@ function createGameSharePlaceholderTexture(session) {
   });
 }
 
-function hasFreshGameSharePreview(session = {}) {
-  const preview = session?.latest_preview ?? null;
-  const updatedAt = Date.parse(String(preview?.updated_at ?? ""));
-  return Boolean(preview?.data_url)
-    && Number.isFinite(updatedAt)
-    && (Date.now() - updatedAt) <= GAME_SHARE_PREVIEW_MAX_AGE_MS;
-}
-
 function updateGameShareGeometry(entry) {
   if (!entry?.frame || !entry?.frameShell) {
     return;
@@ -8201,12 +8164,11 @@ function updateGameSharePresentation(entry) {
     entry.currentPreviewAt = preview.updated_at;
     entry.liveImage.src = preview.data_url;
   }
-  const hasFreshPreview = hasFreshGameSharePreview(entry.session);
   const deliveryMode = getGameSessionDeliveryMode(entry.session);
   const showLiveMedia = deliveryMode === "full";
   const desiredTexture = showLiveMedia && entry.videoTexture
     ? entry.videoTexture
-    : showLiveMedia && hasFreshPreview
+    : showLiveMedia && preview?.data_url
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredTexture === entry.placeholderTexture;
@@ -8260,7 +8222,7 @@ function updateGameShareEntries(elapsedSeconds = 0) {
       continue;
     }
     const showingLiveMedia = getGameSessionDeliveryMode(entry.session) === "full"
-      && Boolean(entry.videoTexture || hasFreshGameSharePreview(entry.session));
+      && Boolean(entry.videoTexture || entry.session?.latest_preview?.data_url);
     const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
     entry.targetPosition.copy(hostPosition);
     entry.targetPosition.x += laneOffset.x;
@@ -10906,9 +10868,7 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
   const joinMode = Boolean(!localGameSession && joinTarget);
   const joinStateMatches = String(state.pendingShareJoin?.anchorSessionId ?? "").trim() === String(joinTarget?.session_id ?? "").trim();
   const joinApproved = joinMode && joinStateMatches && state.pendingShareJoin?.approved === true;
-  const previewUrl = hasFreshGameSharePreview(localGameSession)
-    ? String(localGameSession?.latest_preview?.data_url ?? "").trim()
-    : "";
+  const previewUrl = String(localGameSession?.latest_preview?.data_url ?? "").trim();
   const hasPreview = Boolean(previewUrl);
   elements.browserPanel?.classList.add("is-game-mode");
   elements.browserPanel?.classList.remove("is-docked-compact");

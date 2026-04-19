@@ -496,11 +496,6 @@ export class GameShareManager {
       throw new HttpError(403, "Only the host can publish game previews");
     }
     const dataUrl = String(preview.data_url ?? preview.dataUrl ?? "").trim();
-    if (!dataUrl) {
-      session.latest_preview = null;
-      session.updated_at = nowIso();
-      return this.toSessionSummary(session);
-    }
     if (!/^data:image\/(?:png|jpeg|webp);base64,/i.test(dataUrl)) {
       throw new HttpError(400, "Game previews must be PNG, JPEG, or WebP data URLs");
     }
