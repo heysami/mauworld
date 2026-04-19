@@ -228,15 +228,110 @@ function buildShellBridgeScript() {
           };
         }
 
+        function isVisiblePreviewCandidate(element) {
+          if (!element || !element.isConnected) {
+            return false;
+          }
+          const style = window.getComputedStyle(element);
+          if (
+            style.display === "none"
+            || style.visibility === "hidden"
+            || Number(style.opacity || 1) <= 0.02
+          ) {
+            return false;
+          }
+          const rect = element.getBoundingClientRect();
+          const width = Math.max(
+            0,
+            Math.round(rect.width || element.clientWidth || element.width || element.videoWidth || 0),
+          );
+          const height = Math.max(
+            0,
+            Math.round(rect.height || element.clientHeight || element.height || element.videoHeight || 0),
+          );
+          return width >= 32 && height >= 32;
+        }
+
+        function getPreviewCandidateScore(element) {
+          const rect = element.getBoundingClientRect();
+          const width = Math.max(
+            1,
+            Math.round(rect.width || element.clientWidth || element.width || element.videoWidth || 0),
+          );
+          const height = Math.max(
+            1,
+            Math.round(rect.height || element.clientHeight || element.height || element.videoHeight || 0),
+          );
+          const tagName = String(element.tagName || "").toLowerCase();
+          let bonus = 0;
+          if (element.hasAttribute("data-mauworld-preview")) {
+            bonus += 5_000_000;
+          } else if (tagName === "canvas") {
+            bonus += 4_000_000;
+          } else if (tagName === "svg") {
+            bonus += 3_000_000;
+          } else if (tagName === "img") {
+            bonus += 2_000_000;
+          } else if (tagName === "video") {
+            bonus += 1_000_000;
+          }
+          return bonus + width * height;
+        }
+
+        function findPreviewTargetIn(root) {
+          if (!root || typeof root.querySelectorAll !== "function") {
+            return null;
+          }
+          const candidates = [...root.querySelectorAll("[data-mauworld-preview], canvas, svg, img, video")]
+            .filter((element) => isVisiblePreviewCandidate(element));
+          candidates.sort((left, right) => getPreviewCandidateScore(right) - getPreviewCandidateScore(left));
+          return candidates[0] || null;
+        }
+
+        function getHookPreviewTarget() {
+          try {
+            if (typeof state.hooks.getPreviewTarget === "function") {
+              return state.hooks.getPreviewTarget() || null;
+            }
+          } catch (_error) {
+            // Hook-based preview targeting is best-effort.
+          }
+          try {
+            if (typeof state.descriptor.getPreviewTarget === "function") {
+              return state.descriptor.getPreviewTarget() || null;
+            }
+          } catch (_error) {
+            // Descriptor-based preview targeting is best-effort.
+          }
+          return null;
+        }
+
         function getPreviewTarget(target = null) {
           if (
             target instanceof HTMLCanvasElement
             || target instanceof HTMLImageElement
+            || target instanceof HTMLVideoElement
             || target instanceof HTMLElement
           ) {
             return target;
           }
-          return document.body || ensureRoot();
+          const hookTarget = getHookPreviewTarget();
+          if (hookTarget && isVisiblePreviewCandidate(hookTarget)) {
+            return hookTarget;
+          }
+          const root = ensureRoot();
+          const rootTarget = findPreviewTargetIn(root);
+          if (rootTarget) {
+            return rootTarget;
+          }
+          const bodyTarget = findPreviewTargetIn(document.body);
+          if (bodyTarget) {
+            return bodyTarget;
+          }
+          if (root.firstElementChild && isVisiblePreviewCandidate(root.firstElementChild)) {
+            return root.firstElementChild;
+          }
+          return document.body || root;
         }
 
         async function rasterizeNode(target) {
@@ -254,6 +349,33 @@ function buildShellBridgeScript() {
             const width = Math.max(1, target.naturalWidth || Math.round(target.clientWidth || 0));
             const height = Math.max(1, target.naturalHeight || Math.round(target.clientHeight || 0));
             return renderPreviewSource(target, width, height);
+          }
+          if (target instanceof HTMLVideoElement) {
+            const width = Math.max(1, target.videoWidth || Math.round(target.clientWidth || 0));
+            const height = Math.max(1, target.videoHeight || Math.round(target.clientHeight || 0));
+            return renderPreviewSource(target, width, height);
+          }
+          if (typeof SVGElement !== "undefined" && target instanceof SVGElement) {
+            const rect = target.getBoundingClientRect();
+            const width = Math.max(1, Math.round(rect.width || target.clientWidth || 0));
+            const height = Math.max(1, Math.round(rect.height || target.clientHeight || 0));
+            const serialized = new XMLSerializer().serializeToString(target.cloneNode(true));
+            const svgMarkup = /^<svg[\s>]/i.test(serialized)
+              ? serialized
+              : '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">' + serialized + '</svg>';
+            const blob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            try {
+              const image = await new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = url;
+              });
+              return renderPreviewSource(image, width, height);
+            } finally {
+              URL.revokeObjectURL(url);
+            }
           }
           const node = target instanceof HTMLElement ? target : ensureRoot();
           const rect = node.getBoundingClientRect();
