@@ -33,6 +33,7 @@ import {
   SHARED_BROWSER_SHARE_LAYOUT,
   SHARED_CHAT_BUBBLE_LAYOUT,
   getSharedNearbyLaneOffset,
+  getSharedNearbyMediaWidth,
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import {
@@ -2398,16 +2399,23 @@ function updatePrivateShareBubbleGeometry(entry) {
     return;
   }
   const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_SHARE.aspectRatio;
-  if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
+  const width = getSharedNearbyMediaWidth({
+    shareKind: getPrivateBrowserSessionShareKind(entry.session),
+    sessionSlot: entry.session?.sessionSlot,
+  });
+  if (
+    Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01
+    && Math.abs((entry.geometryWidth ?? 0) - width) < 0.01
+  ) {
     return;
   }
-  const width = PRIVATE_BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   entry.frame.geometry.dispose();
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
   entry.frameShell.geometry.dispose();
   entry.frameShell.geometry = new THREE.PlaneGeometry(width + 1.2, height + 1.2);
   entry.geometryAspectRatio = aspectRatio;
+  entry.geometryWidth = width;
 }
 
 function updatePrivateShareBubbleAspectFromVideo(entry, videoElement) {
@@ -2461,7 +2469,10 @@ function updatePrivateShareBubblePresentation(entry) {
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
   const shareKind = getPrivateBrowserSessionShareKind(entry.session);
   const aspectRatio = Number(entry.session?.aspectRatio) || PRIVATE_BROWSER_SHARE.aspectRatio;
-  const baseWidth = PRIVATE_BROWSER_SHARE.screenWidth;
+  const baseWidth = getSharedNearbyMediaWidth({
+    shareKind,
+    sessionSlot: entry.session?.sessionSlot,
+  });
   const baseHeight = baseWidth / Math.max(0.1, aspectRatio);
   const bubbleWidth = shareKind === "audio"
     ? PRIVATE_BROWSER_SHARE.placeholderAudioWidth
@@ -2573,7 +2584,10 @@ function ensurePrivateShareBubbleEntry(session = {}) {
   }
 
   const aspectRatio = Number(session.aspectRatio) || PRIVATE_BROWSER_SHARE.aspectRatio;
-  const width = PRIVATE_BROWSER_SHARE.screenWidth;
+  const width = getSharedNearbyMediaWidth({
+    shareKind: getPrivateBrowserSessionShareKind(session),
+    sessionSlot: session?.sessionSlot,
+  });
   const height = width / Math.max(0.1, aspectRatio);
   const group = new THREE.Group();
   const frameShell = new THREE.Mesh(
@@ -2625,6 +2639,7 @@ function ensurePrivateShareBubbleEntry(session = {}) {
     currentFrameId: 0,
     deliveryMode: String(session.deliveryMode ?? "placeholder"),
     geometryAspectRatio: aspectRatio,
+    geometryWidth: width,
   };
   preview.browserShareEntries.set(sessionId, entry);
   updatePrivateShareBubblePresentation(entry);
@@ -2724,10 +2739,63 @@ function getPrivateGameBubblePlaceholderKey(session = {}) {
 }
 
 function createPrivateGameBubbleTexture(session = {}) {
+  const occupiedSeats = normalizePrivateGameSeats(session).filter((seat) => seat.viewer_session_id).length;
+  const seatSummary = `${occupiedSeats}/${getPrivateGameSeatCapacity(session)} seats claimed`;
+  const description = getPrivateGameSessionDescription(session)
+    || (session?.started === true
+      ? `${seatSummary}. Reopen the game window any time to keep the live preview moving.`
+      : `${seatSummary}. Open the game window to jump back in and refresh the live preview.`);
   return createBubbleTexture("🎮", {
+    label: getPrivateGameSessionTitle(session),
+    text: description,
+    badge: session?.started === true ? "LIVE GAME" : "GAME SHARE",
+    width: 640,
+    height: 360,
     accent: PRIVATE_WORLD_STYLE.accents[1],
     stroke: PRIVATE_WORLD_STYLE.outline,
   });
+}
+
+function freezePrivateGameSharePreviewFrame(entry) {
+  const videoElement = entry?.videoElement;
+  if (!entry || !videoElement) {
+    return;
+  }
+  const width = Math.max(1, Math.floor(Number(videoElement.videoWidth) || 0));
+  const height = Math.max(1, Math.floor(Number(videoElement.videoHeight) || 0));
+  if (!width || !height) {
+    return;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return;
+  }
+  try {
+    context.drawImage(videoElement, 0, 0, width, height);
+    const frozenPreview = {
+      data_url: canvas.toDataURL("image/webp", 0.92),
+      width,
+      height,
+      updated_at: new Date().toISOString(),
+    };
+    entry.session = {
+      ...(entry.session ?? {}),
+      latest_preview: frozenPreview,
+    };
+    entry.currentPreviewAt = "";
+    const cached = state.gameSessions.get(entry.sessionId);
+    if (cached) {
+      state.gameSessions.set(entry.sessionId, {
+        ...cached,
+        latest_preview: frozenPreview,
+      });
+    }
+  } catch {
+    // MediaStream-backed videos can briefly become unreadable while tearing down.
+  }
 }
 
 function updatePrivateGameBubbleGeometry(entry) {
@@ -2735,10 +2803,13 @@ function updatePrivateGameBubbleGeometry(entry) {
     return;
   }
   const aspectRatio = getPrivateGameBubbleAspectRatio(entry.session);
-  if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
+  const width = getSharedNearbyMediaWidth({ shareKind: "game" });
+  if (
+    Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01
+    && Math.abs((entry.geometryWidth ?? 0) - width) < 0.01
+  ) {
     return;
   }
-  const width = PRIVATE_BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   entry.frame.geometry.dispose();
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
@@ -2752,6 +2823,7 @@ function updatePrivateGameBubbleGeometry(entry) {
     );
   }
   entry.geometryAspectRatio = aspectRatio;
+  entry.geometryWidth = width;
 }
 
 function removePrivateGameBubbleEntry(sessionId = "") {
@@ -2791,7 +2863,7 @@ function ensurePrivateGameBubbleEntry(session = {}) {
     return existing;
   }
   const aspectRatio = getPrivateGameBubbleAspectRatio(session);
-  const width = PRIVATE_BROWSER_SHARE.screenWidth;
+  const width = getSharedNearbyMediaWidth({ shareKind: "game" });
   const height = width / aspectRatio;
   const group = new THREE.Group();
   const frameShell = new THREE.Mesh(
@@ -2860,6 +2932,7 @@ function ensurePrivateGameBubbleEntry(session = {}) {
     targetPosition: new THREE.Vector3(),
     currentPreviewAt: "",
     geometryAspectRatio: aspectRatio,
+    geometryWidth: width,
     placeholderKey: getPrivateGameBubblePlaceholderKey(session),
   };
   preview.gameShareEntries.set(sessionId, entry);
@@ -2892,6 +2965,7 @@ function clearPrivateGameShareVideo(sessionId) {
   if (!entry) {
     return;
   }
+  freezePrivateGameSharePreviewFrame(entry);
   entry.videoTexture?.dispose?.();
   entry.videoTexture = null;
   entry.videoElement = null;
@@ -2922,23 +2996,16 @@ function updatePrivateGameBubblePresentation(entry) {
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
-  const baseAspectRatio = getPrivateGameBubbleAspectRatio(entry.session);
-  const baseWidth = PRIVATE_BROWSER_SHARE.screenWidth;
-  const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
-  const bubbleWidth = PRIVATE_BROWSER_SHARE.placeholderVideoWidth;
-  const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_SHARE.placeholderAspectRatio;
-  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
-  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
-  entry.frame.scale.set(scaleX, scaleY, 1);
+  entry.frame.scale.set(1, 1, 1);
   entry.frame.position.set(0, 0, 0);
   if (entry.hitTarget) {
-    entry.hitTarget.scale.set(scaleX, scaleY, 1);
+    entry.hitTarget.scale.set(1, 1, 1);
     entry.hitTarget.position.set(0, 0, 0);
   }
   entry.frame.material.depthTest = false;
   entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
   entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
-  entry.frameShell.visible = false;
+  entry.frameShell.visible = showingPlaceholder;
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
@@ -7335,7 +7402,7 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
     elements.panelBrowserFrame.removeAttribute("src");
     elements.panelBrowserPlaceholder.hidden = false;
     elements.panelBrowserPlaceholder.textContent = localGameSession
-      ? "Open the game window to play, publish previews, and let nearby visitors claim seats."
+      ? "Open the game window to play, refresh the live preview, and let nearby visitors claim seats."
       : pendingShareJoinRequest
         ? "Waiting for the anchor host to approve this nearby game request."
         : joinMode && selectedGame

@@ -24,6 +24,22 @@ export const SHARED_BROWSER_SHARE_LAYOUT = Object.freeze({
   placeholderBobAmplitude: 0.18,
 });
 
+export function getSharedNearbyMediaWidth(input = {}) {
+  const sessionSlot = String(input?.sessionSlot ?? "").trim().toLowerCase();
+  const shareKind = String(input?.shareKind ?? "").trim().toLowerCase();
+  const baseWidth = SHARED_BROWSER_SHARE_LAYOUT.screenWidth;
+  if (shareKind === "game") {
+    return baseWidth * 0.76;
+  }
+  if (sessionSlot === "persistent-voice") {
+    return baseWidth * 0.38;
+  }
+  if (sessionSlot === "display-av" || shareKind === "camera" || shareKind === "audio") {
+    return baseWidth * 0.6;
+  }
+  return baseWidth;
+}
+
 export function getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds = 0) {
   return showingLiveMedia
     ? SHARED_BROWSER_SHARE_LAYOUT.liveOffsetY
@@ -37,15 +53,32 @@ export function getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds =
 export function getSharedNearbyLaneOffset(input = {}) {
   const sessionSlot = String(input?.sessionSlot ?? "").trim().toLowerCase();
   const shareKind = String(input?.shareKind ?? "").trim().toLowerCase();
-  const laneWidth = SHARED_BROWSER_SHARE_LAYOUT.screenWidth * 0.92;
+  const screenWidth = getSharedNearbyMediaWidth({
+    shareKind: "screen",
+    sessionSlot: "display-screen",
+  });
+  const laneWidth = getSharedNearbyMediaWidth({ shareKind, sessionSlot });
+  const sideGap = SHARED_BROWSER_SHARE_LAYOUT.screenWidth * 0.42;
   if (shareKind === "game") {
-    return { x: laneWidth, y: 0, z: 0 };
+    return {
+      x: ((screenWidth + laneWidth) * 0.5) + sideGap,
+      y: -1.35,
+      z: -3.25,
+    };
   }
   if (sessionSlot === "persistent-voice") {
-    return { x: -laneWidth * 0.38, y: 0, z: 0 };
+    return {
+      x: -(screenWidth * 1.02),
+      y: -5,
+      z: 1.8,
+    };
   }
   if (sessionSlot === "display-av" || shareKind === "camera" || shareKind === "audio") {
-    return { x: -laneWidth, y: 0, z: 0 };
+    return {
+      x: -(((screenWidth + laneWidth) * 0.5) + (sideGap * 0.96)),
+      y: -0.85,
+      z: 2.95,
+    };
   }
   return { x: 0, y: 0, z: 0 };
 }

@@ -33,6 +33,7 @@ import {
   SHARED_BROWSER_SHARE_LAYOUT,
   SHARED_CHAT_BUBBLE_LAYOUT,
   getSharedNearbyLaneOffset,
+  getSharedNearbyMediaWidth,
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
@@ -50,6 +51,7 @@ const elements = {
   canvas: document.querySelector("[data-world-canvas]"),
   focusVeil: document.querySelector("[data-world-focus-veil]"),
   focusFrame: document.querySelector("[data-world-focus-frame]"),
+  browserFocusBar: document.querySelector("[data-world-browser-focus-bar]"),
   searchForm: document.querySelector("[data-world-search-form]"),
   searchStatus: document.querySelector("[data-world-search-status]"),
   results: document.querySelector("[data-world-results]"),
@@ -273,10 +275,13 @@ const state = {
   postFocusMix: 0,
   postFocusMixTarget: 0,
   browserFocusSessionId: "",
+  browserFocusHostSessionId: "",
+  browserFocusMode: "single",
   browserFocusMix: 0,
   browserFocusMixTarget: 0,
   browserFocusOffset: new THREE.Vector3(),
   browserFocusReturnRadius: PLAYER_VIEW.defaultRadius,
+  browserFocusControlsSignature: "",
   focusReturnRadius: PLAYER_VIEW.defaultRadius,
   trailAccumulator: 0,
   realtimeClient: null,
@@ -826,7 +831,8 @@ function isPostFocusModeActive() {
 }
 
 function isBrowserFocusModeActive() {
-  return Boolean(state.browserFocusSessionId) && (state.browserFocusMixTarget > 0.001 || state.browserFocusMix > 0.001);
+  return Boolean(state.browserFocusSessionId || state.browserFocusHostSessionId)
+    && (state.browserFocusMixTarget > 0.001 || state.browserFocusMix > 0.001);
 }
 
 function getImmersiveFocusMix() {
@@ -7243,9 +7249,7 @@ function removeBrowserScreenEntry(sessionId) {
   if (!entry) {
     return;
   }
-  if (state.browserFocusSessionId === sessionId) {
-    clearBrowserFocus();
-  }
+  handleNearbyMediaFocusTargetRemoved(sessionId, entry.hostSessionId);
   clearBrowserScreenVideo(sessionId);
   entry.liveTexture?.dispose?.();
   entry.placeholderTexture?.dispose?.();
@@ -7277,16 +7281,23 @@ function updateBrowserScreenGeometry(entry) {
     return;
   }
   const aspectRatio = Number(entry.session?.aspectRatio) || getInteractionConfig().browserAspectRatio;
-  if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
+  const width = getSharedNearbyMediaWidth({
+    shareKind: getBrowserSessionShareKind(entry.session),
+    sessionSlot: entry.session?.sessionSlot,
+  });
+  if (
+    Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01
+    && Math.abs((entry.geometryWidth ?? 0) - width) < 0.01
+  ) {
     return;
   }
-  const width = BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   entry.frame.geometry.dispose();
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
   entry.frameShell.geometry.dispose();
   entry.frameShell.geometry = new THREE.PlaneGeometry(width + 1.2, height + 1.2);
   entry.geometryAspectRatio = aspectRatio;
+  entry.geometryWidth = width;
 }
 
 function updateBrowserScreenAspectFromVideo(entry, videoElement) {
@@ -7350,7 +7361,10 @@ function ensureBrowserScreenEntry(session) {
   }
 
   const aspectRatio = Number(session.aspectRatio) || getInteractionConfig().browserAspectRatio;
-  const width = BROWSER_SHARE.screenWidth;
+  const width = getSharedNearbyMediaWidth({
+    shareKind: getBrowserSessionShareKind(session),
+    sessionSlot: session?.sessionSlot,
+  });
   const height = width / Math.max(0.1, aspectRatio);
   const group = new THREE.Group();
   const frameShell = new THREE.Mesh(
@@ -7405,6 +7419,7 @@ function ensureBrowserScreenEntry(session) {
     currentFrameId: 0,
     deliveryMode: "placeholder",
     geometryAspectRatio: aspectRatio,
+    geometryWidth: width,
     placeholderKey: getBrowserPlaceholderTextureKey(session),
     billboardEnabled: true,
     clickablePayloads,
@@ -7432,7 +7447,10 @@ function updateBrowserScreenPresentation(entry) {
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
   const shareKind = getBrowserSessionShareKind(entry.session);
   const baseAspectRatio = Number(entry.session?.aspectRatio) || getInteractionConfig().browserAspectRatio;
-  const baseWidth = BROWSER_SHARE.screenWidth;
+  const baseWidth = getSharedNearbyMediaWidth({
+    shareKind,
+    sessionSlot: entry.session?.sessionSlot,
+  });
   const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
   const bubbleWidth = shareKind === "audio"
     ? BROWSER_SHARE.placeholderAudioWidth
@@ -7532,28 +7550,205 @@ function getBrowserScreenRenderTarget(entry) {
   return hostPosition.clone().add(new THREE.Vector3(0, BROWSER_SHARE.liveOffsetY, 0));
 }
 
+function getGameShareRenderTarget(entry) {
+  if (!entry) {
+    return null;
+  }
+  if (entry.group?.visible) {
+    return entry.group.position.clone();
+  }
+  const hostPosition = getBrowserHostPosition(entry.hostSessionId);
+  if (!hostPosition) {
+    return null;
+  }
+  const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
+  return hostPosition.clone().add(new THREE.Vector3(
+    laneOffset.x,
+    BROWSER_SHARE.liveOffsetY + laneOffset.y,
+    laneOffset.z,
+  ));
+}
+
+function getBrowserScreenFocusDimensions(entry) {
+  const session = entry?.session ?? {};
+  const width = Number(entry?.geometryWidth) || getSharedNearbyMediaWidth({
+    shareKind: getBrowserSessionShareKind(session),
+    sessionSlot: session?.sessionSlot,
+  });
+  const height = width / Math.max(0.1, Number(session?.aspectRatio) || getInteractionConfig().browserAspectRatio);
+  return {
+    width: width * (Number(entry?.frame?.scale?.x) || 1),
+    height: height * (Number(entry?.frame?.scale?.y) || 1),
+  };
+}
+
+function getGameShareFocusDimensions(entry) {
+  const width = Number(entry?.geometryWidth) || getSharedNearbyMediaWidth({ shareKind: "game" });
+  const height = width / Math.max(0.1, getGameShareAspectRatio(entry?.session));
+  return {
+    width: width * (Number(entry?.frame?.scale?.x) || 1),
+    height: height * (Number(entry?.frame?.scale?.y) || 1),
+  };
+}
+
+function getNearbyFocusTargetLabel(target) {
+  if (!target) {
+    return "Share";
+  }
+  return target.type === "game"
+    ? "Game"
+    : getBrowserShareKindLabel(getBrowserSessionShareKind(target.session));
+}
+
+function getNearbyFocusTargetOrder(target) {
+  if (!target) {
+    return 99;
+  }
+  if (target.type === "game") {
+    return 3;
+  }
+  const sessionSlot = getBrowserShareSessionSlot(target.session);
+  const shareKind = getBrowserSessionShareKind(target.session);
+  if (sessionSlot === "display-screen" || shareKind === "screen") {
+    return 0;
+  }
+  if (shareKind === "camera") {
+    return 1;
+  }
+  if (shareKind === "audio" || sessionSlot === "persistent-voice") {
+    return 2;
+  }
+  return 4;
+}
+
+function getFocusedNearbyMediaTarget(sessionId = "") {
+  const key = String(sessionId ?? "").trim();
+  if (!key) {
+    return null;
+  }
+  const browserEntry = sceneState.browserScreenEntries.get(key);
+  const browserSession = state.browserSessions.get(key) ?? browserEntry?.session ?? null;
+  if (browserEntry && browserSession) {
+    const target = getBrowserScreenRenderTarget(browserEntry);
+    if (!target) {
+      return null;
+    }
+    return {
+      id: key,
+      type: "browser",
+      hostSessionId: String(browserSession?.hostSessionId ?? browserEntry?.hostSessionId ?? "").trim(),
+      session: browserSession,
+      title: getBrowserSessionTitle(browserSession),
+      target,
+      ...getBrowserScreenFocusDimensions(browserEntry),
+    };
+  }
+  const gameEntry = sceneState.gameShareEntries.get(key);
+  const gameSession = state.gameSessions.get(key) ?? gameEntry?.session ?? null;
+  if (gameEntry && gameSession) {
+    const target = getGameShareRenderTarget(gameEntry);
+    if (!target) {
+      return null;
+    }
+    return {
+      id: key,
+      type: "game",
+      hostSessionId: String(gameSession?.host_viewer_session_id ?? gameEntry?.hostSessionId ?? "").trim(),
+      session: gameSession,
+      title: getGameSessionTitle(gameSession),
+      target,
+      ...getGameShareFocusDimensions(gameEntry),
+    };
+  }
+  return null;
+}
+
+function getNearbyMediaFocusTargetsForHost(hostSessionId = "", preferredSessionId = "") {
+  const normalizedHostSessionId = String(hostSessionId ?? "").trim();
+  const normalizedPreferredSessionId = String(preferredSessionId ?? "").trim();
+  if (!normalizedHostSessionId || normalizedHostSessionId === state.viewerSessionId) {
+    return [];
+  }
+  const targets = [];
+  for (const [sessionId, entry] of sceneState.browserScreenEntries.entries()) {
+    const session = state.browserSessions.get(sessionId) ?? entry?.session ?? null;
+    if (!session || String(session?.hostSessionId ?? entry?.hostSessionId ?? "").trim() !== normalizedHostSessionId) {
+      continue;
+    }
+    const target = getFocusedNearbyMediaTarget(sessionId);
+    if (target) {
+      targets.push(target);
+    }
+  }
+  for (const [sessionId, entry] of sceneState.gameShareEntries.entries()) {
+    const session = state.gameSessions.get(sessionId) ?? entry?.session ?? null;
+    if (!session || String(session?.host_viewer_session_id ?? entry?.hostSessionId ?? "").trim() !== normalizedHostSessionId) {
+      continue;
+    }
+    const target = getFocusedNearbyMediaTarget(sessionId);
+    if (target) {
+      targets.push(target);
+    }
+  }
+  return targets.sort((left, right) =>
+    getNearbyFocusTargetOrder(left) - getNearbyFocusTargetOrder(right)
+    || Number(String(right.id ?? "").trim() === normalizedPreferredSessionId)
+      - Number(String(left.id ?? "").trim() === normalizedPreferredSessionId)
+    || left.title.localeCompare(right.title)
+    || left.id.localeCompare(right.id));
+}
+
+function getNearbyMediaFocusCluster(hostSessionId = "", preferredSessionId = "") {
+  const targets = getNearbyMediaFocusTargetsForHost(hostSessionId, preferredSessionId);
+  if (targets.length === 0) {
+    return null;
+  }
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  for (const target of targets) {
+    minX = Math.min(minX, target.target.x - (target.width / 2));
+    maxX = Math.max(maxX, target.target.x + (target.width / 2));
+    minY = Math.min(minY, target.target.y - (target.height / 2));
+    maxY = Math.max(maxY, target.target.y + (target.height / 2));
+    minZ = Math.min(minZ, target.target.z);
+    maxZ = Math.max(maxZ, target.target.z);
+  }
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  return {
+    hostSessionId: String(hostSessionId ?? "").trim(),
+    targets,
+    target: new THREE.Vector3(
+      (minX + maxX) / 2,
+      (minY + maxY) / 2 + Math.max(0.16, height * 0.02),
+      (minZ + maxZ) / 2,
+    ),
+    width,
+    height,
+    depth: Math.max(0, maxZ - minZ),
+  };
+}
+
 function getFocusedBrowserScreenCenter() {
-  if (!state.browserFocusSessionId) {
+  if (!state.browserFocusSessionId && !state.browserFocusHostSessionId) {
     return null;
   }
-  const session = state.browserSessions.get(state.browserFocusSessionId);
-  const entry = sceneState.browserScreenEntries.get(state.browserFocusSessionId);
-  if (!session || session.deliveryMode !== "full" || !entry) {
-    return null;
+  if (state.browserFocusMode === "group" && state.browserFocusHostSessionId) {
+    return getNearbyMediaFocusCluster(state.browserFocusHostSessionId, state.browserFocusSessionId)?.target ?? null;
   }
-  return getBrowserScreenRenderTarget(entry);
+  return getFocusedNearbyMediaTarget(state.browserFocusSessionId)?.target ?? null;
 }
 
 function computeFocusedBrowserView(sessionId, sourcePosition = getNavigationPosition()) {
-  const session = state.browserSessions.get(sessionId);
-  const entry = sceneState.browserScreenEntries.get(sessionId);
-  if (!session || session.deliveryMode !== "full" || !entry) {
+  const targetDescriptor = getFocusedNearbyMediaTarget(sessionId);
+  if (!targetDescriptor || targetDescriptor.hostSessionId === state.viewerSessionId) {
     return null;
   }
-  const focusTarget = getBrowserScreenRenderTarget(entry);
-  if (!focusTarget) {
-    return null;
-  }
+  const focusTarget = targetDescriptor.target.clone();
   const eyeOrigin = getPlayerLookTarget(sourcePosition);
   const planarApproach = new THREE.Vector3(
     focusTarget.x - eyeOrigin.x,
@@ -7565,8 +7760,8 @@ function computeFocusedBrowserView(sessionId, sourcePosition = getNavigationPosi
   } else {
     planarApproach.normalize();
   }
-  const screenWidth = BROWSER_SHARE.screenWidth;
-  const screenHeight = screenWidth / Math.max(0.1, Number(entry.session?.aspectRatio) || getInteractionConfig().browserAspectRatio);
+  const screenWidth = targetDescriptor.width;
+  const screenHeight = targetDescriptor.height;
   const eyeDistance = Math.max(16, screenWidth * 0.82, screenHeight * 1.58);
   const eyePosition = focusTarget.clone().sub(planarApproach.multiplyScalar(eyeDistance));
   const navigationTarget = eyePosition.clone().sub(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
@@ -7579,6 +7774,59 @@ function computeFocusedBrowserView(sessionId, sourcePosition = getNavigationPosi
     target: focusTarget,
     eyeOffset: eyePosition.clone().sub(focusTarget),
   };
+}
+
+function computeFocusedBrowserGroupView(hostSessionId, sourcePosition = getNavigationPosition()) {
+  const cluster = getNearbyMediaFocusCluster(hostSessionId, state.browserFocusSessionId);
+  if (!cluster) {
+    return null;
+  }
+  if (cluster.targets.length <= 1) {
+    return computeFocusedBrowserView(cluster.targets[0]?.id, sourcePosition);
+  }
+  const focusTarget = cluster.target.clone();
+  const eyeOrigin = getPlayerLookTarget(sourcePosition);
+  const planarApproach = new THREE.Vector3(
+    focusTarget.x - eyeOrigin.x,
+    0,
+    focusTarget.z - eyeOrigin.z,
+  );
+  if (planarApproach.lengthSq() < 0.0001) {
+    planarApproach.copy(getFlatForwardVector(inputState.yaw)).multiplyScalar(-1);
+  } else {
+    planarApproach.normalize();
+  }
+  const verticalFov = THREE.MathUtils.degToRad(Number(sceneState.camera?.fov) || 58);
+  const aspect = Number(sceneState.camera?.aspect) || (window.innerWidth / Math.max(1, window.innerHeight));
+  const horizontalFov = 2 * Math.atan(Math.tan(verticalFov * 0.5) * aspect);
+  const safeWidth = cluster.width + Math.max(2.2, cluster.width * 0.16);
+  const safeHeight = cluster.height + Math.max(1.8, cluster.height * 0.18);
+  const distanceByWidth = (safeWidth * 0.5) / Math.max(0.14, Math.tan(horizontalFov * 0.5));
+  const distanceByHeight = (safeHeight * 0.5) / Math.max(0.14, Math.tan(verticalFov * 0.5));
+  const eyeDistance = clamp(
+    Math.max(18, distanceByWidth, distanceByHeight) + (cluster.depth * 0.7),
+    18,
+    PLAYER_VIEW.maxRadius * 0.92,
+  );
+  const eyePosition = focusTarget.clone().sub(planarApproach.multiplyScalar(eyeDistance));
+  eyePosition.y += Math.max(0.4, cluster.height * 0.04);
+  const navigationTarget = eyePosition.clone().sub(new THREE.Vector3(0, PLAYER_VIEW.lookHeight, 0));
+  navigationTarget.y = clamp(navigationTarget.y, CAMERA.minY, CAMERA.maxY);
+  const { yaw, pitch } = computeLookAngles(eyePosition, focusTarget);
+  return {
+    position: navigationTarget,
+    yaw,
+    pitch,
+    target: focusTarget,
+    eyeOffset: eyePosition.clone().sub(focusTarget),
+  };
+}
+
+function computeCurrentBrowserFocusView(sourcePosition = getNavigationPosition()) {
+  if (state.browserFocusMode === "group" && state.browserFocusHostSessionId) {
+    return computeFocusedBrowserGroupView(state.browserFocusHostSessionId, sourcePosition);
+  }
+  return computeFocusedBrowserView(state.browserFocusSessionId, sourcePosition);
 }
 
 function computeRemoteBrowserAudioVolume(session) {
@@ -7696,10 +7944,63 @@ function getGameSharePlaceholderTextureKey(session = {}) {
 }
 
 function createGameSharePlaceholderTexture(session) {
+  const occupiedSeats = normalizeGameSeats(session).filter((seat) => seat.viewer_session_id).length;
+  const seatSummary = `${occupiedSeats}/${getGameSeatCapacity(session)} seats claimed`;
+  const description = getGameSessionDescription(session)
+    || (session?.started === true
+      ? `${seatSummary}. Reopen the game window any time to keep the live preview moving.`
+      : `${seatSummary}. Open the game window to jump back in and refresh the live preview.`);
   return createBubbleTexture("🎮", {
+    label: getGameSessionTitle(session),
+    text: description,
+    badge: session?.started === true ? "LIVE GAME" : "GAME SHARE",
+    width: 640,
+    height: 360,
     accent: WORLD_STYLE.accents[1],
     stroke: WORLD_STYLE.outline,
   });
+}
+
+function freezeGameSharePreviewFrame(entry) {
+  const videoElement = entry?.videoElement;
+  if (!entry || !videoElement) {
+    return;
+  }
+  const width = Math.max(1, Math.floor(Number(videoElement.videoWidth) || 0));
+  const height = Math.max(1, Math.floor(Number(videoElement.videoHeight) || 0));
+  if (!width || !height) {
+    return;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return;
+  }
+  try {
+    context.drawImage(videoElement, 0, 0, width, height);
+    const frozenPreview = {
+      data_url: canvas.toDataURL("image/webp", 0.92),
+      width,
+      height,
+      updated_at: new Date().toISOString(),
+    };
+    entry.session = {
+      ...(entry.session ?? {}),
+      latest_preview: frozenPreview,
+    };
+    entry.currentPreviewAt = "";
+    const cached = state.gameSessions.get(entry.sessionId);
+    if (cached) {
+      state.gameSessions.set(entry.sessionId, {
+        ...cached,
+        latest_preview: frozenPreview,
+      });
+    }
+  } catch {
+    // MediaStream-backed videos can briefly become unreadable while tearing down.
+  }
 }
 
 function updateGameShareGeometry(entry) {
@@ -7707,10 +8008,13 @@ function updateGameShareGeometry(entry) {
     return;
   }
   const aspectRatio = getGameShareAspectRatio(entry.session);
-  if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
+  const width = getSharedNearbyMediaWidth({ shareKind: "game" });
+  if (
+    Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01
+    && Math.abs((entry.geometryWidth ?? 0) - width) < 0.01
+  ) {
     return;
   }
-  const width = BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   entry.frame.geometry.dispose();
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
@@ -7724,6 +8028,7 @@ function updateGameShareGeometry(entry) {
     );
   }
   entry.geometryAspectRatio = aspectRatio;
+  entry.geometryWidth = width;
 }
 
 function removeGameShareEntry(sessionId) {
@@ -7735,6 +8040,7 @@ function removeGameShareEntry(sessionId) {
   if (!entry) {
     return;
   }
+  handleNearbyMediaFocusTargetRemoved(normalizedSessionId, entry.hostSessionId);
   clearGameShareVideo(normalizedSessionId);
   entry.liveTexture?.dispose?.();
   entry.placeholderTexture?.dispose?.();
@@ -7775,7 +8081,7 @@ function ensureGameShareEntry(session) {
     return entry;
   }
   const aspectRatio = getGameShareAspectRatio(session);
-  const width = BROWSER_SHARE.screenWidth;
+  const width = getSharedNearbyMediaWidth({ shareKind: "game" });
   const height = width / aspectRatio;
   const group = new THREE.Group();
   const frameShell = new THREE.Mesh(
@@ -7855,6 +8161,7 @@ function ensureGameShareEntry(session) {
     targetPosition: new THREE.Vector3(),
     currentPreviewAt: "",
     geometryAspectRatio: aspectRatio,
+    geometryWidth: width,
     placeholderKey: getGameSharePlaceholderTextureKey(session),
     clickablePayloads,
   };
@@ -7888,6 +8195,7 @@ function clearGameShareVideo(sessionId) {
   if (!entry) {
     return;
   }
+  freezeGameSharePreviewFrame(entry);
   entry.videoTexture?.dispose?.();
   entry.videoTexture = null;
   entry.videoElement = null;
@@ -7919,22 +8227,17 @@ function updateGameSharePresentation(entry) {
       : entry.placeholderTexture;
   const showingPlaceholder = desiredTexture === entry.placeholderTexture;
   const baseAspectRatio = getGameShareAspectRatio(entry.session);
-  const baseWidth = BROWSER_SHARE.screenWidth;
-  const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
-  const bubbleWidth = BROWSER_SHARE.placeholderVideoWidth;
-  const bubbleHeight = bubbleWidth / BROWSER_SHARE.placeholderAspectRatio;
-  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
-  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
-  entry.frame.scale.set(scaleX, scaleY, 1);
+  const baseWidth = getSharedNearbyMediaWidth({ shareKind: "game" });
+  entry.frame.scale.set(1, 1, 1);
   entry.frame.position.set(0, 0, 0);
   if (entry.hitTarget) {
-    entry.hitTarget.scale.set(scaleX, scaleY, 1);
+    entry.hitTarget.scale.set(1, 1, 1);
     entry.hitTarget.position.set(0, 0, 0);
   }
   entry.frame.material.depthTest = false;
   entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
   entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
-  entry.frameShell.visible = false;
+  entry.frameShell.visible = showingPlaceholder;
   if (entry.frame.material.map !== desiredTexture) {
     entry.frame.material.map = desiredTexture;
     entry.frame.material.needsUpdate = true;
@@ -8951,47 +9254,209 @@ function syncExpandedTagState() {
 }
 
 function clearBrowserFocus() {
-  if (!state.browserFocusSessionId && state.browserFocusMix <= 0.001 && state.browserFocusMixTarget <= 0.001) {
+  if (
+    !state.browserFocusSessionId
+    && !state.browserFocusHostSessionId
+    && state.browserFocusMix <= 0.001
+    && state.browserFocusMixTarget <= 0.001
+  ) {
     return;
   }
   state.browserFocusSessionId = "";
+  state.browserFocusHostSessionId = "";
+  state.browserFocusMode = "single";
   state.browserFocusMix = 0;
   state.browserFocusMixTarget = 0;
   state.browserFocusOffset.set(0, 0, 0);
+  state.browserFocusControlsSignature = "";
   state.cameraRadius = clamp(
     state.browserFocusReturnRadius || state.cameraRadius,
     PLAYER_VIEW.minRadius,
     PLAYER_VIEW.maxRadius,
   );
   syncCameraToFollowTarget();
+  renderBrowserFocusControls();
 }
 
-function focusBrowserScreen(sessionId) {
+function focusNearbyMediaTarget(sessionId, options = {}) {
   const key = String(sessionId ?? "").trim();
   if (!key) {
     return false;
   }
-  const session = state.browserSessions.get(key);
-  if (session?.hostSessionId === state.viewerSessionId) {
+  const target = getFocusedNearbyMediaTarget(key);
+  if (!target || target.hostSessionId === state.viewerSessionId) {
     return false;
   }
-  const focusView = computeFocusedBrowserView(key, getNavigationPosition());
+  const availableTargets = getNearbyMediaFocusTargetsForHost(target.hostSessionId, key);
+  const useGroup = options.forceGroup === true
+    || (options.preferGroup !== false && availableTargets.length > 1);
+  const focusView = useGroup
+    ? computeFocusedBrowserGroupView(target.hostSessionId, getNavigationPosition())
+    : computeFocusedBrowserView(key, getNavigationPosition());
   if (!focusView) {
     return false;
   }
   closeSelectedPost();
   state.focusAnimation = null;
-  if (state.browserFocusSessionId !== key) {
+  if (state.browserFocusHostSessionId !== target.hostSessionId) {
     state.browserFocusReturnRadius = state.cameraRadius;
   }
   state.browserFocusSessionId = key;
+  state.browserFocusHostSessionId = target.hostSessionId;
+  state.browserFocusMode = useGroup ? "group" : "single";
   state.browserFocusOffset.copy(focusView.eyeOffset);
   state.browserFocusMixTarget = 1;
-  if (session?.hostSessionId && session.hostSessionId !== state.viewerSessionId) {
+  if (target.type === "browser" && target.hostSessionId !== state.viewerSessionId) {
     state.browserPanelRemoteSessionId = key;
   }
+  renderBrowserFocusControls();
   loadStreamForPosition(focusView.position, true).catch((error) => showToast(error.message));
   return true;
+}
+
+function focusBrowserScreen(sessionId) {
+  return focusNearbyMediaTarget(sessionId, { preferGroup: true });
+}
+
+function focusNearbyMediaGroup(hostSessionId, preferredSessionId = "") {
+  const normalizedHostSessionId = String(hostSessionId ?? "").trim();
+  const targets = getNearbyMediaFocusTargetsForHost(normalizedHostSessionId, preferredSessionId);
+  if (targets.length === 0) {
+    return false;
+  }
+  const preferredTargetId = String(preferredSessionId ?? "").trim();
+  const selectedTarget = targets.find((target) => target.id === preferredTargetId) ?? targets[0];
+  const focusView = computeFocusedBrowserGroupView(normalizedHostSessionId, getNavigationPosition());
+  if (!focusView || !selectedTarget) {
+    return false;
+  }
+  closeSelectedPost();
+  state.focusAnimation = null;
+  if (state.browserFocusHostSessionId !== normalizedHostSessionId) {
+    state.browserFocusReturnRadius = state.cameraRadius;
+  }
+  state.browserFocusSessionId = selectedTarget.id;
+  state.browserFocusHostSessionId = normalizedHostSessionId;
+  state.browserFocusMode = "group";
+  state.browserFocusOffset.copy(focusView.eyeOffset);
+  state.browserFocusMixTarget = 1;
+  if (selectedTarget.type === "browser") {
+    state.browserPanelRemoteSessionId = selectedTarget.id;
+  } else {
+    const browserTarget = targets.find((target) => target.type === "browser");
+    if (browserTarget) {
+      state.browserPanelRemoteSessionId = browserTarget.id;
+    }
+  }
+  renderBrowserFocusControls();
+  loadStreamForPosition(focusView.position, true).catch((error) => showToast(error.message));
+  return true;
+}
+
+function handleNearbyMediaFocusTargetRemoved(sessionId, hostSessionId = "") {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  const normalizedHostSessionId = String(hostSessionId ?? "").trim();
+  if (!normalizedSessionId && !normalizedHostSessionId) {
+    return;
+  }
+  if (state.browserFocusMode === "group") {
+    const focusHostSessionId = String(state.browserFocusHostSessionId ?? "").trim();
+    if (focusHostSessionId && (!normalizedHostSessionId || focusHostSessionId === normalizedHostSessionId)) {
+      const remainingTargets = getNearbyMediaFocusTargetsForHost(focusHostSessionId)
+        .filter((target) => target.id !== normalizedSessionId);
+      if (remainingTargets.length > 0) {
+        if (state.browserFocusSessionId === normalizedSessionId) {
+          state.browserFocusSessionId = remainingTargets[0].id;
+          const browserTarget = remainingTargets.find((target) => target.type === "browser");
+          if (browserTarget) {
+            state.browserPanelRemoteSessionId = browserTarget.id;
+          }
+        }
+        renderBrowserFocusControls();
+        return;
+      }
+    }
+  }
+  if (
+    state.browserFocusSessionId === normalizedSessionId
+    || (normalizedHostSessionId && String(state.browserFocusHostSessionId ?? "").trim() === normalizedHostSessionId)
+  ) {
+    clearBrowserFocus();
+  }
+}
+
+function renderBrowserFocusControls() {
+  if (!elements.browserFocusBar) {
+    return;
+  }
+  if (!isBrowserFocusModeActive()) {
+    elements.browserFocusBar.hidden = true;
+    elements.browserFocusBar.innerHTML = "";
+    state.browserFocusControlsSignature = "";
+    return;
+  }
+  const hostSessionId = String(state.browserFocusHostSessionId ?? "").trim()
+    || String(getFocusedNearbyMediaTarget(state.browserFocusSessionId)?.hostSessionId ?? "").trim();
+  const targets = getNearbyMediaFocusTargetsForHost(hostSessionId, state.browserFocusSessionId);
+  if (!hostSessionId || targets.length === 0) {
+    elements.browserFocusBar.hidden = true;
+    elements.browserFocusBar.innerHTML = "";
+    state.browserFocusControlsSignature = "";
+    return;
+  }
+  const signature = JSON.stringify({
+    hostSessionId,
+    mode: state.browserFocusMode,
+    selected: state.browserFocusSessionId,
+    targets: targets.map((target) => `${target.type}:${target.id}:${getNearbyFocusTargetLabel(target)}`),
+  });
+  if (signature === state.browserFocusControlsSignature && !elements.browserFocusBar.hidden) {
+    return;
+  }
+  state.browserFocusControlsSignature = signature;
+  const hostName = getPresenceDisplayNameForSessionId(hostSessionId) || "Nearby host";
+  elements.browserFocusBar.hidden = false;
+  elements.browserFocusBar.innerHTML = `
+    <div class="world-browser-focus-bar__head">
+      <div class="world-browser-focus-bar__title">
+        <strong>Nearby Focus</strong>
+        <span>${htmlEscape(hostName)}</span>
+      </div>
+      <div class="world-browser-focus-bar__buttons">
+        ${targets.length > 1 ? `
+          <button
+            type="button"
+            class="${state.browserFocusMode === "group" ? "is-active" : ""}"
+            data-world-browser-focus-scope="all"
+          >All windows</button>
+        ` : ""}
+        ${targets.map((target) => `
+          <button
+            type="button"
+            class="${state.browserFocusMode === "single" && state.browserFocusSessionId === target.id ? "is-active" : ""}"
+            data-world-browser-focus-target="${htmlEscape(target.id)}"
+          >${htmlEscape(getNearbyFocusTargetLabel(target))}</button>
+        `).join("")}
+        <button type="button" class="is-muted" data-world-browser-focus-close>Close</button>
+      </div>
+    </div>
+  `;
+  for (const button of elements.browserFocusBar.querySelectorAll("[data-world-browser-focus-target]")) {
+    bindPanelPress(button, () => {
+      const targetSessionId = String(button.getAttribute("data-world-browser-focus-target") ?? "").trim();
+      focusNearbyMediaTarget(targetSessionId, { preferGroup: false });
+    });
+  }
+  for (const button of elements.browserFocusBar.querySelectorAll("[data-world-browser-focus-scope='all']")) {
+    bindPanelPress(button, () => {
+      focusNearbyMediaGroup(hostSessionId, state.browserFocusSessionId);
+    });
+  }
+  for (const button of elements.browserFocusBar.querySelectorAll("[data-world-browser-focus-close]")) {
+    bindPanelPress(button, () => {
+      clearBrowserFocus();
+    });
+  }
 }
 
 function closeSelectedPost() {
@@ -10611,7 +11076,7 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
     elements.browserFrame.removeAttribute("src");
     elements.browserPlaceholder.hidden = false;
     elements.browserPlaceholder.textContent = localGameSession
-      ? "Open the game window to play, publish previews, and let nearby visitors claim seats."
+      ? "Open the game window to play, refresh the live preview, and let nearby visitors claim seats."
       : pendingShareJoinRequest
         ? "Waiting for the anchor host to approve this nearby game request."
         : joinMode && selectedGame
@@ -11035,9 +11500,7 @@ function handleBrowserStop(payload) {
   ) {
     clearPendingBrowserShare();
   }
-  if (state.browserFocusSessionId === sessionId) {
-    clearBrowserFocus();
-  }
+  handleNearbyMediaFocusTargetRemoved(sessionId, hostSessionId);
   clearLocalBrowserShare({ sessionId });
   clearLocalVoiceShare({ sessionId });
   clearBrowserScreenVideo(sessionId);
@@ -11912,7 +12375,7 @@ function updateBrowserFocusTracking(deltaSeconds) {
   if (!isBrowserFocusModeActive()) {
     return;
   }
-  const focusView = computeFocusedBrowserView(state.browserFocusSessionId, getNavigationPosition());
+  const focusView = computeCurrentBrowserFocusView(getNavigationPosition());
   if (!focusView) {
     clearBrowserFocus();
     return;
@@ -12144,7 +12607,17 @@ function pickSceneObject(event) {
   } else if (payload.type === "browser-screen") {
     focusBrowserScreen(payload.data?.sessionId);
   } else if (payload.type === "game-share") {
-    const session = state.gameSessions.get(String(payload.data?.sessionId ?? "").trim());
+    const sessionId = String(payload.data?.sessionId ?? "").trim();
+    const session = state.gameSessions.get(sessionId);
+    const hostSessionId = String(
+      session?.host_viewer_session_id
+      ?? sceneState.gameShareEntries.get(sessionId)?.hostSessionId
+      ?? "",
+    ).trim();
+    if (hostSessionId && getNearbyMediaFocusTargetsForHost(hostSessionId, sessionId).length > 1) {
+      focusNearbyMediaTarget(sessionId, { preferGroup: true });
+      return;
+    }
     if (session) {
       requestOpenWorldGameSession(session);
     }
@@ -12871,6 +13344,7 @@ function animate() {
   updateAnimatedObjects(deltaSeconds, elapsedSeconds);
   updatePrivateWorldMiniatures(elapsedSeconds);
   updateBrowserFocusTracking(deltaSeconds);
+  renderBrowserFocusControls();
   updateFocusVeil();
   updateCameraPanel();
   pruneExpiredChatEvents();
