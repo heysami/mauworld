@@ -40,7 +40,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260419b";
+} from "./world-games-ui.js?v=20260419c";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 
@@ -3456,6 +3456,10 @@ function getSavedGameTitle(game, fallback = "Nearby game") {
 
 function normalizeGameSeats(session) {
   return Array.isArray(session?.seats) ? session.seats : [];
+}
+
+function getGameSeatCapacity(session = {}) {
+  return Math.max(1, normalizeGameSeats(session).length || Number(session?.game?.manifest?.max_players) || 1);
 }
 
 function getGameSessionTitle(session) {
@@ -9184,7 +9188,7 @@ function renderLiveSharesList() {
     .map((session) => {
       const title = getGameSessionTitle(session);
       const playerCount = normalizeGameSeats(session).filter((seat) => seat.viewer_session_id).length;
-      const maxPlayers = Math.max(1, Number(session?.game?.manifest?.max_players) || 1);
+      const maxPlayers = getGameSeatCapacity(session);
       const contributorCount = Math.max(0, getGameShareGroupSessions(session.session_id).filter((entry) => isGameMemberSession(entry)).length);
       const isOwn = String(session?.host_viewer_session_id ?? "").trim() === state.viewerSessionId;
       const hostName = getGameSessionHostName(session);
@@ -9777,6 +9781,7 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
     });
   } else if (localGameSession) {
     const seatedPlayers = normalizeGameSeats(localGameSession).filter((seat) => seat.viewer_session_id).length;
+    const maxSeats = getGameSeatCapacity(localGameSession);
     const memberShare = isGameMemberSession(localGameSession);
     setBrowserStatus(
       localGameSession.started
@@ -9788,8 +9793,8 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
       badge: memberShare ? "Group" : (localGameSession.started ? "Live" : "Lobby"),
       current: getGameSessionTitle(localGameSession),
       hint: memberShare
-        ? `${seatedPlayers} / ${Math.max(1, Number(localGameSession?.game?.manifest?.max_players) || 1)} seats claimed. Leaving the anchor circle stops this contributor game share.`
-        : `${seatedPlayers} / ${Math.max(1, Number(localGameSession?.game?.manifest?.max_players) || 1)} seats claimed. Movement stays locked while this anchor game is live.`,
+        ? `${seatedPlayers} / ${maxSeats} seats claimed. Leaving the anchor circle stops this contributor game share.`
+        : `${seatedPlayers} / ${maxSeats} seats claimed. Movement stays locked while this anchor game is live.`,
     });
   } else if (joinMode && selectedGame) {
     const hostName = getGameSessionHostName(joinTarget);

@@ -143,6 +143,9 @@ function buildShellBridgeScript() {
           session: null,
           authoritativeState: null,
           mounted: false,
+          previewLoopStarted: false,
+          previewTimer: null,
+          previewPending: false,
         };
 
         function clone(value) {
@@ -174,33 +177,72 @@ function buildShellBridgeScript() {
           return root;
         }
 
+        function clampNumber(value, fallback, min, max) {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            return fallback;
+          }
+          return Math.max(min, Math.min(max, numeric));
+        }
+
+        function getPreviewTargetSize(width, height) {
+          const safeWidth = Math.max(1, Math.round(width || 0));
+          const safeHeight = Math.max(1, Math.round(height || 0));
+          const previewConfig = state.descriptor && state.descriptor.manifest && state.descriptor.manifest.preview
+            ? state.descriptor.manifest.preview
+            : {};
+          const aspectRatio = safeWidth / Math.max(1, safeHeight);
+          const maxWidth = Math.round(clampNumber(previewConfig.width, 480, 160, 960));
+          const fallbackHeight = Math.max(90, Math.round(maxWidth / Math.max(0.1, aspectRatio)));
+          const maxHeight = Math.round(clampNumber(previewConfig.height, fallbackHeight, 90, 720));
+          const scale = Math.min(
+            1,
+            maxWidth / Math.max(1, safeWidth),
+            maxHeight / Math.max(1, safeHeight),
+          );
+          return {
+            width: Math.max(1, Math.round(safeWidth * scale)),
+            height: Math.max(1, Math.round(safeHeight * scale)),
+          };
+        }
+
+        function renderPreviewSource(source, width, height) {
+          const safeWidth = Math.max(0, Math.round(width || 0));
+          const safeHeight = Math.max(0, Math.round(height || 0));
+          if (!safeWidth || !safeHeight) {
+            return null;
+          }
+          const targetSize = getPreviewTargetSize(safeWidth, safeHeight);
+          const canvas = document.createElement("canvas");
+          canvas.width = targetSize.width;
+          canvas.height = targetSize.height;
+          const context = canvas.getContext("2d");
+          if (!context) {
+            return null;
+          }
+          context.drawImage(source, 0, 0, targetSize.width, targetSize.height);
+          return {
+            data_url: canvas.toDataURL("image/webp", 0.78),
+            width: targetSize.width,
+            height: targetSize.height,
+          };
+        }
+
         async function rasterizeNode(target) {
           if (!target) {
             return null;
           }
           if (target instanceof HTMLCanvasElement) {
-            return {
-              data_url: target.toDataURL("image/webp", 0.86),
-              width: target.width || Math.round(target.clientWidth || 0),
-              height: target.height || Math.round(target.clientHeight || 0),
-            };
+            return renderPreviewSource(
+              target,
+              target.width || Math.round(target.clientWidth || 0),
+              target.height || Math.round(target.clientHeight || 0),
+            );
           }
           if (target instanceof HTMLImageElement) {
             const width = Math.max(1, target.naturalWidth || Math.round(target.clientWidth || 0));
             const height = Math.max(1, target.naturalHeight || Math.round(target.clientHeight || 0));
-            const canvas = document.createElement("canvas");
-            canvas.width = width;
-            canvas.height = height;
-            const context = canvas.getContext("2d");
-            if (!context) {
-              return null;
-            }
-            context.drawImage(target, 0, 0, width, height);
-            return {
-              data_url: canvas.toDataURL("image/webp", 0.86),
-              width,
-              height,
-            };
+            return renderPreviewSource(target, width, height);
           }
           const node = target instanceof HTMLElement ? target : ensureRoot();
           const rect = node.getBoundingClientRect();
@@ -232,22 +274,64 @@ function buildShellBridgeScript() {
               img.onerror = reject;
               img.src = url;
             });
-            const canvas = document.createElement("canvas");
-            canvas.width = width;
-            canvas.height = height;
-            const context = canvas.getContext("2d");
-            if (!context) {
-              return null;
-            }
-            context.drawImage(image, 0, 0, width, height);
-            return {
-              data_url: canvas.toDataURL("image/webp", 0.86),
-              width,
-              height,
-            };
+            return renderPreviewSource(image, width, height);
           } finally {
             URL.revokeObjectURL(url);
           }
+        }
+
+        function getPreviewIntervalMs() {
+          const previewConfig = state.descriptor && state.descriptor.manifest && state.descriptor.manifest.preview
+            ? state.descriptor.manifest.preview
+            : {};
+          const fps = clampNumber(previewConfig.fps, 2, 1, 4);
+          return Math.max(250, Math.round(1000 / fps));
+        }
+
+        async function publishAutomaticPreview() {
+          if (
+            state.previewPending
+            || !state.mounted
+            || !state.session
+            || state.session.role !== "host"
+          ) {
+            return;
+          }
+          state.previewPending = true;
+          try {
+            const preview = await rasterizeNode(ensureRoot());
+            if (preview && preview.data_url) {
+              post("preview", { preview });
+            }
+          } catch (_error) {
+            // Preview frames are best-effort.
+          } finally {
+            state.previewPending = false;
+          }
+        }
+
+        function stopPreviewLoop() {
+          state.previewLoopStarted = false;
+          if (state.previewTimer) {
+            window.clearTimeout(state.previewTimer);
+            state.previewTimer = null;
+          }
+          state.previewPending = false;
+        }
+
+        function startPreviewLoop() {
+          if (state.previewLoopStarted) {
+            return;
+          }
+          state.previewLoopStarted = true;
+          const tick = async () => {
+            if (!state.previewLoopStarted) {
+              return;
+            }
+            await publishAutomaticPreview();
+            state.previewTimer = window.setTimeout(tick, getPreviewIntervalMs());
+          };
+          state.previewTimer = window.setTimeout(tick, 350);
         }
 
         function buildApi() {
@@ -308,6 +392,7 @@ function buildShellBridgeScript() {
             state.hooks.onState(clone(state.authoritativeState));
           }
           post("sdk-ready");
+          startPreviewLoop();
         }
 
         function handleHostMessage(payload = {}) {
@@ -333,6 +418,7 @@ function buildShellBridgeScript() {
             return;
           }
           if (type === "destroy") {
+            stopPreviewLoop();
             if (typeof state.hooks.destroy === "function") {
               state.hooks.destroy();
             }
@@ -953,10 +1039,13 @@ export function createWorldGameShell(options = {}) {
     }
     const context = computeRole(session);
     const seats = normalizeSeatList(session);
+    const seatCountLabel = seats.length > 0
+      ? `${seats.length} player${seats.length === 1 ? "" : "s"}`
+      : getPlayerCountLabel(session.game?.manifest ?? state.game?.manifest ?? {});
     elements.seats.innerHTML = `
       <div class="mw-game-shell__seat-header">
         <strong>Seats</strong>
-        <span>${escapeHtml(getPlayerCountLabel(session.game?.manifest ?? state.game?.manifest ?? {}))}</span>
+        <span>${escapeHtml(seatCountLabel)}</span>
       </div>
       ${seats.map((seat) => {
         const isClaimedByViewer = context.claimedSeatId === seat.seat_id;
@@ -1036,8 +1125,9 @@ export function createWorldGameShell(options = {}) {
       );
     }
     if (elements.ready) {
-      const showReady = Boolean(context.claimedSeatId && !context.isHost);
+      const showReady = Boolean(context.claimedSeatId && !session?.started);
       elements.ready.hidden = !showReady;
+      elements.ready.disabled = Boolean(state.loading);
       elements.ready.textContent = context.ready ? "Unready" : "Ready";
     }
     if (elements.start) {

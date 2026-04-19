@@ -94,3 +94,32 @@ test("game share manager relays authoritative state and cleans up host sessions"
   assert.equal(removed.stopped.length, 1);
   assert.equal(manager.getSession(session.session_id), null);
 });
+
+test("game share manager normalizes multiplayer manifests into joinable seat counts", () => {
+  const manager = new GameShareManager({ scope: "public" });
+  const baseGame = createSavedGame();
+  const session = manager.createSession({
+    bindingKey: "world_current",
+    hostViewerSessionId: "viewer_host",
+    hostDisplayName: "Host",
+    game: {
+      ...baseGame,
+      manifest: {
+        ...baseGame.manifest,
+        multiplayer_mode: "turn-based",
+        min_players: 1,
+        max_players: 1,
+      },
+    },
+  });
+
+  assert.equal(session.seats.length, 2);
+
+  manager.claimSeat(session.session_id, "viewer_host", "Host", "white");
+  manager.setReady(session.session_id, "viewer_host", true);
+
+  assert.throws(
+    () => manager.startMatch(session.session_id, "viewer_host"),
+    /At least 2 players must be seated/,
+  );
+});

@@ -42,7 +42,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260419b";
+} from "./world-games-ui.js?v=20260419c";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -6537,6 +6537,7 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
     });
   } else if (localGameSession) {
     const seatedPlayers = normalizePrivateGameSeats(localGameSession).filter((seat) => seat.viewer_session_id).length;
+    const maxSeats = getPrivateGameSeatCapacity(localGameSession);
     const memberShare = isPrivateGameMemberSession(localGameSession);
     setPrivateBrowserStatus(
       localGameSession.started
@@ -6548,8 +6549,8 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
       badge: memberShare ? "Group" : (localGameSession.started ? "Live" : "Lobby"),
       current: getPrivateGameSessionTitle(localGameSession),
       hint: memberShare
-        ? `${seatedPlayers} / ${Math.max(1, Number(localGameSession?.game?.manifest?.max_players) || 1)} seats claimed. Leaving the anchor circle stops this contributor game share.`
-        : `${seatedPlayers} / ${Math.max(1, Number(localGameSession?.game?.manifest?.max_players) || 1)} seats claimed. Movement stays locked while this anchor game is live.`,
+        ? `${seatedPlayers} / ${maxSeats} seats claimed. Leaving the anchor circle stops this contributor game share.`
+        : `${seatedPlayers} / ${maxSeats} seats claimed. Movement stays locked while this anchor game is live.`,
     });
   } else if (joinMode && selectedGame) {
     const hostName = getPrivateGameHostName(joinTarget);
@@ -9885,6 +9886,10 @@ function normalizePrivateGameSeats(session = {}) {
   return Array.isArray(session?.seats) ? session.seats : [];
 }
 
+function getPrivateGameSeatCapacity(session = {}) {
+  return Math.max(1, normalizePrivateGameSeats(session).length || Number(session?.game?.manifest?.max_players) || 1);
+}
+
 function getPrivateGameSessionTitle(session = {}) {
   return getPrivateSavedGameTitle(session?.game ?? {}, "Nearby game");
 }
@@ -10341,7 +10346,7 @@ function renderPrivateLiveSharesList() {
   const gameMarkup = filteredGameSessions.map((session) => {
     const title = getPrivateGameSessionTitle(session);
     const playerCount = normalizePrivateGameSeats(session).filter((seat) => seat.viewer_session_id).length;
-    const maxPlayers = Math.max(1, Number(session?.game?.manifest?.max_players) || 1);
+    const maxPlayers = getPrivateGameSeatCapacity(session);
     const contributorCount = Math.max(0, getPrivateGameShareGroupSessions(session.session_id).filter((entry) => isPrivateGameMemberSession(entry)).length);
     return `
       <button

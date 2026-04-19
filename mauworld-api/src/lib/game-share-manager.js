@@ -29,9 +29,26 @@ function normalizeSeatId(value = "") {
   return clipText(value, 64).toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
 }
 
+function getPlayerBounds(manifest = {}) {
+  const multiplayerMode = String(manifest.multiplayer_mode ?? "").trim().toLowerCase();
+  const multiplayer = multiplayerMode && multiplayerMode !== "single";
+  const minFloor = multiplayer ? 2 : 1;
+  const maxPlayers = clampInteger(manifest.max_players, minFloor, minFloor, 12);
+  const minPlayers = clampInteger(
+    manifest.min_players,
+    multiplayer ? Math.min(2, maxPlayers) : 1,
+    minFloor,
+    maxPlayers,
+  );
+  return {
+    minPlayers,
+    maxPlayers,
+  };
+}
+
 function buildSeatEntries(game = {}) {
   const manifest = game.manifest ?? {};
-  const maxPlayers = clampInteger(manifest.max_players, 2, 1, 12);
+  const { maxPlayers } = getPlayerBounds(manifest);
   const labels = Array.isArray(manifest.seats) ? manifest.seats : [];
   const seats = [];
   for (let index = 0; index < maxPlayers; index += 1) {
@@ -398,7 +415,7 @@ export class GameShareManager {
       throw new HttpError(403, "Only the host can start this game");
     }
     const claimedSeats = session.seats.filter((seat) => seat.viewer_session_id);
-    const minPlayers = clampInteger(session.game.manifest?.min_players, 1, 1, 12);
+    const { minPlayers } = getPlayerBounds(session.game.manifest ?? {});
     if (claimedSeats.length < minPlayers) {
       throw new HttpError(409, `At least ${minPlayers} player${minPlayers === 1 ? "" : "s"} must be seated`);
     }
