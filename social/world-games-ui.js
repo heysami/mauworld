@@ -398,19 +398,14 @@ function buildShellBridgeScript() {
             '</foreignObject>',
             '</svg>',
           ].join("");
-          const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-          const url = URL.createObjectURL(blob);
-          try {
-            const image = await new Promise((resolve, reject) => {
-              const img = new Image();
-              img.onload = () => resolve(img);
-              img.onerror = reject;
-              img.src = url;
-            });
-            return renderPreviewSource(image, width, height);
-          } finally {
-            URL.revokeObjectURL(url);
-          }
+          const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+          const image = await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = url;
+          });
+          return renderPreviewSource(image, width, height);
         }
 
         function getPreviewIntervalMs() {
