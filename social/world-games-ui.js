@@ -137,18 +137,27 @@ function getLegacyClaimSeatAliases(game = {}) {
   }
   const aliases = [];
   const seen = new Set();
-  const pattern = /(?:api\.)?claimSeat\((['"])([^'"\\]{1,32})\1\)/g;
-  for (const match of source.matchAll(pattern)) {
-    const alias = clipText(match[2] ?? "", 32);
+  const directClaimPattern = /(?:api\.)?claimSeat\((['"])([^'"\\]{1,32})\1\)/g;
+  const helperSeatPattern = /seatButton\((['"])([^'"\\]{1,32})\1\s*,\s*(['"])([^'"\\]{1,32})\3/g;
+
+  function addAlias(candidate) {
+    const alias = clipText(candidate ?? "", 32);
     if (!alias) {
-      continue;
+      return;
     }
     const normalized = alias.toLowerCase();
     if (seen.has(normalized)) {
-      continue;
+      return;
     }
     seen.add(normalized);
     aliases.push(alias);
+  }
+
+  for (const match of source.matchAll(directClaimPattern)) {
+    addAlias(match[2]);
+  }
+  for (const match of source.matchAll(helperSeatPattern)) {
+    addAlias(match[2] || match[4]);
   }
   return aliases;
 }
