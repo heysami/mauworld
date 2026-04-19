@@ -139,6 +139,7 @@ const PRIVATE_BROWSER_RADIUS = PRIVATE_BROWSER_SHARE.radius;
 const PRIVATE_GAME_SHARE_HIT_PADDING = 3.2;
 const PRIVATE_GAME_SHARE_HIT_PROXY_OPACITY = 0.01;
 const PRIVATE_GAME_SHARE_PICK_PRIORITY = 12;
+const PRIVATE_GAME_SHARE_PREVIEW_MAX_AGE_MS = 2200;
 const PRIVATE_LOCAL_PREVIEW_SESSION_ID = "__private_local_preview__";
 const BUILD_PLACEMENT_SHORTCUTS = new Map([
   ["1", "voxel"],
@@ -2739,63 +2740,18 @@ function getPrivateGameBubblePlaceholderKey(session = {}) {
 }
 
 function createPrivateGameBubbleTexture(session = {}) {
-  const occupiedSeats = normalizePrivateGameSeats(session).filter((seat) => seat.viewer_session_id).length;
-  const seatSummary = `${occupiedSeats}/${getPrivateGameSeatCapacity(session)} seats claimed`;
-  const description = getPrivateGameSessionDescription(session)
-    || (session?.started === true
-      ? `${seatSummary}. Reopen the game window any time to keep the live preview moving.`
-      : `${seatSummary}. Open the game window to jump back in and refresh the live preview.`);
   return createBubbleTexture("🎮", {
-    label: getPrivateGameSessionTitle(session),
-    text: description,
-    badge: session?.started === true ? "LIVE GAME" : "GAME SHARE",
-    width: 640,
-    height: 360,
     accent: PRIVATE_WORLD_STYLE.accents[1],
     stroke: PRIVATE_WORLD_STYLE.outline,
   });
 }
 
-function freezePrivateGameSharePreviewFrame(entry) {
-  const videoElement = entry?.videoElement;
-  if (!entry || !videoElement) {
-    return;
-  }
-  const width = Math.max(1, Math.floor(Number(videoElement.videoWidth) || 0));
-  const height = Math.max(1, Math.floor(Number(videoElement.videoHeight) || 0));
-  if (!width || !height) {
-    return;
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return;
-  }
-  try {
-    context.drawImage(videoElement, 0, 0, width, height);
-    const frozenPreview = {
-      data_url: canvas.toDataURL("image/webp", 0.92),
-      width,
-      height,
-      updated_at: new Date().toISOString(),
-    };
-    entry.session = {
-      ...(entry.session ?? {}),
-      latest_preview: frozenPreview,
-    };
-    entry.currentPreviewAt = "";
-    const cached = state.gameSessions.get(entry.sessionId);
-    if (cached) {
-      state.gameSessions.set(entry.sessionId, {
-        ...cached,
-        latest_preview: frozenPreview,
-      });
-    }
-  } catch {
-    // MediaStream-backed videos can briefly become unreadable while tearing down.
-  }
+function hasFreshPrivateGameSharePreview(session = {}) {
+  const previewFrame = session?.latest_preview ?? null;
+  const updatedAt = Date.parse(String(previewFrame?.updated_at ?? ""));
+  return Boolean(previewFrame?.data_url)
+    && Number.isFinite(updatedAt)
+    && (Date.now() - updatedAt) <= PRIVATE_GAME_SHARE_PREVIEW_MAX_AGE_MS;
 }
 
 function updatePrivateGameBubbleGeometry(entry) {
@@ -2965,7 +2921,6 @@ function clearPrivateGameShareVideo(sessionId) {
   if (!entry) {
     return;
   }
-  freezePrivateGameSharePreviewFrame(entry);
   entry.videoTexture?.dispose?.();
   entry.videoTexture = null;
   entry.videoElement = null;
@@ -2988,24 +2943,32 @@ function updatePrivateGameBubblePresentation(entry) {
     entry.currentPreviewAt = previewFrame.updated_at;
     entry.liveImage.src = previewFrame.data_url;
   }
+  const hasFreshPreview = hasFreshPrivateGameSharePreview(entry.session);
   const deliveryMode = getPrivateGameSessionDeliveryMode(entry.session);
   const showLiveMedia = deliveryMode === "full";
   const desiredMap = showLiveMedia && entry.videoTexture
     ? entry.videoTexture
-    : showLiveMedia && previewFrame?.data_url
+    : showLiveMedia && hasFreshPreview
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
-  entry.frame.scale.set(1, 1, 1);
+  const baseAspectRatio = getPrivateGameBubbleAspectRatio(entry.session);
+  const baseWidth = getSharedNearbyMediaWidth({ shareKind: "game" });
+  const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
+  const bubbleWidth = PRIVATE_BROWSER_SHARE.placeholderVideoWidth;
+  const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_SHARE.placeholderAspectRatio;
+  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
+  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
+  entry.frame.scale.set(scaleX, scaleY, 1);
   entry.frame.position.set(0, 0, 0);
   if (entry.hitTarget) {
-    entry.hitTarget.scale.set(1, 1, 1);
+    entry.hitTarget.scale.set(scaleX, scaleY, 1);
     entry.hitTarget.position.set(0, 0, 0);
   }
   entry.frame.material.depthTest = false;
   entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
   entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
-  entry.frameShell.visible = showingPlaceholder;
+  entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
@@ -3047,7 +3010,7 @@ function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
       continue;
     }
     const showingLiveMedia = getPrivateGameSessionDeliveryMode(entry.session) === "full"
-      && Boolean(entry.videoTexture || entry.session?.latest_preview?.data_url);
+      && Boolean(entry.videoTexture || hasFreshPrivateGameSharePreview(entry.session));
     const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
     entry.targetPosition.copy(hostPosition);
     entry.targetPosition.x += laneOffset.x;
@@ -7245,7 +7208,9 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
   const joinMode = Boolean(!localGameSession && joinTarget);
   const joinStateMatches = String(state.pendingShareJoin?.anchorSessionId ?? "").trim() === String(joinTarget?.session_id ?? "").trim();
   const joinApproved = joinMode && joinStateMatches && state.pendingShareJoin?.approved === true;
-  const previewUrl = String(localGameSession?.latest_preview?.data_url ?? "").trim();
+  const previewUrl = hasFreshPrivateGameSharePreview(localGameSession)
+    ? String(localGameSession?.latest_preview?.data_url ?? "").trim()
+    : "";
   elements.panelBrowserPanel?.classList.add("is-game-mode");
   elements.panelBrowserPanel?.classList.remove("is-docked-compact");
   elements.panelBrowserStage?.classList.add("is-active");

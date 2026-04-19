@@ -175,6 +175,7 @@ function buildShellBridgeScript() {
           session: null,
           authoritativeState: null,
           mounted: false,
+          previewEnabled: true,
           previewLoopStarted: false,
           previewTimer: null,
           previewPending: false,
@@ -191,6 +192,9 @@ function buildShellBridgeScript() {
         }
 
         function post(type, payload = {}) {
+          if (type === "preview" && state.previewEnabled !== true) {
+            return;
+          }
           parent.postMessage({ channel: CHANNEL_OUT, type, ...payload }, "*");
         }
 
@@ -680,6 +684,15 @@ function buildShellBridgeScript() {
           if (type === "action") {
             if (typeof state.hooks.onAction === "function") {
               state.hooks.onAction(clone(payload.action), clone(payload.meta));
+            }
+            return;
+          }
+          if (type === "preview-visibility") {
+            state.previewEnabled = payload.active !== false;
+            if (state.previewEnabled) {
+              startPreviewLoop();
+            } else {
+              stopPreviewLoop();
             }
             return;
           }
@@ -1437,6 +1450,15 @@ export function createWorldGameShell(options = {}) {
     renderSummary();
   }
 
+  function syncPreviewVisibility() {
+    if (!state.session || !state.iframeReady) {
+      return;
+    }
+    sendToFrame("preview-visibility", {
+      active: state.open === true,
+    });
+  }
+
   function loadIframe() {
     if (!state.game?.source_html || !elements.frame) {
       return;
@@ -1457,6 +1479,7 @@ export function createWorldGameShell(options = {}) {
     ) {
       state.open = true;
       render();
+      syncPreviewVisibility();
       return;
     }
     state.open = true;
@@ -1497,6 +1520,7 @@ export function createWorldGameShell(options = {}) {
     if (syncFrame) {
       syncFrameSession();
     }
+    syncPreviewVisibility();
   }
 
   function updateState(sessionId, nextState) {
@@ -1550,11 +1574,13 @@ export function createWorldGameShell(options = {}) {
     if (payload.type === "sdk-ready") {
       state.iframeReady = true;
       syncFrameSession();
+      syncPreviewVisibility();
       return;
     }
     if (payload.type === "registered") {
       state.iframeReady = true;
       syncFrameSession();
+      syncPreviewVisibility();
       return;
     }
     if (payload.type === "claim-seat") {
@@ -1620,6 +1646,7 @@ export function createWorldGameShell(options = {}) {
   function hide() {
     state.open = false;
     render();
+    syncPreviewVisibility();
   }
 
   return {

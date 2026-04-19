@@ -221,6 +221,7 @@ let toonGradientTexture = null;
 const GAME_SHARE_HIT_PADDING = 3.2;
 const GAME_SHARE_HIT_PROXY_OPACITY = 0.01;
 const GAME_SHARE_PICK_PRIORITY = 12;
+const GAME_SHARE_PREVIEW_MAX_AGE_MS = 2200;
 
 function createEmptyPrivateWorldGateState() {
   return {
@@ -7944,63 +7945,18 @@ function getGameSharePlaceholderTextureKey(session = {}) {
 }
 
 function createGameSharePlaceholderTexture(session) {
-  const occupiedSeats = normalizeGameSeats(session).filter((seat) => seat.viewer_session_id).length;
-  const seatSummary = `${occupiedSeats}/${getGameSeatCapacity(session)} seats claimed`;
-  const description = getGameSessionDescription(session)
-    || (session?.started === true
-      ? `${seatSummary}. Reopen the game window any time to keep the live preview moving.`
-      : `${seatSummary}. Open the game window to jump back in and refresh the live preview.`);
   return createBubbleTexture("🎮", {
-    label: getGameSessionTitle(session),
-    text: description,
-    badge: session?.started === true ? "LIVE GAME" : "GAME SHARE",
-    width: 640,
-    height: 360,
     accent: WORLD_STYLE.accents[1],
     stroke: WORLD_STYLE.outline,
   });
 }
 
-function freezeGameSharePreviewFrame(entry) {
-  const videoElement = entry?.videoElement;
-  if (!entry || !videoElement) {
-    return;
-  }
-  const width = Math.max(1, Math.floor(Number(videoElement.videoWidth) || 0));
-  const height = Math.max(1, Math.floor(Number(videoElement.videoHeight) || 0));
-  if (!width || !height) {
-    return;
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return;
-  }
-  try {
-    context.drawImage(videoElement, 0, 0, width, height);
-    const frozenPreview = {
-      data_url: canvas.toDataURL("image/webp", 0.92),
-      width,
-      height,
-      updated_at: new Date().toISOString(),
-    };
-    entry.session = {
-      ...(entry.session ?? {}),
-      latest_preview: frozenPreview,
-    };
-    entry.currentPreviewAt = "";
-    const cached = state.gameSessions.get(entry.sessionId);
-    if (cached) {
-      state.gameSessions.set(entry.sessionId, {
-        ...cached,
-        latest_preview: frozenPreview,
-      });
-    }
-  } catch {
-    // MediaStream-backed videos can briefly become unreadable while tearing down.
-  }
+function hasFreshGameSharePreview(session = {}) {
+  const preview = session?.latest_preview ?? null;
+  const updatedAt = Date.parse(String(preview?.updated_at ?? ""));
+  return Boolean(preview?.data_url)
+    && Number.isFinite(updatedAt)
+    && (Date.now() - updatedAt) <= GAME_SHARE_PREVIEW_MAX_AGE_MS;
 }
 
 function updateGameShareGeometry(entry) {
@@ -8195,7 +8151,6 @@ function clearGameShareVideo(sessionId) {
   if (!entry) {
     return;
   }
-  freezeGameSharePreviewFrame(entry);
   entry.videoTexture?.dispose?.();
   entry.videoTexture = null;
   entry.videoElement = null;
@@ -8218,26 +8173,32 @@ function updateGameSharePresentation(entry) {
     entry.currentPreviewAt = preview.updated_at;
     entry.liveImage.src = preview.data_url;
   }
+  const hasFreshPreview = hasFreshGameSharePreview(entry.session);
   const deliveryMode = getGameSessionDeliveryMode(entry.session);
   const showLiveMedia = deliveryMode === "full";
   const desiredTexture = showLiveMedia && entry.videoTexture
     ? entry.videoTexture
-    : showLiveMedia && preview?.data_url
+    : showLiveMedia && hasFreshPreview
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredTexture === entry.placeholderTexture;
   const baseAspectRatio = getGameShareAspectRatio(entry.session);
   const baseWidth = getSharedNearbyMediaWidth({ shareKind: "game" });
-  entry.frame.scale.set(1, 1, 1);
+  const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
+  const bubbleWidth = BROWSER_SHARE.placeholderVideoWidth;
+  const bubbleHeight = bubbleWidth / BROWSER_SHARE.placeholderAspectRatio;
+  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
+  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
+  entry.frame.scale.set(scaleX, scaleY, 1);
   entry.frame.position.set(0, 0, 0);
   if (entry.hitTarget) {
-    entry.hitTarget.scale.set(1, 1, 1);
+    entry.hitTarget.scale.set(scaleX, scaleY, 1);
     entry.hitTarget.position.set(0, 0, 0);
   }
   entry.frame.material.depthTest = false;
   entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
   entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
-  entry.frameShell.visible = showingPlaceholder;
+  entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredTexture) {
     entry.frame.material.map = desiredTexture;
     entry.frame.material.needsUpdate = true;
@@ -8271,7 +8232,7 @@ function updateGameShareEntries(elapsedSeconds = 0) {
       continue;
     }
     const showingLiveMedia = getGameSessionDeliveryMode(entry.session) === "full"
-      && Boolean(entry.videoTexture || entry.session?.latest_preview?.data_url);
+      && Boolean(entry.videoTexture || hasFreshGameSharePreview(entry.session));
     const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
     entry.targetPosition.copy(hostPosition);
     entry.targetPosition.x += laneOffset.x;
@@ -10917,7 +10878,9 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
   const joinMode = Boolean(!localGameSession && joinTarget);
   const joinStateMatches = String(state.pendingShareJoin?.anchorSessionId ?? "").trim() === String(joinTarget?.session_id ?? "").trim();
   const joinApproved = joinMode && joinStateMatches && state.pendingShareJoin?.approved === true;
-  const previewUrl = String(localGameSession?.latest_preview?.data_url ?? "").trim();
+  const previewUrl = hasFreshGameSharePreview(localGameSession)
+    ? String(localGameSession?.latest_preview?.data_url ?? "").trim()
+    : "";
   const hasPreview = Boolean(previewUrl);
   elements.browserPanel?.classList.add("is-game-mode");
   elements.browserPanel?.classList.remove("is-docked-compact");
