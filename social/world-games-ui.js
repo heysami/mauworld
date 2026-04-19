@@ -191,8 +191,8 @@ function buildShellBridgeScript() {
           return JSON.parse(JSON.stringify(value));
         }
 
-        function post(type, payload = {}) {
-          if (type === "preview" && state.previewEnabled !== true) {
+        function post(type, payload = {}, options = {}) {
+          if (type === "preview" && state.previewEnabled !== true && options.force !== true) {
             return;
           }
           parent.postMessage({ channel: CHANNEL_OUT, type, ...payload }, "*");
@@ -558,7 +558,9 @@ function buildShellBridgeScript() {
           return requestedSeatId;
         }
 
-        async function publishAutomaticPreview() {
+        async function publishAutomaticPreview(options = {}) {
+          const force = options && options.force === true;
+          const reason = String(options && options.reason || "").trim();
           if (
             state.previewPending
             || !state.mounted
@@ -571,7 +573,10 @@ function buildShellBridgeScript() {
           try {
             const preview = await rasterizeNode(getPreviewTarget());
             if (preview && preview.data_url) {
-              post("preview", { preview });
+              post("preview", {
+                preview,
+                reason: reason || undefined,
+              }, { force });
             }
           } catch (_error) {
             // Preview frames are best-effort.
@@ -694,6 +699,13 @@ function buildShellBridgeScript() {
             } else {
               stopPreviewLoop();
             }
+            return;
+          }
+          if (type === "capture-preview") {
+            void publishAutomaticPreview({
+              force: true,
+              reason: "hide-final",
+            });
             return;
           }
           if (type === "destroy") {
@@ -1179,6 +1191,8 @@ export function createWorldGameShell(options = {}) {
   const state = {
     open: false,
     acceptPreviews: false,
+    pendingHide: false,
+    hideTimer: null,
     loading: false,
     status: "",
     session: null,
@@ -1465,6 +1479,44 @@ export function createWorldGameShell(options = {}) {
     syncPreviewVisibility(state.acceptPreviews);
   }
 
+  function clearPendingHideTimer() {
+    if (state.hideTimer) {
+      window.clearTimeout(state.hideTimer);
+      state.hideTimer = null;
+    }
+  }
+
+  function finalizeHide() {
+    clearPendingHideTimer();
+    state.pendingHide = false;
+    state.acceptPreviews = false;
+    state.open = false;
+    render();
+  }
+
+  function requestHide() {
+    if (!state.open) {
+      return;
+    }
+    if (!state.session || !state.iframeReady) {
+      finalizeHide();
+      return;
+    }
+    if (state.pendingHide) {
+      return;
+    }
+    state.pendingHide = true;
+    state.lastPreviewSentAt = 0;
+    sendToFrame("preview-visibility", {
+      active: false,
+    });
+    sendToFrame("capture-preview");
+    clearPendingHideTimer();
+    state.hideTimer = window.setTimeout(() => {
+      finalizeHide();
+    }, 420);
+  }
+
   function loadIframe() {
     if (!state.game?.source_html || !elements.frame) {
       return;
@@ -1490,6 +1542,8 @@ export function createWorldGameShell(options = {}) {
     }
     state.open = true;
     state.acceptPreviews = true;
+    state.pendingHide = false;
+    clearPendingHideTimer();
     state.loading = true;
     state.status = "";
     state.session = cloneJson(session);
@@ -1508,6 +1562,8 @@ export function createWorldGameShell(options = {}) {
   function openPayload(payload = {}) {
     state.open = true;
     state.acceptPreviews = true;
+    state.pendingHide = false;
+    clearPendingHideTimer();
     state.loading = false;
     state.status = "";
     state.session = cloneJson(payload.session ?? null);
@@ -1553,6 +1609,8 @@ export function createWorldGameShell(options = {}) {
   }
 
   function close() {
+    clearPendingHideTimer();
+    state.pendingHide = false;
     state.acceptPreviews = false;
     if (state.iframeReady) {
       sendToFrame("destroy");
@@ -1620,24 +1678,18 @@ export function createWorldGameShell(options = {}) {
       if (!state.open || !state.acceptPreviews) {
         return;
       }
+      const isFinalHidePreview = String(payload.reason ?? "").trim() === "hide-final";
       const now = performance.now();
-      if (now - state.lastPreviewSentAt < 220) {
+      if (!isFinalHidePreview && now - state.lastPreviewSentAt < 220) {
         return;
       }
       state.lastPreviewSentAt = now;
       options.onPreview?.(sessionId, cloneJson(payload.preview));
+      if (state.pendingHide && isFinalHidePreview) {
+        finalizeHide();
+      }
     }
   }
-
-  overlay.addEventListener("pointerdown", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-    if (target.hasAttribute("data-game-shell-close")) {
-      setPreviewCaptureActive(false);
-    }
-  }, true);
 
   overlay.addEventListener("click", (event) => {
     const target = event.target;
@@ -1645,7 +1697,7 @@ export function createWorldGameShell(options = {}) {
       return;
     }
     if (target.hasAttribute("data-game-shell-close")) {
-      hide();
+      requestHide();
     }
   });
   elements.ready?.addEventListener("click", () => {
@@ -1666,9 +1718,7 @@ export function createWorldGameShell(options = {}) {
   render();
 
   function hide() {
-    setPreviewCaptureActive(false);
-    state.open = false;
-    render();
+    requestHide();
   }
 
   return {
