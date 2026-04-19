@@ -373,20 +373,37 @@ export class GameShareManager {
     return this.toSessionSummary(session);
   }
 
-  releaseSeat(sessionId, viewerSessionId) {
+  releaseSeat(sessionId, viewerSessionId, seatId = "") {
     const session = this.getSession(sessionId);
     const resolvedViewerSessionId = String(viewerSessionId ?? "").trim();
     if (!session || !resolvedViewerSessionId) {
       throw new HttpError(404, "Game session not found");
     }
-    const seat = findSeatByViewerSessionId(session, resolvedViewerSessionId);
+    const resolvedSeatId = normalizeSeatId(seatId);
+    let releasedViewerSessionId = resolvedViewerSessionId;
+    let seat = null;
+    if (resolvedSeatId) {
+      seat = session.seats.find((entry) => entry.seat_id === resolvedSeatId) ?? null;
+      releasedViewerSessionId = String(seat?.viewer_session_id ?? "").trim();
+      if (
+        releasedViewerSessionId
+        && releasedViewerSessionId !== resolvedViewerSessionId
+        && session.host_viewer_session_id !== resolvedViewerSessionId
+      ) {
+        throw new HttpError(403, "Only the host can release other player seats");
+      }
+    } else {
+      seat = findSeatByViewerSessionId(session, resolvedViewerSessionId);
+    }
     if (!seat) {
       return this.toSessionSummary(session);
     }
     seat.viewer_session_id = "";
     seat.display_name = "";
     seat.claimed_at = null;
-    session.ready_by_viewer_session_id.delete(resolvedViewerSessionId);
+    if (releasedViewerSessionId) {
+      session.ready_by_viewer_session_id.delete(releasedViewerSessionId);
+    }
     session.updated_at = nowIso();
     return this.toSessionSummary(session);
   }

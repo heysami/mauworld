@@ -620,8 +620,8 @@ function buildShellBridgeScript() {
             claimSeat(seatId) {
               post("claim-seat", { seatId: mapRequestedSeatId(state.session, seatId) });
             },
-            releaseSeat() {
-              post("release-seat");
+            releaseSeat(seatId = "") {
+              post("release-seat", { seatId: mapRequestedSeatId(state.session, seatId) });
             },
             setReady(ready) {
               post("ready", { ready: ready === true });
@@ -1325,12 +1325,13 @@ export function createWorldGameShell(options = {}) {
         <span>${escapeHtml(seatCountLabel)}</span>
       </div>
       ${seats.map((seat, index) => {
-        const isClaimedByViewer = context.claimedSeatId === seat.seat_id;
         const open = !seat.viewer_session_id;
+        const isClaimedByViewer = context.claimedSeatId === seat.seat_id;
+        const canReleaseSeat = !open && (isClaimedByViewer || context.isHost);
         const seatAlias = legacyAliases[index] ? ` (${legacyAliases[index]})` : "";
         const label = open
           ? "Claim"
-          : isClaimedByViewer
+          : canReleaseSeat
             ? "Release"
             : "Taken";
         return `
@@ -1344,7 +1345,7 @@ export function createWorldGameShell(options = {}) {
               <button
                 type="button"
                 data-game-shell-seat="${escapeHtml(seat.seat_id)}"
-                ${(!open && !isClaimedByViewer) ? "disabled" : ""}
+                ${(!open && !canReleaseSeat) ? "disabled" : ""}
               >${label}</button>
             </div>
           </div>
@@ -1355,11 +1356,14 @@ export function createWorldGameShell(options = {}) {
       button.addEventListener("click", () => {
         const seatId = button.getAttribute("data-game-shell-seat") || "";
         const contextNext = computeRole();
-        if (contextNext.claimedSeatId === seatId) {
-          options.onReleaseSeat?.(state.session?.session_id ?? "");
+        const session = state.session;
+        const selectedSeat = normalizeSeatList(session).find((seat) => seat.seat_id === seatId) ?? null;
+        const open = !selectedSeat?.viewer_session_id;
+        if (!open && (contextNext.isHost || contextNext.claimedSeatId === seatId)) {
+          options.onReleaseSeat?.(session?.session_id ?? "", seatId);
           return;
         }
-        options.onClaimSeat?.(state.session?.session_id ?? "", seatId);
+        options.onClaimSeat?.(session?.session_id ?? "", seatId);
       });
     }
   }
@@ -1558,7 +1562,7 @@ export function createWorldGameShell(options = {}) {
       return;
     }
     if (payload.type === "release-seat") {
-      options.onReleaseSeat?.(sessionId);
+      options.onReleaseSeat?.(sessionId, payload.seatId);
       return;
     }
     if (payload.type === "ready") {

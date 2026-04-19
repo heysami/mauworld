@@ -198,8 +198,11 @@ export function createWorldRealtimeClient(options = {}) {
     claimGameSeat(sessionId, seatId) {
       return send("game:seat-claim", { sessionId, seatId });
     },
-    releaseGameSeat(sessionId) {
-      return send("game:seat-release", { sessionId });
+    releaseGameSeat(sessionId, seatId = "") {
+      return send("game:seat-release", {
+        sessionId,
+        seatId: String(seatId ?? "").trim(),
+      });
     },
     setGameReady(sessionId, ready) {
       return send("game:ready", { sessionId, ready: ready === true });

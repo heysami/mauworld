@@ -95,6 +95,36 @@ test("game share manager relays authoritative state and cleans up host sessions"
   assert.equal(manager.getSession(session.session_id), null);
 });
 
+test("game share manager lets hosts release any occupied seat", () => {
+  const manager = new GameShareManager({ scope: "public" });
+  const session = manager.createSession({
+    bindingKey: "world_current",
+    hostViewerSessionId: "viewer_host",
+    hostDisplayName: "Host",
+    game: createSavedGame(),
+  });
+
+  manager.claimSeat(session.session_id, "viewer_guest", "Guest", "white");
+  manager.setReady(session.session_id, "viewer_guest", true);
+
+  const selfReleased = manager.releaseSeat(session.session_id, "viewer_guest", "white");
+  assert.equal(selfReleased.seats.find((seat) => seat.seat_id === "white")?.viewer_session_id, null);
+
+  manager.claimSeat(session.session_id, "viewer_guest", "Guest", "white");
+  manager.setReady(session.session_id, "viewer_guest", true);
+  manager.claimSeat(session.session_id, "viewer_host", "Host", "black");
+
+  assert.throws(
+    () => manager.releaseSeat(session.session_id, "viewer_guest", "black"),
+    /Only the host can release other player seats/,
+  );
+
+  const released = manager.releaseSeat(session.session_id, "viewer_host", "white");
+  const whiteSeat = released.seats.find((seat) => seat.seat_id === "white");
+  assert.equal(whiteSeat?.viewer_session_id, null);
+  assert.equal(whiteSeat?.ready, false);
+});
+
 test("game share manager normalizes multiplayer manifests into joinable seat counts", () => {
   const manager = new GameShareManager({ scope: "public" });
   const baseGame = createSavedGame();

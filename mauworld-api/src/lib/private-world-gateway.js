@@ -943,6 +943,7 @@ export class PrivateWorldGateway {
       const summary = this.gameShares.releaseSeat(
         String(message.sessionId ?? "").trim(),
         client.viewerSessionId,
+        String(message.seatId ?? message.seat_id ?? "").trim(),
       );
       if (summary.binding_key !== client.browserWorldKey) {
         throw new Error("Game session not found");

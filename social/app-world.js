@@ -490,8 +490,8 @@ const publicGameShell = createWorldGameShell({
       showToast("Realtime share is offline.");
     }
   },
-  onReleaseSeat(sessionId) {
-    if (state.realtimeClient?.releaseGameSeat(sessionId) !== true) {
+  onReleaseSeat(sessionId, seatId = "") {
+    if (state.realtimeClient?.releaseGameSeat(sessionId, seatId) !== true) {
       showToast("Realtime share is offline.");
     }
   },

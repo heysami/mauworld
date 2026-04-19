@@ -1214,10 +1214,11 @@ const privateGameShell = createWorldGameShell({
       seatId,
     });
   },
-  onReleaseSeat(sessionId) {
+  onReleaseSeat(sessionId, seatId = "") {
     sendWorldSocketMessage({
       type: "game:seat-release",
       sessionId,
+      seatId,
     });
   },
   onReady(sessionId, ready) {

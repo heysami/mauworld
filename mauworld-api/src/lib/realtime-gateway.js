@@ -1140,6 +1140,7 @@ export class RealtimeGateway {
       const summary = this.gameShares.releaseSeat(
         String(message.sessionId ?? "").trim(),
         client.viewerSessionId,
+        String(message.seatId ?? message.seat_id ?? "").trim(),
       );
       if (summary.binding_key !== client.worldSnapshotId) {
         throw new Error("Game session not found");

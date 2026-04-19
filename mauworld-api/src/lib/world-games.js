@@ -299,7 +299,7 @@ function buildGameGenerationPrompt(input = {}) {
     "- api.getState(): read the current authoritative state",
     "- api.setState(nextState): host only, publishes authoritative state to everyone",
     "- api.sendAction(action): non-host players send semantic actions to the host",
-    "- api.claimSeat(seatId), api.releaseSeat(), api.setReady(boolean), api.startMatch()",
+    "- api.claimSeat(seatId), api.releaseSeat(optionalSeatId), api.setReady(boolean), api.startMatch()",
     "- api.publishPreview(elementOrCanvas): publish a live preview frame after rendering",
     "Manifest requirements:",
     '- manifest must include title, description, multiplayer_mode ("single", "turn-based", or "realtime"), min_players, max_players, allow_viewers, aspect_ratio, and preview.',
