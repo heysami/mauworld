@@ -7615,8 +7615,7 @@ function updateGameSharePresentation(entry) {
   entry.frame.material.depthTest = false;
   entry.frame.material.opacity = showingPlaceholder ? 0.99 : 1;
   entry.frame.renderOrder = 10;
-  entry.frameShell.visible = true;
-  entry.frameShell.material.opacity = showingPlaceholder ? 0.94 : 0.9;
+  entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredTexture) {
     entry.frame.material.map = desiredTexture;
     entry.frame.material.needsUpdate = true;

@@ -2963,8 +2963,7 @@ function updatePrivateGameBubblePresentation(entry) {
   entry.frame.material.depthTest = false;
   entry.frame.material.opacity = showingPlaceholder ? 0.99 : 1;
   entry.frame.renderOrder = 10;
-  entry.frameShell.visible = true;
-  entry.frameShell.material.opacity = showingPlaceholder ? 0.94 : 0.92;
+  entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
