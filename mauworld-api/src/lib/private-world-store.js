@@ -18,6 +18,7 @@ import {
 } from "./private-worlds.js";
 
 const PRIVATE_WORLD_PARTICIPANT_STALE_MS = 30_000;
+const PUBLIC_PRIVATE_WORLD_VISIBLE_STATUSES = new Set(["active", "started"]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -62,6 +63,10 @@ function lower(value) {
 function asNumber(value, fallback = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+export function isPubliclyVisiblePrivateWorldInstanceStatus(status = "") {
+  return PUBLIC_PRIVATE_WORLD_VISIBLE_STATUSES.has(lower(status));
 }
 
 function buildAssetSearchText(values = []) {
@@ -522,8 +527,16 @@ function getMiniatureCollisionRadius(entry = {}) {
   return Math.max(getMiniatureLongestSide(entry) / 2, 1);
 }
 
-function getMiniatureSafetyMargin(left = {}, right = {}) {
-  return Math.max(2, 0.15 * Math.max(getMiniatureLongestSide(left), getMiniatureLongestSide(right)));
+function getMiniaturePlacementExtraBuffer(miniature = {}, blockerRadius = 1) {
+  return Math.max(2, 0.15 * Math.max(getMiniatureLongestSide(miniature), Math.max(1, blockerRadius) * 2));
+}
+
+export function computePublicWorldPostBlockerRadius(entry = {}) {
+  const sizeFactor = Math.max(0, asNumber(entry.size_factor, 1));
+  const displayTier = lower(entry.display_tier);
+  const cardWidth = 8.6 + sizeFactor * 4.8 + (displayTier === "hero" ? 1.6 : 0);
+  const cardHeight = cardWidth * ((displayTier === "hero" ? 272 : 248) / 700);
+  return Math.hypot(cardWidth, cardHeight) / 2;
 }
 
 function buildMiniatureDistanceBands(entry = {}) {
@@ -572,22 +585,69 @@ async function loadViewerPresenceForSnapshot(store, worldSnapshotId, viewerSessi
   );
 }
 
-async function findNearestPrivateWorldAnchor(store, currentWorld, requestedPosition = {}, miniature = {}, excludeWorldRowId = null) {
-  const worldSnapshotId = String(currentWorld?.worldSnapshot?.id ?? "").trim();
+async function loadPublicWorldPlacementBlockers(store, worldSnapshotId, excludeWorldRowId = null) {
+  const snapshotId = String(worldSnapshotId ?? "").trim();
+  if (!snapshotId) {
+    return [];
+  }
+  const [activeInstances, pillarRows, postRows] = await Promise.all([
+    must(
+      store.serviceClient
+        .from("private_world_active_instances")
+        .select("*")
+        .eq("anchor_world_snapshot_id", snapshotId),
+      "Could not load active private world anchors",
+    ),
+    must(
+      store.serviceClient
+        .from("world_pillar_layouts")
+        .select("*")
+        .eq("world_snapshot_id", snapshotId),
+      "Could not load world pillar blockers",
+    ),
+    must(
+      store.serviceClient
+        .from("world_post_instances")
+        .select("*")
+        .eq("world_snapshot_id", snapshotId),
+      "Could not load world post blockers",
+    ),
+  ]);
+  const miniatureBlockers = activeInstances
+    .filter((entry) => entry.world_id !== excludeWorldRowId)
+    .filter((entry) => isPubliclyVisiblePrivateWorldInstanceStatus(entry.status))
+    .map((entry) => ({
+      kind: "miniature",
+      x: asNumber(entry.anchor_position_x),
+      z: asNumber(entry.anchor_position_z),
+      radius: getMiniatureCollisionRadius(entry),
+    }));
+  const pillarBlockers = pillarRows.map((entry) => ({
+    kind: "pillar",
+    x: asNumber(entry.position_x),
+    z: asNumber(entry.position_z),
+    radius: Math.max(1, asNumber(entry.radius, 1)),
+  }));
+  const postBlockers = postRows
+    .filter((entry) => lower(entry.display_tier) !== "hidden")
+    .map((entry) => ({
+      kind: "post",
+      x: asNumber(entry.position_x),
+      z: asNumber(entry.position_z),
+      radius: Math.max(1, computePublicWorldPostBlockerRadius(entry)),
+    }));
+  return miniatureBlockers.concat(pillarBlockers, postBlockers);
+}
+
+export async function findNearestPrivateWorldAnchor(store, currentWorld, requestedPosition = {}, miniature = {}, options = {}) {
+  const worldSnapshotId = String(options.worldSnapshotId ?? currentWorld?.worldSnapshot?.id ?? "").trim();
   const cellSize = Math.max(16, Math.floor(asNumber(currentWorld?.settings?.world_cell_size, 64)));
   const requested = {
     x: asNumber(requestedPosition.x),
     y: asNumber(requestedPosition.y),
     z: asNumber(requestedPosition.z),
   };
-  const activeInstances = await must(
-    store.serviceClient
-      .from("private_world_active_instances")
-      .select("*")
-      .eq("anchor_world_snapshot_id", worldSnapshotId),
-    "Could not load active private world anchors",
-  );
-  const blockers = activeInstances.filter((entry) => entry.world_id !== excludeWorldRowId);
+  const blockers = await loadPublicWorldPlacementBlockers(store, worldSnapshotId, options.excludeWorldRowId ?? null);
   const withinSearch = [];
   for (let ring = 0; ring <= 6; ring += 1) {
     for (let dx = -ring; dx <= ring; dx += 1) {
@@ -611,9 +671,11 @@ async function findNearestPrivateWorldAnchor(store, currentWorld, requestedPosit
 
   for (const candidate of withinSearch) {
     const collides = blockers.some((entry) => {
-      const margin = getMiniatureSafetyMargin(miniature, entry);
-      const minDistance = getMiniatureCollisionRadius(miniature) + getMiniatureCollisionRadius(entry) + margin;
-      return Math.hypot(candidate.x - asNumber(entry.anchor_position_x), candidate.z - asNumber(entry.anchor_position_z)) < minDistance;
+      const blockerRadius = Math.max(1, asNumber(entry.radius, 1));
+      const minDistance = getMiniatureCollisionRadius(miniature)
+        + blockerRadius
+        + getMiniaturePlacementExtraBuffer(miniature, blockerRadius);
+      return Math.hypot(candidate.x - asNumber(entry.x), candidate.z - asNumber(entry.z)) < minDistance;
     });
     if (!collides) {
       return {
@@ -1398,10 +1460,7 @@ export function installPrivateWorldStore(MauworldStore) {
     const participantCounts = await loadParticipantCountsForInstanceIds(
       this,
       activeRows.map((entry) => entry.id),
-      {
-        nowMs,
-        visibleOnly: true,
-      },
+      { nowMs },
     );
     const matchedRows = activeRows
       .map((activeInstance) => ({
@@ -1409,7 +1468,7 @@ export function installPrivateWorldStore(MauworldStore) {
         world: worldById.get(activeInstance.world_id) ?? null,
       }))
       .filter((entry) => entry.world)
-      .filter((entry) => entry.activeInstance.status === "active")
+      .filter((entry) => isPubliclyVisiblePrivateWorldInstanceStatus(entry.activeInstance.status))
       .filter((entry) => !worldType || entry.world.world_type === worldType)
       .filter((entry) => !query || String(entry.world.search_text ?? "").includes(query))
       .filter((entry) => (participantCounts.get(entry.activeInstance.id) ?? 0) > 0)
@@ -2128,7 +2187,10 @@ export function installPrivateWorldStore(MauworldStore) {
         miniature_width: miniature.width,
         miniature_length: miniature.length,
         miniature_height: miniature.height,
-      }, world.id);
+      }, {
+        excludeWorldRowId: world.id,
+        worldSnapshotId: anchorSnapshotId,
+      });
       if (!anchor) {
         throw new HttpError(409, "Could not find enough public-world space to anchor this private world");
       }
@@ -2854,7 +2916,7 @@ export function installPrivateWorldStore(MauworldStore) {
     const creatorProfiles = await loadProfilesByIds(this, [...new Set([...worldsById.values()].map((row) => row.creator_profile_id))]);
     const miniatures = [];
     for (const row of rows) {
-      if (row.status !== "active") {
+      if (!isPubliclyVisiblePrivateWorldInstanceStatus(row.status)) {
         continue;
       }
       const world = worldsById.get(row.world_id);
@@ -2865,10 +2927,7 @@ export function installPrivateWorldStore(MauworldStore) {
       const creator = creatorProfiles.get(world.creator_profile_id);
       const participants = filterFreshPrivateWorldParticipants(
         await loadInstanceParticipants(this, row.id),
-        {
-          nowMs,
-          visibleOnly: true,
-        },
+        { nowMs },
       );
       if (participants.length === 0) {
         continue;
@@ -2933,6 +2992,7 @@ export function installPrivateWorldStore(MauworldStore) {
         miniature_width: row.miniature_width,
         miniature_length: row.miniature_length,
         miniature_height: row.miniature_height,
+        status: row.status,
         viewer_count: participants.length,
         lineage: {
           is_imported: Boolean(

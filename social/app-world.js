@@ -40,6 +40,10 @@ import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.j
 import { createWorldRealtimeClient } from "./world-realtime.js?v=20260419kick1";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 import {
+  isLivePrivateWorldInstanceStatus,
+  resolvePrivateWorldMiniatureRenderState,
+} from "./private-world-miniatures.js?v=20260420a";
+import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
@@ -7186,7 +7190,7 @@ function buildPrivateWorldMiniatureObject(entry) {
         viewer_count: entry.viewer_count,
         lineage: entry.lineage,
         active_instance: {
-          status: "active",
+          status: entry.status ?? "active",
           viewer_count: entry.viewer_count,
           anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
           anchor_position: {
@@ -7215,7 +7219,7 @@ function buildPrivateWorldMiniatureObject(entry) {
         viewer_count: entry.viewer_count,
         lineage: entry.lineage,
         active_instance: {
-          status: "active",
+          status: entry.status ?? "active",
           viewer_count: entry.viewer_count,
           anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
           anchor_position: {
@@ -7244,7 +7248,7 @@ function buildPrivateWorldMiniatureObject(entry) {
         viewer_count: entry.viewer_count,
         lineage: entry.lineage,
         active_instance: {
-          status: "active",
+          status: entry.status ?? "active",
           viewer_count: entry.viewer_count,
           anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
           anchor_position: {
@@ -7272,21 +7276,25 @@ function updatePrivateWorldMiniatures(elapsedSeconds) {
     const distance = sceneState.camera.position.distanceTo(entry.group.position);
     const isNear = distance <= entry.nearDistance;
     const isMid = distance > entry.nearDistance && distance <= entry.midDistance;
-    const allowNear = entry.serverLodBand === "near";
-    const allowMid = entry.serverLodBand === "near" || entry.serverLodBand === "mid";
+    const renderState = resolvePrivateWorldMiniatureRenderState({
+      serverLodBand: entry.serverLodBand,
+      distanceBand: isNear ? "near" : isMid ? "mid" : "far",
+    });
     const focusedKey = state.focusedPrivateWorld ? getPrivateWorldResultKey(state.focusedPrivateWorld) : "";
     const isFocused = focusedKey && focusedKey === `${entry.worldId}:${entry.creatorUsername}`;
-    entry.label.visible = isNear || isMid || entry.serverLodBand !== "far";
-    entry.silhouetteGroup.visible = allowMid && (isMid || (entry.serverLodBand === "mid" && isNear));
-    entry.detailGroup.visible = allowNear && isNear;
-    entry.playerDots.visible = allowNear && isNear;
+    entry.dome.visible = renderState.showDome;
+    entry.basePlate.visible = renderState.showBasePlate;
+    entry.label.visible = renderState.showLabel;
+    entry.silhouetteGroup.visible = renderState.showSilhouette;
+    entry.detailGroup.visible = renderState.showDetail;
+    entry.playerDots.visible = renderState.showPlayerDots;
     entry.dome.material.color.set(isFocused ? "#f8d4e2" : "#d7e7ff");
     entry.dome.material.emissive.set(isFocused ? "#ff4f6d" : "#000000");
     entry.dome.material.emissiveIntensity = isFocused ? 0.14 : 0;
     entry.basePlate.material.color.set(isFocused ? "#ffd1db" : "#9bb0c8");
     entry.basePlate.material.emissive.set(isFocused ? "#ff4f6d" : "#000000");
     entry.basePlate.material.emissiveIntensity = isFocused ? 0.18 : 0;
-    entry.dome.material.opacity = isNear ? 0.12 : isMid ? 0.18 : 0.24;
+    entry.dome.material.opacity = renderState.domeOpacity;
     entry.basePlate.material.opacity = isFocused ? 0.36 : (isNear ? 0.28 : 0.22);
     const pulse = 1 + Math.sin(elapsedSeconds * 0.8 + entry.phase) * 0.018;
     entry.dome.scale.y = entry.baseDomeScaleY * pulse;
@@ -10179,7 +10187,7 @@ function renderSelected(result) {
       <div class="world-selected__stack">
         <div class="world-selected__card">
           <div class="world-selected__label">Entry</div>
-          <div class="world-selected__copy">${htmlEscape(activeInstance.status === "active" ? "The dome is live in Mauworld right now." : "This world is not active right now.")}</div>
+          <div class="world-selected__copy">${htmlEscape(isLivePrivateWorldInstanceStatus(activeInstance.status) ? "The dome is live in Mauworld right now." : "This world is not active right now.")}</div>
         </div>
         <div class="world-selected__card">
           <div class="world-selected__label">Credits</div>

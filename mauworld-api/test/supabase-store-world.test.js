@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MauworldStore } from "../src/lib/supabase-store.js";
+import { findNearestPrivateWorldAnchor } from "../src/lib/private-world-store.js";
 
 function cloneRow(value) {
   return JSON.parse(JSON.stringify(value));
@@ -17,6 +18,18 @@ function applyFilters(rows, filters, orFilters = []) {
       }
       if (filter.type === "lt") {
         return row[filter.column] < filter.value;
+      }
+      if (filter.type === "gt") {
+        return row[filter.column] > filter.value;
+      }
+      if (filter.type === "gte") {
+        return row[filter.column] >= filter.value;
+      }
+      if (filter.type === "lte") {
+        return row[filter.column] <= filter.value;
+      }
+      if (filter.type === "neq") {
+        return row[filter.column] !== filter.value;
       }
       return true;
     })
@@ -75,6 +88,26 @@ class FakeQuery {
 
   lt(column, value) {
     this.filters.push({ type: "lt", column, value });
+    return this;
+  }
+
+  gt(column, value) {
+    this.filters.push({ type: "gt", column, value });
+    return this;
+  }
+
+  gte(column, value) {
+    this.filters.push({ type: "gte", column, value });
+    return this;
+  }
+
+  lte(column, value) {
+    this.filters.push({ type: "lte", column, value });
+    return this;
+  }
+
+  neq(column, value) {
+    this.filters.push({ type: "neq", column, value });
     return this;
   }
 
@@ -670,7 +703,7 @@ test("getPillarDetail loads posts from current pillar tags instead of pillar_id_
   assert.equal(result.posts[0].title, "Post for current pillar tags");
 });
 
-test("searchPublicPrivateWorlds only exposes worlds with fresh visible participants", async () => {
+test("searchPublicPrivateWorlds exposes started worlds with any fresh participants and excludes stale ones", async () => {
   const now = Date.now();
   const freshIso = new Date(now - 5_000).toISOString();
   const staleIso = new Date(now - 120_000).toISOString();
@@ -687,7 +720,7 @@ test("searchPublicPrivateWorlds only exposes worlds with fresh visible participa
         {
           id: "instance_live",
           world_id: "world_row_live",
-          status: "active",
+          status: "started",
           active_scene_id: "scene_live",
           last_active_at: freshIso,
         },
@@ -745,13 +778,6 @@ test("searchPublicPrivateWorlds only exposes worlds with fresh visible participa
         {
           id: "participant_live",
           instance_id: "instance_live",
-          profile_id: "profile_live",
-          visible_to_others: true,
-          last_seen_at: freshIso,
-        },
-        {
-          id: "participant_guest",
-          instance_id: "instance_live",
           profile_id: null,
           guest_session_id: "guest_123",
           visible_to_others: false,
@@ -772,5 +798,230 @@ test("searchPublicPrivateWorlds only exposes worlds with fresh visible participa
 
   assert.equal(result.worlds.length, 1);
   assert.equal(result.worlds[0].world_id, "mw_live");
+  assert.equal(result.worlds[0].active_instance.status, "started");
   assert.equal(result.worlds[0].active_instance.viewer_count, 1);
+});
+
+test("listPrivateWorldMiniaturesForSnapshot exposes started worlds with guest-only presence", async () => {
+  const now = Date.now();
+  const freshIso = new Date(now - 5_000).toISOString();
+  const state = {
+    tables: {
+      private_world_active_instances: [
+        {
+          id: "instance_live",
+          world_id: "world_row_live",
+          status: "started",
+          active_scene_id: "scene_live",
+          anchor_world_snapshot_id: "snapshot_live",
+          anchor_position_x: 0,
+          anchor_position_y: 0,
+          anchor_position_z: 0,
+          anchor_cell_x: 0,
+          anchor_cell_z: 0,
+          miniature_width: 12,
+          miniature_length: 6,
+          miniature_height: 3,
+          last_active_at: freshIso,
+        },
+      ],
+      private_worlds: [
+        {
+          id: "world_row_live",
+          world_id: "mw_live",
+          creator_profile_id: "profile_creator",
+          world_type: "room",
+          template_size: "medium",
+          width: 40,
+          length: 20,
+          height: 10,
+          name: "Lantern Hall",
+          about: "Actually occupied",
+        },
+      ],
+      private_world_scenes: [
+        {
+          id: "scene_live",
+          world_id: "world_row_live",
+          compiled_doc: {
+            miniature: {
+              static_voxels: [
+                {
+                  id: "voxel_1",
+                  position: { x: 0, y: 0, z: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                  material: { color: "#ffffff" },
+                },
+              ],
+              screens: [],
+              players: [],
+            },
+            stats: {},
+          },
+        },
+      ],
+      user_profiles: [
+        {
+          id: "profile_creator",
+          username: "maker",
+          display_name: "Maker",
+        },
+      ],
+      private_world_participants: [
+        {
+          id: "participant_guest",
+          instance_id: "instance_live",
+          profile_id: null,
+          guest_session_id: "guest_123",
+          visible_to_others: false,
+          last_seen_at: freshIso,
+        },
+      ],
+      private_world_ready_states: [],
+      live_presence_sessions: [],
+    },
+    queryLog: [],
+  };
+
+  const fakeStore = {
+    serviceClient: createFakeServiceClient(state),
+    privateWorldRuntime: {
+      getSnapshotByWorldRef() {
+        return null;
+      },
+    },
+  };
+
+  const result = await MauworldStore.prototype.listPrivateWorldMiniaturesForSnapshot.call(fakeStore, {
+    worldSnapshotId: "snapshot_live",
+    cellXMin: -1,
+    cellXMax: 1,
+    cellZMin: -1,
+    cellZMax: 1,
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].world_id, "mw_live");
+  assert.equal(result[0].status, "started");
+  assert.equal(result[0].viewer_count, 1);
+});
+
+test("findNearestPrivateWorldAnchor skips blocked pillar anchors", async () => {
+  const state = {
+    tables: {
+      private_world_active_instances: [],
+      world_pillar_layouts: [
+        {
+          id: "pillar_1",
+          world_snapshot_id: "snapshot_live",
+          position_x: 0,
+          position_z: 0,
+          radius: 10,
+        },
+      ],
+      world_post_instances: [],
+    },
+    queryLog: [],
+  };
+
+  const anchor = await findNearestPrivateWorldAnchor(
+    { serviceClient: createFakeServiceClient(state) },
+    {
+      worldSnapshot: { id: "snapshot_live" },
+      settings: { world_cell_size: 64 },
+    },
+    { x: 0, y: 0, z: 0 },
+    {
+      miniature_width: 12,
+      miniature_length: 6,
+      miniature_height: 3,
+    },
+  );
+
+  assert.notEqual(anchor, null);
+  assert.notDeepEqual(
+    { x: anchor.x, y: anchor.y, z: anchor.z },
+    { x: 0, y: 0, z: 0 },
+  );
+});
+
+test("findNearestPrivateWorldAnchor skips blocked post-card footprints", async () => {
+  const state = {
+    tables: {
+      private_world_active_instances: [],
+      world_pillar_layouts: [],
+      world_post_instances: [
+        {
+          id: "post_1",
+          world_snapshot_id: "snapshot_live",
+          position_x: 0,
+          position_z: 0,
+          size_factor: 2,
+          display_tier: "hero",
+        },
+      ],
+    },
+    queryLog: [],
+  };
+
+  const anchor = await findNearestPrivateWorldAnchor(
+    { serviceClient: createFakeServiceClient(state) },
+    {
+      worldSnapshot: { id: "snapshot_live" },
+      settings: { world_cell_size: 64 },
+    },
+    { x: 0, y: 0, z: 0 },
+    {
+      miniature_width: 12,
+      miniature_length: 6,
+      miniature_height: 3,
+    },
+  );
+
+  assert.notEqual(anchor, null);
+  assert.notDeepEqual(
+    { x: anchor.x, y: anchor.y, z: anchor.z },
+    { x: 0, y: 0, z: 0 },
+  );
+});
+
+test("findNearestPrivateWorldAnchor keeps the requested anchor when blockers are outside the buffer", async () => {
+  const state = {
+    tables: {
+      private_world_active_instances: [],
+      world_pillar_layouts: [
+        {
+          id: "pillar_1",
+          world_snapshot_id: "snapshot_live",
+          position_x: 40,
+          position_z: 0,
+          radius: 2,
+        },
+      ],
+      world_post_instances: [],
+    },
+    queryLog: [],
+  };
+
+  const anchor = await findNearestPrivateWorldAnchor(
+    { serviceClient: createFakeServiceClient(state) },
+    {
+      worldSnapshot: { id: "snapshot_live" },
+      settings: { world_cell_size: 64 },
+    },
+    { x: 0, y: 0, z: 0 },
+    {
+      miniature_width: 12,
+      miniature_length: 6,
+      miniature_height: 3,
+    },
+  );
+
+  assert.deepEqual(anchor, {
+    x: 0,
+    y: 0,
+    z: 0,
+    cellX: 0,
+    cellZ: 0,
+  });
 });
