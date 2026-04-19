@@ -34,6 +34,14 @@ function normalizeSessionMode(rawMode) {
   return String(rawMode ?? "").trim() === "display-share" ? "display-share" : "remote-browser";
 }
 
+function normalizeDisplaySessionSlotForKind(shareKind = "") {
+  const normalizedShareKind = String(shareKind ?? "").trim().toLowerCase();
+  if (normalizedShareKind === "camera" || normalizedShareKind === "audio") {
+    return "display-av";
+  }
+  return "display-screen";
+}
+
 function normalizeGroupRole(rawRole, sessionMode = "remote-browser") {
   const value = String(rawRole ?? "").trim().toLowerCase();
   if (value === "member" || value === "persistent-voice" || value === "origin") {
@@ -42,15 +50,20 @@ function normalizeGroupRole(rawRole, sessionMode = "remote-browser") {
   return sessionMode === "display-share" ? "origin" : "origin";
 }
 
-function normalizeSessionSlot(rawSlot, sessionMode = "remote-browser", groupRole = "origin") {
+function normalizeSessionSlot(rawSlot, sessionMode = "remote-browser", groupRole = "origin", shareKind = "") {
   const value = String(rawSlot ?? "").trim().toLowerCase();
-  if (value) {
+  if (value === "display-screen" || value === "display-av" || value === "persistent-voice" || value === "remote-browser") {
     return value;
+  }
+  if (value === "display-share") {
+    return normalizeDisplaySessionSlotForKind(shareKind);
   }
   if (groupRole === "persistent-voice") {
     return "persistent-voice";
   }
-  return sessionMode === "display-share" ? "display-share" : "remote-browser";
+  return sessionMode === "display-share"
+    ? normalizeDisplaySessionSlotForKind(shareKind)
+    : "remote-browser";
 }
 
 function normalizeShareKind(rawKind, sessionMode = "remote-browser") {
@@ -159,7 +172,12 @@ function installLocalPlaywrightBrowser() {
 function applySessionGroupMetadata(session, input = {}) {
   const sessionMode = normalizeSessionMode(input.mode ?? session.sessionMode);
   const groupRole = normalizeGroupRole(input.groupRole ?? session.groupRole, sessionMode);
-  const sessionSlot = normalizeSessionSlot(input.sessionSlot ?? session.sessionSlot, sessionMode, groupRole);
+  const sessionSlot = normalizeSessionSlot(
+    input.sessionSlot ?? session.sessionSlot,
+    sessionMode,
+    groupRole,
+    input.shareKind ?? session.shareKind,
+  );
   const listedLive = input.listedLive == null ? groupRole === "origin" : input.listedLive === true;
   const movementLocked = input.movementLocked == null ? groupRole === "origin" : input.movementLocked === true;
   const groupJoined = input.groupJoined === true;
@@ -278,7 +296,7 @@ export class BrowserSessionManager extends EventEmitter {
       hasAudio: session.hasAudio === true,
       viewerCount: Math.max(0, Number(session.viewerCount) || 0),
       maxViewers: Math.max(0, Number(session.maxViewers) || 0),
-      sessionSlot: session.sessionSlot || normalizeSessionSlot("", session.sessionMode, session.groupRole),
+      sessionSlot: session.sessionSlot || normalizeSessionSlot("", session.sessionMode, session.groupRole, session.shareKind),
       groupRole: normalizeGroupRole(session.groupRole, session.sessionMode),
       listedLive: session.listedLive !== false,
       movementLocked: session.movementLocked === true,
@@ -369,7 +387,7 @@ export class BrowserSessionManager extends EventEmitter {
     const sessionMode = normalizeSessionMode(input.mode);
     const shareKind = normalizeShareKind(input.shareKind, sessionMode);
     const groupRole = normalizeGroupRole(input.groupRole, sessionMode);
-    const sessionSlot = normalizeSessionSlot(input.sessionSlot, sessionMode, groupRole);
+    const sessionSlot = normalizeSessionSlot(input.sessionSlot, sessionMode, groupRole, shareKind);
     const existing = this.getSessionByHost(hostSessionId, { sessionSlot });
     if (existing && existing.sessionMode !== sessionMode) {
       await this.stopSession(existing.id);

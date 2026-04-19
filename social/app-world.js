@@ -10,6 +10,7 @@ import {
   createNearbyDisplayShareFeature,
   launchNearbyDisplayShare,
   getBrowserShareKindLabel,
+  getBrowserShareSessionSlot,
   getDisplayShareStageLayout,
   getDisplayShareStagePlaceholderText,
   getDisplayShareLaunchState,
@@ -31,6 +32,7 @@ import {
 import {
   SHARED_BROWSER_SHARE_LAYOUT,
   SHARED_CHAT_BUBBLE_LAYOUT,
+  getSharedNearbyLaneOffset,
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
@@ -82,6 +84,7 @@ const elements = {
   browserSummaryBadge: document.querySelector("[data-world-browser-summary-badge]"),
   browserSummaryCurrent: document.querySelector("[data-world-browser-summary-current]"),
   browserSummaryHint: document.querySelector("[data-world-browser-summary-hint]"),
+  browserLocalStack: document.querySelector("[data-world-browser-local-stack]"),
   browserStatus: document.querySelector("[data-world-browser-status]"),
   browserBackdrop: document.querySelector("[data-world-browser-backdrop]"),
   browserStage: document.querySelector("[data-world-browser-stage]"),
@@ -282,6 +285,8 @@ const state = {
   activeChats: new Map(),
   browserSessions: new Map(),
   localBrowserSessionId: "",
+  localBrowserShares: new Map(),
+  localBrowserSessionIdsBySlot: new Map(),
   localVoiceSessionId: "",
   localBrowserFocus: false,
   browserOverlayOpen: false,
@@ -2489,6 +2494,139 @@ function updateBrowserPanelSummary(summary = {}) {
   }
 }
 
+function getLocalBrowserShareStackEntries() {
+  const entries = [];
+  for (const session of getLocalBrowserDisplaySessions()) {
+    const shareKind = getBrowserSessionShareKind(session);
+    entries.push({
+      id: String(session.sessionId ?? "").trim(),
+      type: "browser",
+      label: getBrowserShareKindLabel(shareKind),
+      title: getBrowserSessionTitle(session),
+      active: String(session.sessionId ?? "").trim() === String(state.localBrowserSessionId ?? "").trim(),
+      secondary: isBrowserMemberSession(session) ? "Contributor" : "Nearby",
+    });
+  }
+  const localVoiceSession = getLocalVoiceSession();
+  if (localVoiceSession) {
+    entries.push({
+      id: String(localVoiceSession.sessionId ?? "").trim(),
+      type: "voice",
+      label: "Voice",
+      title: "Persistent voice chat",
+      active: false,
+      secondary: localVoiceSession.groupJoined === true ? "Joined" : "Standalone",
+    });
+  }
+  const localGameSession = getLocalGameSession();
+  if (localGameSession) {
+    entries.push({
+      id: String(localGameSession.session_id ?? "").trim(),
+      type: "game",
+      label: "Game",
+      title: getGameSessionTitle(localGameSession),
+      active: state.browserShareMode === "game",
+      secondary: isGameMemberSession(localGameSession) ? "Contributor" : "Nearby",
+    });
+  }
+  const order = {
+    Screen: 0,
+    Video: 1,
+    Voice: 2,
+    Game: 3,
+  };
+  return entries.sort((left, right) =>
+    (order[left.label] ?? 99) - (order[right.label] ?? 99)
+    || Number(right.active) - Number(left.active)
+    || left.title.localeCompare(right.title));
+}
+
+function renderLocalBrowserShareStack() {
+  if (!elements.browserLocalStack) {
+    return;
+  }
+  const entries = getLocalBrowserShareStackEntries();
+  elements.browserLocalStack.hidden = entries.length === 0;
+  if (entries.length === 0) {
+    elements.browserLocalStack.innerHTML = "";
+    return;
+  }
+  elements.browserLocalStack.innerHTML = entries.map((entry) => `
+    <section class="world-local-share-card ${entry.active ? "is-active" : ""}" data-local-share-id="${htmlEscape(entry.id)}" data-local-share-type="${htmlEscape(entry.type)}">
+      <div class="world-local-share-card__meta">
+        <span class="world-local-share-card__badge">${htmlEscape(entry.label)}</span>
+        <strong>${htmlEscape(entry.title)}</strong>
+        <span>${htmlEscape(entry.secondary)}</span>
+      </div>
+      <div class="world-local-share-card__actions">
+        <button type="button" class="is-muted" data-local-share-focus="${htmlEscape(entry.id)}" data-local-share-type="${htmlEscape(entry.type)}">
+          ${entry.type === "voice" ? "Manage" : entry.type === "game" ? "Open" : "Focus"}
+        </button>
+        ${entry.type === "browser" ? `<button type="button" class="is-muted" data-local-share-rename="${htmlEscape(entry.id)}">Rename</button>` : ""}
+        <button type="button" class="is-muted" data-local-share-stop="${htmlEscape(entry.id)}" data-local-share-type="${htmlEscape(entry.type)}">Stop</button>
+      </div>
+    </section>
+  `).join("");
+
+  for (const button of elements.browserLocalStack.querySelectorAll("[data-local-share-focus]")) {
+    button.addEventListener("click", () => {
+      const sessionId = String(button.getAttribute("data-local-share-focus") ?? "").trim();
+      const entryType = String(button.getAttribute("data-local-share-type") ?? "").trim();
+      if (entryType === "voice") {
+        setWorldPanelTab("chat");
+        return;
+      }
+      if (entryType === "game") {
+        const session = getLocalGameSession();
+        if (session) {
+          requestOpenWorldGameSession(session);
+        }
+        return;
+      }
+      const session = state.browserSessions.get(sessionId);
+      if (!session) {
+        return;
+      }
+      state.browserShareMode = normalizeBrowserShareKind(getBrowserSessionShareKind(session), "screen");
+      browserShareFeature.setSelectedMode(state.browserShareMode);
+      setSelectedLocalBrowserSession(sessionId);
+      updateBrowserPanel();
+    });
+  }
+  for (const button of elements.browserLocalStack.querySelectorAll("[data-local-share-rename]")) {
+    button.addEventListener("click", () => {
+      const sessionId = String(button.getAttribute("data-local-share-rename") ?? "").trim();
+      const session = state.browserSessions.get(sessionId);
+      if (!session) {
+        return;
+      }
+      state.browserShareMode = normalizeBrowserShareKind(getBrowserSessionShareKind(session), "screen");
+      browserShareFeature.setSelectedMode(state.browserShareMode);
+      setSelectedLocalBrowserSession(sessionId);
+      if (elements.browserShareTitle) {
+        elements.browserShareTitle.focus();
+        elements.browserShareTitle.select();
+      }
+      updateBrowserPanel();
+    });
+  }
+  for (const button of elements.browserLocalStack.querySelectorAll("[data-local-share-stop]")) {
+    button.addEventListener("click", () => {
+      const sessionId = String(button.getAttribute("data-local-share-stop") ?? "").trim();
+      const entryType = String(button.getAttribute("data-local-share-type") ?? "").trim();
+      if (entryType === "voice") {
+        state.realtimeClient?.stopVoice(sessionId);
+        return;
+      }
+      if (entryType === "game") {
+        state.realtimeClient?.stopGameShare(sessionId);
+        return;
+      }
+      state.realtimeClient?.stopBrowser(sessionId);
+    });
+  }
+}
+
 function releaseBrowserDisplayShare(share, { stopTracks = false } = {}) {
   if (!share) {
     return;
@@ -2508,20 +2646,29 @@ function clearPendingBrowserShare({ stopTracks = false } = {}) {
 }
 
 function clearLocalBrowserShare({ stopTracks = false, sessionId = "" } = {}) {
-  const activeShare = state.localBrowserShare;
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  const targetSessionId = normalizedSessionId || String(state.localBrowserSessionId ?? "").trim();
+  if (!targetSessionId) {
+    return;
+  }
+  const activeShare = state.localBrowserShares.get(targetSessionId) ?? null;
   if (!activeShare) {
     return;
   }
-  if (sessionId && activeShare.sessionId && activeShare.sessionId !== sessionId) {
-    return;
-  }
   releaseBrowserDisplayShare(activeShare, { stopTracks });
-  setBrowserPreviewStream(null);
-  updateBrowserMediaVideoMetrics(null, "");
   if (activeShare.sessionId) {
     clearBrowserScreenVideo(activeShare.sessionId);
   }
-  state.localBrowserShare = null;
+  state.localBrowserShares.delete(targetSessionId);
+  if (getBrowserShareSessionSlot(activeShare) && state.localBrowserSessionIdsBySlot.get(getBrowserShareSessionSlot(activeShare)) === targetSessionId) {
+    state.localBrowserSessionIdsBySlot.delete(getBrowserShareSessionSlot(activeShare));
+  }
+  if (String(state.localBrowserSessionId ?? "").trim() === targetSessionId) {
+    state.localBrowserSessionId = "";
+    setSelectedLocalBrowserSession("");
+  } else {
+    syncSelectedLocalBrowserShare();
+  }
 }
 
 function clearPendingVoiceShare({ stopTracks = false } = {}) {
@@ -2560,13 +2707,19 @@ function dropLocalBrowserSession(sessionId, { unpublish = true } = {}) {
   removeBrowserScreenEntry(normalized);
   if (state.localBrowserSessionId === normalized) {
     state.localBrowserSessionId = "";
-    state.browserMediaTransport = "jpeg-sequence";
   }
   if (state.localVoiceSessionId === normalized) {
     state.localVoiceSessionId = "";
   }
+  state.localBrowserShares.delete(normalized);
+  for (const [sessionSlot, trackedSessionId] of state.localBrowserSessionIdsBySlot.entries()) {
+    if (trackedSessionId === normalized) {
+      state.localBrowserSessionIdsBySlot.delete(sessionSlot);
+    }
+  }
   ensureBrowserRemoteAudioStateMap().delete(normalized);
   syncRemoteBrowserAudioState();
+  setSelectedLocalBrowserSession("");
   return true;
 }
 
@@ -2623,6 +2776,10 @@ function getRemoteBrowserPanelSessionId(preferredSessionId = "") {
     .filter((session) => isRemoteBrowserPanelSessionCandidate(session))
     .sort((left, right) =>
       Number(isBrowserOriginSession(right)) - Number(isBrowserOriginSession(left))
+      || Number(getBrowserShareSessionSlot(right) === "display-screen")
+        - Number(getBrowserShareSessionSlot(left) === "display-screen")
+      || Number(normalizeBrowserShareKind(right.shareKind, "screen") === "camera")
+        - Number(normalizeBrowserShareKind(left.shareKind, "screen") === "camera")
       || Number(String(right.sessionId ?? "").trim() === normalizedPreferredSessionId)
         - Number(String(left.sessionId ?? "").trim() === normalizedPreferredSessionId)
       || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
@@ -3203,7 +3360,8 @@ const browserShareFeature = createNearbyDisplayShareFeature({
   getSessionShareKind: getBrowserSessionShareKind,
   getPendingShare: () => state.pendingBrowserShare,
   getLocalSession: getLocalBrowserSession,
-  getLocalShare: () => state.localBrowserShare,
+  getLocalShare: () => getLocalBrowserShare(),
+  isLocalShare: isKnownLocalBrowserShare,
   clearPendingShare: clearPendingBrowserShare,
   clearLocalShare: clearLocalBrowserShare,
   onLocalShareEnded({ sessionId }) {
@@ -3264,21 +3422,20 @@ function attachLocalBrowserShare(sessionId, share) {
   if (!share || !sessionId || !state.meta?.worldSnapshotId) {
     return;
   }
-  clearLocalBrowserShare({ stopTracks: true });
-  state.localBrowserShare = {
+  clearLocalBrowserShare({ stopTracks: true, sessionId });
+  const nextShare = {
     ...share,
     sessionId,
   };
+  state.localBrowserShares.set(sessionId, nextShare);
+  const sessionSlot = getBrowserShareSessionSlot(nextShare);
+  if (sessionSlot) {
+    state.localBrowserSessionIdsBySlot.set(sessionSlot, sessionId);
+  }
+  setSelectedLocalBrowserSession(sessionId);
   browserShareFeature.setSelectedMode(share.shareKind);
   if (elements.browserShareTitle) {
     elements.browserShareTitle.value = share.title || "";
-  }
-  setBrowserPreviewStream(share.hasVideo ? share.stream : null);
-  if (share.hasVideo && elements.browserVideo) {
-    bindBrowserPanelVideoMetrics(sessionId, elements.browserVideo);
-    setBrowserScreenVideo(sessionId, elements.browserVideo);
-  } else {
-    clearBrowserScreenVideo(sessionId);
   }
   void getBrowserMediaController().publishStream({
     sessionId,
@@ -3438,13 +3595,13 @@ function createPersistentVoiceContributionShare() {
     fallbackWidth: 540,
     fallbackHeight: 432,
     isPendingShare: (candidate) => state.pendingBrowserShare?.stream === candidate.stream,
-    isLocalShare: (candidate) => state.localBrowserShare?.stream === candidate.stream,
+    isLocalShare: isKnownLocalBrowserShare,
     onEndedWhilePending() {
       clearPendingBrowserShare({ stopTracks: false });
       updateBrowserPanel();
     },
     onEndedWhileLive() {
-      const sessionId = String(state.localBrowserShare?.sessionId ?? state.localBrowserSessionId ?? "").trim();
+      const sessionId = String(share.sessionId ?? state.localBrowserSessionId ?? "").trim();
       clearLocalBrowserShare({ stopTracks: false, sessionId });
       dropLocalBrowserSession(sessionId);
       if (sessionId) {
@@ -3462,15 +3619,16 @@ function startPersistentVoiceContribution(anchorSessionId) {
   if (!normalizedAnchorSessionId) {
     return false;
   }
-  const existingLocalSession = getLocalBrowserSession();
-  if (existingLocalSession) {
-    const sameContribution = isBrowserMemberSession(existingLocalSession)
-      && getBrowserSessionShareKind(existingLocalSession) === "audio"
-      && getBrowserSessionAnchorSessionId(existingLocalSession) === normalizedAnchorSessionId;
+  const anchorHostSessionId = resolveShareGroupHostSessionId(normalizedAnchorSessionId);
+  const existingAvSession = getLocalBrowserDisplaySessionBySlot("display-av");
+  if (existingAvSession) {
+    const sameContribution = isBrowserMemberSession(existingAvSession)
+      && getBrowserSessionShareKind(existingAvSession) === "audio"
+      && getBrowserSessionAnchorHostSessionId(existingAvSession) === anchorHostSessionId;
     if (sameContribution) {
       return true;
     }
-    showToast("Stop your current nearby share before joining with persistent voice.");
+    showToast("Stop your current nearby video or voice share before joining with persistent voice.");
     return false;
   }
   if (state.pendingBrowserShare) {
@@ -4029,6 +4187,47 @@ function getBrowserSessionAnchorHostSessionId(session = {}) {
   return String(session?.anchorHostSessionId ?? "").trim();
 }
 
+function getPreferredBrowserOriginSessionForHost(hostSessionId = "", preferredSessionId = "") {
+  const normalizedHostSessionId = String(hostSessionId ?? "").trim();
+  const normalizedPreferredSessionId = String(preferredSessionId ?? "").trim();
+  if (!normalizedHostSessionId) {
+    return null;
+  }
+  return [...state.browserSessions.values()]
+    .filter((session) =>
+      isListedLiveSession(session)
+      && String(session.hostSessionId ?? "").trim() === normalizedHostSessionId)
+    .sort((left, right) =>
+      Number(getBrowserShareSessionSlot(right) === "display-screen") - Number(getBrowserShareSessionSlot(left) === "display-screen")
+      || Number(String(right.sessionId ?? "").trim() === normalizedPreferredSessionId)
+        - Number(String(left.sessionId ?? "").trim() === normalizedPreferredSessionId)
+      || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
+      || String(left.sessionId ?? "").localeCompare(String(right.sessionId ?? "")))[0] ?? null;
+}
+
+function resolveShareGroupHostSessionId(anchorSessionId = "", anchorHostSessionId = "") {
+  const normalizedAnchorHostSessionId = String(anchorHostSessionId ?? "").trim();
+  if (normalizedAnchorHostSessionId) {
+    return normalizedAnchorHostSessionId;
+  }
+  const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+  if (!normalizedAnchorSessionId) {
+    return "";
+  }
+  const browserSession = state.browserSessions.get(normalizedAnchorSessionId);
+  if (browserSession) {
+    return getBrowserSessionAnchorHostSessionId(browserSession);
+  }
+  const gameSession = state.gameSessions.get(normalizedAnchorSessionId);
+  return String(
+    gameSession?.anchor_host_session_id
+    ?? gameSession?.anchorHostSessionId
+    ?? gameSession?.host_viewer_session_id
+    ?? gameSession?.hostViewerSessionId
+    ?? "",
+  ).trim();
+}
+
 function isBrowserJoinedPersistentVoiceSession(session = {}) {
   return isBrowserPersistentVoiceSession(session)
     && session?.groupJoined === true
@@ -4037,13 +4236,15 @@ function isBrowserJoinedPersistentVoiceSession(session = {}) {
 
 function resolveBrowserOriginSession(session = {}) {
   const anchorSessionId = getBrowserSessionAnchorSessionId(session);
-  if (!anchorSessionId) {
+  const anchorHostSessionId = getBrowserSessionAnchorHostSessionId(session);
+  if (!anchorSessionId && !anchorHostSessionId) {
     return null;
   }
   if (String(session?.sessionId ?? "").trim() === anchorSessionId && isBrowserOriginSession(session)) {
     return session;
   }
-  return state.browserSessions.get(anchorSessionId) ?? null;
+  return state.browserSessions.get(anchorSessionId)
+    ?? getPreferredBrowserOriginSessionForHost(anchorHostSessionId, anchorSessionId);
 }
 
 function isListedLiveSession(session = {}) {
@@ -4065,42 +4266,47 @@ function getBrowserSessionSpatialCenter(session = {}) {
 function getNearbyOriginSession(excludeHostSessionId = state.viewerSessionId) {
   const viewerPosition = getNavigationPosition();
   const radius = Math.max(16, getInteractionConfig().browserRadius);
-  let bestSession = null;
-  let bestDistanceSquared = Infinity;
-  for (const session of state.browserSessions.values()) {
-    if (!isListedLiveSession(session)) {
-      continue;
-    }
-    if (excludeHostSessionId && String(session.hostSessionId ?? "").trim() === String(excludeHostSessionId ?? "").trim()) {
-      continue;
-    }
-    const hostPosition = getBrowserHostPosition(session.hostSessionId);
-    if (!hostPosition) {
-      continue;
-    }
-    const dx = viewerPosition.x - hostPosition.x;
-    const dz = viewerPosition.z - hostPosition.z;
-    const distanceSquared = dx * dx + dz * dz;
-    if (distanceSquared > radius * radius || distanceSquared >= bestDistanceSquared) {
-      continue;
-    }
-    bestSession = session;
-    bestDistanceSquared = distanceSquared;
-  }
-  return bestSession;
+  return [...state.browserSessions.values()]
+    .filter((session) => isListedLiveSession(session))
+    .filter((session) => !excludeHostSessionId || String(session.hostSessionId ?? "").trim() !== String(excludeHostSessionId ?? "").trim())
+    .map((session) => {
+      const hostPosition = getBrowserHostPosition(session.hostSessionId);
+      if (!hostPosition) {
+        return null;
+      }
+      const dx = viewerPosition.x - hostPosition.x;
+      const dz = viewerPosition.z - hostPosition.z;
+      return {
+        session,
+        distanceSquared: dx * dx + dz * dz,
+      };
+    })
+    .filter((entry) => entry && entry.distanceSquared <= radius * radius)
+    .sort((left, right) =>
+      left.distanceSquared - right.distanceSquared
+      || Number(getBrowserShareSessionSlot(right.session) === "display-screen")
+        - Number(getBrowserShareSessionSlot(left.session) === "display-screen")
+      || Number(getBrowserShareSessionSlot(right.session) === "display-av")
+        - Number(getBrowserShareSessionSlot(left.session) === "display-av")
+      || Date.parse(left.session.startedAt ?? 0) - Date.parse(right.session.startedAt ?? 0)
+      || String(left.session.sessionId ?? "").localeCompare(String(right.session.sessionId ?? "")))[0]?.session ?? null;
 }
 
 function getShareGroupSessions(anchorSessionId = "") {
   const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
-  if (!normalizedAnchorSessionId) {
+  const anchorHostSessionId = resolveShareGroupHostSessionId(normalizedAnchorSessionId);
+  if (!normalizedAnchorSessionId && !anchorHostSessionId) {
     return [];
   }
   return [...state.browserSessions.values()]
     .filter((session) =>
-      (isBrowserOriginSession(session) && String(session.sessionId ?? "").trim() === normalizedAnchorSessionId)
-      || getBrowserSessionAnchorSessionId(session) === normalizedAnchorSessionId)
+      resolveShareGroupHostSessionId(
+        getBrowserSessionAnchorSessionId(session),
+        getBrowserSessionAnchorHostSessionId(session),
+      ) === anchorHostSessionId)
     .sort((left, right) =>
       Number(isBrowserOriginSession(right)) - Number(isBrowserOriginSession(left))
+      || Number(getBrowserShareSessionSlot(right) === "display-screen") - Number(getBrowserShareSessionSlot(left) === "display-screen")
       || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
       || String(left.hostSessionId ?? "").localeCompare(String(right.hostSessionId ?? "")));
 }
@@ -4111,8 +4317,10 @@ function getShareJoinTarget() {
     return resolveBrowserOriginSession(localSession);
   }
   const pendingAnchorSessionId = String(state.pendingShareJoin?.anchorSessionId ?? "").trim();
-  if (pendingAnchorSessionId) {
-    return state.browserSessions.get(pendingAnchorSessionId) ?? null;
+  const pendingAnchorHostSessionId = String(state.pendingShareJoin?.anchorHostSessionId ?? "").trim();
+  if (pendingAnchorSessionId || pendingAnchorHostSessionId) {
+    return state.browserSessions.get(pendingAnchorSessionId)
+      ?? getPreferredBrowserOriginSessionForHost(pendingAnchorHostSessionId, pendingAnchorSessionId);
   }
   return getNearbyOriginSession();
 }
@@ -7385,7 +7593,13 @@ function updateBrowserScreenEntry(entry, deltaSeconds, elapsedSeconds) {
     return;
   }
   const showingLiveMedia = isBrowserScreenShowingLiveMedia(entry);
+  const laneOffset = getSharedNearbyLaneOffset({
+    shareKind: getBrowserSessionShareKind(entry.session),
+    sessionSlot: entry.session?.sessionSlot,
+  });
   entry.targetPosition.copy(hostPosition);
+  entry.targetPosition.x += laneOffset.x;
+  entry.targetPosition.z += laneOffset.z;
   entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
   entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
   entry.group.position.copy(entry.position);
@@ -7715,7 +7929,10 @@ function updateGameShareEntries(elapsedSeconds = 0) {
     }
     const showingLiveMedia = getGameSessionDeliveryMode(entry.session) === "full"
       && Boolean(entry.videoTexture || entry.session?.latest_preview?.data_url);
+    const laneOffset = getSharedNearbyLaneOffset({ shareKind: "game" });
     entry.targetPosition.copy(hostPosition);
+    entry.targetPosition.x += laneOffset.x;
+    entry.targetPosition.z += laneOffset.z;
     entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
     entry.position.lerp(entry.targetPosition, 0.18);
     entry.group.position.copy(entry.position);
@@ -7748,6 +7965,10 @@ function removeBrowserAnchorEntry(anchorSessionId) {
   sceneState.browserAnchorEntries.delete(normalizedAnchorSessionId);
 }
 
+function getBrowserAnchorEntryKey(session = {}) {
+  return `host:${String(session?.hostSessionId ?? "").trim()}`;
+}
+
 function updateBrowserAnchorGeometry(entry, radius = getInteractionConfig().browserRadius) {
   if (!entry?.fill || !entry?.ring) {
     return;
@@ -7765,11 +7986,11 @@ function updateBrowserAnchorGeometry(entry, radius = getInteractionConfig().brow
 }
 
 function ensureBrowserAnchorEntry(session = {}) {
-  const anchorSessionId = String(session.sessionId ?? "").trim();
-  if (!anchorSessionId) {
+  const anchorEntryKey = getBrowserAnchorEntryKey(session);
+  if (anchorEntryKey === "host:") {
     return null;
   }
-  const existing = sceneState.browserAnchorEntries.get(anchorSessionId);
+  const existing = sceneState.browserAnchorEntries.get(anchorEntryKey);
   if (existing) {
     existing.session = session;
     existing.hostSessionId = String(session.hostSessionId ?? existing.hostSessionId ?? "").trim();
@@ -7817,7 +8038,7 @@ function ensureBrowserAnchorEntry(session = {}) {
     ring,
     radius,
   };
-  sceneState.browserAnchorEntries.set(anchorSessionId, entry);
+  sceneState.browserAnchorEntries.set(anchorEntryKey, entry);
   return entry;
 }
 
@@ -7835,10 +8056,19 @@ function reconcileBrowserAnchorEntries() {
       sessionId: String(session?.session_id ?? "").trim(),
       hostSessionId: String(session?.host_viewer_session_id ?? "").trim(),
     }));
-  const anchorSessions = [...browserAnchorSessions, ...gameAnchorSessions];
+  const anchorSessions = [];
+  const seenHosts = new Set();
+  for (const session of [...browserAnchorSessions, ...gameAnchorSessions]) {
+    const anchorEntryKey = getBrowserAnchorEntryKey(session);
+    if (!anchorEntryKey || seenHosts.has(anchorEntryKey)) {
+      continue;
+    }
+    seenHosts.add(anchorEntryKey);
+    anchorSessions.push(session);
+  }
   const activeAnchorIds = new Set(
     anchorSessions
-      .map((session) => String(session.sessionId ?? "").trim())
+      .map((session) => getBrowserAnchorEntryKey(session))
       .filter(Boolean),
   );
   for (const anchorSessionId of [...sceneState.browserAnchorEntries.keys()]) {
@@ -7847,7 +8077,7 @@ function reconcileBrowserAnchorEntries() {
     }
   }
   for (const session of anchorSessions) {
-    if (!activeAnchorIds.has(String(session.sessionId ?? "").trim())) {
+    if (!activeAnchorIds.has(getBrowserAnchorEntryKey(session))) {
       continue;
     }
     ensureBrowserAnchorEntry(session);
@@ -10017,6 +10247,90 @@ function getLocalBrowserSession() {
   return state.localBrowserSessionId ? state.browserSessions.get(state.localBrowserSessionId) ?? null : null;
 }
 
+function getLocalBrowserShare(sessionId = state.localBrowserSessionId) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  return normalizedSessionId ? state.localBrowserShares.get(normalizedSessionId) ?? null : null;
+}
+
+function getLocalBrowserDisplaySessions() {
+  return [...state.browserSessions.values()]
+    .filter((session) =>
+      session?.hostSessionId === state.viewerSessionId
+      && session?.sessionMode === "display-share"
+      && !isBrowserPersistentVoiceSession(session));
+}
+
+function getLocalBrowserDisplaySessionBySlot(sessionSlot = "") {
+  const normalizedSessionSlot = String(sessionSlot ?? "").trim().toLowerCase();
+  if (!normalizedSessionSlot) {
+    return null;
+  }
+  const sessionId = String(state.localBrowserSessionIdsBySlot.get(normalizedSessionSlot) ?? "").trim();
+  if (sessionId) {
+    return state.browserSessions.get(sessionId) ?? null;
+  }
+  return getLocalBrowserDisplaySessions().find((session) =>
+    getBrowserShareSessionSlot(session) === normalizedSessionSlot) ?? null;
+}
+
+function getPreferredLocalBrowserSessionId() {
+  const preferredSlots = ["display-screen", "display-av"];
+  for (const sessionSlot of preferredSlots) {
+    const session = getLocalBrowserDisplaySessionBySlot(sessionSlot);
+    if (session?.sessionId) {
+      return String(session.sessionId ?? "").trim();
+    }
+  }
+  const fallbackSession = getLocalBrowserDisplaySessions()
+    .sort((left, right) =>
+      Number(getBrowserShareSessionSlot(right) === "display-screen") - Number(getBrowserShareSessionSlot(left) === "display-screen")
+      || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
+      || String(left.sessionId ?? "").localeCompare(String(right.sessionId ?? "")))[0] ?? null;
+  return String(fallbackSession?.sessionId ?? "").trim();
+}
+
+function syncSelectedLocalBrowserShare() {
+  const preferredSessionId = getPreferredLocalBrowserSessionId();
+  if (!state.localBrowserSessionId || !state.browserSessions.has(state.localBrowserSessionId)) {
+    state.localBrowserSessionId = preferredSessionId;
+  }
+  if (
+    state.localBrowserSessionId
+    && !state.localBrowserShares.has(state.localBrowserSessionId)
+    && preferredSessionId
+  ) {
+    state.localBrowserSessionId = preferredSessionId;
+  }
+  state.localBrowserShare = getLocalBrowserShare(state.localBrowserSessionId);
+  return state.localBrowserShare;
+}
+
+function setSelectedLocalBrowserSession(sessionId = "") {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  state.localBrowserSessionId = normalizedSessionId || getPreferredLocalBrowserSessionId();
+  const nextShare = syncSelectedLocalBrowserShare();
+  const nextSession = getLocalBrowserSession();
+  state.browserMediaTransport = String(nextSession?.frameTransport ?? "").trim() || "jpeg-sequence";
+  if (nextShare?.hasVideo) {
+    setBrowserPreviewStream(nextShare.stream);
+    if (elements.browserVideo && nextSession?.sessionId) {
+      bindBrowserPanelVideoMetrics(nextSession.sessionId, elements.browserVideo);
+      setBrowserScreenVideo(nextSession.sessionId, elements.browserVideo);
+    }
+  } else {
+    setBrowserPreviewStream(null);
+    updateBrowserMediaVideoMetrics(null, "");
+  }
+  return nextShare;
+}
+
+function isKnownLocalBrowserShare(share = null) {
+  if (!share?.stream) {
+    return false;
+  }
+  return [...state.localBrowserShares.values()].some((entry) => entry?.stream === share.stream);
+}
+
 function isLiveKitBrowserTransport(frameTransport) {
   return String(frameTransport ?? "").startsWith("livekit");
 }
@@ -10271,12 +10585,14 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
 function updateBrowserPanel() {
   const signedIn = isPublicViewerSignedIn();
   const canShareNearby = Boolean(signedIn && state.realtimeConnected);
-  if (state.localBrowserShare && !isLocalDisplayShareActive(state.localBrowserShare)) {
-    const endedSessionId = String(state.localBrowserShare.sessionId ?? state.localBrowserSessionId ?? "").trim();
-    clearLocalBrowserShare({ stopTracks: false, sessionId: endedSessionId });
-    dropLocalBrowserSession(endedSessionId);
-    if (endedSessionId) {
-      state.realtimeClient?.stopBrowser(endedSessionId);
+  for (const [sessionId, localShare] of [...state.localBrowserShares.entries()]) {
+    if (isLocalDisplayShareActive(localShare)) {
+      continue;
+    }
+    clearLocalBrowserShare({ stopTracks: false, sessionId });
+    dropLocalBrowserSession(sessionId);
+    if (sessionId) {
+      state.realtimeClient?.stopBrowser(sessionId);
     }
   }
   if (state.localVoiceShare && !isLocalDisplayShareActive(state.localVoiceShare)) {
@@ -10290,13 +10606,16 @@ function updateBrowserPanel() {
   if (state.browserPanelRemoteSessionId && !state.browserSessions.has(state.browserPanelRemoteSessionId)) {
     state.browserPanelRemoteSessionId = "";
   }
+  syncSelectedLocalBrowserShare();
   const gameMode = state.browserShareMode === "game";
   if (gameMode) {
     updateGameSharePanel({ signedIn, canShareNearby });
+    renderLocalBrowserShareStack();
     return;
   }
   elements.browserPanel?.classList.remove("is-game-mode");
   const localSession = getLocalBrowserSession();
+  const localShare = getLocalBrowserShare();
   const localVoiceSession = getLocalVoiceSession();
   const joinTarget = getShareJoinTarget();
   const joinMode = Boolean(!localSession && joinTarget);
@@ -10307,19 +10626,15 @@ function updateBrowserPanel() {
   const draft = browserShareFeature.getDraft(localSession);
   const previewStream = state.pendingBrowserShare?.hasVideo
     ? state.pendingBrowserShare.stream
-    : state.localBrowserShare?.hasVideo
-      ? state.localBrowserShare.stream
+    : localShare?.hasVideo
+      ? localShare.stream
       : null;
-  const remotePanelSession = state.browserPanelRemoteSessionId
-    ? state.browserSessions.get(state.browserPanelRemoteSessionId) ?? null
-    : localSession
-      ? null
-      : [...state.browserSessions.values()].find(
-        (session) =>
-          session.hostSessionId !== state.viewerSessionId
-          && session.deliveryMode === "full"
-          && !isBrowserPersistentVoiceSession(session),
-      ) ?? null;
+  const remotePanelSession = localSession
+    ? null
+    : (() => {
+      const sessionId = getRemoteBrowserPanelSessionId();
+      return sessionId ? state.browserSessions.get(sessionId) ?? null : null;
+    })();
   const hasRemotePanelSession = Boolean(!previewStream && remotePanelSession);
   const remotePanelHasVisual = Boolean(remotePanelSession && remotePanelSession.hasVideo !== false);
   const needsManualPlaybackStart = Boolean(
@@ -10446,9 +10761,9 @@ function updateBrowserPanel() {
   } else if (isBrowserMemberSession(localSession)) {
     const anchorSession = resolveBrowserOriginSession(localSession);
     const anchorHostName = getPresenceDisplayNameForSessionId(anchorSession?.hostSessionId) || "nearby host";
-    const shareKind = getBrowserShareKindLabel(getBrowserSessionShareKind(localSession));
-    setBrowserStatus(
-      state.localBrowserShare?.sessionId === localSession.sessionId
+      const shareKind = getBrowserShareKindLabel(getBrowserSessionShareKind(localSession));
+      setBrowserStatus(
+      localShare?.sessionId === localSession.sessionId
         ? `Sharing ${shareKind.toLowerCase()} inside ${anchorHostName}'s nearby group.`
         : `Allow ${shareKind.toLowerCase()} access to contribute inside ${anchorHostName}'s nearby group.`,
     );
@@ -10461,7 +10776,7 @@ function updateBrowserPanel() {
   } else if (localSession.sessionMode === "display-share") {
     const presentation = getLocalDisplaySharePresentation({
       localSession,
-      localShare: state.localBrowserShare,
+      localShare,
       draft,
       audienceLabel: "nearby visitors",
       screenPrompt: "Share a tab or window to start the nearby stream.",
@@ -10529,6 +10844,7 @@ function updateBrowserPanel() {
     }
   }
   syncDisplayShareExpandButton(elements.browserExpand, state.browserOverlayOpen);
+  renderLocalBrowserShareStack();
 
   if (!elements.browserFrame || !elements.browserPlaceholder) {
     return;
@@ -10613,8 +10929,14 @@ function updateBrowserSessionState(sessionPatch) {
   if (next.hostSessionId === state.viewerSessionId) {
     if (isBrowserPersistentVoiceSession(next)) {
       state.localVoiceSessionId = next.sessionId;
-    } else {
-      state.localBrowserSessionId = next.sessionId;
+    } else if (next.sessionMode === "display-share") {
+      const sessionSlot = getBrowserShareSessionSlot(next);
+      if (sessionSlot) {
+        state.localBrowserSessionIdsBySlot.set(sessionSlot, next.sessionId);
+      }
+      if (!state.localBrowserSessionId || !state.browserSessions.has(state.localBrowserSessionId)) {
+        state.localBrowserSessionId = next.sessionId;
+      }
     }
     if (isLiveKitBrowserTransport(next.frameTransport) && state.meta?.worldSnapshotId) {
       void getBrowserMediaController().connect({
@@ -10627,7 +10949,12 @@ function updateBrowserSessionState(sessionPatch) {
       const pendingVoiceShare = state.pendingVoiceShare;
       state.pendingVoiceShare = null;
       attachLocalVoiceShare(next.sessionId, pendingVoiceShare);
-    } else if (next.sessionMode === "display-share" && state.pendingBrowserShare?.stream) {
+    } else if (
+      next.sessionMode === "display-share"
+      && state.pendingBrowserShare?.stream
+      && getBrowserShareSessionSlot(next) === getBrowserShareSessionSlot(state.pendingBrowserShare)
+      && !state.localBrowserShares.has(next.sessionId)
+    ) {
       const pendingShare = state.pendingBrowserShare;
       state.pendingBrowserShare = null;
       attachLocalBrowserShare(next.sessionId, pendingShare);
@@ -10636,6 +10963,7 @@ function updateBrowserSessionState(sessionPatch) {
       clearPendingShareJoinState();
     }
   }
+  syncSelectedLocalBrowserShare();
   reconcileBrowserScreens();
   reconcileBrowserAnchorEntries();
   if (
@@ -10658,7 +10986,12 @@ function handleBrowserStop(payload) {
   }
   if (hostSessionId && hostSessionId === state.viewerSessionId && sessionId === state.localVoiceSessionId) {
     clearPendingVoiceShare();
-  } else if (hostSessionId && hostSessionId === state.viewerSessionId) {
+  } else if (
+    hostSessionId
+    && hostSessionId === state.viewerSessionId
+    && state.pendingBrowserShare
+    && getBrowserShareSessionSlot(state.pendingBrowserShare) === getBrowserShareSessionSlot(state.browserSessions.get(sessionId) ?? {})
+  ) {
     clearPendingBrowserShare();
   }
   if (state.browserFocusSessionId === sessionId) {
@@ -10668,23 +11001,36 @@ function handleBrowserStop(payload) {
   clearLocalVoiceShare({ sessionId });
   clearBrowserScreenVideo(sessionId);
   dropLocalBrowserSession(sessionId);
-  if (state.pendingShareJoin?.anchorSessionId === sessionId) {
+  if (
+    state.pendingShareJoin?.anchorSessionId === sessionId
+    || (hostSessionId && state.pendingShareJoin?.anchorHostSessionId === hostSessionId)
+  ) {
     clearPendingShareJoinState();
   }
   if (state.pendingShareJoinCancellationAnchorSessionId === sessionId) {
     state.pendingShareJoinCancellationAnchorSessionId = "";
   }
-  if (state.pendingVoiceJoin?.anchorSessionId === sessionId) {
+  if (
+    state.pendingVoiceJoin?.anchorSessionId === sessionId
+    || (hostSessionId && state.pendingVoiceJoin?.anchorHostSessionId === hostSessionId)
+  ) {
     clearPendingVoiceJoinState();
   }
   if (state.pendingVoiceJoinCancellationAnchorSessionId === sessionId) {
     state.pendingVoiceJoinCancellationAnchorSessionId = "";
   }
-  if (state.voiceJoinOffer?.anchorSessionId === sessionId) {
+  if (
+    state.voiceJoinOffer?.anchorSessionId === sessionId
+    || (hostSessionId && state.voiceJoinOffer?.anchorHostSessionId === hostSessionId)
+  ) {
     state.voiceJoinOffer = null;
   }
-  state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) => request.anchorSessionId !== sessionId);
-  state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) => request.anchorSessionId !== sessionId);
+  state.incomingShareJoinRequests = state.incomingShareJoinRequests.filter((request) =>
+    request.anchorSessionId !== sessionId
+    && (!hostSessionId || request.anchorHostSessionId !== hostSessionId));
+  state.incomingVoiceJoinRequests = state.incomingVoiceJoinRequests.filter((request) =>
+    request.anchorSessionId !== sessionId
+    && (!hostSessionId || request.anchorHostSessionId !== hostSessionId));
   updateBrowserPanel();
   renderLiveSharesList();
 }

@@ -100,6 +100,37 @@ test("display-share sessions skip Playwright and use livekit-display transport",
   assert.equal(session.title, "Shared tab");
 });
 
+test("display-share sessions split screen and av slots per host", async () => {
+  const manager = new BrowserSessionManager({
+    allowedHosts: ["*"],
+    liveKitConfig: {
+      liveKitUrl: "https://livekit.example.com",
+      liveKitApiKey: "key",
+      liveKitApiSecret: "secret",
+    },
+  });
+
+  const screenSession = await manager.startSession({
+    hostSessionId: "viewer_host",
+    worldSnapshotId: "world_current",
+    mode: "display-share",
+    shareKind: "screen",
+    title: "Screen",
+  });
+  const cameraSession = await manager.startSession({
+    hostSessionId: "viewer_host",
+    worldSnapshotId: "world_current",
+    mode: "display-share",
+    shareKind: "camera",
+    title: "Camera",
+  });
+
+  assert.equal(screenSession.sessionSlot, "display-screen");
+  assert.equal(cameraSession.sessionSlot, "display-av");
+  assert.notEqual(screenSession.sessionId, cameraSession.sessionId);
+  assert.equal(manager.listSessionsForHost("viewer_host").length, 2);
+});
+
 test("shared browser schedules an interaction capture after pointer input", async () => {
   const manager = new BrowserSessionManager({
     allowedHosts: ["*"],

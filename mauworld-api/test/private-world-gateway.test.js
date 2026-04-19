@@ -1236,3 +1236,255 @@ test("private persistent voice acceptance notifies the anchor host", async () =>
     true,
   );
 });
+
+test("private host can run screen, camera, and game at the same time", async () => {
+  const gateway = createGateway({
+    async getWorldGame() {
+      return {
+        game: {
+          id: "game_1",
+          owner_profile_id: "profile_profile:host",
+          title: "Chess",
+          prompt: "make chess",
+          source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+          manifest: {
+            title: "Chess",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+          },
+        },
+      };
+    },
+  });
+  gateway.rebalanceGameSessions = async () => {};
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+
+  const startedSessions = [];
+  gateway.browserManager.listSessionsForHost = () => [];
+  gateway.browserManager.startSession = async (input) => {
+    startedSessions.push({ ...input });
+    return {
+      sessionId: `browser_${startedSessions.length}`,
+      id: `browser_${startedSessions.length}`,
+      subscribers: new Set([host.viewerSessionId]),
+      ...input,
+    };
+  };
+  gateway.broadcastBrowserSession = async () => {};
+
+  await gateway.handleBrowserStart(host, {
+    mode: "display-share",
+    title: "Main screen",
+    shareKind: "screen",
+    hasVideo: true,
+    hasAudio: false,
+  });
+  await gateway.handleBrowserStart(host, {
+    mode: "display-share",
+    title: "Cam",
+    shareKind: "camera",
+    hasVideo: true,
+    hasAudio: true,
+  });
+  await gateway.handleGameStartShare(host, { gameId: "game_1" });
+
+  assert.equal(startedSessions.length, 2);
+  assert.equal(startedSessions[0]?.sessionSlot, "display-screen");
+  assert.equal(startedSessions[1]?.sessionSlot, "display-av");
+  assert.equal(gateway.gameShares.listSessionsForBinding(host.browserWorldKey).length, 1);
+});
+
+test("private camera start stops persistent voice, but screen start leaves it running", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+
+  const voiceSession = {
+    id: "voice_session",
+    sessionId: "voice_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    sessionSlot: "persistent-voice",
+    shareKind: "audio",
+    groupRole: "origin",
+    listedLive: false,
+    subscribers: new Set([host.viewerSessionId]),
+  };
+  const stopped = [];
+  gateway.browserManager.getSessionByHost = (_hostSessionId, options = {}) =>
+    options.sessionSlot === "persistent-voice" ? voiceSession : null;
+  gateway.browserManager.listSessionsForHost = () => [];
+  gateway.browserManager.stopSession = async (sessionId) => {
+    stopped.push(sessionId);
+  };
+  gateway.browserManager.startSession = async (input) => ({
+    sessionId: `started_${input.shareKind}`,
+    id: `started_${input.shareKind}`,
+    subscribers: new Set([host.viewerSessionId]),
+    ...input,
+  });
+  gateway.broadcastBrowserSession = async () => {};
+
+  await gateway.handleBrowserStart(host, {
+    mode: "display-share",
+    title: "Only screen",
+    shareKind: "screen",
+    hasVideo: true,
+    hasAudio: false,
+  });
+  assert.deepEqual(stopped, []);
+
+  await gateway.handleBrowserStart(host, {
+    mode: "display-share",
+    title: "Cam",
+    shareKind: "camera",
+    hasVideo: true,
+    hasAudio: true,
+  });
+  assert.deepEqual(stopped, ["voice_session"]);
+});
+
+test("private persistent voice stops display-av, keeps screen, and can coexist with game", async () => {
+  const gateway = createGateway({
+    async getWorldGame() {
+      return {
+        game: {
+          id: "game_2",
+          owner_profile_id: "profile_profile:host",
+          title: "Checkers",
+          prompt: "make checkers",
+          source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+          manifest: {
+            title: "Checkers",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+          },
+        },
+      };
+    },
+  });
+  gateway.rebalanceGameSessions = async () => {};
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+
+  const screenSession = {
+    id: "screen_session",
+    sessionId: "screen_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    sessionSlot: "display-screen",
+    shareKind: "screen",
+  };
+  const avSession = {
+    id: "camera_session",
+    sessionId: "camera_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    sessionSlot: "display-av",
+    shareKind: "camera",
+  };
+  const stopped = [];
+  gateway.browserManager.listSessionsForHost = () => [screenSession, avSession];
+  gateway.browserManager.getSessionByHost = () => null;
+  gateway.browserManager.stopSession = async (sessionId) => {
+    stopped.push(sessionId);
+  };
+  gateway.browserManager.startSession = async (input) => ({
+    sessionId: `voice_${input.sessionSlot}`,
+    id: `voice_${input.sessionSlot}`,
+    subscribers: new Set([host.viewerSessionId]),
+    ...input,
+  });
+  gateway.broadcastBrowserSession = async () => {};
+
+  await gateway.handleVoiceStart(host);
+  await gateway.handleGameStartShare(host, { gameId: "game_2" });
+
+  assert.deepEqual(stopped, ["camera_session"]);
+  assert.equal(gateway.gameShares.listSessionsForBinding(host.browserWorldKey).length, 1);
+});
+
+test("private host-based join approval works across multiple live rows", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const requester = createClient({
+    viewerSessionId: "profile:requester",
+    displayName: "requester",
+    position: { x: 16, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(requester);
+
+  const screenSession = {
+    id: "screen_session",
+    sessionId: "screen_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    sessionSlot: "display-screen",
+    shareKind: "screen",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([host.viewerSessionId]),
+  };
+  const cameraSession = {
+    id: "camera_session",
+    sessionId: "camera_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    sessionMode: "display-share",
+    sessionSlot: "display-av",
+    shareKind: "camera",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([host.viewerSessionId]),
+  };
+  gateway.browserManager.listSessionsForWorld = () => [screenSession, cameraSession];
+  gateway.browserManager.listSessionsForHost = (viewerSessionId) =>
+    viewerSessionId === host.viewerSessionId ? [screenSession, cameraSession] : [];
+  gateway.browserManager.getSession = (sessionId) => {
+    if (sessionId === screenSession.id) {
+      return screenSession;
+    }
+    if (sessionId === cameraSession.id) {
+      return cameraSession;
+    }
+    return null;
+  };
+
+  await gateway.handleShareJoinRequest(requester, {
+    anchorSessionId: screenSession.id,
+    shareKind: "screen",
+  });
+  await gateway.handleShareJoinDecision(host, {
+    anchorSessionId: cameraSession.id,
+    requesterSessionId: requester.viewerSessionId,
+    approved: true,
+  });
+
+  const resolved = requester.socket.sent.find((message) => message.type === "share:join-resolved" && message.approved === true);
+  assert.equal(resolved?.anchorHostSessionId, host.viewerSessionId);
+  assert.equal(resolved?.anchorSessionId, cameraSession.id);
+});

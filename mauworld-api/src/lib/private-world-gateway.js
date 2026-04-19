@@ -3,6 +3,7 @@ import { BrowserSessionManager } from "./browser-session-manager.js";
 import { GameShareManager } from "./game-share-manager.js";
 import {
   findNearestOriginSession,
+  getAnchorHostSessionId,
   getAnchorSessionId,
   isJoinedPersistentVoiceSession,
   isListedLiveSession,
@@ -353,8 +354,32 @@ export class PrivateWorldGateway {
     return this.getBrowserWorldClients(browserWorldKey).find((client) => client.viewerSessionId === target) ?? null;
   }
 
-  getHostedDisplaySession(viewerSessionId) {
-    return this.browserManager.getSessionByHost(viewerSessionId, { sessionSlot: "display-share" });
+  getDisplaySessionSlot(shareKind = "") {
+    const normalizedShareKind = String(shareKind ?? "").trim().toLowerCase();
+    return normalizedShareKind === "camera" || normalizedShareKind === "audio"
+      ? "display-av"
+      : "display-screen";
+  }
+
+  getHostedDisplaySessions(viewerSessionId, options = {}) {
+    const sessionSlot = String(options.sessionSlot ?? "").trim().toLowerCase();
+    const browserWorldKey = String(options.browserWorldKey ?? "").trim();
+    return this.browserManager.listSessionsForHost(viewerSessionId)
+      .filter((session) =>
+        session?.sessionMode === "display-share"
+        && !isPersistentVoiceSession(session)
+        && (!sessionSlot || String(session.sessionSlot ?? "").trim().toLowerCase() === sessionSlot)
+        && (!browserWorldKey || String(session.worldSnapshotId ?? "").trim() === browserWorldKey));
+  }
+
+  getHostedDisplaySession(viewerSessionId, options = {}) {
+    const sessionSlot = options.sessionSlot
+      ? String(options.sessionSlot ?? "").trim().toLowerCase()
+      : (options.shareKind ? this.getDisplaySessionSlot(options.shareKind) : "");
+    return this.getHostedDisplaySessions(viewerSessionId, {
+      ...options,
+      sessionSlot,
+    })[0] ?? null;
   }
 
   getHostedPersistentVoiceSession(viewerSessionId) {
@@ -369,6 +394,77 @@ export class PrivateWorldGateway {
     for (const session of this.browserManager.listSessionsForHost(viewerSessionId)) {
       await this.browserManager.stopSession(session.id ?? session.sessionId);
     }
+  }
+
+  async stopHostedDisplaySessions(viewerSessionId, options = {}) {
+    const sessions = this.getHostedDisplaySessions(viewerSessionId, options);
+    for (const session of sessions) {
+      await this.browserManager.stopSession(session.id ?? session.sessionId);
+    }
+  }
+
+  async stopHostedVoiceVideoConflicts(viewerSessionId, shareKind, browserWorldKey = "") {
+    const normalizedShareKind = String(shareKind ?? "").trim().toLowerCase();
+    if (normalizedShareKind === "camera" || normalizedShareKind === "audio") {
+      const voiceSession = this.getHostedPersistentVoiceSession(viewerSessionId);
+      if (voiceSession && (!browserWorldKey || String(voiceSession.worldSnapshotId ?? "").trim() === browserWorldKey)) {
+        this.cancelVoiceJoinOffer(voiceSession, {
+          message: "Persistent voice chat stopped.",
+          notifyRequester: false,
+        });
+        this.clearVoiceJoinOffer(voiceSession.id ?? voiceSession.sessionId);
+        await this.browserManager.stopSession(voiceSession.id ?? voiceSession.sessionId);
+      }
+      return;
+    }
+    if (normalizedShareKind === "persistent-voice") {
+      await this.stopHostedDisplaySessions(viewerSessionId, {
+        browserWorldKey,
+        sessionSlot: "display-av",
+      });
+    }
+  }
+
+  getHostedDisplayOriginSessions(viewerSessionId, browserWorldKey = "") {
+    return this.getHostedDisplaySessions(viewerSessionId, { browserWorldKey })
+      .filter((session) => isOriginSession(session) && isListedLiveSession(session))
+      .sort((left, right) =>
+        Number(String(right.sessionSlot ?? "") === "display-screen") - Number(String(left.sessionSlot ?? "") === "display-screen")
+        || Date.parse(left.startedAt ?? 0) - Date.parse(right.startedAt ?? 0)
+        || String(left.sessionId ?? left.id ?? "").localeCompare(String(right.sessionId ?? right.id ?? "")));
+  }
+
+  getPreferredDisplayOriginSession(viewerSessionId, browserWorldKey = "") {
+    return this.getHostedDisplayOriginSessions(viewerSessionId, browserWorldKey)[0] ?? null;
+  }
+
+  resolveAnchorHostSessionId(anchorSessionId = "", anchorHostSessionId = "") {
+    const normalizedAnchorHostSessionId = String(anchorHostSessionId ?? "").trim();
+    if (normalizedAnchorHostSessionId) {
+      return normalizedAnchorHostSessionId;
+    }
+    const anchorSession = anchorSessionId
+      ? this.browserManager.getSession(anchorSessionId) ?? this.gameShares.getSession(anchorSessionId)
+      : null;
+    return String(
+      anchorSession?.hostSessionId
+      ?? anchorSession?.host_viewer_session_id
+      ?? anchorSession?.hostViewerSessionId
+      ?? "",
+    ).trim();
+  }
+
+  resolveBrowserAnchorSession(anchorSessionId = "", anchorHostSessionId = "", browserWorldKey = "") {
+    const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+    const directAnchorSession = normalizedAnchorSessionId ? this.browserManager.getSession(normalizedAnchorSessionId) : null;
+    if (directAnchorSession && isListedLiveSession(directAnchorSession)) {
+      return directAnchorSession;
+    }
+    const resolvedAnchorHostSessionId = this.resolveAnchorHostSessionId(normalizedAnchorSessionId, anchorHostSessionId);
+    if (!resolvedAnchorHostSessionId) {
+      return null;
+    }
+    return this.getPreferredDisplayOriginSession(resolvedAnchorHostSessionId, browserWorldKey);
   }
 
   getSessionHostClient(sessionLike) {
@@ -399,7 +495,15 @@ export class PrivateWorldGateway {
       return sessionLike;
     }
     const anchorSessionId = getAnchorSessionId(sessionLike);
-    return anchorSessionId ? this.browserManager.getSession(anchorSessionId) ?? null : null;
+    const directAnchorSession = anchorSessionId ? this.browserManager.getSession(anchorSessionId) ?? null : null;
+    if (directAnchorSession) {
+      return directAnchorSession;
+    }
+    return this.resolveBrowserAnchorSession(
+      anchorSessionId,
+      getAnchorHostSessionId(sessionLike),
+      String(sessionLike?.worldSnapshotId ?? "").trim(),
+    );
   }
 
   getGameSessionHostClient(sessionLike) {
@@ -467,8 +571,36 @@ export class PrivateWorldGateway {
     );
   }
 
-  getShareJoinKey(anchorSessionId, requesterSessionId) {
-    return `${String(anchorSessionId ?? "").trim()}:${String(requesterSessionId ?? "").trim()}`;
+  getShareJoinKey(anchorSessionId, requesterSessionId, anchorHostSessionId = "") {
+    const anchorKey = this.resolveAnchorHostSessionId(anchorSessionId, anchorHostSessionId)
+      || String(anchorSessionId ?? "").trim();
+    return `${anchorKey}:${String(requesterSessionId ?? "").trim()}`;
+  }
+
+  getShareJoinRequest(anchorSessionId, requesterSessionId, anchorHostSessionId = "") {
+    const keys = new Set([
+      this.getShareJoinKey(anchorSessionId, requesterSessionId, anchorHostSessionId),
+      this.getShareJoinKey(anchorSessionId, requesterSessionId),
+    ]);
+    for (const key of keys) {
+      const request = this.pendingShareJoinRequests.get(key);
+      if (request) {
+        return request;
+      }
+    }
+    return null;
+  }
+
+  deleteShareJoinRequest(anchorSessionId, requesterSessionId, anchorHostSessionId = "") {
+    const keys = new Set([
+      this.getShareJoinKey(anchorSessionId, requesterSessionId, anchorHostSessionId),
+      this.getShareJoinKey(anchorSessionId, requesterSessionId),
+    ]);
+    let deleted = false;
+    for (const key of keys) {
+      deleted = this.pendingShareJoinRequests.delete(key) || deleted;
+    }
+    return deleted;
   }
 
   pruneShareJoinApprovals() {
@@ -480,22 +612,38 @@ export class PrivateWorldGateway {
     }
   }
 
-  grantApprovedShareJoin(anchorSessionId, requesterSessionId, shareKind = "") {
-    this.approvedShareJoins.set(this.getShareJoinKey(anchorSessionId, requesterSessionId), {
+  grantApprovedShareJoin(anchorSessionId, requesterSessionId, shareKind = "", anchorHostSessionId = "") {
+    this.approvedShareJoins.set(this.getShareJoinKey(anchorSessionId, requesterSessionId, anchorHostSessionId), {
       anchorSessionId: String(anchorSessionId ?? "").trim(),
+      anchorHostSessionId: this.resolveAnchorHostSessionId(anchorSessionId, anchorHostSessionId),
       requesterSessionId: String(requesterSessionId ?? "").trim(),
       shareKind: String(shareKind ?? "").trim().toLowerCase(),
       expiresAt: Date.now() + 60_000,
     });
   }
 
-  hasApprovedShareJoin(anchorSessionId, requesterSessionId) {
+  hasApprovedShareJoin(anchorSessionId, requesterSessionId, anchorHostSessionId = "") {
     this.pruneShareJoinApprovals();
-    return this.approvedShareJoins.has(this.getShareJoinKey(anchorSessionId, requesterSessionId));
+    const keys = new Set([
+      this.getShareJoinKey(anchorSessionId, requesterSessionId, anchorHostSessionId),
+      this.getShareJoinKey(anchorSessionId, requesterSessionId),
+    ]);
+    for (const key of keys) {
+      if (this.approvedShareJoins.has(key)) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  clearApprovedShareJoin(anchorSessionId, requesterSessionId) {
-    this.approvedShareJoins.delete(this.getShareJoinKey(anchorSessionId, requesterSessionId));
+  clearApprovedShareJoin(anchorSessionId, requesterSessionId, anchorHostSessionId = "") {
+    const keys = new Set([
+      this.getShareJoinKey(anchorSessionId, requesterSessionId, anchorHostSessionId),
+      this.getShareJoinKey(anchorSessionId, requesterSessionId),
+    ]);
+    for (const key of keys) {
+      this.approvedShareJoins.delete(key);
+    }
   }
 
   sessionHasCapacity(session) {
@@ -570,8 +718,13 @@ export class PrivateWorldGateway {
         }
         : null;
     }
+    const requestedAnchorHostSessionId = String(options.anchorHostSessionId ?? "").trim();
     const anchorSession = requestedAnchorSessionId
-      ? this.browserManager.getSession(requestedAnchorSessionId)
+      ? this.resolveBrowserAnchorSession(
+        requestedAnchorSessionId,
+        requestedAnchorHostSessionId,
+        client.browserWorldKey,
+      )
       : this.getNearestOriginSessionForClient(client, client.browserWorldKey);
     const resolvedAnchor = anchorSession && !isOriginSession(anchorSession)
       ? this.getOriginSession(anchorSession)
@@ -884,8 +1037,10 @@ export class PrivateWorldGateway {
       }
       if (!anchorSession) {
         const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
+        const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
         anchorSession = requestedAnchorSessionId
           ? this.gameShares.getSession(requestedAnchorSessionId)
+            ?? this.getHostedGameSession(requestedAnchorHostSessionId, client.browserWorldKey)
           : this.getNearestOriginGameSessionForClient(client, client.browserWorldKey);
         if (anchorSession?.group_role === "member") {
           anchorSession = this.getGameOriginSession(anchorSession);
@@ -897,8 +1052,15 @@ export class PrivateWorldGateway {
       if (anchorSession && this.isClientWithinGameAnchorRadius(client, anchorSession)) {
         const alreadyJoinedAnchor =
           existingGameSession?.group_role === "member"
-          && String(existingGameSession.anchor_session_id ?? existingGameSession.anchorSessionId ?? "").trim() === String(anchorSession.id ?? anchorSession.session_id ?? "").trim();
-        if (!alreadyJoinedAnchor && !this.hasApprovedShareJoin(anchorSession.id ?? anchorSession.session_id, client.viewerSessionId)) {
+          && this.resolveAnchorHostSessionId(
+            String(existingGameSession.anchor_session_id ?? existingGameSession.anchorSessionId ?? "").trim(),
+            String(existingGameSession.anchor_host_session_id ?? existingGameSession.anchorHostSessionId ?? "").trim(),
+          ) === String(anchorSession.host_viewer_session_id ?? anchorSession.hostViewerSessionId ?? "").trim();
+        if (!alreadyJoinedAnchor && !this.hasApprovedShareJoin(
+          anchorSession.id ?? anchorSession.session_id,
+          client.viewerSessionId,
+          anchorSession.host_viewer_session_id ?? anchorSession.hostViewerSessionId,
+        )) {
           sendJson(client, {
             type: "share:join-required",
             shareKind: "game",
@@ -930,7 +1092,11 @@ export class PrivateWorldGateway {
         game: payload.game,
       });
       if (groupRole === "member" && anchorSession) {
-        this.clearApprovedShareJoin(anchorSession.id ?? anchorSession.session_id, client.viewerSessionId);
+        this.clearApprovedShareJoin(
+          anchorSession.id ?? anchorSession.session_id,
+          client.viewerSessionId,
+          anchorSession.host_viewer_session_id ?? anchorSession.hostViewerSessionId,
+        );
       }
       this.broadcastGameSession(session);
       await this.rebalanceGameSessions(client.browserWorldKey);
@@ -1200,9 +1366,11 @@ export class PrivateWorldGateway {
       return;
     }
     const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
+    const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
     const shareKind = String(message.shareKind ?? "screen").trim().toLowerCase();
     const resolvedAnchor = this.resolveShareJoinAnchor(client, {
       anchorSessionId: requestedAnchorSessionId,
+      anchorHostSessionId: requestedAnchorHostSessionId,
       shareKind,
     });
     const anchorSession = resolvedAnchor?.anchorSession ?? null;
@@ -1231,9 +1399,16 @@ export class PrivateWorldGateway {
       return;
     }
     const normalizedAnchorSessionId = String(anchorSession.id ?? anchorSession.session_id ?? "").trim();
-    const key = this.getShareJoinKey(normalizedAnchorSessionId, client.viewerSessionId);
+    const anchorHostSessionId = String(
+      anchorSession.hostSessionId
+      ?? anchorSession.host_viewer_session_id
+      ?? anchorSession.hostViewerSessionId
+      ?? "",
+    ).trim();
+    const key = this.getShareJoinKey(normalizedAnchorSessionId, client.viewerSessionId, anchorHostSessionId);
     this.pendingShareJoinRequests.set(key, {
       anchorSessionId: normalizedAnchorSessionId,
+      anchorHostSessionId,
       requesterSessionId: client.viewerSessionId,
       shareKind,
       requestedAt: Date.now(),
@@ -1246,6 +1421,7 @@ export class PrivateWorldGateway {
       sendJson(anchorClient, {
         type: "share:join-request",
         anchorSessionId: normalizedAnchorSessionId,
+        anchorHostSessionId,
         requesterSessionId: client.viewerSessionId,
         requesterDisplayName: this.getClientDisplayName(client),
         shareKind,
@@ -1257,9 +1433,7 @@ export class PrivateWorldGateway {
     sendJson(client, {
       type: "share:join-requested",
       anchorSessionId: normalizedAnchorSessionId,
-      anchorHostSessionId: isGameAnchor
-        ? anchorSession.host_viewer_session_id
-        : anchorSession.hostSessionId,
+      anchorHostSessionId,
     });
   }
 
@@ -1268,24 +1442,32 @@ export class PrivateWorldGateway {
       return;
     }
     const anchorSessionId = String(message.anchorSessionId ?? "").trim();
-    if (!anchorSessionId) {
+    const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
+    if (!anchorSessionId && !requestedAnchorHostSessionId) {
       return;
     }
-    const key = this.getShareJoinKey(anchorSessionId, client.viewerSessionId);
-    const hadPendingRequest = this.pendingShareJoinRequests.delete(key);
-    this.clearApprovedShareJoin(anchorSessionId, client.viewerSessionId);
-    const anchorSession = this.browserManager.getSession(anchorSessionId) ?? this.gameShares.getSession(anchorSessionId);
-    const anchorHostSessionId = String(
-      anchorSession?.hostSessionId
-      ?? anchorSession?.host_viewer_session_id
-      ?? "",
-    ).trim();
+    const pendingRequest = this.getShareJoinRequest(
+      anchorSessionId,
+      client.viewerSessionId,
+      requestedAnchorHostSessionId,
+    );
+    const anchorHostSessionId = this.resolveAnchorHostSessionId(
+      anchorSessionId,
+      pendingRequest?.anchorHostSessionId || requestedAnchorHostSessionId,
+    );
+    const hadPendingRequest = this.deleteShareJoinRequest(
+      anchorSessionId,
+      client.viewerSessionId,
+      anchorHostSessionId,
+    );
+    this.clearApprovedShareJoin(anchorSessionId, client.viewerSessionId, anchorHostSessionId);
     if (hadPendingRequest && anchorHostSessionId) {
       const anchorClient = this.findBrowserClient(client.browserWorldKey, anchorHostSessionId);
       if (anchorClient) {
         sendJson(anchorClient, {
           type: "share:join-cancelled",
           anchorSessionId,
+          anchorHostSessionId,
           requesterSessionId: client.viewerSessionId,
         });
       }
@@ -1301,17 +1483,30 @@ export class PrivateWorldGateway {
 
   async handleShareJoinDecision(client, message) {
     const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
     const requesterSessionId = String(message.requesterSessionId ?? "").trim();
-    if (!anchorSessionId || !requesterSessionId) {
+    if ((!anchorSessionId && !requestedAnchorHostSessionId) || !requesterSessionId) {
       return;
     }
-    const key = this.getShareJoinKey(anchorSessionId, requesterSessionId);
-    const request = this.pendingShareJoinRequests.get(key);
+    const request = this.getShareJoinRequest(
+      anchorSessionId,
+      requesterSessionId,
+      requestedAnchorHostSessionId,
+    );
     if (!request) {
       return;
     }
-    this.pendingShareJoinRequests.delete(key);
-    const anchorSession = this.browserManager.getSession(anchorSessionId) ?? this.gameShares.getSession(anchorSessionId);
+    const requestAnchorHostSessionId = this.resolveAnchorHostSessionId(
+      anchorSessionId,
+      request.anchorHostSessionId || requestedAnchorHostSessionId,
+    );
+    this.deleteShareJoinRequest(anchorSessionId, requesterSessionId, requestAnchorHostSessionId);
+    const anchorSession = this.resolveBrowserAnchorSession(
+      anchorSessionId,
+      requestAnchorHostSessionId,
+      client.browserWorldKey,
+    ) ?? this.gameShares.getSession(anchorSessionId)
+      ?? this.getHostedGameSession(requestAnchorHostSessionId, client.browserWorldKey);
     const isGameAnchor = Boolean(anchorSession && "host_viewer_session_id" in anchorSession);
     const anchorHostSessionId = String(
       anchorSession?.hostSessionId
@@ -1337,14 +1532,19 @@ export class PrivateWorldGateway {
         ? this.gameSessionHasJoinCapacity(anchorSession)
         : this.sessionHasCapacity(anchorSession));
     if (approved) {
-      this.grantApprovedShareJoin(anchorSessionId, requesterSessionId, request.shareKind);
+      this.grantApprovedShareJoin(
+        String(anchorSession?.id ?? anchorSession?.session_id ?? anchorSessionId).trim(),
+        requesterSessionId,
+        request.shareKind,
+        anchorHostSessionId,
+      );
     } else {
-      this.clearApprovedShareJoin(anchorSessionId, requesterSessionId);
+      this.clearApprovedShareJoin(anchorSessionId, requesterSessionId, anchorHostSessionId);
     }
     sendJson(requesterClient, {
       type: "share:join-resolved",
       approved,
-      anchorSessionId,
+      anchorSessionId: String(anchorSession?.id ?? anchorSession?.session_id ?? anchorSessionId).trim(),
       anchorHostSessionId,
       anchorSession: isGameAnchor
         ? this.buildGameSessionContextPayload(anchorSession)
@@ -1358,28 +1558,41 @@ export class PrivateWorldGateway {
       return;
     }
     const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
     const memberSessionId = String(message.memberSessionId ?? "").trim();
-    if (!anchorSessionId || !memberSessionId) {
+    if ((!anchorSessionId && !requestedAnchorHostSessionId) || !memberSessionId) {
       return;
     }
-    const browserAnchorSession = this.browserManager.getSession(anchorSessionId);
+    const browserAnchorSession = this.resolveBrowserAnchorSession(
+      anchorSessionId,
+      requestedAnchorHostSessionId,
+      client.browserWorldKey,
+    );
     if (browserAnchorSession) {
       const memberSession = this.browserManager.getSession(memberSessionId);
       if (
         !isListedLiveSession(browserAnchorSession)
         || !memberSession
         || !isMemberSession(memberSession)
-        || getAnchorSessionId(memberSession) !== anchorSessionId
+        || this.resolveAnchorHostSessionId(
+          getAnchorSessionId(memberSession),
+          getAnchorHostSessionId(memberSession),
+        ) !== String(browserAnchorSession.hostSessionId ?? "").trim()
         || String(browserAnchorSession.hostSessionId ?? "").trim() !== client.viewerSessionId
       ) {
         return;
       }
-      this.clearApprovedShareJoin(anchorSessionId, memberSession.hostSessionId);
+      this.clearApprovedShareJoin(
+        anchorSessionId,
+        memberSession.hostSessionId,
+        String(browserAnchorSession.hostSessionId ?? "").trim(),
+      );
       const memberClient = this.findBrowserClient(client.browserWorldKey, memberSession.hostSessionId);
       if (memberClient) {
         sendJson(memberClient, {
           type: "share:kicked",
-          anchorSessionId,
+          anchorSessionId: String(browserAnchorSession.id ?? browserAnchorSession.sessionId ?? anchorSessionId).trim(),
+          anchorHostSessionId: String(browserAnchorSession.hostSessionId ?? "").trim(),
           memberSessionId,
           message: "The original sharer stopped your contributor share. Ask again to rejoin.",
         });
@@ -1387,7 +1600,8 @@ export class PrivateWorldGateway {
       await this.browserManager.stopSession(memberSession.id ?? memberSession.sessionId);
       return;
     }
-    const gameAnchorSession = this.gameShares.getSession(anchorSessionId);
+    const gameAnchorSession = this.gameShares.getSession(anchorSessionId)
+      ?? this.getHostedGameSession(requestedAnchorHostSessionId, client.browserWorldKey);
     const memberGameSession = this.gameShares.getSession(memberSessionId);
     if (
       !gameAnchorSession
@@ -1395,17 +1609,25 @@ export class PrivateWorldGateway {
       || gameAnchorSession.listed_live === false
       || String(gameAnchorSession.group_role ?? "").trim().toLowerCase() !== "origin"
       || String(memberGameSession.group_role ?? "").trim().toLowerCase() !== "member"
-      || String(memberGameSession.anchor_session_id ?? memberGameSession.anchorSessionId ?? "").trim() !== anchorSessionId
+      || this.resolveAnchorHostSessionId(
+        String(memberGameSession.anchor_session_id ?? memberGameSession.anchorSessionId ?? "").trim(),
+        String(memberGameSession.anchor_host_session_id ?? memberGameSession.anchorHostSessionId ?? "").trim(),
+      ) !== String(gameAnchorSession.host_viewer_session_id ?? gameAnchorSession.hostViewerSessionId ?? "").trim()
       || String(gameAnchorSession.host_viewer_session_id ?? gameAnchorSession.hostViewerSessionId ?? "").trim() !== client.viewerSessionId
     ) {
       return;
     }
-    this.clearApprovedShareJoin(anchorSessionId, memberGameSession.host_viewer_session_id);
+    this.clearApprovedShareJoin(
+      anchorSessionId,
+      memberGameSession.host_viewer_session_id,
+      String(gameAnchorSession.host_viewer_session_id ?? gameAnchorSession.hostViewerSessionId ?? "").trim(),
+    );
     const memberClient = this.findBrowserClient(client.browserWorldKey, memberGameSession.host_viewer_session_id);
     if (memberClient) {
       sendJson(memberClient, {
         type: "share:kicked",
-        anchorSessionId,
+        anchorSessionId: String(gameAnchorSession.id ?? gameAnchorSession.session_id ?? anchorSessionId).trim(),
+        anchorHostSessionId: String(gameAnchorSession.host_viewer_session_id ?? gameAnchorSession.hostViewerSessionId ?? "").trim(),
         memberSessionId,
         message: "The original sharer stopped your contributor share. Ask again to rejoin.",
       });
@@ -1433,11 +1655,13 @@ export class PrivateWorldGateway {
       return false;
     }
     const anchorSessionId = String(offer.anchorSessionId ?? "").trim();
+    const anchorHostSessionId = this.resolveAnchorHostSessionId(
+      anchorSessionId,
+      offer.anchorHostSessionId,
+    );
     const requesterSessionId = String(sessionLike?.hostSessionId ?? "").trim();
     const browserWorldKey = String(sessionLike?.worldSnapshotId ?? "").trim();
-    const anchorSession = anchorSessionId ? this.browserManager.getSession(anchorSessionId) : null;
-    const anchorHostSessionId = String(anchorSession?.hostSessionId ?? "").trim();
-    this.clearApprovedShareJoin(anchorSessionId, requesterSessionId);
+    this.clearApprovedShareJoin(anchorSessionId, requesterSessionId, anchorHostSessionId);
     this.clearVoiceJoinOffer(sessionId);
     if (notifyAnchor && anchorHostSessionId) {
       const anchorClient = this.findBrowserClient(browserWorldKey, anchorHostSessionId);
@@ -1445,6 +1669,7 @@ export class PrivateWorldGateway {
         sendJson(anchorClient, {
           type: "voice:join-cancelled",
           anchorSessionId,
+          anchorHostSessionId,
           requesterSessionId,
         });
       }
@@ -1473,6 +1698,7 @@ export class PrivateWorldGateway {
       return;
     }
     try {
+      await this.stopHostedVoiceVideoConflicts(client.viewerSessionId, "persistent-voice", client.browserWorldKey);
       const session = await this.browserManager.startSession({
         hostSessionId: client.viewerSessionId,
         worldSnapshotId: client.browserWorldKey,
@@ -1528,7 +1754,12 @@ export class PrivateWorldGateway {
     }
     const offer = this.voiceJoinOffers.get(voiceSession.id ?? voiceSession.sessionId);
     const anchorSessionId = String(message.anchorSessionId ?? "").trim();
-    if (!offer || offer.anchorSessionId !== anchorSessionId) {
+    const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
+    if (
+      !offer
+      || this.resolveAnchorHostSessionId(offer.anchorSessionId, offer.anchorHostSessionId)
+        !== this.resolveAnchorHostSessionId(anchorSessionId, requestedAnchorHostSessionId)
+    ) {
       return;
     }
     if (message.accepted !== true) {
@@ -1537,17 +1768,23 @@ export class PrivateWorldGateway {
         type: "voice:join-resolved",
         approved: false,
         anchorSessionId,
+        anchorHostSessionId: this.resolveAnchorHostSessionId(anchorSessionId, offer.anchorHostSessionId),
         message: "Stayed in standalone voice chat.",
       });
       return;
     }
-    const anchorSession = this.browserManager.getSession(anchorSessionId);
+    const anchorSession = this.resolveBrowserAnchorSession(
+      anchorSessionId,
+      offer.anchorHostSessionId || requestedAnchorHostSessionId,
+      client.browserWorldKey,
+    );
     if (!anchorSession || !isListedLiveSession(anchorSession)) {
       this.clearVoiceJoinOffer(voiceSession.id ?? voiceSession.sessionId);
       sendJson(client, {
         type: "voice:join-resolved",
         approved: false,
         anchorSessionId,
+        anchorHostSessionId: this.resolveAnchorHostSessionId(anchorSessionId, offer.anchorHostSessionId),
         message: "That nearby live session is no longer available.",
       });
       return;
@@ -1559,22 +1796,26 @@ export class PrivateWorldGateway {
         type: "voice:join-resolved",
         approved: false,
         anchorSessionId,
+        anchorHostSessionId: String(anchorSession.hostSessionId ?? "").trim(),
         message: "That nearby live session is no longer available.",
       });
       return;
     }
     offer.state = "pending-origin";
+    offer.anchorSessionId = String(anchorSession.id ?? anchorSession.sessionId ?? anchorSessionId).trim();
+    offer.anchorHostSessionId = String(anchorSession.hostSessionId ?? "").trim();
     sendJson(anchorClient, {
       type: "voice:join-request",
-      anchorSessionId,
+      anchorSessionId: offer.anchorSessionId,
+      anchorHostSessionId: offer.anchorHostSessionId,
       requesterSessionId: client.viewerSessionId,
       requesterDisplayName: this.getClientDisplayName(client),
       sessionId: voiceSession.id ?? voiceSession.sessionId,
     });
     sendJson(client, {
       type: "voice:join-requested",
-      anchorSessionId,
-      anchorHostSessionId: anchorSession.hostSessionId,
+      anchorSessionId: offer.anchorSessionId,
+      anchorHostSessionId: offer.anchorHostSessionId,
       anchorSession: this.buildSessionContextPayload(anchorSession),
     });
   }
@@ -1588,11 +1829,17 @@ export class PrivateWorldGateway {
       return;
     }
     const anchorSessionId = String(message.anchorSessionId ?? "").trim();
-    if (!anchorSessionId) {
+    const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
+    if (!anchorSessionId && !requestedAnchorHostSessionId) {
       return;
     }
     const offer = this.voiceJoinOffers.get(voiceSession.id ?? voiceSession.sessionId);
-    if (!offer || offer.anchorSessionId !== anchorSessionId || offer.state === "joined") {
+    if (
+      !offer
+      || this.resolveAnchorHostSessionId(offer.anchorSessionId, offer.anchorHostSessionId)
+        !== this.resolveAnchorHostSessionId(anchorSessionId, requestedAnchorHostSessionId)
+      || offer.state === "joined"
+    ) {
       return;
     }
     this.cancelVoiceJoinOffer(voiceSession, {
@@ -1603,21 +1850,31 @@ export class PrivateWorldGateway {
 
   async handleVoiceJoinDecision(client, message) {
     const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
     const requesterSessionId = String(message.requesterSessionId ?? "").trim();
-    if (!anchorSessionId || !requesterSessionId) {
+    if ((!anchorSessionId && !requestedAnchorHostSessionId) || !requesterSessionId) {
       return;
     }
-    const anchorSession = this.browserManager.getSession(anchorSessionId);
+    const voiceSession = this.getHostedPersistentVoiceSession(requesterSessionId);
+    const offer = voiceSession
+      ? this.voiceJoinOffers.get(voiceSession.id ?? voiceSession.sessionId)
+      : null;
+    const anchorSession = this.resolveBrowserAnchorSession(
+      anchorSessionId,
+      offer?.anchorHostSessionId || requestedAnchorHostSessionId,
+      client.browserWorldKey,
+    );
     if (!anchorSession || !isListedLiveSession(anchorSession) || anchorSession.hostSessionId !== client.viewerSessionId) {
       return;
     }
     const requesterClient = this.findBrowserClient(client.browserWorldKey, requesterSessionId);
-    const voiceSession = this.getHostedPersistentVoiceSession(requesterSessionId);
     if (!requesterClient || !voiceSession) {
       return;
     }
-    const offer = this.voiceJoinOffers.get(voiceSession.id ?? voiceSession.sessionId);
-    if (!offer || offer.anchorSessionId !== anchorSessionId) {
+    if (
+      !offer
+      || this.resolveAnchorHostSessionId(offer.anchorSessionId, offer.anchorHostSessionId) !== String(anchorSession.hostSessionId ?? "").trim()
+    ) {
       return;
     }
     const approved = message.approved === true
@@ -1625,14 +1882,23 @@ export class PrivateWorldGateway {
       && this.sessionHasCapacity(anchorSession);
     offer.state = approved ? "joined" : "denied";
     if (approved) {
-      this.grantApprovedShareJoin(anchorSessionId, requesterSessionId, "audio");
+      this.grantApprovedShareJoin(
+        String(anchorSession.id ?? anchorSession.sessionId ?? anchorSessionId).trim(),
+        requesterSessionId,
+        "audio",
+        String(anchorSession.hostSessionId ?? "").trim(),
+      );
     } else {
-      this.clearApprovedShareJoin(anchorSessionId, requesterSessionId);
+      this.clearApprovedShareJoin(
+        anchorSessionId,
+        requesterSessionId,
+        String(anchorSession.hostSessionId ?? "").trim(),
+      );
     }
     sendJson(requesterClient, {
       type: "voice:join-resolved",
       approved,
-      anchorSessionId,
+      anchorSessionId: String(anchorSession.id ?? anchorSession.sessionId ?? anchorSessionId).trim(),
       anchorHostSessionId: anchorSession.hostSessionId,
       message: approved ? "Voice joined the nearby live group." : "Voice join request declined.",
     });
@@ -1728,12 +1994,18 @@ export class PrivateWorldGateway {
     }
     try {
       const sessionMode = String(message.mode ?? "").trim() === "display-share" ? "display-share" : "remote-browser";
-      const existingDisplaySession = this.getHostedDisplaySession(client.viewerSessionId);
+      const shareKind = String(message.shareKind ?? "screen").trim().toLowerCase();
+      const displaySessionSlot = this.getDisplaySessionSlot(shareKind);
+      const existingDisplaySessions = this.getHostedDisplaySessions(client.viewerSessionId, {
+        browserWorldKey: client.browserWorldKey,
+      });
+      const existingMemberSession = existingDisplaySessions.find((session) => isMemberSession(session)) ?? null;
       let groupRole = "origin";
       let anchorSession = null;
       if (sessionMode === "display-share") {
-        if (existingDisplaySession && isMemberSession(existingDisplaySession)) {
-          const existingAnchorSession = this.getOriginSession(existingDisplaySession);
+        await this.stopHostedVoiceVideoConflicts(client.viewerSessionId, shareKind, client.browserWorldKey);
+        if (existingMemberSession) {
+          const existingAnchorSession = this.getOriginSession(existingMemberSession);
           if (existingAnchorSession && this.isClientWithinAnchorRadius(client, existingAnchorSession)) {
             anchorSession = existingAnchorSession;
             groupRole = "member";
@@ -1741,8 +2013,13 @@ export class PrivateWorldGateway {
         }
         if (!anchorSession) {
           const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
+          const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
           anchorSession = requestedAnchorSessionId
-            ? this.browserManager.getSession(requestedAnchorSessionId)
+            ? this.resolveBrowserAnchorSession(
+              requestedAnchorSessionId,
+              requestedAnchorHostSessionId,
+              client.browserWorldKey,
+            )
             : this.getNearestOriginSessionForClient(client, client.browserWorldKey);
           if (anchorSession && !isOriginSession(anchorSession)) {
             anchorSession = this.getOriginSession(anchorSession);
@@ -1753,10 +2030,13 @@ export class PrivateWorldGateway {
         }
         if (anchorSession && this.isClientWithinAnchorRadius(client, anchorSession)) {
           const alreadyJoinedAnchor =
-            existingDisplaySession
-            && isMemberSession(existingDisplaySession)
-            && getAnchorSessionId(existingDisplaySession) === anchorSession.id;
-          if (!alreadyJoinedAnchor && !this.hasApprovedShareJoin(anchorSession.id, client.viewerSessionId)) {
+            existingDisplaySessions.some((session) =>
+              isMemberSession(session)
+              && this.resolveAnchorHostSessionId(
+                getAnchorSessionId(session),
+                getAnchorHostSessionId(session),
+              ) === String(anchorSession.hostSessionId ?? "").trim());
+          if (!alreadyJoinedAnchor && !this.hasApprovedShareJoin(anchorSession.id, client.viewerSessionId, anchorSession.hostSessionId)) {
             sendJson(client, {
               type: "share:join-required",
               anchorSessionId: anchorSession.id,
@@ -1782,7 +2062,7 @@ export class PrivateWorldGateway {
         aspectRatio: message.aspectRatio,
         displaySurface: message.displaySurface,
         groupRole,
-        sessionSlot: sessionMode === "display-share" ? "display-share" : "remote-browser",
+        sessionSlot: sessionMode === "display-share" ? displaySessionSlot : "remote-browser",
         listedLive: groupRole === "origin",
         movementLocked: groupRole === "origin",
         anchorSessionId: anchorSession?.id ?? "",
@@ -1793,7 +2073,7 @@ export class PrivateWorldGateway {
         internal.subscribers = internal.subscribers ?? new Set();
       }
       if (groupRole === "member" && anchorSession) {
-        this.clearApprovedShareJoin(anchorSession.id, client.viewerSessionId);
+        this.clearApprovedShareJoin(anchorSession.id, client.viewerSessionId, anchorSession.hostSessionId);
       }
       await this.broadcastBrowserSession(session);
     } catch (error) {
@@ -1921,7 +2201,11 @@ export class PrivateWorldGateway {
         continue;
       }
       const offer = this.voiceJoinOffers.get(sessionId) ?? null;
-      const offeredAnchor = offer?.anchorSessionId ? this.browserManager.getSession(offer.anchorSessionId) : null;
+      const offeredAnchor = this.resolveBrowserAnchorSession(
+        offer?.anchorSessionId,
+        offer?.anchorHostSessionId,
+        browserWorldKey,
+      );
       const stillInOfferedRange = offeredAnchor ? this.isClientWithinAnchorRadius(hostClient, offeredAnchor) : false;
 
       if (isJoinedPersistentVoiceSession(session)) {
@@ -1954,11 +2238,17 @@ export class PrivateWorldGateway {
         continue;
       }
       const currentOffer = this.voiceJoinOffers.get(sessionId);
-      if (currentOffer?.anchorSessionId === nearestOrigin.id) {
+      if (
+        this.resolveAnchorHostSessionId(
+          currentOffer?.anchorSessionId,
+          currentOffer?.anchorHostSessionId,
+        ) === String(nearestOrigin.hostSessionId ?? "").trim()
+      ) {
         continue;
       }
       this.voiceJoinOffers.set(sessionId, {
         anchorSessionId: nearestOrigin.id,
+        anchorHostSessionId: String(nearestOrigin.hostSessionId ?? "").trim(),
         state: "offered",
       });
       sendJson(hostClient, {

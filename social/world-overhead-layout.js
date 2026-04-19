@@ -33,3 +33,19 @@ export function getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds =
       + Math.sin(elapsedSeconds * SHARED_BROWSER_SHARE_LAYOUT.placeholderBobFrequency)
         * SHARED_BROWSER_SHARE_LAYOUT.placeholderBobAmplitude;
 }
+
+export function getSharedNearbyLaneOffset(input = {}) {
+  const sessionSlot = String(input?.sessionSlot ?? "").trim().toLowerCase();
+  const shareKind = String(input?.shareKind ?? "").trim().toLowerCase();
+  const laneWidth = SHARED_BROWSER_SHARE_LAYOUT.screenWidth * 0.92;
+  if (shareKind === "game") {
+    return { x: laneWidth, y: 0, z: 0 };
+  }
+  if (sessionSlot === "persistent-voice") {
+    return { x: -laneWidth * 0.38, y: 0, z: 0 };
+  }
+  if (sessionSlot === "display-av" || shareKind === "camera" || shareKind === "audio") {
+    return { x: -laneWidth, y: 0, z: 0 };
+  }
+  return { x: 0, y: 0, z: 0 };
+}

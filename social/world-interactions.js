@@ -28,6 +28,25 @@ export function normalizeBrowserShareKind(rawKind, fallback = "screen") {
   return fallback;
 }
 
+export function getBrowserShareSessionSlot(input = {}) {
+  const shareKind = typeof input === "string"
+    ? normalizeBrowserShareKind(input, "screen")
+    : normalizeBrowserShareKind(input?.shareKind, "screen");
+  const explicitSessionSlot = typeof input === "string"
+    ? ""
+    : String(input?.sessionSlot ?? "").trim().toLowerCase();
+  if (explicitSessionSlot === "persistent-voice") {
+    return "persistent-voice";
+  }
+  if (shareKind === "camera" || shareKind === "audio") {
+    return "display-av";
+  }
+  if (shareKind === "screen") {
+    return "display-screen";
+  }
+  return "";
+}
+
 export function getDisplayShareLabel(videoTrack) {
   const settings = videoTrack?.getSettings?.() ?? {};
   const displaySurface = String(settings.displaySurface ?? "").trim().toLowerCase();
@@ -1096,7 +1115,8 @@ export function createNearbyDisplayShareFeature(options = {}) {
       fallbackWidth: fallbackSize.width,
       fallbackHeight: fallbackSize.height,
       isPendingShare: (share) => options.getPendingShare?.()?.stream === share.stream,
-      isLocalShare: (share) => options.getLocalShare?.()?.stream === share.stream,
+      isLocalShare: (share) => options.isLocalShare?.(share) === true
+        || options.getLocalShare?.()?.stream === share.stream,
       onEndedWhilePending() {
         options.clearPendingShare?.({ stopTracks: false });
         options.updateView?.();
