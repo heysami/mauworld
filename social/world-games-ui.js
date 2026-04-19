@@ -1693,7 +1693,9 @@ export function createWorldGameShell(options = {}) {
         return;
       }
       state.lastPreviewSentAt = now;
-      options.onPreview?.(sessionId, cloneJson(payload.preview));
+      options.onPreview?.(sessionId, cloneJson(payload.preview), {
+        reason: String(payload.reason ?? "").trim(),
+      });
       if (state.pendingHide && isFinalHidePreview) {
         finalizeHide();
       }

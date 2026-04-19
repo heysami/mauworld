@@ -43,7 +43,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260419f";
+} from "./world-games-ui.js?v=20260419g";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 
@@ -525,7 +525,15 @@ const publicGameShell = createWorldGameShell({
       showToast("Realtime share is offline.");
     }
   },
-  onPreview(sessionId, preview) {
+  onPreview(sessionId, preview, meta = {}) {
+    const normalizedSessionId = String(sessionId ?? "").trim();
+    const isFinalHidePreview = String(meta?.reason ?? "").trim() === "hide-final";
+    const existingPreviewUrl = String(
+      state.gameSessions.get(normalizedSessionId)?.latest_preview?.data_url ?? "",
+    ).trim();
+    if (isFinalHidePreview && existingPreviewUrl) {
+      return;
+    }
     updateLocalGamePreview(sessionId, preview);
     queueGamePreviewMediaFrame(sessionId, preview);
     state.realtimeClient?.sendGamePreview(sessionId, preview);
