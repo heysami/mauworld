@@ -576,7 +576,6 @@ function buildShellBridgeScript() {
         });
 
         document.addEventListener("DOMContentLoaded", () => {
-          ensureRoot();
           void mountIfReady();
         });
       })();
@@ -631,10 +630,8 @@ function injectShellBridge(sourceHtml = "") {
       "</html>",
     ].join("");
   }
-  if (/<body[\s>]/i.test(html)) {
-    html = html.replace(/<body([^>]*)>/i, '<body$1><div id="mauworld-game-root"></div>');
-  } else {
-    html = html.replace(/<\/html>/i, '<body><div id="mauworld-game-root"></div></body></html>');
+  if (!/<body[\s>]/i.test(html)) {
+    html = html.replace(/<\/html>/i, "<body></body></html>");
   }
   return html;
 }
