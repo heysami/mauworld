@@ -1422,6 +1422,15 @@ export function createWorldGameShell(options = {}) {
     if (!sessionId) {
       return;
     }
+    if (
+      state.session
+      && String(state.session.session_id ?? "").trim() === sessionId
+      && state.game
+    ) {
+      state.open = true;
+      render();
+      return;
+    }
     state.open = true;
     state.loading = true;
     state.status = "";
@@ -1500,7 +1509,7 @@ export function createWorldGameShell(options = {}) {
 
   function handleShellMessage(event) {
     const payload = event.data;
-    if (!state.open || !payload || payload.channel !== "mauworld-game-shell") {
+    if (!payload || payload.channel !== "mauworld-game-shell") {
       return;
     }
     const sessionId = String(state.session?.session_id ?? "").trim();
@@ -1557,7 +1566,7 @@ export function createWorldGameShell(options = {}) {
       return;
     }
     if (target.hasAttribute("data-game-shell-close")) {
-      close();
+      hide();
     }
   });
   elements.ready?.addEventListener("click", () => {
@@ -1580,12 +1589,18 @@ export function createWorldGameShell(options = {}) {
 
   render();
 
+  function hide() {
+    state.open = false;
+    render();
+  }
+
   return {
     requestOpen,
     openPayload,
     updateSession,
     updateState,
     deliverAction,
+    hide,
     close,
     isOpen(sessionId = "") {
       if (!state.open) {
