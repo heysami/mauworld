@@ -462,7 +462,6 @@ export function createWorldGameLibrary(options = {}) {
     loading: false,
     generating: false,
     status: "",
-    statusTone: "",
     games: [],
     selectedGameId: "",
     prompt: "",
@@ -477,20 +476,16 @@ export function createWorldGameLibrary(options = {}) {
     <div class="mw-game-modal__backdrop" data-game-library-close></div>
     <div class="mw-game-modal__dialog" role="dialog" aria-modal="true" aria-label="Saved Mauworld games">
       <div class="mw-game-modal__header">
-        <div class="mw-game-modal__heading">
+        <div>
           <span class="mw-game-modal__eyebrow">Saved games</span>
-          <h2>HTML game library</h2>
-          <p class="mw-game-modal__copy">Choose something you already own, or generate a new game to share nearby.</p>
+          <h2>Game Library</h2>
         </div>
         <button type="button" class="mw-game-modal__close" data-game-library-close aria-label="Close game library">Close</button>
       </div>
       <div class="mw-game-library">
         <section class="mw-game-library__column mw-game-library__column--list">
           <div class="mw-game-library__toolbar">
-            <div class="mw-game-library__toolbar-copy">
-              <strong>Your games</strong>
-              <span>Saved single-file HTML apps ready to share.</span>
-            </div>
+            <strong>Your HTML games</strong>
             <button type="button" class="is-muted" data-game-library-refresh>Refresh</button>
           </div>
           <div class="mw-game-library__status" data-game-library-status></div>
@@ -500,10 +495,8 @@ export function createWorldGameLibrary(options = {}) {
           <div class="mw-game-library__detail" data-game-library-detail></div>
           <form class="mw-game-generator" data-game-generator-form>
             <div class="mw-game-generator__header">
-              <div class="mw-game-generator__heading">
-                <strong>Generate a new game</strong>
-                <span>Single-file HTML only. No external assets, scripts, or network calls.</span>
-              </div>
+              <strong>Generate a new game</strong>
+              <span>Single-file HTML only</span>
             </div>
             <label>
               <span>Prompt</span>
@@ -519,7 +512,6 @@ export function createWorldGameLibrary(options = {}) {
                 <input type="text" data-game-generator-model autocomplete="off" placeholder="gpt-5.4-mini" />
               </label>
             </div>
-            <p class="mw-game-generator__note">Your AI key stays in this browser only.</p>
             <div class="mw-game-generator__actions">
               <button type="submit" data-game-generator-submit>Generate</button>
             </div>
@@ -556,12 +548,7 @@ export function createWorldGameLibrary(options = {}) {
       return;
     }
     if (state.games.length === 0) {
-      elements.list.innerHTML = `
-        <div class="mw-game-library__empty">
-          <strong>No saved games yet</strong>
-          <span>Generate your first one below to start sharing it nearby.</span>
-        </div>
-      `;
+      elements.list.innerHTML = '<p class="mw-game-library__empty">No saved games yet.</p>';
       return;
     }
     elements.list.innerHTML = state.games.map((game) => {
@@ -596,26 +583,24 @@ export function createWorldGameLibrary(options = {}) {
       elements.detail.innerHTML = `
         <div class="mw-game-library__empty">
           <strong>Pick a saved game</strong>
-          <span>Choose one from your library, or generate a new HTML game below.</span>
+          <span>Generate a new one below, or refresh if you already made it in another window.</span>
         </div>
       `;
       return;
     }
     elements.detail.innerHTML = `
       <div class="mw-game-library__detail-head">
-        <div class="mw-game-library__detail-copy">
-          <span class="mw-game-library__badge">Selected game</span>
-          <h3>${escapeHtml(getGameTitle(game))}</h3>
-          <p>${escapeHtml(getGameDescription(game) || "No description yet.")}</p>
-        </div>
-        <div class="mw-game-library__detail-actions">
-          <button type="button" data-game-library-share>Share nearby</button>
-        </div>
+        <span class="mw-game-library__badge">Selected</span>
+        <h3>${escapeHtml(getGameTitle(game))}</h3>
+        <p>${escapeHtml(getGameDescription(game) || "No description yet.")}</p>
       </div>
       <div class="mw-game-library__detail-meta">
         <span>${escapeHtml(getMultiplayerModeLabel(game.manifest))}</span>
         <span>${escapeHtml(getPlayerCountLabel(game.manifest))}</span>
         <span>${game.manifest?.allow_viewers === false ? "Players only" : "Viewers allowed"}</span>
+      </div>
+      <div class="mw-game-library__detail-actions">
+        <button type="button" data-game-library-share>Share This Game</button>
       </div>
     `;
     elements.detail.querySelector("[data-game-library-share]")?.addEventListener("click", () => {
@@ -632,11 +617,6 @@ export function createWorldGameLibrary(options = {}) {
       return;
     }
     elements.status.textContent = state.status || "";
-    if (state.statusTone) {
-      elements.status.dataset.tone = state.statusTone;
-    } else {
-      delete elements.status.dataset.tone;
-    }
   }
 
   function renderForm() {
@@ -665,7 +645,6 @@ export function createWorldGameLibrary(options = {}) {
     }
     state.loading = true;
     state.status = "Loading saved games...";
-    state.statusTone = "";
     render();
     try {
       const payload = await api.listGames(optionsInput.limit ?? 60);
@@ -676,12 +655,10 @@ export function createWorldGameLibrary(options = {}) {
         ? preferredId
         : (state.games[0]?.id ?? "");
       state.status = state.games.length === 0 ? "Generate your first game to share it nearby." : "";
-      state.statusTone = "";
       options.onSelect?.(getSelectedGame());
       return state.games;
     } catch (error) {
       state.status = error?.message || "Could not load saved games.";
-      state.statusTone = "error";
       throw error;
     } finally {
       state.loading = false;
@@ -692,7 +669,6 @@ export function createWorldGameLibrary(options = {}) {
   async function open(config = {}) {
     state.open = true;
     state.status = "";
-    state.statusTone = "";
     if (config.prompt) {
       state.prompt = String(config.prompt);
       elements.prompt.value = state.prompt;
@@ -722,19 +698,16 @@ export function createWorldGameLibrary(options = {}) {
     const model = clipText(elements.model?.value ?? "", 80) || "gpt-5.4-mini";
     if (!prompt) {
       state.status = "Add a prompt before generating a game.";
-      state.statusTone = "error";
       render();
       return;
     }
     if (!apiKey) {
       state.status = "Enter your AI key. It stays in this browser only.";
-      state.statusTone = "error";
       render();
       return;
     }
     state.generating = true;
     state.status = "Generating a new Mauworld game...";
-    state.statusTone = "";
     state.prompt = prompt;
     state.apiKey = apiKey;
     state.model = model;
@@ -753,13 +726,11 @@ export function createWorldGameLibrary(options = {}) {
       }
       await refresh({ selectGameId: payload?.game?.id ?? state.selectedGameId });
       state.status = payload?.game ? `"${getGameTitle(payload.game)}" is ready.` : "Game generated.";
-      state.statusTone = "success";
       options.onGenerated?.(payload?.game ?? null);
       options.onSelect?.(getSelectedGame());
       render();
     } catch (error) {
       state.status = error?.message || "Could not generate a game.";
-      state.statusTone = "error";
       render();
     } finally {
       state.generating = false;
