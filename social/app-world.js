@@ -40,7 +40,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260419e";
+} from "./world-games-ui.js?v=20260419f";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 

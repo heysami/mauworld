@@ -1373,11 +1373,8 @@ export function createWorldGameShell(options = {}) {
   }
 
   function handleShellMessage(event) {
-    if (!state.open || event.source !== elements.frame?.contentWindow) {
-      return;
-    }
     const payload = event.data;
-    if (!payload || payload.channel !== "mauworld-game-shell") {
+    if (!state.open || !payload || payload.channel !== "mauworld-game-shell") {
       return;
     }
     const sessionId = String(state.session?.session_id ?? "").trim();
