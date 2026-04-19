@@ -321,6 +321,122 @@ function buildShellBridgeScript() {
           return bonus + width * height;
         }
 
+        function escapeAttribute(value) {
+          return String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+        }
+
+        function getCssColorAlpha(value) {
+          const normalized = String(value ?? "").trim().toLowerCase();
+          if (
+            !normalized
+            || normalized === "transparent"
+            || normalized === "inherit"
+            || normalized === "initial"
+            || normalized === "unset"
+          ) {
+            return 0;
+          }
+          const rgbaMatch = normalized.match(/^rgba\(([^)]+)\)$/);
+          if (rgbaMatch) {
+            const parts = rgbaMatch[1].split(",").map((part) => part.trim());
+            const alpha = Number(parts[3]);
+            return Number.isFinite(alpha) ? alpha : 1;
+          }
+          const hslaMatch = normalized.match(/^hsla\(([^)]+)\)$/);
+          if (hslaMatch) {
+            const parts = hslaMatch[1].split(",").map((part) => part.trim());
+            const alpha = Number(parts[3]);
+            return Number.isFinite(alpha) ? alpha : 1;
+          }
+          return 1;
+        }
+
+        function serializeBackdropStyle(style) {
+          if (!style) {
+            return "";
+          }
+          const declarations = [];
+          const backgroundColor = String(style.backgroundColor || "").trim();
+          const backgroundImage = String(style.backgroundImage || "").trim();
+          const backgroundSize = String(style.backgroundSize || "").trim();
+          const backgroundPosition = String(style.backgroundPosition || "").trim();
+          const backgroundRepeat = String(style.backgroundRepeat || "").trim();
+          if (backgroundColor && getCssColorAlpha(backgroundColor) > 0.02) {
+            declarations.push("background-color:" + backgroundColor);
+          }
+          if (backgroundImage && backgroundImage !== "none") {
+            declarations.push("background-image:" + backgroundImage);
+          }
+          if (backgroundSize && backgroundSize !== "initial") {
+            declarations.push("background-size:" + backgroundSize);
+          }
+          if (backgroundPosition && backgroundPosition !== "initial") {
+            declarations.push("background-position:" + backgroundPosition);
+          }
+          if (backgroundRepeat && backgroundRepeat !== "initial") {
+            declarations.push("background-repeat:" + backgroundRepeat);
+          }
+          return declarations.join(";") + (declarations.length ? ";" : "");
+        }
+
+        function getPreviewBackdropColor(node) {
+          let current = node instanceof HTMLElement ? node.parentElement : null;
+          while (current && current !== document.documentElement) {
+            const backgroundColor = String(window.getComputedStyle(current).backgroundColor || "").trim();
+            if (backgroundColor && getCssColorAlpha(backgroundColor) > 0.02) {
+              return backgroundColor;
+            }
+            current = current.parentElement;
+          }
+          const bodyColor = String(window.getComputedStyle(document.body).backgroundColor || "").trim();
+          if (bodyColor && getCssColorAlpha(bodyColor) > 0.02) {
+            return bodyColor;
+          }
+          const htmlColor = String(window.getComputedStyle(document.documentElement).backgroundColor || "").trim();
+          if (htmlColor && getCssColorAlpha(htmlColor) > 0.02) {
+            return htmlColor;
+          }
+          return "#0a0f1f";
+        }
+
+        function getPreviewBackdropStyle(node) {
+          let current = node instanceof HTMLElement ? node.parentElement : null;
+          while (current && current !== document.documentElement) {
+            const serialized = serializeBackdropStyle(window.getComputedStyle(current));
+            if (serialized) {
+              return serialized;
+            }
+            current = current.parentElement;
+          }
+          const bodyStyle = serializeBackdropStyle(window.getComputedStyle(document.body));
+          if (bodyStyle) {
+            return bodyStyle;
+          }
+          return serializeBackdropStyle(window.getComputedStyle(document.documentElement));
+        }
+
+        function preparePreviewClone(node, backdropColor) {
+          const clonedNode = node.cloneNode(true);
+          if (!(clonedNode instanceof HTMLElement) || !(node instanceof HTMLElement)) {
+            return clonedNode;
+          }
+          const computedStyle = window.getComputedStyle(node);
+          const backgroundColor = String(computedStyle.backgroundColor || "").trim();
+          const backgroundImage = String(computedStyle.backgroundImage || "").trim();
+          const needsBackdropColor = (
+            (backgroundImage && backgroundImage !== "none")
+            || getCssColorAlpha(backgroundColor) < 0.92
+          );
+          if (needsBackdropColor && backdropColor) {
+            clonedNode.style.backgroundColor = backdropColor;
+          }
+          return clonedNode;
+        }
+
         function findPreviewTargetIn(root) {
           if (!root || typeof root.querySelectorAll !== "function") {
             return null;
@@ -430,11 +546,15 @@ function buildShellBridgeScript() {
           const styles = [...document.querySelectorAll("style")]
             .map((element) => element.textContent || "")
             .join("\\n");
-          const serialized = new XMLSerializer().serializeToString(node.cloneNode(true));
+          const backdropStyle = getPreviewBackdropStyle(node);
+          const backdropColor = getPreviewBackdropColor(node);
+          const preparedNode = preparePreviewClone(node, backdropColor);
+          const serialized = new XMLSerializer().serializeToString(preparedNode);
           const svg = [
             '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">',
+            '<rect width="100%" height="100%" fill="' + escapeAttribute(backdropColor) + '"></rect>',
             '<foreignObject width="100%" height="100%">',
-            '<div xmlns="http://www.w3.org/1999/xhtml" style="width:' + width + 'px;height:' + height + 'px;">',
+            '<div xmlns="http://www.w3.org/1999/xhtml" style="width:' + width + 'px;height:' + height + 'px;overflow:hidden;' + escapeAttribute(backdropStyle) + '">',
             '<style>html,body{margin:0;padding:0;}#mauworld-game-root{width:100%;height:100%;}' + styles + '</style>',
             serialized,
             '</div>',
@@ -448,7 +568,17 @@ function buildShellBridgeScript() {
             img.onerror = reject;
             img.src = url;
           });
-          return renderPreviewSource(image, width, height);
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext("2d");
+          if (!context) {
+            return null;
+          }
+          context.fillStyle = backdropColor;
+          context.fillRect(0, 0, width, height);
+          context.drawImage(image, 0, 0, width, height);
+          return renderPreviewSource(canvas, width, height);
         }
 
         function getPreviewIntervalMs() {

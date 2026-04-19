@@ -45,7 +45,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260419g";
+} from "./world-games-ui.js?v=20260419i";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -1480,9 +1480,18 @@ function getPrivateGameShareLocalCanvasTexture(entry) {
     entry.localCanvasTexture?.dispose?.();
     entry.localCanvasTexture = null;
     entry.localCanvas = null;
+    entry.localCanvasWidth = 0;
+    entry.localCanvasHeight = 0;
     return null;
   }
-  if (entry.localCanvas !== canvas || !entry.localCanvasTexture) {
+  const canvasWidth = Math.max(1, Math.round(Number(canvas.width) || canvas.clientWidth || 0));
+  const canvasHeight = Math.max(1, Math.round(Number(canvas.height) || canvas.clientHeight || 0));
+  if (
+    entry.localCanvas !== canvas
+    || !entry.localCanvasTexture
+    || entry.localCanvasWidth !== canvasWidth
+    || entry.localCanvasHeight !== canvasHeight
+  ) {
     entry.localCanvasTexture?.dispose?.();
     entry.localCanvas = canvas;
     entry.localCanvasTexture = new THREE.CanvasTexture(canvas);
@@ -1490,6 +1499,8 @@ function getPrivateGameShareLocalCanvasTexture(entry) {
     entry.localCanvasTexture.generateMipmaps = false;
     entry.localCanvasTexture.minFilter = THREE.LinearFilter;
     entry.localCanvasTexture.magFilter = THREE.LinearFilter;
+    entry.localCanvasWidth = canvasWidth;
+    entry.localCanvasHeight = canvasHeight;
   }
   entry.localCanvasTexture.needsUpdate = true;
   return entry.localCanvasTexture;
@@ -2577,7 +2588,10 @@ function updatePrivateShareBubblePresentation(entry) {
   entry.frame.material.depthTest = false;
   entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
   entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
-  entry.frameShell.visible = false;
+  entry.frameShell.visible = !showingPlaceholder;
+  if (entry.frameShell.material) {
+    entry.frameShell.material.opacity = showingPlaceholder ? 0 : 0.92;
+  }
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
@@ -2969,6 +2983,8 @@ function ensurePrivateGameBubbleEntry(session = {}) {
     videoTexture: null,
     localCanvas: null,
     localCanvasTexture: null,
+    localCanvasWidth: 0,
+    localCanvasHeight: 0,
     placeholderTexture,
     position: new THREE.Vector3(),
     targetPosition: new THREE.Vector3(),
