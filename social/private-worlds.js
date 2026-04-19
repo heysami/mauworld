@@ -1386,6 +1386,17 @@ function clearAllPrivateGamePreviewMedia({ unpublish = true } = {}) {
   }
 }
 
+function getPrivateGameSessionHostViewerSessionId(session = {}) {
+  return String(session?.host_viewer_session_id ?? session?.hostViewerSessionId ?? "").trim();
+}
+
+function getPrivateGameSessionDeliveryMode(session = {}) {
+  if (getPrivateGameSessionHostViewerSessionId(session) === getPrivateViewerSessionId()) {
+    return "full";
+  }
+  return String(session?.deliveryMode ?? "").trim() === "full" ? "full" : "placeholder";
+}
+
 function updateLocalPrivateGamePreview(sessionId, preview = null) {
   const normalizedSessionId = String(sessionId ?? "").trim();
   const existing = state.gameSessions.get(normalizedSessionId);
@@ -1411,10 +1422,19 @@ function updateCachedPrivateGameSession(sessionId, patch = {}) {
     return null;
   }
   const existing = state.gameSessions.get(normalizedSessionId) ?? {};
+  const hostViewerSessionId = getPrivateGameSessionHostViewerSessionId({
+    ...existing,
+    ...patch,
+  });
   const next = {
     ...existing,
     ...patch,
     session_id: normalizedSessionId,
+    deliveryMode: hostViewerSessionId === getPrivateViewerSessionId()
+      ? "full"
+      : String(patch?.deliveryMode ?? existing?.deliveryMode ?? "").trim() === "full"
+        ? "full"
+        : "placeholder",
   };
   state.gameSessions.set(normalizedSessionId, next);
   return next;
@@ -1476,6 +1496,9 @@ function syncPrivateGameMediaSubscription(sessionId, subscribed) {
   if (!normalizedSessionId || !browserWorldKey) {
     return;
   }
+  updateCachedPrivateGameSession(normalizedSessionId, {
+    deliveryMode: subscribed ? "full" : "placeholder",
+  });
   if (subscribed) {
     state.gameMediaSubscriptions.add(normalizedSessionId);
   } else {
@@ -2927,7 +2950,13 @@ function updatePrivateGameBubblePresentation(entry) {
     entry.currentPreviewAt = previewFrame.updated_at;
     entry.liveImage.src = previewFrame.data_url;
   }
-  const desiredMap = entry.videoTexture || (previewFrame?.data_url ? entry.liveTexture : entry.placeholderTexture);
+  const deliveryMode = getPrivateGameSessionDeliveryMode(entry.session);
+  const showLiveMedia = deliveryMode === "full";
+  const desiredMap = showLiveMedia && entry.videoTexture
+    ? entry.videoTexture
+    : showLiveMedia && previewFrame?.data_url
+      ? entry.liveTexture
+      : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
   entry.frame.scale.set(1, 1, 1);
   entry.frame.position.set(0, 0, 0);
@@ -2976,8 +3005,10 @@ function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
       entry.group.visible = false;
       continue;
     }
+    const showingLiveMedia = getPrivateGameSessionDeliveryMode(entry.session) === "full"
+      && Boolean(entry.videoTexture || entry.session?.latest_preview?.data_url);
     entry.targetPosition.copy(hostPosition);
-    entry.targetPosition.y += getSharedBrowserScreenOffsetY(true, elapsedSeconds);
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
     entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);
@@ -6680,6 +6711,7 @@ function handlePrivateGamePreview(payload = {}) {
   }
   state.gameMediaSubscriptions.add(sessionId);
   updateCachedPrivateGameSession(sessionId, {
+    deliveryMode: "full",
     latest_preview: cloneJson(payload.preview ?? null),
   });
   if (privateGameShell.isOpen(sessionId)) {
