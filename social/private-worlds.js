@@ -972,6 +972,7 @@ const state = {
   incomingVoiceJoinRequests: [],
   gameSessions: new Map(),
   gamePreviewMedia: new Map(),
+  gameMediaSubscriptions: new Set(),
   selectedWorldGameId: "",
   pendingGameShareGameId: "",
   browserOverlayOpen: false,
@@ -1400,6 +1401,21 @@ function updateLocalPrivateGamePreview(sessionId, preview = null) {
   }
 }
 
+function updateCachedPrivateGameSession(sessionId, patch = {}) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+  const existing = state.gameSessions.get(normalizedSessionId) ?? {};
+  const next = {
+    ...existing,
+    ...patch,
+    session_id: normalizedSessionId,
+  };
+  state.gameSessions.set(normalizedSessionId, next);
+  return next;
+}
+
 async function ensurePublishedPrivateGamePreviewMedia(sessionId) {
   const normalizedSessionId = String(sessionId ?? "").trim();
   const localSession = getLocalPrivateGameSession();
@@ -1455,6 +1471,11 @@ function syncPrivateGameMediaSubscription(sessionId, subscribed) {
   const browserWorldKey = getPrivateBrowserWorldKey();
   if (!normalizedSessionId || !browserWorldKey) {
     return;
+  }
+  if (subscribed) {
+    state.gameMediaSubscriptions.add(normalizedSessionId);
+  } else {
+    state.gameMediaSubscriptions.delete(normalizedSessionId);
   }
   const session = state.gameSessions.get(normalizedSessionId) ?? null;
   void getPrivateBrowserMediaController().setSubscribed({
@@ -6186,7 +6207,10 @@ function getPrivateBrowserMediaController() {
   state.browserMediaController = createBrowserMediaController({
     fetchToken: ({ canPublish = false } = {}) => fetchPrivateBrowserMediaToken({ canPublish }),
     onRemoteTrack: ({ sessionId, track, element }) => {
-      if (state.gameSessions.has(sessionId)) {
+      if (state.gameSessions.has(sessionId) || state.gameMediaSubscriptions.has(sessionId)) {
+        updateCachedPrivateGameSession(sessionId, {
+          _remoteElement: element ?? null,
+        });
         if (element) {
           setPrivateGameShareVideo(sessionId, element);
         }
@@ -6213,7 +6237,10 @@ function getPrivateBrowserMediaController() {
       updatePrivateBrowserPanel();
     },
     onRemoteTrackRemoved: ({ sessionId }) => {
-      if (state.gameSessions.has(sessionId)) {
+      if (state.gameSessions.has(sessionId) || state.gameMediaSubscriptions.has(sessionId)) {
+        updateCachedPrivateGameSession(sessionId, {
+          _remoteElement: null,
+        });
         clearPrivateGameShareVideo(sessionId);
         return;
       }
@@ -6589,13 +6616,7 @@ function updatePrivateGameSessionState(sessionPatch = {}) {
   if (!sessionId) {
     return;
   }
-  const previous = state.gameSessions.get(sessionId) ?? {};
-  const next = {
-    ...previous,
-    ...cloneJson(sessionPatch),
-    session_id: sessionId,
-  };
-  state.gameSessions.set(sessionId, next);
+  const next = updateCachedPrivateGameSession(sessionId, cloneJson(sessionPatch));
   if (
     state.pendingGameShareGameId
     && String(next?.host_viewer_session_id ?? "").trim() === getPrivateViewerSessionId()
@@ -6619,12 +6640,11 @@ function updatePrivateGameSessionState(sessionPatch = {}) {
 
 function handlePrivateGamePreview(payload = {}) {
   const sessionId = String(payload.sessionId ?? "").trim();
-  const existing = state.gameSessions.get(sessionId);
-  if (!existing) {
+  if (!sessionId) {
     return;
   }
-  state.gameSessions.set(sessionId, {
-    ...existing,
+  state.gameMediaSubscriptions.add(sessionId);
+  updateCachedPrivateGameSession(sessionId, {
     latest_preview: cloneJson(payload.preview ?? null),
   });
   if (privateGameShell.isOpen(sessionId)) {
@@ -6639,6 +6659,7 @@ function handlePrivateGameStop(payload = {}) {
   if (!sessionId) {
     return;
   }
+  state.gameMediaSubscriptions.delete(sessionId);
   clearPrivateGamePreviewMedia(sessionId);
   const stoppedSession = state.gameSessions.get(sessionId);
   state.gameSessions.delete(sessionId);

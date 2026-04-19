@@ -305,6 +305,7 @@ const state = {
   incomingVoiceJoinRequests: [],
   gameSessions: new Map(),
   gamePreviewMedia: new Map(),
+  gameMediaSubscriptions: new Set(),
   selectedWorldGameId: "",
   pendingGameShareGameId: "",
   browserMediaState: {
@@ -2199,6 +2200,21 @@ function updateLocalGamePreview(sessionId, preview = null) {
   }
 }
 
+function updateCachedGameSession(sessionId, patch = {}) {
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+  const existing = state.gameSessions.get(normalizedSessionId) ?? {};
+  const next = {
+    ...existing,
+    ...patch,
+    session_id: normalizedSessionId,
+  };
+  state.gameSessions.set(normalizedSessionId, next);
+  return next;
+}
+
 async function ensurePublishedGamePreviewMedia(sessionId) {
   const normalizedSessionId = String(sessionId ?? "").trim();
   const localSession = getLocalGameSession();
@@ -2252,6 +2268,11 @@ function syncGameMediaSubscription(sessionId, subscribed) {
   const normalizedSessionId = String(sessionId ?? "").trim();
   if (!normalizedSessionId || !state.meta?.worldSnapshotId) {
     return;
+  }
+  if (subscribed) {
+    state.gameMediaSubscriptions.add(normalizedSessionId);
+  } else {
+    state.gameMediaSubscriptions.delete(normalizedSessionId);
   }
   const session = state.gameSessions.get(normalizedSessionId) ?? null;
   void getBrowserMediaController().setSubscribed({
@@ -3398,8 +3419,13 @@ function getBrowserMediaController() {
   state.browserMediaController = createBrowserMediaController({
     fetchToken: ({ canPublish = false } = {}) => fetchBrowserMediaToken({ canPublish }),
     onRemoteTrack: ({ sessionId, track, element }) => {
-      if (state.gameSessions.has(sessionId)) {
-        setGameShareVideo(sessionId, element);
+      if (state.gameSessions.has(sessionId) || state.gameMediaSubscriptions.has(sessionId)) {
+        updateCachedGameSession(sessionId, {
+          _remoteElement: element ?? null,
+        });
+        if (element) {
+          setGameShareVideo(sessionId, element);
+        }
         state.browserMediaTransport = "livekit";
         return;
       }
@@ -3422,7 +3448,10 @@ function getBrowserMediaController() {
       updateBrowserPanel();
     },
     onRemoteTrackRemoved: ({ sessionId }) => {
-      if (state.gameSessions.has(sessionId)) {
+      if (state.gameSessions.has(sessionId) || state.gameMediaSubscriptions.has(sessionId)) {
+        updateCachedGameSession(sessionId, {
+          _remoteElement: null,
+        });
         clearGameShareVideo(sessionId);
         return;
       }
@@ -7534,6 +7563,9 @@ function updateGameShareEntries(elapsedSeconds = 0) {
     }
     entry.session = session;
     entry.hostSessionId = String(session?.host_viewer_session_id ?? "").trim();
+    if (session?._remoteElement) {
+      setGameShareVideo(entry.sessionId, session._remoteElement);
+    }
     const hostPosition = getBrowserHostPosition(entry.hostSessionId);
     if (!hostPosition) {
       entry.group.visible = false;
@@ -10540,13 +10572,7 @@ function updateGameSessionState(sessionPatch = {}) {
   if (!sessionId) {
     return;
   }
-  const previous = state.gameSessions.get(sessionId) ?? {};
-  const next = {
-    ...previous,
-    ...cloneJson(sessionPatch),
-    session_id: sessionId,
-  };
-  state.gameSessions.set(sessionId, next);
+  const next = updateCachedGameSession(sessionId, cloneJson(sessionPatch));
   if (
     state.pendingGameShareGameId
     && String(next?.host_viewer_session_id ?? "").trim() === state.viewerSessionId
@@ -10570,12 +10596,11 @@ function updateGameSessionState(sessionPatch = {}) {
 
 function handleGamePreview(payload = {}) {
   const sessionId = String(payload.sessionId ?? "").trim();
-  const existing = state.gameSessions.get(sessionId);
-  if (!existing) {
+  if (!sessionId) {
     return;
   }
-  state.gameSessions.set(sessionId, {
-    ...existing,
+  state.gameMediaSubscriptions.add(sessionId);
+  updateCachedGameSession(sessionId, {
     latest_preview: cloneJson(payload.preview ?? null),
   });
   if (publicGameShell.isOpen(sessionId)) {
@@ -10590,6 +10615,7 @@ function handleGameStop(payload = {}) {
   if (!sessionId) {
     return;
   }
+  state.gameMediaSubscriptions.delete(sessionId);
   clearGamePreviewMedia(sessionId);
   const stoppedSession = state.gameSessions.get(sessionId);
   state.gameSessions.delete(sessionId);
