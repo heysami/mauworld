@@ -133,6 +133,9 @@ const PRIVATE_CHAT_MAX_ENTRIES = 28;
 const PRIVATE_CHAT_BUBBLE = SHARED_CHAT_BUBBLE_LAYOUT;
 const PRIVATE_BROWSER_SHARE = SHARED_BROWSER_SHARE_LAYOUT;
 const PRIVATE_BROWSER_RADIUS = PRIVATE_BROWSER_SHARE.radius;
+const PRIVATE_GAME_SHARE_HIT_PADDING = 3.2;
+const PRIVATE_GAME_SHARE_HIT_PROXY_OPACITY = 0.01;
+const PRIVATE_GAME_SHARE_PICK_PRIORITY = 12;
 const PRIVATE_LOCAL_PREVIEW_SESSION_ID = "__private_local_preview__";
 const BUILD_PLACEMENT_SHORTCUTS = new Map([
   ["1", "voxel"],
@@ -2753,6 +2756,13 @@ function updatePrivateGameBubbleGeometry(entry) {
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
   entry.frameShell.geometry.dispose();
   entry.frameShell.geometry = new THREE.PlaneGeometry(width + 1.2, height + 1.2);
+  if (entry.hitTarget?.geometry) {
+    entry.hitTarget.geometry.dispose();
+    entry.hitTarget.geometry = new THREE.PlaneGeometry(
+      width + PRIVATE_GAME_SHARE_HIT_PADDING,
+      height + PRIVATE_GAME_SHARE_HIT_PADDING,
+    );
+  }
   entry.geometryAspectRatio = aspectRatio;
 }
 
@@ -2764,14 +2774,16 @@ function removePrivateGameBubbleEntry(sessionId = "") {
   }
   clearPrivateGameShareVideo(entry.sessionId);
   preview.gameShareEntries.delete(entry.sessionId);
-  preview.entityPickables = preview.entityPickables.filter((mesh) => mesh !== entry.frame);
+  preview.entityPickables = preview.entityPickables.filter((mesh) => mesh !== entry.frame && mesh !== entry.hitTarget);
   entry.group.parent?.remove(entry.group);
   entry.liveTexture?.dispose?.();
   entry.placeholderTexture?.dispose?.();
   entry.frame.geometry?.dispose?.();
   entry.frameShell.geometry?.dispose?.();
+  entry.hitTarget?.geometry?.dispose?.();
   entry.frame.material?.dispose?.();
   entry.frameShell.material?.dispose?.();
+  entry.hitTarget?.material?.dispose?.();
 }
 
 function ensurePrivateGameBubbleEntry(session = {}) {
@@ -2822,8 +2834,26 @@ function ensurePrivateGameBubbleEntry(session = {}) {
   });
   frame.frustumCulled = false;
   frame.userData.privateWorldGameSessionId = sessionId;
-  preview.entityPickables.push(frame);
+  frame.userData.privateWorldPickPriority = PRIVATE_GAME_SHARE_PICK_PRIORITY;
   group.add(frame);
+  const hitTarget = new THREE.Mesh(
+    new THREE.PlaneGeometry(width + PRIVATE_GAME_SHARE_HIT_PADDING, height + PRIVATE_GAME_SHARE_HIT_PADDING),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#ffffff"),
+      transparent: true,
+      opacity: PRIVATE_GAME_SHARE_HIT_PROXY_OPACITY,
+      side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  hitTarget.renderOrder = 11;
+  hitTarget.frustumCulled = false;
+  hitTarget.userData.privateWorldGameSessionId = sessionId;
+  hitTarget.userData.privateWorldPickPriority = PRIVATE_GAME_SHARE_PICK_PRIORITY;
+  group.add(hitTarget);
+  preview.entityPickables.push(hitTarget, frame);
   preview.gameShares.add(group);
   const entry = {
     sessionId,
@@ -2832,6 +2862,7 @@ function ensurePrivateGameBubbleEntry(session = {}) {
     group,
     frameShell,
     frame,
+    hitTarget,
     liveImage,
     liveTexture,
     videoElement: null,
@@ -2927,6 +2958,9 @@ function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
     const entry = ensurePrivateGameBubbleEntry(session);
     if (!entry) {
       continue;
+    }
+    if (!preview.entityPickables.includes(entry.hitTarget)) {
+      preview.entityPickables.push(entry.hitTarget);
     }
     if (!preview.entityPickables.includes(entry.frame)) {
       preview.entityPickables.push(entry.frame);
@@ -11298,6 +11332,7 @@ function getPreviewPointerContext(pointerSource) {
 
 function getFirstPreviewEntityHit(intersections = []) {
   const buildMode = state.mode === "build" && isEditor();
+  const candidates = [];
   for (const hit of intersections) {
     if (!hit?.object) {
       continue;
@@ -11305,9 +11340,20 @@ function getFirstPreviewEntityHit(intersections = []) {
     if (hit.object.userData?.privateWorldBuildOnly && !buildMode) {
       continue;
     }
-    return hit;
+    candidates.push(hit);
   }
-  return null;
+  if (candidates.length === 0) {
+    return null;
+  }
+  candidates.sort((left, right) => {
+    const leftPriority = Number(left.object?.userData?.privateWorldPickPriority) || 0;
+    const rightPriority = Number(right.object?.userData?.privateWorldPickPriority) || 0;
+    if (leftPriority !== rightPriority) {
+      return rightPriority - leftPriority;
+    }
+    return left.distance - right.distance;
+  });
+  return candidates[0];
 }
 
 function resolveBuildGridCell(context) {

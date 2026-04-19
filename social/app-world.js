@@ -213,6 +213,9 @@ const SKYLINE_BAND_ASSETS = {
 
 const skylineTextureCache = new Map();
 let toonGradientTexture = null;
+const GAME_SHARE_HIT_PADDING = 3.2;
+const GAME_SHARE_HIT_PROXY_OPACITY = 0.01;
+const GAME_SHARE_PICK_PRIORITY = 12;
 
 function createEmptyPrivateWorldGateState() {
   return {
@@ -4802,7 +4805,7 @@ function isClickablePayloadPickable(payload) {
   if (!payload?.mesh || !isObjectHierarchyVisible(payload.mesh)) {
     return false;
   }
-  if (getMeshMaterialOpacity(payload.mesh.material) <= 0.12) {
+  if (payload.transparentHit !== true && getMeshMaterialOpacity(payload.mesh.material) <= 0.12) {
     return false;
   }
 
@@ -4861,6 +4864,11 @@ function isClickablePayloadPickable(payload) {
   }
 
   return true;
+}
+
+function getClickablePayloadPickPriority(payload) {
+  const value = Number(payload?.pickPriority);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function createBillboard(texture, width, height, options = {}) {
@@ -7377,6 +7385,13 @@ function updateGameShareGeometry(entry) {
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
   entry.frameShell.geometry.dispose();
   entry.frameShell.geometry = new THREE.PlaneGeometry(width + 1.2, height + 1.2);
+  if (entry.hitTarget?.geometry) {
+    entry.hitTarget.geometry.dispose();
+    entry.hitTarget.geometry = new THREE.PlaneGeometry(
+      width + GAME_SHARE_HIT_PADDING,
+      height + GAME_SHARE_HIT_PADDING,
+    );
+  }
   entry.geometryAspectRatio = aspectRatio;
 }
 
@@ -7451,12 +7466,39 @@ function ensureGameShareEntry(session) {
     renderOrder: 10,
     persistent: true,
   });
+  frame.frustumCulled = false;
   group.add(frame);
-  const clickablePayloads = [{
-    mesh: frame,
-    type: "game-share",
-    data: { sessionId },
-  }];
+  const hitTarget = new THREE.Mesh(
+    new THREE.PlaneGeometry(width + GAME_SHARE_HIT_PADDING, height + GAME_SHARE_HIT_PADDING),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color("#ffffff"),
+      transparent: true,
+      opacity: GAME_SHARE_HIT_PROXY_OPACITY,
+      side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  hitTarget.renderOrder = 11;
+  hitTarget.frustumCulled = false;
+  registerBillboard(hitTarget, true);
+  group.add(hitTarget);
+  const clickablePayloads = [
+    {
+      mesh: hitTarget,
+      type: "game-share",
+      data: { sessionId },
+      transparentHit: true,
+      pickPriority: GAME_SHARE_PICK_PRIORITY,
+    },
+    {
+      mesh: frame,
+      type: "game-share",
+      data: { sessionId },
+      pickPriority: GAME_SHARE_PICK_PRIORITY,
+    },
+  ];
   sceneState.clickable.push(...clickablePayloads);
   entry = {
     sessionId,
@@ -7465,6 +7507,7 @@ function ensureGameShareEntry(session) {
     group,
     frameShell,
     frame,
+    hitTarget,
     liveImage,
     liveTexture,
     videoElement: null,
@@ -11577,17 +11620,25 @@ function pickSceneObject(event) {
     clickableEntries.map((entry) => entry.mesh),
     false,
   );
-  const top = hits.find((hit) => {
-    const payload = clickableEntries.find((entry) => entry.mesh === hit.object);
-    return Boolean(payload && isClickablePayloadPickable(payload));
-  });
-  if (!top) {
+  const rankedHits = hits
+    .map((hit) => ({
+      hit,
+      payload: clickableEntries.find((entry) => entry.mesh === hit.object),
+    }))
+    .filter(({ payload }) => Boolean(payload && isClickablePayloadPickable(payload)))
+    .sort((left, right) => {
+      const priorityDelta = getClickablePayloadPickPriority(right.payload)
+        - getClickablePayloadPickPriority(left.payload);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+      return left.hit.distance - right.hit.distance;
+    });
+  const top = rankedHits[0];
+  if (!top?.payload) {
     return;
   }
-  const payload = clickableEntries.find((entry) => entry.mesh === top.object);
-  if (!payload) {
-    return;
-  }
+  const { payload } = top;
 
   if (payload.type === "post") {
     openPostDetail(payload.data);
