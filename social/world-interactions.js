@@ -930,7 +930,7 @@ export function getLocalDisplaySharePresentation(options = {}) {
 
   return {
     badge: summaryState === "draft" ? "Draft" : "Live",
-    current: `${liveKindLabel} live${draft.liveTitle ? ` - ${draft.liveTitle}` : ""}`,
+    current: summaryState === "draft" ? `Update ${liveKindLabel}` : `${liveKindLabel} live`,
     hint,
     state: summaryState,
     status,
@@ -950,15 +950,14 @@ export function getDisplayShareReadyPresentation(options = {}) {
   });
   const scopeLabel = String(options.scopeLabel ?? "").trim();
   const scopeSuffix = scopeLabel ? ` ${scopeLabel}` : "";
+  const titleSuffix = draft.draftTitle ? ` Title: "${draft.draftTitle}".` : "";
   return {
     state: "idle",
     badge: "Idle",
-    current: draft.draftTitle
-      ? `Ready: ${draft.draftModeLabel} "${draft.draftTitle}"`
-      : `Ready: ${draft.draftModeLabel}`,
+    current: `Ready for ${draft.draftModeLabel}`,
     hint: draft.draftMode === "screen"
-      ? `Pick Screen to choose what to share${scopeSuffix}.`
-      : `Press ${launchState.label} to go live${scopeSuffix}.`,
+      ? `Pick Screen to choose what to share${scopeSuffix}.${titleSuffix}`
+      : `Press ${launchState.label} to go live${scopeSuffix}.${titleSuffix}`,
   };
 }
 

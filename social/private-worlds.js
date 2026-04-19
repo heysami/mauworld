@@ -5369,13 +5369,15 @@ function getPrivateLocalBrowserShareStackEntries() {
   const entries = [];
   for (const session of getLocalPrivateBrowserDisplaySessions()) {
     const shareKind = getPrivateBrowserSessionShareKind(session);
+    const active = String(session.sessionId ?? "").trim() === String(state.localBrowserSessionId ?? "").trim();
     entries.push({
       id: String(session.sessionId ?? "").trim(),
       type: "browser",
       label: getBrowserShareKindLabel(shareKind),
       title: getPrivateBrowserSessionTitle(session),
-      active: String(session.sessionId ?? "").trim() === String(state.localBrowserSessionId ?? "").trim(),
-      secondary: isPrivateBrowserMemberSession(session) ? "Contributor" : "Nearby",
+      active,
+      stateLabel: active ? "Previewing" : "Live",
+      secondary: isPrivateBrowserMemberSession(session) ? "Contributor share" : "Anchor share",
     });
   }
   const localVoiceSession = getLocalPrivateVoiceSession();
@@ -5386,18 +5388,21 @@ function getPrivateLocalBrowserShareStackEntries() {
       label: "Voice",
       title: "Persistent voice chat",
       active: false,
-      secondary: localVoiceSession.groupJoined === true ? "Joined" : "Standalone",
+      stateLabel: localVoiceSession.groupJoined === true ? "Joined" : "Live",
+      secondary: localVoiceSession.groupJoined === true ? "Inside anchor group" : "Open nearby",
     });
   }
   const localGameSession = getLocalPrivateGameSession();
   if (localGameSession) {
+    const active = state.browserShareMode === "game";
     entries.push({
       id: String(localGameSession.session_id ?? "").trim(),
       type: "game",
       label: "Game",
       title: getPrivateGameSessionTitle(localGameSession),
-      active: state.browserShareMode === "game",
-      secondary: isPrivateGameMemberSession(localGameSession) ? "Contributor" : "Nearby",
+      active,
+      stateLabel: active ? "Selected" : "Live",
+      secondary: isPrivateGameMemberSession(localGameSession) ? "Contributor game" : "Anchor game",
     });
   }
   const order = {
@@ -5412,32 +5417,49 @@ function getPrivateLocalBrowserShareStackEntries() {
     || left.title.localeCompare(right.title));
 }
 
-function renderPrivateLocalBrowserShareStack() {
+function renderPrivateLocalBrowserShareStack(entries = getPrivateLocalBrowserShareStackEntries()) {
   if (!elements.panelBrowserLocalStack) {
     return;
   }
-  const entries = getPrivateLocalBrowserShareStackEntries();
   elements.panelBrowserLocalStack.hidden = entries.length === 0;
   if (entries.length === 0) {
     elements.panelBrowserLocalStack.innerHTML = "";
     return;
   }
-  elements.panelBrowserLocalStack.innerHTML = entries.map((entry) => `
-    <section class="world-local-share-card ${entry.active ? "is-active" : ""}" data-private-local-share-id="${htmlEscape(entry.id)}" data-private-local-share-type="${htmlEscape(entry.type)}">
-      <div class="world-local-share-card__meta">
-        <span class="world-local-share-card__badge">${htmlEscape(entry.label)}</span>
-        <strong>${htmlEscape(entry.title)}</strong>
-        <span>${htmlEscape(entry.secondary)}</span>
-      </div>
-      <div class="world-local-share-card__actions">
-        <button type="button" class="is-muted" data-private-local-share-focus="${htmlEscape(entry.id)}" data-private-local-share-type="${htmlEscape(entry.type)}">
-          ${entry.type === "voice" ? "Manage" : entry.type === "game" ? "Open" : "Focus"}
-        </button>
-        ${entry.type === "browser" ? `<button type="button" class="is-muted" data-private-local-share-rename="${htmlEscape(entry.id)}">Rename</button>` : ""}
-        <button type="button" class="is-muted" data-private-local-share-stop="${htmlEscape(entry.id)}" data-private-local-share-type="${htmlEscape(entry.type)}">Stop</button>
-      </div>
-    </section>
-  `).join("");
+  const countLabel = entries.length === 1 ? "1 type live" : `${entries.length} types live`;
+  elements.panelBrowserLocalStack.innerHTML = `
+    <div class="world-local-share-stack__head">
+      <strong>Live now</strong>
+      <span>${htmlEscape(countLabel)}</span>
+    </div>
+    <div class="world-local-share-stack__grid">
+      ${entries.map((entry) => `
+        <section class="world-local-share-card ${entry.active ? "is-active" : ""}" data-private-local-share-id="${htmlEscape(entry.id)}" data-private-local-share-type="${htmlEscape(entry.type)}">
+          <div class="world-local-share-card__top">
+            <span class="world-local-share-card__badge">${htmlEscape(entry.label)}</span>
+            <span class="world-local-share-card__state">${htmlEscape(entry.stateLabel || "Live")}</span>
+          </div>
+          <div class="world-local-share-card__meta">
+            <strong>${htmlEscape(entry.title)}</strong>
+            <span>${htmlEscape(entry.secondary)}</span>
+          </div>
+          <div class="world-local-share-card__actions">
+            <button
+              type="button"
+              class="is-muted"
+              data-private-local-share-focus="${htmlEscape(entry.id)}"
+              data-private-local-share-type="${htmlEscape(entry.type)}"
+              ${entry.type === "browser" && entry.active ? "disabled" : ""}
+            >
+              ${entry.type === "voice" ? "Manage" : entry.type === "game" ? "Open" : entry.active ? "Previewing" : "Preview"}
+            </button>
+            ${entry.type === "browser" ? `<button type="button" class="is-muted" data-private-local-share-rename="${htmlEscape(entry.id)}">Rename</button>` : ""}
+            <button type="button" class="is-muted" data-private-local-share-stop="${htmlEscape(entry.id)}" data-private-local-share-type="${htmlEscape(entry.type)}">Stop</button>
+          </div>
+        </section>
+      `).join("")}
+    </div>
+  `;
 
   for (const button of elements.panelBrowserLocalStack.querySelectorAll("[data-private-local-share-focus]")) {
     button.addEventListener("click", () => {
@@ -6211,6 +6233,15 @@ function renderPrivateShareGroupSummary() {
       ? "You are the anchor for this nearby share group. Movement stays locked while it is live."
       : "You are contributing inside this nearby share group. Leaving the circle will stop your share."
     : `Join ${hostName}'s nearby share group without creating another live row.`;
+  const shouldRenderSummary = !localSession
+    || !isPrivateBrowserOriginSession(localSession)
+    || contributorEntries.length > 0
+    || Boolean(pendingState);
+  if (!shouldRenderSummary) {
+    elements.panelShareGroupSummary.innerHTML = "";
+    elements.panelShareGroupSummary.hidden = true;
+    return;
+  }
   elements.panelShareGroupSummary.hidden = false;
   elements.panelShareGroupSummary.innerHTML = `
     <div class="world-group-summary__title">${htmlEscape(getPrivateBrowserSessionTitle(anchorSession))}</div>
@@ -6291,6 +6322,15 @@ function renderPrivateGameShareGroupSummary() {
       ? "You are the anchor for this nearby game group. Movement stays locked while it is live."
       : "You are contributing a game inside this nearby group. Leaving the circle will stop it."
     : `Join ${hostName}'s nearby game group without creating another live row.`;
+  const shouldRenderSummary = !localSession
+    || !isPrivateGameOriginSession(localSession)
+    || contributorEntries.length > 0
+    || Boolean(pendingState);
+  if (!shouldRenderSummary) {
+    elements.panelShareGroupSummary.innerHTML = "";
+    elements.panelShareGroupSummary.hidden = true;
+    return;
+  }
   elements.panelShareGroupSummary.hidden = false;
   elements.panelShareGroupSummary.innerHTML = `
     <div class="world-group-summary__title">${htmlEscape(getPrivateGameSessionTitle(anchorSession))}</div>
@@ -7422,7 +7462,8 @@ function updatePrivateBrowserPanel() {
   updatePrivateVoicePanel();
   renderPrivateVoiceJoinOffers();
   renderPrivateVoiceJoinRequests();
-  renderPrivateLocalBrowserShareStack();
+  const localShareEntries = getPrivateLocalBrowserShareStackEntries();
+  renderPrivateLocalBrowserShareStack(localShareEntries);
   const launchState = getDisplayShareLaunchState({
     canShare,
     pending: Boolean(state.pendingBrowserShare),
@@ -7433,7 +7474,7 @@ function updatePrivateBrowserPanel() {
     launchButton: elements.panelBrowserLaunch,
     stopButton: elements.panelBrowserStop,
     launchState,
-    showStop: Boolean(localSession || pendingShareJoinRequest),
+    showStop: Boolean(pendingShareJoinRequest),
   });
   if (!localSession && pendingShareJoinRequest && elements.panelBrowserLaunch) {
     elements.panelBrowserLaunch.textContent = cancelingShareJoinRequest ? "Canceling..." : "Waiting...";
