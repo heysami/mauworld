@@ -181,7 +181,13 @@ function buildShellBridgeScript() {
         };
 
         function clone(value) {
-          return value == null ? null : JSON.parse(JSON.stringify(value));
+          if (value == null) {
+            return null;
+          }
+          if (typeof structuredClone === "function") {
+            return structuredClone(value);
+          }
+          return JSON.parse(JSON.stringify(value));
         }
 
         function post(type, payload = {}) {
