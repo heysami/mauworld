@@ -2719,51 +2719,10 @@ function getPrivateGameBubblePlaceholderKey(session = {}) {
 }
 
 function createPrivateGameBubbleTexture(session = {}) {
-  const occupiedSeats = normalizePrivateGameSeats(session).filter((seat) => seat.viewer_session_id).length;
-  const capacity = getPrivateGameSeatCapacity(session);
-  const title = String(getPrivateGameSessionTitle(session) || "Nearby game").slice(0, 42);
-  const description = String(getPrivateGameSessionDescription(session) || "").slice(0, 60);
-  const statusLine = `${session?.started === true ? "Match live" : "Lobby open"} · ${occupiedSeats}/${capacity} seats`;
-  const detail = description ? `${statusLine} · Click to open` : "Click to open and join";
-  const canvas = document.createElement("canvas");
-  canvas.width = 720;
-  canvas.height = 360;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return createBubbleTexture("🎮", {
-      accent: PRIVATE_WORLD_STYLE.accents[1],
-      stroke: PRIVATE_WORLD_STYLE.outline,
-      text: `${title}${description ? `\n${description}` : ""}`,
-      label: "Live Game",
-      width: 420,
-      height: 300,
-      maxLines: 4,
-    });
-  }
-  context.fillStyle = "rgba(255, 255, 255, 0.98)";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.lineWidth = 6;
-  context.strokeStyle = "rgba(32, 50, 104, 0.2)";
-  context.strokeRect(3, 3, canvas.width - 6, canvas.height - 6);
-  context.fillStyle = PRIVATE_WORLD_STYLE.accents[1];
-  context.fillRect(0, 0, canvas.width, 14);
-
-  context.fillStyle = "#17305c";
-  context.font = "700 44px Manrope, sans-serif";
-  context.textBaseline = "top";
-  context.fillText(title, 34, 42);
-
-  context.fillStyle = "#4a6297";
-  context.font = "600 28px Manrope, sans-serif";
-  context.fillText(description || statusLine, 34, 112);
-
-  context.font = "500 24px Manrope, sans-serif";
-  context.fillText(detail, 34, 164);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-  return texture;
+  return createBubbleTexture("🎮", {
+    accent: PRIVATE_WORLD_STYLE.accents[1],
+    stroke: PRIVATE_WORLD_STYLE.outline,
+  });
 }
 
 function updatePrivateGameBubbleGeometry(entry) {
@@ -2958,11 +2917,22 @@ function updatePrivateGameBubblePresentation(entry) {
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
-  entry.frame.scale.set(1, 1, 1);
+  const baseAspectRatio = getPrivateGameBubbleAspectRatio(entry.session);
+  const baseWidth = PRIVATE_BROWSER_SHARE.screenWidth;
+  const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
+  const bubbleWidth = PRIVATE_BROWSER_SHARE.placeholderVideoWidth;
+  const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_SHARE.placeholderAspectRatio;
+  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
+  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
+  entry.frame.scale.set(scaleX, scaleY, 1);
   entry.frame.position.set(0, 0, 0);
+  if (entry.hitTarget) {
+    entry.hitTarget.scale.set(scaleX, scaleY, 1);
+    entry.hitTarget.position.set(0, 0, 0);
+  }
   entry.frame.material.depthTest = false;
-  entry.frame.material.opacity = showingPlaceholder ? 0.99 : 1;
-  entry.frame.renderOrder = 10;
+  entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
+  entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
   entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;

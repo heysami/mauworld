@@ -7377,20 +7377,9 @@ function getGameSharePlaceholderTextureKey(session = {}) {
 }
 
 function createGameSharePlaceholderTexture(session) {
-  const occupiedSeats = normalizeGameSeats(session).filter((seat) => seat.viewer_session_id).length;
-  const capacity = getGameSeatCapacity(session);
-  const statusLine = `${session?.started === true ? "Match live" : "Lobby open"} · ${occupiedSeats}/${capacity} seats`;
-  const description = getGameSessionDescription(session);
-  return createLabelTexture([
-    getGameSessionTitle(session),
-    description || statusLine,
-    description ? `${statusLine} · Click to open` : "Click to open and join",
-  ], {
-    width: 720,
-    height: 360,
+  return createBubbleTexture("🎮", {
     accent: WORLD_STYLE.accents[1],
-    border: "rgba(51, 64, 122, 0.2)",
-    background: "rgba(255, 255, 255, 0.98)",
+    stroke: WORLD_STYLE.outline,
   });
 }
 
@@ -7610,11 +7599,22 @@ function updateGameSharePresentation(entry) {
       ? entry.liveTexture
       : entry.placeholderTexture;
   const showingPlaceholder = desiredTexture === entry.placeholderTexture;
-  entry.frame.scale.set(1, 1, 1);
+  const baseAspectRatio = getGameShareAspectRatio(entry.session);
+  const baseWidth = BROWSER_SHARE.screenWidth;
+  const baseHeight = baseWidth / Math.max(0.1, baseAspectRatio);
+  const bubbleWidth = BROWSER_SHARE.placeholderVideoWidth;
+  const bubbleHeight = bubbleWidth / BROWSER_SHARE.placeholderAspectRatio;
+  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
+  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
+  entry.frame.scale.set(scaleX, scaleY, 1);
   entry.frame.position.set(0, 0, 0);
+  if (entry.hitTarget) {
+    entry.hitTarget.scale.set(scaleX, scaleY, 1);
+    entry.hitTarget.position.set(0, 0, 0);
+  }
   entry.frame.material.depthTest = false;
-  entry.frame.material.opacity = showingPlaceholder ? 0.99 : 1;
-  entry.frame.renderOrder = 10;
+  entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
+  entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
   entry.frameShell.visible = false;
   if (entry.frame.material.map !== desiredTexture) {
     entry.frame.material.map = desiredTexture;
