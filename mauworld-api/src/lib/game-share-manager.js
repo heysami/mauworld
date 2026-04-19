@@ -51,6 +51,37 @@ function findSeatByViewerSessionId(session, viewerSessionId) {
   return session.seats.find((seat) => seat.viewer_session_id === viewerSessionId) ?? null;
 }
 
+function getGameSessionId(session = {}) {
+  return String(session.session_id ?? session.sessionId ?? session.id ?? "").trim();
+}
+
+function getGameSessionRole(session = {}) {
+  const value = String(session.group_role ?? session.groupRole ?? "").trim().toLowerCase();
+  return value === "member" ? "member" : "origin";
+}
+
+function isOriginGameSession(session = {}) {
+  return getGameSessionRole(session) === "origin";
+}
+
+function isMemberGameSession(session = {}) {
+  return getGameSessionRole(session) === "member";
+}
+
+function getGameAnchorSessionId(session = {}) {
+  if (isOriginGameSession(session)) {
+    return getGameSessionId(session);
+  }
+  return String(session.anchor_session_id ?? session.anchorSessionId ?? "").trim();
+}
+
+function getGameAnchorHostSessionId(session = {}) {
+  if (isOriginGameSession(session)) {
+    return String(session.host_viewer_session_id ?? session.hostViewerSessionId ?? session.hostSessionId ?? "").trim();
+  }
+  return String(session.anchor_host_session_id ?? session.anchorHostSessionId ?? "").trim();
+}
+
 function sanitizeGameSnapshot(game = {}) {
   const manifest = cloneJson(game.manifest ?? {});
   return {
@@ -73,6 +104,93 @@ function buildSeatSummaries(session) {
     claimed_at: seat.claimed_at || null,
     ready: seat.viewer_session_id ? session.ready_by_viewer_session_id.get(seat.viewer_session_id) === true : false,
   }));
+}
+
+function normalizeGameSessionSummary(sessionLike = {}) {
+  const sessionId = getGameSessionId(sessionLike);
+  const hostViewerSessionId = String(
+    sessionLike.host_viewer_session_id
+    ?? sessionLike.hostViewerSessionId
+    ?? sessionLike.hostSessionId
+    ?? "",
+  ).trim();
+  const game = sanitizeGameSnapshot(sessionLike.game ?? {});
+  const groupRole = getGameSessionRole(sessionLike);
+  const listedLive = sessionLike.listed_live !== false && sessionLike.listedLive !== false;
+  const movementLocked = sessionLike.movement_locked === true || sessionLike.movementLocked === true;
+  const viewerCount = Number.isFinite(Number(sessionLike.viewer_count ?? sessionLike.viewerCount))
+    ? Math.max(0, Math.floor(Number(sessionLike.viewer_count ?? sessionLike.viewerCount)))
+    : sessionLike.opened_viewer_session_ids instanceof Set
+      ? Math.max(0, sessionLike.opened_viewer_session_ids.size)
+      : 0;
+  const maxViewers = Number.isFinite(Number(sessionLike.max_viewers ?? sessionLike.maxViewers))
+    ? Math.max(1, Math.floor(Number(sessionLike.max_viewers ?? sessionLike.maxViewers)))
+    : 20;
+  const anchorSessionId = getGameAnchorSessionId(sessionLike);
+  const anchorHostSessionId = getGameAnchorHostSessionId(sessionLike);
+  const rawSeats = Array.isArray(sessionLike.seats) ? sessionLike.seats : [];
+  const seats = rawSeats.length > 0
+    ? rawSeats.map((seat) => ({
+      seat_id: seat.seat_id,
+      label: seat.label,
+      viewer_session_id: seat.viewer_session_id || null,
+      display_name: seat.display_name || null,
+      claimed_at: seat.claimed_at || null,
+      ready: typeof seat.ready === "boolean"
+        ? seat.ready
+        : (seat.viewer_session_id
+          ? sessionLike.ready_by_viewer_session_id?.get?.(seat.viewer_session_id) === true
+          : false),
+    }))
+    : buildSeatSummaries(sessionLike);
+  const latestPreview = sessionLike.latest_preview ?? sessionLike.latestPreview ?? null;
+  return {
+    session_id: sessionId,
+    sessionId,
+    scope: String(sessionLike.scope ?? "").trim() || "world",
+    binding_key: String(sessionLike.binding_key ?? sessionLike.bindingKey ?? "").trim(),
+    bindingKey: String(sessionLike.binding_key ?? sessionLike.bindingKey ?? "").trim(),
+    host_viewer_session_id: hostViewerSessionId,
+    hostViewerSessionId,
+    hostSessionId: hostViewerSessionId,
+    host_display_name: String(sessionLike.host_display_name ?? sessionLike.hostDisplayName ?? "").trim(),
+    title: game.title,
+    share_kind: "game",
+    shareKind: "game",
+    group_role: groupRole,
+    groupRole,
+    listed_live: listedLive,
+    listedLive,
+    movement_locked: movementLocked,
+    movementLocked,
+    anchor_session_id: anchorSessionId,
+    anchorSessionId,
+    anchor_host_session_id: anchorHostSessionId,
+    anchorHostSessionId,
+    game: {
+      id: game.id,
+      owner_profile_id: game.owner_profile_id,
+      source_game_id: game.source_game_id,
+      title: game.title,
+      manifest: cloneJson(game.manifest),
+    },
+    seats,
+    started: sessionLike.started === true,
+    viewer_count: viewerCount,
+    viewerCount,
+    max_viewers: maxViewers,
+    maxViewers,
+    latest_preview: latestPreview
+      ? {
+        data_url: latestPreview.data_url,
+        width: latestPreview.width,
+        height: latestPreview.height,
+        updated_at: latestPreview.updated_at,
+      }
+      : null,
+    created_at: sessionLike.created_at ?? sessionLike.createdAt ?? null,
+    updated_at: sessionLike.updated_at ?? sessionLike.updatedAt ?? null,
+  };
 }
 
 export class GameShareManager {
@@ -103,6 +221,12 @@ export class GameShareManager {
       binding_key: bindingKey,
       host_viewer_session_id: hostViewerSessionId,
       host_display_name: clipText(input.hostDisplayName ?? "Host", 48) || "Host",
+      share_kind: "game",
+      group_role: getGameSessionRole(input),
+      listed_live: input.listedLive !== false,
+      movement_locked: input.movementLocked === true,
+      anchor_session_id: String(input.anchorSessionId ?? "").trim(),
+      anchor_host_session_id: String(input.anchorHostSessionId ?? "").trim(),
       game,
       seats: buildSeatEntries(game),
       ready_by_viewer_session_id: new Map(),
@@ -110,6 +234,7 @@ export class GameShareManager {
       authoritative_state: null,
       latest_preview: null,
       opened_viewer_session_ids: new Set([hostViewerSessionId]),
+      max_viewers: clampInteger(input.maxViewers, 20, 1, 99),
       created_at: createdAt,
       updated_at: createdAt,
     };
@@ -145,41 +270,26 @@ export class GameShareManager {
     if (!session) {
       return null;
     }
-    if (
-      typeof session === "object"
-      && session !== null
-      && typeof session.session_id === "string"
-      && !("opened_viewer_session_ids" in session)
-    ) {
-      return cloneJson(session);
+    if ("opened_viewer_session_ids" in session) {
+      return normalizeGameSessionSummary({
+        ...session,
+        seats: buildSeatSummaries(session),
+        viewer_count: session.opened_viewer_session_ids.size,
+      });
     }
-    return {
-      session_id: session.id,
-      scope: session.scope,
-      binding_key: session.binding_key,
-      host_viewer_session_id: session.host_viewer_session_id,
-      host_display_name: session.host_display_name,
-      game: {
-        id: session.game.id,
-        owner_profile_id: session.game.owner_profile_id,
-        source_game_id: session.game.source_game_id,
-        title: session.game.title,
-        manifest: cloneJson(session.game.manifest),
-      },
-      seats: buildSeatSummaries(session),
-      started: session.started === true,
-      viewer_count: session.opened_viewer_session_ids.size,
-      latest_preview: session.latest_preview
-        ? {
-          data_url: session.latest_preview.data_url,
-          width: session.latest_preview.width,
-          height: session.latest_preview.height,
-          updated_at: session.latest_preview.updated_at,
-        }
-        : null,
-      created_at: session.created_at,
-      updated_at: session.updated_at,
-    };
+    return normalizeGameSessionSummary(session);
+  }
+
+  getOriginSession(sessionLike) {
+    const session = typeof sessionLike === "string" ? this.getSession(sessionLike) : sessionLike;
+    if (!session) {
+      return null;
+    }
+    if (isOriginGameSession(session)) {
+      return session;
+    }
+    const anchorSessionId = getGameAnchorSessionId(session);
+    return anchorSessionId ? this.getSession(anchorSessionId) : null;
   }
 
   buildOpenPayload(sessionId, viewerSessionId) {
@@ -382,6 +492,33 @@ export class GameShareManager {
     return this.toSessionSummary(session);
   }
 
+  stopSessionTree(sessionId) {
+    const queue = [String(sessionId ?? "").trim()].filter(Boolean);
+    const stopped = [];
+    while (queue.length > 0) {
+      const nextId = queue.shift();
+      const session = this.getSession(nextId);
+      if (!session) {
+        continue;
+      }
+      if (isOriginGameSession(session)) {
+        for (const candidate of this.listSessionsForBinding(session.binding_key)) {
+          if (!isMemberGameSession(candidate)) {
+            continue;
+          }
+          if (getGameAnchorSessionId(candidate) === session.id) {
+            queue.push(candidate.id);
+          }
+        }
+      }
+      const stoppedSession = this.stopSession(session.id);
+      if (stoppedSession) {
+        stopped.push(stoppedSession);
+      }
+    }
+    return stopped;
+  }
+
   removeViewerSession(viewerSessionId) {
     const resolvedViewerSessionId = String(viewerSessionId ?? "").trim();
     if (!resolvedViewerSessionId) {
@@ -394,10 +531,7 @@ export class GameShareManager {
     const updated = [];
     for (const session of [...this.sessions.values()]) {
       if (session.host_viewer_session_id === resolvedViewerSessionId) {
-        const stoppedSession = this.stopSession(session.id);
-        if (stoppedSession) {
-          stopped.push(stoppedSession);
-        }
+        stopped.push(...this.stopSessionTree(session.id));
         continue;
       }
       session.opened_viewer_session_ids.delete(resolvedViewerSessionId);

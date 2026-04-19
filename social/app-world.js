@@ -34,7 +34,7 @@ import {
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
-import { createWorldRealtimeClient } from "./world-realtime.js?v=20260418i";
+import { createWorldRealtimeClient } from "./world-realtime.js?v=20260419gamejoin1";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 import {
   createWorldGamesApi,
@@ -2763,6 +2763,50 @@ function renderShareGroupSummary() {
   `;
 }
 
+function renderGameShareGroupSummary() {
+  if (!elements.shareGroupSummary) {
+    return;
+  }
+  const localSession = getLocalGameSession();
+  const anchorSession = getGameShareJoinTarget();
+  if (!anchorSession) {
+    elements.shareGroupSummary.innerHTML = "";
+    elements.shareGroupSummary.hidden = true;
+    return;
+  }
+  const memberNames = getGameShareGroupSessions(anchorSession.session_id)
+    .filter((session) => isGameMemberSession(session))
+    .map((session) => getGameSessionHostName(session))
+    .filter(Boolean);
+  const hostName = getGameSessionHostName(anchorSession);
+  const viewerCount = Math.max(0, Number(anchorSession?.viewer_count ?? anchorSession?.viewerCount) || 0);
+  const maxViewers = Math.max(1, Number(anchorSession?.max_viewers ?? anchorSession?.maxViewers) || getInteractionConfig().maxRecipients);
+  const pendingState = state.pendingShareJoin?.anchorSessionId === String(anchorSession?.session_id ?? "").trim()
+    ? state.pendingShareJoin.approved
+      ? "Approved. Share your game to add it to this nearby group."
+      : isShareJoinCancellationPending(anchorSession.session_id)
+        ? "Canceling request..."
+        : "Waiting for approval."
+    : "";
+  const summaryCopy = localSession
+    ? isGameOriginSession(localSession)
+      ? "You are the anchor for this nearby game group. Movement stays locked while it is live."
+      : "You are contributing a game inside this nearby group. Leaving the circle will stop it."
+    : `Join ${hostName}'s nearby game group without creating another live row.`;
+  elements.shareGroupSummary.hidden = false;
+  elements.shareGroupSummary.innerHTML = `
+    <div class="world-group-summary__title">${htmlEscape(getGameSessionTitle(anchorSession))}</div>
+    <div class="world-group-summary__meta">
+      <span>${htmlEscape(hostName)}</span>
+      <span>${viewerCount}/${maxViewers} viewers</span>
+      <span>${memberNames.length} contributor${memberNames.length === 1 ? "" : "s"}</span>
+    </div>
+    <div class="world-group-summary__body">${htmlEscape(summaryCopy)}</div>
+    ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
+    ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
+  `;
+}
+
 function isShareJoinCancellationPending(anchorSessionId = "") {
   return String(state.pendingShareJoinCancellationAnchorSessionId ?? "").trim() === String(anchorSessionId ?? "").trim()
     && Boolean(anchorSessionId);
@@ -2791,7 +2835,41 @@ async function handleNearbyShareLaunch({ defaultLaunch, getLocalSession, getSele
       requestOpenWorldGameSession(localGameSession);
       return true;
     }
-    await startWorldGameShare();
+    if (!getSelectedWorldGame()) {
+      await startWorldGameShare();
+      return true;
+    }
+    const joinTarget = getGameShareJoinTarget();
+    const approvedJoin = state.pendingShareJoin?.approved === true ? state.pendingShareJoin : null;
+    if (!joinTarget || (approvedJoin && approvedJoin.anchorSessionId === String(joinTarget?.session_id ?? "").trim())) {
+      await startWorldGameShare();
+      return true;
+    }
+    if (!isPublicViewerSignedIn()) {
+      showToast("Log in to share nearby.");
+      void openPrivateWorldGate("account");
+      return true;
+    }
+    if (!state.realtimeClient?.isConnected()) {
+      showToast("Realtime share is offline.");
+      return true;
+    }
+    state.pendingShareJoin = {
+      anchorSessionId: String(joinTarget?.session_id ?? "").trim(),
+      anchorHostSessionId: String(joinTarget?.host_viewer_session_id ?? "").trim(),
+      shareKind: "game",
+      approved: false,
+    };
+    state.pendingShareJoinCancellationAnchorSessionId = "";
+    const requested = state.realtimeClient?.requestShareJoin?.(joinTarget.session_id, "game") === true;
+    if (!requested) {
+      clearPendingShareJoinState();
+      updateBrowserPanel();
+      showToast("Realtime share is offline.");
+      return true;
+    }
+    updateBrowserPanel();
+    showToast(`Asked ${getGameSessionHostName(joinTarget) || "the nearby host"} to join.`);
     return true;
   }
   const localSession = getLocalSession();
@@ -3399,6 +3477,111 @@ function getGameSessionHostName(session) {
     || "nearby host";
 }
 
+function getGameSessionRole(session = {}) {
+  const value = String(session?.group_role ?? session?.groupRole ?? "").trim().toLowerCase();
+  return value === "member" ? "member" : "origin";
+}
+
+function isGameOriginSession(session = {}) {
+  return getGameSessionRole(session) === "origin";
+}
+
+function isGameMemberSession(session = {}) {
+  return getGameSessionRole(session) === "member";
+}
+
+function getGameSessionAnchorSessionId(session = {}) {
+  if (isGameOriginSession(session)) {
+    return String(session?.session_id ?? "").trim();
+  }
+  return String(session?.anchor_session_id ?? session?.anchorSessionId ?? "").trim();
+}
+
+function getGameSessionAnchorHostSessionId(session = {}) {
+  if (isGameOriginSession(session)) {
+    return String(session?.host_viewer_session_id ?? "").trim();
+  }
+  return String(session?.anchor_host_session_id ?? session?.anchorHostSessionId ?? "").trim();
+}
+
+function resolveGameOriginSession(session = {}) {
+  const anchorSessionId = getGameSessionAnchorSessionId(session);
+  if (!anchorSessionId) {
+    return null;
+  }
+  if (String(session?.session_id ?? "").trim() === anchorSessionId && isGameOriginSession(session)) {
+    return session;
+  }
+  return state.gameSessions.get(anchorSessionId) ?? null;
+}
+
+function isListedLiveGameSession(session = {}) {
+  return isGameOriginSession(session) && session?.listed_live !== false && session?.listedLive !== false;
+}
+
+function getNearbyOriginGameSession(excludeHostSessionId = state.viewerSessionId) {
+  const viewerPosition = getNavigationPosition();
+  const radius = Math.max(16, getInteractionConfig().browserRadius);
+  let bestSession = null;
+  let bestDistanceSquared = Infinity;
+  for (const session of state.gameSessions.values()) {
+    if (!isListedLiveGameSession(session)) {
+      continue;
+    }
+    if (
+      excludeHostSessionId
+      && String(session?.host_viewer_session_id ?? "").trim() === String(excludeHostSessionId ?? "").trim()
+    ) {
+      continue;
+    }
+    const hostPosition = getBrowserHostPosition(session?.host_viewer_session_id);
+    if (!hostPosition) {
+      continue;
+    }
+    const dx = viewerPosition.x - hostPosition.x;
+    const dz = viewerPosition.z - hostPosition.z;
+    const distanceSquared = dx * dx + dz * dz;
+    if (distanceSquared > radius * radius || distanceSquared >= bestDistanceSquared) {
+      continue;
+    }
+    bestSession = session;
+    bestDistanceSquared = distanceSquared;
+  }
+  return bestSession;
+}
+
+function getGameShareGroupSessions(anchorSessionId = "") {
+  const normalizedAnchorSessionId = String(anchorSessionId ?? "").trim();
+  if (!normalizedAnchorSessionId) {
+    return [];
+  }
+  return [...state.gameSessions.values()]
+    .filter((session) =>
+      (isGameOriginSession(session) && String(session?.session_id ?? "").trim() === normalizedAnchorSessionId)
+      || getGameSessionAnchorSessionId(session) === normalizedAnchorSessionId)
+    .sort((left, right) =>
+      Number(isGameOriginSession(right)) - Number(isGameOriginSession(left))
+      || Date.parse(left?.created_at ?? 0) - Date.parse(right?.created_at ?? 0)
+      || String(left?.host_viewer_session_id ?? "").localeCompare(String(right?.host_viewer_session_id ?? "")));
+}
+
+function getGameShareJoinTarget() {
+  const localSession = getLocalGameSession();
+  if (localSession) {
+    return resolveGameOriginSession(localSession);
+  }
+  const pendingAnchorSessionId = String(state.pendingShareJoin?.anchorSessionId ?? "").trim();
+  if (pendingAnchorSessionId) {
+    return state.gameSessions.get(pendingAnchorSessionId) ?? null;
+  }
+  return getNearbyOriginGameSession();
+}
+
+function isLocalOriginGameShareLocked() {
+  const localSession = getLocalGameSession();
+  return Boolean(localSession && isGameOriginSession(localSession) && (localSession?.movement_locked === true || localSession?.movementLocked === true));
+}
+
 function getLocalGameSession() {
   const worldSnapshotId = String(state.meta?.worldSnapshotId ?? "").trim();
   if (!worldSnapshotId) {
@@ -3414,6 +3597,7 @@ function getVisibleGameSessions(query = state.liveShareQuery) {
   const normalizedQuery = String(query ?? "").trim().toLowerCase();
   return [...state.gameSessions.values()]
     .filter((session) => !worldSnapshotId || String(session?.binding_key ?? "").trim() === worldSnapshotId)
+    .filter((session) => isListedLiveGameSession(session))
     .filter((session) => {
       if (!normalizedQuery) {
         return true;
@@ -3451,6 +3635,9 @@ async function openWorldGameLibrary(options = {}) {
 
 async function startWorldGameShare(game = null) {
   const targetGame = game ?? getSelectedWorldGame();
+  const approvedJoin = state.pendingShareJoin?.approved === true && state.pendingShareJoin?.shareKind === "game"
+    ? state.pendingShareJoin
+    : null;
   if (!isPublicViewerSignedIn()) {
     showToast("Log in to share games nearby.");
     void openPrivateWorldGate("account");
@@ -3464,7 +3651,7 @@ async function startWorldGameShare(game = null) {
     showToast("Realtime share is offline.");
     return false;
   }
-  const sent = state.realtimeClient?.startGameShare(targetGame.id) === true;
+  const sent = state.realtimeClient?.startGameShare(targetGame.id, approvedJoin?.anchorSessionId ?? "") === true;
   if (!sent) {
     showToast("Realtime share is offline.");
     return false;
@@ -3638,7 +3825,10 @@ function getShareJoinTarget() {
 
 function isLocalOriginShareLocked() {
   const localSession = getLocalBrowserSession();
-  return Boolean(localSession && isBrowserOriginSession(localSession) && localSession.movementLocked === true);
+  if (localSession && isBrowserOriginSession(localSession) && localSession.movementLocked === true) {
+    return true;
+  }
+  return isLocalOriginGameShareLocked();
 }
 
 function setLoading(isLoading) {
@@ -7246,12 +7436,22 @@ function ensureBrowserAnchorEntry(session = {}) {
 }
 
 function reconcileBrowserAnchorEntries() {
+  const browserAnchorSessions = [...state.browserSessions.values()]
+    .filter((session) =>
+      isBrowserOriginSession(session)
+      && session?.movementLocked === true
+      && String(session?.sessionMode ?? "").trim() === "display-share");
+  const gameAnchorSessions = [...state.gameSessions.values()]
+    .filter((session) =>
+      isGameOriginSession(session)
+      && (session?.movement_locked === true || session?.movementLocked === true))
+    .map((session) => ({
+      sessionId: String(session?.session_id ?? "").trim(),
+      hostSessionId: String(session?.host_viewer_session_id ?? "").trim(),
+    }));
+  const anchorSessions = [...browserAnchorSessions, ...gameAnchorSessions];
   const activeAnchorIds = new Set(
-    [...state.browserSessions.values()]
-      .filter((session) =>
-        isBrowserOriginSession(session)
-        && session?.movementLocked === true
-        && String(session?.sessionMode ?? "").trim() === "display-share")
+    anchorSessions
       .map((session) => String(session.sessionId ?? "").trim())
       .filter(Boolean),
   );
@@ -7260,7 +7460,7 @@ function reconcileBrowserAnchorEntries() {
       removeBrowserAnchorEntry(anchorSessionId);
     }
   }
-  for (const session of state.browserSessions.values()) {
+  for (const session of anchorSessions) {
     if (!activeAnchorIds.has(String(session.sessionId ?? "").trim())) {
       continue;
     }
@@ -8985,6 +9185,7 @@ function renderLiveSharesList() {
       const title = getGameSessionTitle(session);
       const playerCount = normalizeGameSeats(session).filter((seat) => seat.viewer_session_id).length;
       const maxPlayers = Math.max(1, Number(session?.game?.manifest?.max_players) || 1);
+      const contributorCount = Math.max(0, getGameShareGroupSessions(session.session_id).filter((entry) => isGameMemberSession(entry)).length);
       const isOwn = String(session?.host_viewer_session_id ?? "").trim() === state.viewerSessionId;
       const hostName = getGameSessionHostName(session);
       return `
@@ -9001,6 +9202,7 @@ function renderLiveSharesList() {
             <span class="world-live-result__badge">Game</span>
             <span>${isOwn ? "You are hosting this now." : `${htmlEscape(hostName)} is hosting now.`}</span>
             <span>${htmlEscape(session.started ? "Match live" : "Lobby open")}</span>
+            ${contributorCount > 0 ? `<span>${contributorCount} contributor${contributorCount === 1 ? "" : "s"}</span>` : ""}
           </div>
         </button>
       `;
@@ -9498,13 +9700,25 @@ function getBrowserStagePlaceholderText({
 function updateGameSharePanel({ signedIn, canShareNearby }) {
   const localGameSession = getLocalGameSession();
   const selectedGame = getSelectedWorldGame();
+  const joinTarget = getGameShareJoinTarget();
+  const pendingShareJoinRequest = Boolean(
+    !localGameSession
+    && state.pendingShareJoin?.shareKind === "game"
+    && state.pendingShareJoin?.anchorSessionId
+    && state.pendingShareJoin?.approved !== true,
+  );
+  const cancelingShareJoinRequest = pendingShareJoinRequest
+    && isShareJoinCancellationPending(state.pendingShareJoin?.anchorSessionId);
+  const joinMode = Boolean(!localGameSession && joinTarget);
+  const joinStateMatches = String(state.pendingShareJoin?.anchorSessionId ?? "").trim() === String(joinTarget?.session_id ?? "").trim();
+  const joinApproved = joinMode && joinStateMatches && state.pendingShareJoin?.approved === true;
   const previewUrl = String(localGameSession?.latest_preview?.data_url ?? "").trim();
   const hasPreview = Boolean(previewUrl);
   elements.browserPanel?.classList.add("is-game-mode");
   elements.browserPanel?.classList.remove("is-docked-compact");
   elements.browserStage?.classList.add("is-active");
   elements.browserStage?.classList.remove("is-collapsed", "is-permission-only", "needs-video-start");
-  elements.browserShare?.classList.remove("is-join-mode");
+  elements.browserShare?.classList.toggle("is-join-mode", joinMode);
   if (elements.browserStage) {
     elements.browserStage.tabIndex = -1;
     elements.browserStage.setAttribute("aria-hidden", "false");
@@ -9519,7 +9733,7 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
   renderVoiceJoinOffers();
   renderVoiceJoinRequests();
   renderShareJoinRequests();
-  renderShareGroupSummary();
+  renderGameShareGroupSummary();
 
   if (!signedIn) {
     setBrowserStatus("Log in to generate, save, or share games nearby.");
@@ -9537,6 +9751,21 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
       current: "Realtime share is offline",
       hint: "Reconnect before you start a game share.",
     });
+  } else if (pendingShareJoinRequest) {
+    const hostName = getGameSessionHostName(joinTarget ?? {});
+    setBrowserStatus(
+      cancelingShareJoinRequest
+        ? `Canceling your nearby game request to ${hostName}...`
+        : `Waiting for ${hostName} to approve your nearby game request...`,
+    );
+    updateBrowserPanelSummary({
+      state: "starting",
+      badge: cancelingShareJoinRequest ? "Canceling" : "Waiting",
+      current: selectedGame ? `Requested ${getSavedGameTitle(selectedGame)}` : "Requested Game",
+      hint: cancelingShareJoinRequest
+        ? "This request will disappear from the anchor host as soon as the realtime update lands."
+        : "Once approved, sharing your game will keep it attached to this nearby group without creating another live row.",
+    });
   } else if (state.pendingGameShareGameId) {
     const pendingGame = selectedGame && selectedGame.id === state.pendingGameShareGameId ? selectedGame : null;
     setBrowserStatus(`Starting ${getSavedGameTitle(pendingGame ?? {}, "your game")} nearby...`);
@@ -9548,12 +9777,30 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
     });
   } else if (localGameSession) {
     const seatedPlayers = normalizeGameSeats(localGameSession).filter((seat) => seat.viewer_session_id).length;
-    setBrowserStatus(localGameSession.started ? "Your game match is live nearby." : "Your game lobby is open nearby.");
+    const memberShare = isGameMemberSession(localGameSession);
+    setBrowserStatus(
+      localGameSession.started
+        ? (memberShare ? "Your game match is live inside this nearby group." : "Your game match is live nearby.")
+        : (memberShare ? "Your game lobby is open inside this nearby group." : "Your game lobby is open nearby."),
+    );
     updateBrowserPanelSummary({
       state: "live",
-      badge: localGameSession.started ? "Live" : "Lobby",
+      badge: memberShare ? "Group" : (localGameSession.started ? "Live" : "Lobby"),
       current: getGameSessionTitle(localGameSession),
-      hint: `${seatedPlayers} / ${Math.max(1, Number(localGameSession?.game?.manifest?.max_players) || 1)} seats claimed. Open the game window to play or publish previews.`,
+      hint: memberShare
+        ? `${seatedPlayers} / ${Math.max(1, Number(localGameSession?.game?.manifest?.max_players) || 1)} seats claimed. Leaving the anchor circle stops this contributor game share.`
+        : `${seatedPlayers} / ${Math.max(1, Number(localGameSession?.game?.manifest?.max_players) || 1)} seats claimed. Movement stays locked while this anchor game is live.`,
+    });
+  } else if (joinMode && selectedGame) {
+    const hostName = getGameSessionHostName(joinTarget);
+    setBrowserStatus(`Join ${hostName}'s nearby game group after approval.`);
+    updateBrowserPanelSummary({
+      state: "draft",
+      badge: "Join",
+      current: getSavedGameTitle(selectedGame),
+      hint: joinApproved
+        ? "Approval is in. Share Game to add this as a contributor game without creating another live row."
+        : "Share Game to ask the anchor host for access first.",
     });
   } else if (selectedGame) {
     setBrowserStatus(`Selected ${getSavedGameTitle(selectedGame)}.`);
@@ -9574,13 +9821,32 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
   }
 
   if (elements.browserLaunch) {
-    elements.browserLaunch.textContent = localGameSession ? "Open Game" : (selectedGame ? "Share Game" : "Open Library");
-    elements.browserLaunch.disabled = !signedIn || !state.realtimeConnected;
+    if (localGameSession) {
+      elements.browserLaunch.textContent = "Open Game";
+      elements.browserLaunch.disabled = !signedIn || !state.realtimeConnected;
+    } else if (pendingShareJoinRequest) {
+      elements.browserLaunch.textContent = cancelingShareJoinRequest ? "Canceling..." : "Waiting...";
+      elements.browserLaunch.disabled = true;
+    } else if (!selectedGame) {
+      elements.browserLaunch.textContent = "Open Library";
+      elements.browserLaunch.disabled = !signedIn || !state.realtimeConnected;
+    } else if (joinMode) {
+      elements.browserLaunch.textContent = joinApproved ? "Share Game" : "Request Game";
+      elements.browserLaunch.disabled = !signedIn || !state.realtimeConnected || Boolean(state.pendingGameShareGameId);
+    } else {
+      elements.browserLaunch.textContent = "Share Game";
+      elements.browserLaunch.disabled = !signedIn || !state.realtimeConnected || Boolean(state.pendingGameShareGameId);
+    }
   }
   if (elements.browserStop) {
-    elements.browserStop.hidden = !localGameSession;
-    elements.browserStop.textContent = "Stop";
-    elements.browserStop.disabled = !canShareNearby;
+    elements.browserStop.hidden = !(localGameSession || pendingShareJoinRequest);
+    if (pendingShareJoinRequest) {
+      elements.browserStop.textContent = cancelingShareJoinRequest ? "Canceling..." : "Cancel Request";
+      elements.browserStop.disabled = cancelingShareJoinRequest || !canShareNearby;
+    } else {
+      elements.browserStop.textContent = "Stop";
+      elements.browserStop.disabled = !canShareNearby;
+    }
   }
   if (elements.browserExpand) {
     elements.browserExpand.disabled = !localGameSession;
@@ -9605,6 +9871,10 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
     elements.browserPlaceholder.hidden = false;
     elements.browserPlaceholder.textContent = localGameSession
       ? "Open the game window to play, publish previews, and let nearby visitors claim seats."
+      : pendingShareJoinRequest
+        ? "Waiting for the anchor host to approve this nearby game request."
+        : joinMode && selectedGame
+          ? "Share Game to add this game inside the nearby group once the host approves."
       : selectedGame
         ? `${getSavedGameTitle(selectedGame)} is ready to share nearby.`
         : "Open the game library to choose or generate a simple HTML game.";
@@ -10074,6 +10344,12 @@ function updateGameSessionState(sessionPatch = {}) {
     state.pendingGameShareGameId = "";
     requestOpenWorldGameSession(next);
   }
+  if (
+    String(next?.host_viewer_session_id ?? "").trim() === state.viewerSessionId
+    && isGameMemberSession(next)
+  ) {
+    clearPendingShareJoinState();
+  }
   if (publicGameShell.isOpen(sessionId)) {
     publicGameShell.updateSession(next);
   }
@@ -10105,6 +10381,12 @@ function handleGameStop(payload = {}) {
   }
   const stoppedSession = state.gameSessions.get(sessionId);
   state.gameSessions.delete(sessionId);
+  if (state.pendingShareJoin?.anchorSessionId === sessionId) {
+    clearPendingShareJoinState();
+  }
+  if (state.pendingShareJoinCancellationAnchorSessionId === sessionId) {
+    state.pendingShareJoinCancellationAnchorSessionId = "";
+  }
   if (
     stoppedSession
     && String(stoppedSession?.host_viewer_session_id ?? "").trim() === state.viewerSessionId
@@ -11629,6 +11911,8 @@ function registerInput() {
       const localGameSession = getLocalGameSession();
       if (localGameSession?.session_id) {
         state.realtimeClient?.stopGameShare(localGameSession.session_id);
+      } else {
+        cancelPendingShareJoinRequest();
       }
       return;
     }

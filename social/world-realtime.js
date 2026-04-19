@@ -186,8 +186,8 @@ export function createWorldRealtimeClient(options = {}) {
     sendBrowserInput(sessionId, input) {
       return send("browser:input", { sessionId, input });
     },
-    startGameShare(gameId) {
-      return send("game:start-share", { gameId });
+    startGameShare(gameId, anchorSessionId = "") {
+      return send("game:start-share", { gameId, anchorSessionId });
     },
     stopGameShare(sessionId) {
       return send("game:stop-share", { sessionId });

@@ -202,6 +202,7 @@ export class PrivateWorldGateway {
       });
       this.sendExistingPresence(client);
       await this.rebalanceBrowserSessions(client.browserWorldKey);
+      await this.rebalanceGameSessions(client.browserWorldKey);
       this.sendExistingBrowserSessions(client);
       this.sendExistingGameSessions(client);
     } catch (error) {
@@ -397,6 +398,53 @@ export class PrivateWorldGateway {
     return anchorSessionId ? this.browserManager.getSession(anchorSessionId) ?? null : null;
   }
 
+  getGameSessionHostClient(sessionLike) {
+    const hostSessionId = typeof sessionLike === "string"
+      ? String(sessionLike ?? "").trim()
+      : String(
+        sessionLike?.host_viewer_session_id
+        ?? sessionLike?.hostViewerSessionId
+        ?? sessionLike?.hostSessionId
+        ?? "",
+      ).trim();
+    const browserWorldKey = typeof sessionLike === "string"
+      ? ""
+      : String(sessionLike?.binding_key ?? sessionLike?.bindingKey ?? "").trim();
+    if (!hostSessionId) {
+      return null;
+    }
+    if (browserWorldKey) {
+      return this.findBrowserClient(browserWorldKey, hostSessionId);
+    }
+    return [...this.clients].find((entry) => entry.viewerSessionId === hostSessionId) ?? null;
+  }
+
+  getGameSessionHostPosition(sessionLike) {
+    return positionFromPrivateClient(this.getGameSessionHostClient(sessionLike));
+  }
+
+  getGameOriginSession(sessionLike) {
+    return this.gameShares.getOriginSession(sessionLike);
+  }
+
+  getNearestOriginGameSessionForClient(client, browserWorldKey, excludeHostSessionId = client?.viewerSessionId) {
+    return findNearestOriginSession({
+      requesterPosition: positionFromPrivateClient(client),
+      sessions: this.gameShares.listSessionsForBinding(browserWorldKey).map((session) => this.gameShares.toSessionSummary(session)),
+      resolveSessionPosition: (session) => this.getGameSessionHostPosition(session),
+      radius: PRIVATE_WORLD_BROWSER_RADIUS,
+      excludeHostSessionId,
+    });
+  }
+
+  isClientWithinGameAnchorRadius(client, anchorSession) {
+    return isWithinRadius(
+      positionFromPrivateClient(client),
+      this.getGameSessionHostPosition(anchorSession),
+      PRIVATE_WORLD_BROWSER_RADIUS,
+    );
+  }
+
   getNearestOriginSessionForClient(client, browserWorldKey, excludeHostSessionId = client?.viewerSessionId) {
     return findNearestOriginSession({
       requesterPosition: positionFromPrivateClient(client),
@@ -454,6 +502,10 @@ export class PrivateWorldGateway {
     return viewerCount < maxViewers;
   }
 
+  gameSessionHasJoinCapacity(_session) {
+    return true;
+  }
+
   buildSessionContextPayload(sessionLike) {
     const session = this.buildBrowserSessionPayload(sessionLike);
     if (!session) {
@@ -470,6 +522,62 @@ export class PrivateWorldGateway {
       maxViewers: session.maxViewers,
       listedLive: session.listedLive !== false,
       groupRole: session.groupRole,
+    };
+  }
+
+  buildGameSessionContextPayload(sessionLike) {
+    const session = this.gameShares.toSessionSummary(sessionLike);
+    if (!session) {
+      return null;
+    }
+    return {
+      sessionId: session.session_id,
+      hostSessionId: session.host_viewer_session_id,
+      anchorSessionId: session.anchor_session_id || session.session_id,
+      anchorHostSessionId: session.anchor_host_session_id || session.host_viewer_session_id,
+      title: session.game?.title || "Nearby game",
+      shareKind: "game",
+      viewerCount: session.viewer_count,
+      maxViewers: session.max_viewers,
+      listedLive: session.listed_live !== false,
+      groupRole: session.group_role || "origin",
+    };
+  }
+
+  resolveShareJoinAnchor(client, options = {}) {
+    const requestedAnchorSessionId = String(options.anchorSessionId ?? "").trim();
+    const shareKind = String(options.shareKind ?? "").trim().toLowerCase();
+    const requestedGameSession = requestedAnchorSessionId
+      ? this.gameShares.getSession(requestedAnchorSessionId)
+      : null;
+    if (shareKind === "game" || requestedGameSession) {
+      let anchorSession = requestedGameSession
+        ?? this.getNearestOriginGameSessionForClient(client, client.browserWorldKey);
+      if (anchorSession?.group_role === "member") {
+        anchorSession = this.getGameOriginSession(anchorSession);
+      }
+      if (anchorSession && anchorSession.listed_live === false) {
+        anchorSession = null;
+      }
+      return anchorSession
+        ? {
+          anchorSession,
+          anchorType: "game",
+        }
+        : null;
+    }
+    const anchorSession = requestedAnchorSessionId
+      ? this.browserManager.getSession(requestedAnchorSessionId)
+      : this.getNearestOriginSessionForClient(client, client.browserWorldKey);
+    const resolvedAnchor = anchorSession && !isOriginSession(anchorSession)
+      ? this.getOriginSession(anchorSession)
+      : anchorSession;
+    if (!resolvedAnchor || !isListedLiveSession(resolvedAnchor)) {
+      return null;
+    }
+    return {
+      anchorSession: resolvedAnchor,
+      anchorType: "browser",
     };
   }
 
@@ -609,6 +717,18 @@ export class PrivateWorldGateway {
     if (!session?.binding_key) {
       return;
     }
+    if (session.group_role === "origin" && session.listed_live !== false) {
+      for (const key of [...this.pendingShareJoinRequests.keys()]) {
+        if (key.startsWith(`${session.session_id}:`)) {
+          this.pendingShareJoinRequests.delete(key);
+        }
+      }
+      for (const key of [...this.approvedShareJoins.keys()]) {
+        if (key.startsWith(`${session.session_id}:`)) {
+          this.approvedShareJoins.delete(key);
+        }
+      }
+    }
     this.broadcastToBrowserWorld(session.binding_key, {
       type: "game:stop-share",
       sessionId: session.session_id,
@@ -626,6 +746,47 @@ export class PrivateWorldGateway {
       return;
     }
     try {
+      let groupRole = "origin";
+      let anchorSession = null;
+      const existingGameSession = this.getHostedGameSession(client.viewerSessionId, client.browserWorldKey);
+      if (existingGameSession?.group_role === "member") {
+        const existingAnchorSession = this.getGameOriginSession(existingGameSession);
+        if (existingAnchorSession && this.isClientWithinGameAnchorRadius(client, existingAnchorSession)) {
+          anchorSession = existingAnchorSession;
+          groupRole = "member";
+        }
+      }
+      if (!anchorSession) {
+        const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
+        anchorSession = requestedAnchorSessionId
+          ? this.gameShares.getSession(requestedAnchorSessionId)
+          : this.getNearestOriginGameSessionForClient(client, client.browserWorldKey);
+        if (anchorSession?.group_role === "member") {
+          anchorSession = this.getGameOriginSession(anchorSession);
+        }
+        if (anchorSession && anchorSession.listed_live === false) {
+          anchorSession = null;
+        }
+      }
+      if (anchorSession && this.isClientWithinGameAnchorRadius(client, anchorSession)) {
+        const alreadyJoinedAnchor =
+          existingGameSession?.group_role === "member"
+          && String(existingGameSession.anchor_session_id ?? existingGameSession.anchorSessionId ?? "").trim() === String(anchorSession.id ?? anchorSession.session_id ?? "").trim();
+        if (!alreadyJoinedAnchor && !this.hasApprovedShareJoin(anchorSession.id ?? anchorSession.session_id, client.viewerSessionId)) {
+          sendJson(client, {
+            type: "share:join-required",
+            shareKind: "game",
+            anchorSessionId: anchorSession.id ?? anchorSession.session_id,
+            anchorHostSessionId: anchorSession.host_viewer_session_id ?? anchorSession.hostViewerSessionId,
+            anchorSession: this.buildGameSessionContextPayload(anchorSession),
+            message: "Ask the original sharer to join this nearby share.",
+          });
+          return;
+        }
+        groupRole = "member";
+      } else {
+        anchorSession = null;
+      }
       const payload = await this.store.getWorldGame(client.profile, {
         gameId: String(message.gameId ?? "").trim(),
       });
@@ -634,8 +795,17 @@ export class PrivateWorldGateway {
         bindingKey: client.browserWorldKey,
         hostViewerSessionId: client.viewerSessionId,
         hostDisplayName: this.getClientDisplayName(client),
+        groupRole,
+        listedLive: groupRole === "origin",
+        movementLocked: groupRole === "origin",
+        anchorSessionId: anchorSession?.id ?? anchorSession?.session_id ?? "",
+        anchorHostSessionId: anchorSession?.host_viewer_session_id ?? anchorSession?.hostViewerSessionId ?? "",
+        maxViewers: PRIVATE_WORLD_MAX_RECIPIENTS,
         game: payload.game,
       });
+      if (groupRole === "member" && anchorSession) {
+        this.clearApprovedShareJoin(anchorSession.id ?? anchorSession.session_id, client.viewerSessionId);
+      }
       this.broadcastGameSession(session);
     } catch (error) {
       this.sendGameError(client, error);
@@ -654,8 +824,7 @@ export class PrivateWorldGateway {
       if (session.host_viewer_session_id !== client.viewerSessionId) {
         throw new Error("Only the host can stop this game share");
       }
-      const stopped = this.gameShares.stopSession(session.id ?? session.session_id);
-      if (stopped) {
+      for (const stopped of this.gameShares.stopSessionTree(session.id ?? session.session_id)) {
         this.broadcastGameStop(stopped);
       }
     } catch (error) {
@@ -904,14 +1073,18 @@ export class PrivateWorldGateway {
       return;
     }
     const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
-    const anchorSession = requestedAnchorSessionId
-      ? this.browserManager.getSession(requestedAnchorSessionId)
-      : this.getNearestOriginSessionForClient(client, client.browserWorldKey);
+    const shareKind = String(message.shareKind ?? "screen").trim().toLowerCase();
+    const resolvedAnchor = this.resolveShareJoinAnchor(client, {
+      anchorSessionId: requestedAnchorSessionId,
+      shareKind,
+    });
+    const anchorSession = resolvedAnchor?.anchorSession ?? null;
+    const isGameAnchor = resolvedAnchor?.anchorType === "game";
     if (
       !anchorSession
-      || !isListedLiveSession(anchorSession)
-      || anchorSession.hostSessionId === client.viewerSessionId
-      || !this.isClientWithinAnchorRadius(client, anchorSession)
+      || (isGameAnchor ? anchorSession.listed_live === false : !isListedLiveSession(anchorSession))
+      || String(isGameAnchor ? anchorSession.host_viewer_session_id : anchorSession.hostSessionId).trim() === client.viewerSessionId
+      || !(isGameAnchor ? this.isClientWithinGameAnchorRadius(client, anchorSession) : this.isClientWithinAnchorRadius(client, anchorSession))
     ) {
       sendJson(client, {
         type: "share:join-resolved",
@@ -921,38 +1094,45 @@ export class PrivateWorldGateway {
       });
       return;
     }
-    if (!this.sessionHasCapacity(anchorSession)) {
+    if (!(isGameAnchor ? this.gameSessionHasJoinCapacity(anchorSession) : this.sessionHasCapacity(anchorSession))) {
       sendJson(client, {
         type: "share:join-resolved",
         approved: false,
-        anchorSessionId: anchorSession.id,
+        anchorSessionId: anchorSession.id ?? anchorSession.session_id,
         message: "That nearby share is full right now.",
       });
       return;
     }
-    const key = this.getShareJoinKey(anchorSession.id, client.viewerSessionId);
+    const normalizedAnchorSessionId = String(anchorSession.id ?? anchorSession.session_id ?? "").trim();
+    const key = this.getShareJoinKey(normalizedAnchorSessionId, client.viewerSessionId);
     this.pendingShareJoinRequests.set(key, {
-      anchorSessionId: anchorSession.id,
+      anchorSessionId: normalizedAnchorSessionId,
       requesterSessionId: client.viewerSessionId,
-      shareKind: String(message.shareKind ?? "screen").trim().toLowerCase(),
+      shareKind,
       requestedAt: Date.now(),
       browserWorldKey: client.browserWorldKey,
     });
-    const anchorClient = this.findBrowserClient(client.browserWorldKey, anchorSession.hostSessionId);
+    const anchorClient = isGameAnchor
+      ? this.getGameSessionHostClient(anchorSession)
+      : this.findBrowserClient(client.browserWorldKey, anchorSession.hostSessionId);
     if (anchorClient) {
       sendJson(anchorClient, {
         type: "share:join-request",
-        anchorSessionId: anchorSession.id,
+        anchorSessionId: normalizedAnchorSessionId,
         requesterSessionId: client.viewerSessionId,
         requesterDisplayName: this.getClientDisplayName(client),
-        shareKind: String(message.shareKind ?? "screen").trim().toLowerCase(),
-        anchorSession: this.buildSessionContextPayload(anchorSession),
+        shareKind,
+        anchorSession: isGameAnchor
+          ? this.buildGameSessionContextPayload(anchorSession)
+          : this.buildSessionContextPayload(anchorSession),
       });
     }
     sendJson(client, {
       type: "share:join-requested",
-      anchorSessionId: anchorSession.id,
-      anchorHostSessionId: anchorSession.hostSessionId,
+      anchorSessionId: normalizedAnchorSessionId,
+      anchorHostSessionId: isGameAnchor
+        ? anchorSession.host_viewer_session_id
+        : anchorSession.hostSessionId,
     });
   }
 
@@ -967,8 +1147,12 @@ export class PrivateWorldGateway {
     const key = this.getShareJoinKey(anchorSessionId, client.viewerSessionId);
     const hadPendingRequest = this.pendingShareJoinRequests.delete(key);
     this.clearApprovedShareJoin(anchorSessionId, client.viewerSessionId);
-    const anchorSession = this.browserManager.getSession(anchorSessionId);
-    const anchorHostSessionId = String(anchorSession?.hostSessionId ?? "").trim();
+    const anchorSession = this.browserManager.getSession(anchorSessionId) ?? this.gameShares.getSession(anchorSessionId);
+    const anchorHostSessionId = String(
+      anchorSession?.hostSessionId
+      ?? anchorSession?.host_viewer_session_id
+      ?? "",
+    ).trim();
     if (hadPendingRequest && anchorHostSessionId) {
       const anchorClient = this.findBrowserClient(client.browserWorldKey, anchorHostSessionId);
       if (anchorClient) {
@@ -1000,8 +1184,18 @@ export class PrivateWorldGateway {
       return;
     }
     this.pendingShareJoinRequests.delete(key);
-    const anchorSession = this.browserManager.getSession(anchorSessionId);
-    if (!anchorSession || anchorSession.hostSessionId !== client.viewerSessionId || !isListedLiveSession(anchorSession)) {
+    const anchorSession = this.browserManager.getSession(anchorSessionId) ?? this.gameShares.getSession(anchorSessionId);
+    const isGameAnchor = Boolean(anchorSession && "host_viewer_session_id" in anchorSession);
+    const anchorHostSessionId = String(
+      anchorSession?.hostSessionId
+      ?? anchorSession?.host_viewer_session_id
+      ?? "",
+    ).trim();
+    if (
+      !anchorSession
+      || anchorHostSessionId !== client.viewerSessionId
+      || (isGameAnchor ? anchorSession.listed_live === false : !isListedLiveSession(anchorSession))
+    ) {
       return;
     }
     const requesterClient = this.findBrowserClient(client.browserWorldKey, requesterSessionId);
@@ -1009,8 +1203,12 @@ export class PrivateWorldGateway {
       return;
     }
     const approved = message.approved === true
-      && this.isClientWithinAnchorRadius(requesterClient, anchorSession)
-      && this.sessionHasCapacity(anchorSession);
+      && (isGameAnchor
+        ? this.isClientWithinGameAnchorRadius(requesterClient, anchorSession)
+        : this.isClientWithinAnchorRadius(requesterClient, anchorSession))
+      && (isGameAnchor
+        ? this.gameSessionHasJoinCapacity(anchorSession)
+        : this.sessionHasCapacity(anchorSession));
     if (approved) {
       this.grantApprovedShareJoin(anchorSessionId, requesterSessionId, request.shareKind);
     } else {
@@ -1020,8 +1218,10 @@ export class PrivateWorldGateway {
       type: "share:join-resolved",
       approved,
       anchorSessionId,
-      anchorHostSessionId: anchorSession.hostSessionId,
-      anchorSession: this.buildSessionContextPayload(anchorSession),
+      anchorHostSessionId,
+      anchorSession: isGameAnchor
+        ? this.buildGameSessionContextPayload(anchorSession)
+        : this.buildSessionContextPayload(anchorSession),
       message: approved ? "Join approved." : "Join request declined.",
     });
   }
@@ -1326,6 +1526,7 @@ export class PrivateWorldGateway {
       }
     }
     await this.rebalanceBrowserSessions(client.browserWorldKey);
+    await this.rebalanceGameSessions(client.browserWorldKey);
   }
 
   async handleBrowserStart(client, message) {
@@ -1671,6 +1872,26 @@ export class PrivateWorldGateway {
     await this.updatePersistentVoiceOffers(browserWorldKey);
   }
 
+  async rebalanceGameSessions(browserWorldKey) {
+    for (const session of this.gameShares.listSessionsForBinding(browserWorldKey)) {
+      const hostClient = this.getGameSessionHostClient(session);
+      if (!hostClient) {
+        for (const stopped of this.gameShares.stopSessionTree(session.id ?? session.session_id)) {
+          this.broadcastGameStop(stopped);
+        }
+        continue;
+      }
+      if (session.group_role === "member") {
+        const anchorSession = this.getGameOriginSession(session);
+        if (!anchorSession || !this.isClientWithinGameAnchorRadius(hostClient, anchorSession)) {
+          for (const stopped of this.gameShares.stopSessionTree(session.id ?? session.session_id)) {
+            this.broadcastGameStop(stopped);
+          }
+        }
+      }
+    }
+  }
+
   async broadcastBrowserStop(payload) {
     const browserWorldKey = String(payload.worldSnapshotId ?? "").trim();
     if (!browserWorldKey) {
@@ -1758,6 +1979,7 @@ export class PrivateWorldGateway {
       await this.stopHostedSessions(client.viewerSessionId);
     } else {
       await this.rebalanceBrowserSessions(client.browserWorldKey);
+      await this.rebalanceGameSessions(client.browserWorldKey);
     }
     if (client.profile) {
       this.broadcastToWorld(client.worldId, client.creatorUsername, {

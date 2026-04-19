@@ -293,6 +293,155 @@ test("private game share starts, opens, and relays player actions to the host", 
   await gateway.dispose();
 });
 
+test("private game share inside an existing nearby game anchor returns join-required", async () => {
+  const gateway = createGateway({
+    async getWorldGame() {
+      return {
+        game: {
+          id: "game_request",
+          owner_profile_id: "profile_profile:requester",
+          title: "Checkers",
+          prompt: "make checkers",
+          source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+          manifest: {
+            title: "Checkers",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+          },
+        },
+      };
+    },
+  });
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const requester = createClient({
+    viewerSessionId: "profile:requester",
+    displayName: "requester",
+    position: { x: 28, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(requester);
+
+  const anchorSession = gateway.gameShares.createSession({
+    scope: "private",
+    bindingKey: host.browserWorldKey,
+    hostViewerSessionId: host.viewerSessionId,
+    hostDisplayName: "host",
+    groupRole: "origin",
+    listedLive: true,
+    movementLocked: true,
+    game: {
+      id: "game_anchor",
+      owner_profile_id: "profile_profile:host",
+      title: "Chess",
+      prompt: "make chess",
+      source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+      manifest: {
+        title: "Chess",
+        multiplayer_mode: "turn-based",
+        min_players: 2,
+        max_players: 2,
+        allow_viewers: true,
+        aspect_ratio: 1.6,
+      },
+    },
+  });
+
+  await gateway.handleGameStartShare(requester, { gameId: "game_request" });
+
+  assert.equal(
+    requester.socket.sent.some((message) =>
+      message.type === "share:join-required"
+      && message.shareKind === "game"
+      && message.anchorSessionId === anchorSession.session_id),
+    true,
+  );
+  assert.equal(gateway.getHostedGameSession(requester.viewerSessionId, requester.browserWorldKey), null);
+
+  await gateway.dispose();
+});
+
+test("approved private nearby game join creates an unlisted member game share", async () => {
+  const gateway = createGateway({
+    async getWorldGame() {
+      return {
+        game: {
+          id: "game_member",
+          owner_profile_id: "profile_profile:requester",
+          title: "Tic-Tac-Toe",
+          prompt: "make tic tac toe",
+          source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+          manifest: {
+            title: "Tic-Tac-Toe",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+          },
+        },
+      };
+    },
+  });
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const requester = createClient({
+    viewerSessionId: "profile:requester",
+    displayName: "requester",
+    position: { x: 24, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(requester);
+
+  const anchorSession = gateway.gameShares.createSession({
+    scope: "private",
+    bindingKey: host.browserWorldKey,
+    hostViewerSessionId: host.viewerSessionId,
+    hostDisplayName: "host",
+    groupRole: "origin",
+    listedLive: true,
+    movementLocked: true,
+    game: {
+      id: "game_anchor",
+      owner_profile_id: "profile_profile:host",
+      title: "Chess",
+      prompt: "make chess",
+      source_html: "<!DOCTYPE html><html><body><script>window.MauworldGame.register({ mount() { return {}; } });</script></body></html>",
+      manifest: {
+        title: "Chess",
+        multiplayer_mode: "turn-based",
+        min_players: 2,
+        max_players: 2,
+        allow_viewers: true,
+        aspect_ratio: 1.6,
+      },
+    },
+  });
+  gateway.grantApprovedShareJoin(anchorSession.session_id, requester.viewerSessionId, "game");
+
+  await gateway.handleGameStartShare(requester, {
+    gameId: "game_member",
+    anchorSessionId: anchorSession.session_id,
+  });
+
+  const memberSession = gateway.getHostedGameSession(requester.viewerSessionId, requester.browserWorldKey);
+  assert.equal(memberSession?.group_role, "member");
+  assert.equal(memberSession?.listed_live, false);
+  assert.equal(memberSession?.movement_locked, false);
+  assert.equal(memberSession?.anchor_session_id, anchorSession.session_id);
+
+  await gateway.dispose();
+});
+
 test("private nearby share starts as an origin when no anchor is nearby", async () => {
   const gateway = createGateway();
   const host = createClient({

@@ -387,8 +387,7 @@ export class RealtimeGateway {
       void this.stopHostedSessions(client.viewerSessionId);
       const hostedGameSession = this.getHostedGameSession(client.viewerSessionId, previousWorld);
       if (hostedGameSession) {
-        const stoppedGameSession = this.gameShares.stopSession(hostedGameSession.id);
-        if (stoppedGameSession) {
+        for (const stoppedGameSession of this.gameShares.stopSessionTree(hostedGameSession.id)) {
           this.broadcastGameStop(stoppedGameSession);
         }
       }
@@ -451,6 +450,50 @@ export class RealtimeGateway {
     }
     const anchorSessionId = getAnchorSessionId(sessionLike);
     return anchorSessionId ? this.browserManager.getSession(anchorSessionId) ?? null : null;
+  }
+
+  getGameSessionHostClient(sessionLike) {
+    const hostSessionId = typeof sessionLike === "string"
+      ? String(sessionLike ?? "").trim()
+      : String(
+        sessionLike?.host_viewer_session_id
+        ?? sessionLike?.hostViewerSessionId
+        ?? sessionLike?.hostSessionId
+        ?? "",
+      ).trim();
+    return hostSessionId ? this.clients.get(hostSessionId) ?? null : null;
+  }
+
+  getGameSessionHostPosition(sessionLike) {
+    return this.getGameSessionHostClient(sessionLike)?.position ?? null;
+  }
+
+  getGameOriginSession(sessionLike) {
+    return this.gameShares.getOriginSession(sessionLike);
+  }
+
+  getNearestOriginGameSessionForClient(client, interactionSettings, options = {}) {
+    if (!client?.worldSnapshotId) {
+      return null;
+    }
+    return findNearestOriginSession({
+      requesterPosition: client.position,
+      sessions: this.gameShares.listSessionsForBinding(client.worldSnapshotId).map((session) => this.gameShares.toSessionSummary(session)),
+      resolveSessionPosition: (session) => this.getGameSessionHostPosition(session),
+      radius: interactionSettings?.browserRadius,
+      excludeHostSessionId: options.excludeHostSessionId ?? client.viewerSessionId,
+    });
+  }
+
+  isClientWithinGameAnchorRadius(client, anchorSession, interactionSettings) {
+    if (!client || !anchorSession) {
+      return false;
+    }
+    return isWithinRadius(
+      client.position,
+      this.getGameSessionHostPosition(anchorSession),
+      interactionSettings?.browserRadius,
+    );
   }
 
   getNearestOriginSessionForClient(client, interactionSettings, options = {}) {
@@ -521,6 +564,10 @@ export class RealtimeGateway {
     return viewerCount < maxViewers;
   }
 
+  gameSessionHasJoinCapacity(_session, _interactionSettings) {
+    return true;
+  }
+
   buildSessionContextPayload(sessionLike, interactionSettings = null) {
     const session = this.buildBrowserSessionPayload(sessionLike, interactionSettings);
     if (!session) {
@@ -537,6 +584,62 @@ export class RealtimeGateway {
       maxViewers: session.maxViewers,
       listedLive: session.listedLive !== false,
       groupRole: session.groupRole,
+    };
+  }
+
+  buildGameSessionContextPayload(sessionLike) {
+    const session = this.gameShares.toSessionSummary(sessionLike);
+    if (!session) {
+      return null;
+    }
+    return {
+      sessionId: session.session_id,
+      hostSessionId: session.host_viewer_session_id,
+      anchorSessionId: session.anchor_session_id || session.session_id,
+      anchorHostSessionId: session.anchor_host_session_id || session.host_viewer_session_id,
+      title: session.game?.title || "Nearby game",
+      shareKind: "game",
+      viewerCount: session.viewer_count,
+      maxViewers: session.max_viewers,
+      listedLive: session.listed_live !== false,
+      groupRole: session.group_role || "origin",
+    };
+  }
+
+  resolveShareJoinAnchor(client, interactionSettings, options = {}) {
+    const requestedAnchorSessionId = String(options.anchorSessionId ?? "").trim();
+    const shareKind = String(options.shareKind ?? "").trim().toLowerCase();
+    const requestedGameSession = requestedAnchorSessionId
+      ? this.gameShares.getSession(requestedAnchorSessionId)
+      : null;
+    if (shareKind === "game" || requestedGameSession) {
+      let anchorSession = requestedGameSession
+        ?? this.getNearestOriginGameSessionForClient(client, interactionSettings);
+      if (anchorSession && anchorSession.group_role === "member") {
+        anchorSession = this.getGameOriginSession(anchorSession);
+      }
+      if (anchorSession && anchorSession.listed_live === false) {
+        anchorSession = null;
+      }
+      return anchorSession
+        ? {
+          anchorSession,
+          anchorType: "game",
+        }
+        : null;
+    }
+    const anchorSession = requestedAnchorSessionId
+      ? this.browserManager.getSession(requestedAnchorSessionId)
+      : this.getNearestOriginSessionForClient(client, interactionSettings);
+    const resolvedAnchor = anchorSession && !isOriginSession(anchorSession)
+      ? this.getOriginSession(anchorSession)
+      : anchorSession;
+    if (!resolvedAnchor || !isListedLiveSession(resolvedAnchor)) {
+      return null;
+    }
+    return {
+      anchorSession: resolvedAnchor,
+      anchorType: "browser",
     };
   }
 
@@ -698,6 +801,7 @@ export class RealtimeGateway {
       }, new Set([client.viewerSessionId]));
     }
     await this.rebalanceBrowserSessions(worldSnapshotId);
+    await this.rebalanceGameSessions(worldSnapshotId, interactionSettings);
   }
 
   async handleChatSend(client, message) {
@@ -799,6 +903,18 @@ export class RealtimeGateway {
     if (!session?.binding_key) {
       return;
     }
+    if (session.group_role === "origin" && session.listed_live !== false) {
+      for (const key of [...this.pendingShareJoinRequests.keys()]) {
+        if (key.startsWith(`${session.session_id}:`)) {
+          this.pendingShareJoinRequests.delete(key);
+        }
+      }
+      for (const key of [...this.approvedShareJoins.keys()]) {
+        if (key.startsWith(`${session.session_id}:`)) {
+          this.approvedShareJoins.delete(key);
+        }
+      }
+    }
     this.broadcastToWorld(session.binding_key, {
       type: "game:stop-share",
       sessionId: session.session_id,
@@ -839,6 +955,48 @@ export class RealtimeGateway {
       return;
     }
     try {
+      const interactionSettings = await this.getInteractionSettings();
+      let groupRole = "origin";
+      let anchorSession = null;
+      const existingGameSession = this.getHostedGameSession(client.viewerSessionId, client.worldSnapshotId);
+      if (existingGameSession?.group_role === "member") {
+        const existingAnchorSession = this.getGameOriginSession(existingGameSession);
+        if (existingAnchorSession && this.isClientWithinGameAnchorRadius(client, existingAnchorSession, interactionSettings)) {
+          anchorSession = existingAnchorSession;
+          groupRole = "member";
+        }
+      }
+      if (!anchorSession) {
+        const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
+        anchorSession = requestedAnchorSessionId
+          ? this.gameShares.getSession(requestedAnchorSessionId)
+          : this.getNearestOriginGameSessionForClient(client, interactionSettings);
+        if (anchorSession?.group_role === "member") {
+          anchorSession = this.getGameOriginSession(anchorSession);
+        }
+        if (anchorSession && anchorSession.listed_live === false) {
+          anchorSession = null;
+        }
+      }
+      if (anchorSession && this.isClientWithinGameAnchorRadius(client, anchorSession, interactionSettings)) {
+        const alreadyJoinedAnchor =
+          existingGameSession?.group_role === "member"
+          && String(existingGameSession.anchor_session_id ?? existingGameSession.anchorSessionId ?? "").trim() === String(anchorSession.id ?? anchorSession.session_id ?? "").trim();
+        if (!alreadyJoinedAnchor && !this.hasApprovedShareJoin(anchorSession.id ?? anchorSession.session_id, client.viewerSessionId)) {
+          sendJson(client, {
+            type: "share:join-required",
+            shareKind: "game",
+            anchorSessionId: anchorSession.id ?? anchorSession.session_id,
+            anchorHostSessionId: anchorSession.host_viewer_session_id ?? anchorSession.hostViewerSessionId,
+            anchorSession: this.buildGameSessionContextPayload(anchorSession),
+            message: "Ask the original sharer to join this nearby share.",
+          });
+          return;
+        }
+        groupRole = "member";
+      } else {
+        anchorSession = null;
+      }
       const payload = await this.store.getWorldGame(client.profile, {
         gameId: String(message.gameId ?? "").trim(),
       });
@@ -847,8 +1005,17 @@ export class RealtimeGateway {
         bindingKey: client.worldSnapshotId,
         hostViewerSessionId: client.viewerSessionId,
         hostDisplayName: this.getClientDisplayName(client),
+        groupRole,
+        listedLive: groupRole === "origin",
+        movementLocked: groupRole === "origin",
+        anchorSessionId: anchorSession?.id ?? anchorSession?.session_id ?? "",
+        anchorHostSessionId: anchorSession?.host_viewer_session_id ?? anchorSession?.hostViewerSessionId ?? "",
+        maxViewers: interactionSettings?.interactionMaxRecipients,
         game: payload.game,
       });
+      if (groupRole === "member" && anchorSession) {
+        this.clearApprovedShareJoin(anchorSession.id ?? anchorSession.session_id, client.viewerSessionId);
+      }
       this.broadcastGameSession(session);
     } catch (error) {
       this.sendGameError(client, error);
@@ -867,8 +1034,7 @@ export class RealtimeGateway {
       if (session.host_viewer_session_id !== client.viewerSessionId) {
         throw new Error("Only the host can stop this game share");
       }
-      const stopped = this.gameShares.stopSession(session.id ?? session.session_id);
-      if (stopped) {
+      for (const stopped of this.gameShares.stopSessionTree(session.id ?? session.session_id)) {
         this.broadcastGameStop(stopped);
       }
     } catch (error) {
@@ -1062,14 +1228,20 @@ export class RealtimeGateway {
     }
     const interactionSettings = await this.getInteractionSettings();
     const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
-    const anchorSession = requestedAnchorSessionId
-      ? this.browserManager.getSession(requestedAnchorSessionId)
-      : this.getNearestOriginSessionForClient(client, interactionSettings);
+    const shareKind = String(message.shareKind ?? "screen").trim().toLowerCase();
+    const resolvedAnchor = this.resolveShareJoinAnchor(client, interactionSettings, {
+      anchorSessionId: requestedAnchorSessionId,
+      shareKind,
+    });
+    const anchorSession = resolvedAnchor?.anchorSession ?? null;
+    const isGameAnchor = resolvedAnchor?.anchorType === "game";
     if (
       !anchorSession
-      || !isListedLiveSession(anchorSession)
-      || anchorSession.hostSessionId === client.viewerSessionId
-      || !this.isClientWithinAnchorRadius(client, anchorSession, interactionSettings)
+      || (isGameAnchor ? anchorSession.listed_live === false : !isListedLiveSession(anchorSession))
+      || String(isGameAnchor ? anchorSession.host_viewer_session_id : anchorSession.hostSessionId).trim() === client.viewerSessionId
+      || !(isGameAnchor
+        ? this.isClientWithinGameAnchorRadius(client, anchorSession, interactionSettings)
+        : this.isClientWithinAnchorRadius(client, anchorSession, interactionSettings))
     ) {
       sendJson(client, {
         type: "share:join-resolved",
@@ -1079,38 +1251,45 @@ export class RealtimeGateway {
       });
       return;
     }
-    if (!this.sessionHasCapacity(anchorSession, interactionSettings)) {
+    if (!(isGameAnchor ? this.gameSessionHasJoinCapacity(anchorSession, interactionSettings) : this.sessionHasCapacity(anchorSession, interactionSettings))) {
       sendJson(client, {
         type: "share:join-resolved",
         approved: false,
-        anchorSessionId: anchorSession.id,
+        anchorSessionId: anchorSession.id ?? anchorSession.session_id,
         message: "That nearby share is full right now.",
       });
       return;
     }
-    const key = this.getShareJoinKey(anchorSession.id, client.viewerSessionId);
+    const normalizedAnchorSessionId = String(anchorSession.id ?? anchorSession.session_id ?? "").trim();
+    const key = this.getShareJoinKey(normalizedAnchorSessionId, client.viewerSessionId);
     this.pendingShareJoinRequests.set(key, {
-      anchorSessionId: anchorSession.id,
+      anchorSessionId: normalizedAnchorSessionId,
       requesterSessionId: client.viewerSessionId,
-      shareKind: String(message.shareKind ?? "screen").trim().toLowerCase(),
+      shareKind,
       requestedAt: Date.now(),
       worldSnapshotId: client.worldSnapshotId,
     });
-    const anchorClient = this.clients.get(anchorSession.hostSessionId);
+    const anchorClient = isGameAnchor
+      ? this.getGameSessionHostClient(anchorSession)
+      : this.clients.get(anchorSession.hostSessionId);
     if (anchorClient) {
       sendJson(anchorClient, {
         type: "share:join-request",
-        anchorSessionId: anchorSession.id,
+        anchorSessionId: normalizedAnchorSessionId,
         requesterSessionId: client.viewerSessionId,
         requesterDisplayName: this.getClientDisplayName(client),
-        shareKind: String(message.shareKind ?? "screen").trim().toLowerCase(),
-        anchorSession: this.buildSessionContextPayload(anchorSession, interactionSettings),
+        shareKind,
+        anchorSession: isGameAnchor
+          ? this.buildGameSessionContextPayload(anchorSession)
+          : this.buildSessionContextPayload(anchorSession, interactionSettings),
       });
     }
     sendJson(client, {
       type: "share:join-requested",
-      anchorSessionId: anchorSession.id,
-      anchorHostSessionId: anchorSession.hostSessionId,
+      anchorSessionId: normalizedAnchorSessionId,
+      anchorHostSessionId: isGameAnchor
+        ? anchorSession.host_viewer_session_id
+        : anchorSession.hostSessionId,
     });
   }
 
@@ -1125,8 +1304,12 @@ export class RealtimeGateway {
     const key = this.getShareJoinKey(anchorSessionId, client.viewerSessionId);
     const hadPendingRequest = this.pendingShareJoinRequests.delete(key);
     this.clearApprovedShareJoin(anchorSessionId, client.viewerSessionId);
-    const anchorSession = this.browserManager.getSession(anchorSessionId);
-    const anchorHostSessionId = String(anchorSession?.hostSessionId ?? "").trim();
+    const anchorSession = this.browserManager.getSession(anchorSessionId) ?? this.gameShares.getSession(anchorSessionId);
+    const anchorHostSessionId = String(
+      anchorSession?.hostSessionId
+      ?? anchorSession?.host_viewer_session_id
+      ?? "",
+    ).trim();
     if (hadPendingRequest && anchorHostSessionId) {
       const anchorClient = this.clients.get(anchorHostSessionId);
       if (anchorClient) {
@@ -1158,8 +1341,18 @@ export class RealtimeGateway {
       return;
     }
     this.pendingShareJoinRequests.delete(key);
-    const anchorSession = this.browserManager.getSession(anchorSessionId);
-    if (!anchorSession || anchorSession.hostSessionId !== client.viewerSessionId || !isListedLiveSession(anchorSession)) {
+    const anchorSession = this.browserManager.getSession(anchorSessionId) ?? this.gameShares.getSession(anchorSessionId);
+    const isGameAnchor = Boolean(anchorSession && "host_viewer_session_id" in anchorSession);
+    const anchorHostSessionId = String(
+      anchorSession?.hostSessionId
+      ?? anchorSession?.host_viewer_session_id
+      ?? "",
+    ).trim();
+    if (
+      !anchorSession
+      || anchorHostSessionId !== client.viewerSessionId
+      || (isGameAnchor ? anchorSession.listed_live === false : !isListedLiveSession(anchorSession))
+    ) {
       return;
     }
     const requesterClient = this.clients.get(requesterSessionId);
@@ -1168,8 +1361,12 @@ export class RealtimeGateway {
     }
     const interactionSettings = await this.getInteractionSettings();
     const approved = message.approved === true
-      && this.isClientWithinAnchorRadius(requesterClient, anchorSession, interactionSettings)
-      && this.sessionHasCapacity(anchorSession, interactionSettings);
+      && (isGameAnchor
+        ? this.isClientWithinGameAnchorRadius(requesterClient, anchorSession, interactionSettings)
+        : this.isClientWithinAnchorRadius(requesterClient, anchorSession, interactionSettings))
+      && (isGameAnchor
+        ? this.gameSessionHasJoinCapacity(anchorSession, interactionSettings)
+        : this.sessionHasCapacity(anchorSession, interactionSettings));
     if (approved) {
       this.grantApprovedShareJoin(anchorSessionId, requesterSessionId, request.shareKind);
     } else {
@@ -1179,8 +1376,10 @@ export class RealtimeGateway {
       type: "share:join-resolved",
       approved,
       anchorSessionId,
-      anchorHostSessionId: anchorSession.hostSessionId,
-      anchorSession: this.buildSessionContextPayload(anchorSession, interactionSettings),
+      anchorHostSessionId,
+      anchorSession: isGameAnchor
+        ? this.buildGameSessionContextPayload(anchorSession)
+        : this.buildSessionContextPayload(anchorSession, interactionSettings),
       message: approved ? "Join approved." : "Join request declined.",
     });
   }
@@ -1825,6 +2024,27 @@ export class RealtimeGateway {
     await this.updatePersistentVoiceOffers(worldSnapshotId, resolvedInteractionSettings);
   }
 
+  async rebalanceGameSessions(worldSnapshotId, interactionSettings = null) {
+    const resolvedInteractionSettings = interactionSettings ?? await this.getInteractionSettings();
+    for (const session of this.gameShares.listSessionsForBinding(worldSnapshotId)) {
+      const hostClient = this.getGameSessionHostClient(session);
+      if (!hostClient) {
+        for (const stopped of this.gameShares.stopSessionTree(session.id ?? session.session_id)) {
+          this.broadcastGameStop(stopped);
+        }
+        continue;
+      }
+      if (session.group_role === "member") {
+        const anchorSession = this.getGameOriginSession(session);
+        if (!anchorSession || !this.isClientWithinGameAnchorRadius(hostClient, anchorSession, resolvedInteractionSettings)) {
+          for (const stopped of this.gameShares.stopSessionTree(session.id ?? session.session_id)) {
+            this.broadcastGameStop(stopped);
+          }
+        }
+      }
+    }
+  }
+
   async handleDisconnect(client) {
     if (!this.clients.has(client.viewerSessionId)) {
       return;
@@ -1853,6 +2073,7 @@ export class RealtimeGateway {
     }
     if (worldSnapshotId) {
       await this.rebalanceBrowserSessions(worldSnapshotId);
+      await this.rebalanceGameSessions(worldSnapshotId);
     }
   }
 
