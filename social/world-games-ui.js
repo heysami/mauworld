@@ -1606,9 +1606,6 @@ export function createWorldGameShell(options = {}) {
   elements.copy?.addEventListener("click", () => {
     options.onCopy?.(state.session?.session_id ?? "");
   });
-  elements.frame?.addEventListener("load", () => {
-    state.iframeReady = false;
-  });
   window.addEventListener("message", handleShellMessage);
 
   render();
