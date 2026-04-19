@@ -695,7 +695,53 @@ export class RealtimeGateway {
       ? this.getOriginSession(session)
       : null;
     const anchorPosition = anchorSession ? this.getSessionHostPosition(anchorSession) : hostClient.position;
-    return this.selectBrowserRecipients(hostClient, worldClients, interactionSettings, anchorPosition);
+    const recipients = this.selectBrowserRecipients(hostClient, worldClients, interactionSettings, anchorPosition);
+    const suppressedRecipients = this.getStandalonePersistentVoiceSuppressedRecipients(
+      session,
+      worldClients,
+      interactionSettings,
+    );
+    if (!suppressedRecipients || suppressedRecipients.size === 0) {
+      return recipients;
+    }
+    for (const viewerSessionId of suppressedRecipients) {
+      if (viewerSessionId === hostClient.viewerSessionId) {
+        continue;
+      }
+      recipients.delete(viewerSessionId);
+    }
+    return recipients;
+  }
+
+  getStandalonePersistentVoiceSuppressedRecipients(session, worldClients, interactionSettings) {
+    if (!isPersistentVoiceSession(session) || isJoinedPersistentVoiceSession(session)) {
+      return null;
+    }
+    const sessionId = String(session?.id ?? session?.sessionId ?? "").trim();
+    if (!sessionId) {
+      return null;
+    }
+    const offer = this.voiceJoinOffers.get(sessionId) ?? null;
+    const anchorSessionId = String(offer?.anchorSessionId ?? "").trim();
+    if (!anchorSessionId) {
+      return null;
+    }
+    const hostClient = this.getSessionHostClient(session);
+    const anchorSession = this.browserManager.getSession(anchorSessionId);
+    if (
+      !hostClient
+      || !anchorSession
+      || !isListedLiveSession(anchorSession)
+      || !this.isClientWithinAnchorRadius(hostClient, anchorSession, interactionSettings)
+    ) {
+      return null;
+    }
+    const anchorHostClient = this.getSessionHostClient(anchorSession);
+    if (!anchorHostClient) {
+      return null;
+    }
+    const anchorPosition = this.getSessionHostPosition(anchorSession) ?? anchorHostClient.position;
+    return this.selectBrowserRecipients(anchorHostClient, worldClients, interactionSettings, anchorPosition);
   }
 
   getGameSessionAudienceRecipients(session, worldClients, interactionSettings) {
@@ -2053,6 +2099,7 @@ export class RealtimeGateway {
 
   async rebalanceBrowserSessions(worldSnapshotId, interactionSettings = null) {
     const resolvedInteractionSettings = interactionSettings ?? await this.getInteractionSettings();
+    await this.updatePersistentVoiceOffers(worldSnapshotId, resolvedInteractionSettings);
     const sessions = this.browserManager.listSessionsForWorld(worldSnapshotId);
     const worldClients = this.getWorldClients(worldSnapshotId);
 
@@ -2144,7 +2191,6 @@ export class RealtimeGateway {
         });
       }
     }
-    await this.updatePersistentVoiceOffers(worldSnapshotId, resolvedInteractionSettings);
   }
 
   async rebalanceGameSessions(worldSnapshotId, interactionSettings = null) {

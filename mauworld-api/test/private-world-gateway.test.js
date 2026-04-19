@@ -848,6 +848,84 @@ test("private pending nearby join requests can be cancelled", async () => {
   );
 });
 
+test("private persistent voice offer suppresses anchor listeners until approval", async () => {
+  const gateway = createGateway();
+  const anchorHost = createClient({
+    viewerSessionId: "profile:anchor",
+    displayName: "anchor",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const anchorListener = createClient({
+    viewerSessionId: "profile:listener",
+    displayName: "listener",
+    position: { x: 20, y: 0, z: 0 },
+  });
+  const voiceHost = createClient({
+    viewerSessionId: "profile:voice",
+    displayName: "voice",
+    position: { x: 80, y: 0, z: 0 },
+  });
+  const outsider = createClient({
+    viewerSessionId: "profile:outsider",
+    displayName: "outsider",
+    position: { x: 140, y: 0, z: 0 },
+  });
+  gateway.clients.add(anchorHost);
+  gateway.clients.add(anchorListener);
+  gateway.clients.add(voiceHost);
+  gateway.clients.add(outsider);
+
+  const anchorSession = {
+    id: "anchor_session",
+    sessionId: "anchor_session",
+    hostSessionId: anchorHost.viewerSessionId,
+    worldSnapshotId: anchorHost.browserWorldKey,
+    sessionMode: "display-share",
+    groupRole: "origin",
+    listedLive: true,
+    subscribers: new Set([anchorHost.viewerSessionId]),
+  };
+  const voiceSession = {
+    id: "voice_session",
+    sessionId: "voice_session",
+    hostSessionId: voiceHost.viewerSessionId,
+    worldSnapshotId: anchorHost.browserWorldKey,
+    sessionMode: "display-share",
+    sessionSlot: "persistent-voice",
+    groupRole: "origin",
+    listedLive: false,
+    movementLocked: false,
+    groupJoined: false,
+    anchorSessionId: "",
+    anchorHostSessionId: "",
+    subscribers: new Set([voiceHost.viewerSessionId]),
+  };
+  gateway.browserManager.listSessionsForWorld = () => [anchorSession, voiceSession];
+  gateway.browserManager.getSession = (sessionId) => {
+    if (sessionId === anchorSession.id) {
+      return anchorSession;
+    }
+    if (sessionId === voiceSession.id) {
+      return voiceSession;
+    }
+    return null;
+  };
+
+  await gateway.rebalanceBrowserSessions(anchorHost.browserWorldKey);
+
+  assert.equal(
+    voiceHost.socket.sent.some((message) =>
+      message.type === "voice:join-offer" && message.anchorSessionId === anchorSession.id),
+    true,
+  );
+  assert.deepEqual(
+    [...voiceSession.subscribers].sort(),
+    [outsider.viewerSessionId, voiceHost.viewerSessionId].sort(),
+  );
+  assert.equal(voiceSession.subscribers.has(anchorHost.viewerSessionId), false);
+  assert.equal(voiceSession.subscribers.has(anchorListener.viewerSessionId), false);
+});
+
 test("private persistent voice stays unlisted and does not block a nearby origin share", async () => {
   const gateway = createGateway();
   const voiceHost = createClient({

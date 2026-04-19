@@ -607,6 +607,59 @@ export class PrivateWorldGateway {
       }),
     );
     recipients.add(hostClient.viewerSessionId);
+    const suppressedRecipients = this.getStandalonePersistentVoiceSuppressedRecipients(session, worldClients);
+    if (suppressedRecipients && suppressedRecipients.size > 0) {
+      for (const viewerSessionId of suppressedRecipients) {
+        if (viewerSessionId === hostClient.viewerSessionId) {
+          continue;
+        }
+        recipients.delete(viewerSessionId);
+      }
+    }
+    return recipients;
+  }
+
+  getStandalonePersistentVoiceSuppressedRecipients(session, worldClients) {
+    if (!isPersistentVoiceSession(session) || isJoinedPersistentVoiceSession(session)) {
+      return null;
+    }
+    const sessionId = String(session?.id ?? session?.sessionId ?? "").trim();
+    if (!sessionId) {
+      return null;
+    }
+    const offer = this.voiceJoinOffers.get(sessionId) ?? null;
+    const anchorSessionId = String(offer?.anchorSessionId ?? "").trim();
+    if (!anchorSessionId) {
+      return null;
+    }
+    const hostClient = this.getSessionHostClient(session);
+    const anchorSession = this.browserManager.getSession(anchorSessionId);
+    if (
+      !hostClient
+      || !anchorSession
+      || !isListedLiveSession(anchorSession)
+      || !this.isClientWithinAnchorRadius(hostClient, anchorSession)
+    ) {
+      return null;
+    }
+    const anchorHostClient = this.getSessionHostClient(anchorSession);
+    if (!anchorHostClient) {
+      return null;
+    }
+    const senderPosition = this.getSessionHostPosition(anchorSession) ?? positionFromPrivateClient(anchorHostClient);
+    const recipients = new Set(
+      selectNearestRecipients({
+        senderSessionId: anchorHostClient.viewerSessionId,
+        senderPosition,
+        candidates: worldClients.map((entry) => ({
+          viewerSessionId: entry.viewerSessionId,
+          position: positionFromPrivateClient(entry),
+        })),
+        radius: PRIVATE_WORLD_BROWSER_RADIUS,
+        maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+      }),
+    );
+    recipients.add(anchorHostClient.viewerSessionId);
     return recipients;
   }
 
@@ -1919,6 +1972,7 @@ export class PrivateWorldGateway {
   }
 
   async rebalanceBrowserSessions(browserWorldKey) {
+    await this.updatePersistentVoiceOffers(browserWorldKey);
     const worldClients = this.getBrowserWorldClients(browserWorldKey);
     for (const session of this.browserManager.listSessionsForWorld(browserWorldKey)) {
       const hostClient = this.getSessionHostClient(session);
@@ -2005,7 +2059,6 @@ export class PrivateWorldGateway {
         await this.broadcastBrowserSession(session, { rebalance: false });
       }
     }
-    await this.updatePersistentVoiceOffers(browserWorldKey);
   }
 
   async rebalanceGameSessions(browserWorldKey) {
