@@ -228,6 +228,17 @@ function buildShellBridgeScript() {
           };
         }
 
+        function getPreviewTarget(target = null) {
+          if (
+            target instanceof HTMLCanvasElement
+            || target instanceof HTMLImageElement
+            || target instanceof HTMLElement
+          ) {
+            return target;
+          }
+          return document.body || ensureRoot();
+        }
+
         async function rasterizeNode(target) {
           if (!target) {
             return null;
@@ -299,7 +310,7 @@ function buildShellBridgeScript() {
           }
           state.previewPending = true;
           try {
-            const preview = await rasterizeNode(ensureRoot());
+            const preview = await rasterizeNode(getPreviewTarget());
             if (preview && preview.data_url) {
               post("preview", { preview });
             }
@@ -365,7 +376,7 @@ function buildShellBridgeScript() {
             },
             async publishPreview(target = null) {
               try {
-                const preview = await rasterizeNode(target || ensureRoot());
+                const preview = await rasterizeNode(getPreviewTarget(target));
                 if (preview?.data_url) {
                   post("preview", { preview });
                 }

@@ -40,7 +40,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260419c";
+} from "./world-games-ui.js?v=20260419d";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 
@@ -7137,22 +7137,30 @@ function getGameShareAspectRatio(session = {}) {
 }
 
 function getGameSharePlaceholderTextureKey(session = {}) {
+  const occupiedSeats = normalizeGameSeats(session).filter((seat) => seat.viewer_session_id).length;
   return [
     getGameSessionTitle(session),
     getGameSessionDescription(session),
     String(session?.started === true),
+    `${occupiedSeats}/${getGameSeatCapacity(session)}`,
   ].join(":");
 }
 
 function createGameSharePlaceholderTexture(session) {
-  return createBubbleTexture("🎮", {
-    label: "Live Game",
-    text: `${getGameSessionTitle(session)}${getGameSessionDescription(session) ? `\n${getGameSessionDescription(session)}` : ""}`,
+  const occupiedSeats = normalizeGameSeats(session).filter((seat) => seat.viewer_session_id).length;
+  const capacity = getGameSeatCapacity(session);
+  const statusLine = `${session?.started === true ? "Match live" : "Lobby open"} · ${occupiedSeats}/${capacity} seats`;
+  const description = getGameSessionDescription(session);
+  return createLabelTexture([
+    getGameSessionTitle(session),
+    description || statusLine,
+    description ? `${statusLine} · Click to open` : "Click to open and join",
+  ], {
+    width: 720,
+    height: 360,
     accent: WORLD_STYLE.accents[1],
-    stroke: WORLD_STYLE.outline,
-    maxLines: 4,
-    width: 420,
-    height: 300,
+    border: "rgba(51, 64, 122, 0.2)",
+    background: "rgba(255, 255, 255, 0.98)",
   });
 }
 
@@ -7164,12 +7172,12 @@ function updateGameShareGeometry(entry) {
   if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
     return;
   }
-  const width = BROWSER_SHARE.screenWidth * 0.62;
+  const width = BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   entry.frame.geometry.dispose();
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
   entry.frameShell.geometry.dispose();
-  entry.frameShell.geometry = new THREE.PlaneGeometry(width + 0.7, height + 0.7);
+  entry.frameShell.geometry = new THREE.PlaneGeometry(width + 1.2, height + 1.2);
   entry.geometryAspectRatio = aspectRatio;
 }
 
@@ -7214,11 +7222,11 @@ function ensureGameShareEntry(session) {
     return entry;
   }
   const aspectRatio = getGameShareAspectRatio(session);
-  const width = BROWSER_SHARE.screenWidth * 0.62;
+  const width = BROWSER_SHARE.screenWidth;
   const height = width / aspectRatio;
   const group = new THREE.Group();
   const frameShell = new THREE.Mesh(
-    new THREE.PlaneGeometry(width + 0.7, height + 0.7),
+    new THREE.PlaneGeometry(width + 1.2, height + 1.2),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color("#08142c"),
       transparent: true,
@@ -7291,18 +7299,13 @@ function updateGameSharePresentation(entry) {
   }
   const desiredTexture = preview?.data_url ? entry.liveTexture : entry.placeholderTexture;
   const showingPlaceholder = desiredTexture === entry.placeholderTexture;
-  const baseWidth = BROWSER_SHARE.screenWidth * 0.62;
-  const baseHeight = baseWidth / Math.max(0.1, getGameShareAspectRatio(entry.session));
-  const bubbleWidth = BROWSER_SHARE.placeholderVideoWidth;
-  const bubbleHeight = bubbleWidth / BROWSER_SHARE.placeholderAspectRatio;
-  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
-  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
-  entry.frame.scale.set(scaleX, scaleY, 1);
+  entry.frame.scale.set(1, 1, 1);
   entry.frame.position.set(0, 0, 0);
   entry.frame.material.depthTest = false;
-  entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
-  entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
-  entry.frameShell.visible = false;
+  entry.frame.material.opacity = showingPlaceholder ? 0.99 : 1;
+  entry.frame.renderOrder = 10;
+  entry.frameShell.visible = true;
+  entry.frameShell.material.opacity = showingPlaceholder ? 0.94 : 0.9;
   if (entry.frame.material.map !== desiredTexture) {
     entry.frame.material.map = desiredTexture;
     entry.frame.material.needsUpdate = true;
@@ -7332,9 +7335,8 @@ function updateGameShareEntries(elapsedSeconds = 0) {
       entry.group.visible = false;
       continue;
     }
-    const hasPreview = Boolean(session?.latest_preview?.data_url);
     entry.targetPosition.copy(hostPosition);
-    entry.targetPosition.y += getSharedBrowserScreenOffsetY(hasPreview, elapsedSeconds);
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(true, elapsedSeconds);
     entry.position.lerp(entry.targetPosition, 0.18);
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);

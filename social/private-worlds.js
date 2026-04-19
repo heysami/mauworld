@@ -42,7 +42,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260419c";
+} from "./world-games-ui.js?v=20260419d";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -2501,23 +2501,61 @@ function getPrivateGameBubbleAspectRatio(session = {}) {
 }
 
 function getPrivateGameBubblePlaceholderKey(session = {}) {
+  const occupiedSeats = normalizePrivateGameSeats(session).filter((seat) => seat.viewer_session_id).length;
   return [
     getPrivateGameSessionTitle(session),
     getPrivateGameSessionDescription(session),
     String(session?.started === true),
+    `${occupiedSeats}/${getPrivateGameSeatCapacity(session)}`,
   ].join(":");
 }
 
 function createPrivateGameBubbleTexture(session = {}) {
-  return createBubbleTexture("🎮", {
-    accent: PRIVATE_WORLD_STYLE.accents[1],
-    stroke: PRIVATE_WORLD_STYLE.outline,
-    text: `${getPrivateGameSessionTitle(session)}${getPrivateGameSessionDescription(session) ? `\n${getPrivateGameSessionDescription(session)}` : ""}`,
-    label: "Live Game",
-    width: 420,
-    height: 300,
-    maxLines: 4,
-  });
+  const occupiedSeats = normalizePrivateGameSeats(session).filter((seat) => seat.viewer_session_id).length;
+  const capacity = getPrivateGameSeatCapacity(session);
+  const title = String(getPrivateGameSessionTitle(session) || "Nearby game").slice(0, 42);
+  const description = String(getPrivateGameSessionDescription(session) || "").slice(0, 60);
+  const statusLine = `${session?.started === true ? "Match live" : "Lobby open"} · ${occupiedSeats}/${capacity} seats`;
+  const detail = description ? `${statusLine} · Click to open` : "Click to open and join";
+  const canvas = document.createElement("canvas");
+  canvas.width = 720;
+  canvas.height = 360;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return createBubbleTexture("🎮", {
+      accent: PRIVATE_WORLD_STYLE.accents[1],
+      stroke: PRIVATE_WORLD_STYLE.outline,
+      text: `${title}${description ? `\n${description}` : ""}`,
+      label: "Live Game",
+      width: 420,
+      height: 300,
+      maxLines: 4,
+    });
+  }
+  context.fillStyle = "rgba(255, 255, 255, 0.98)";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.lineWidth = 6;
+  context.strokeStyle = "rgba(32, 50, 104, 0.2)";
+  context.strokeRect(3, 3, canvas.width - 6, canvas.height - 6);
+  context.fillStyle = PRIVATE_WORLD_STYLE.accents[1];
+  context.fillRect(0, 0, canvas.width, 14);
+
+  context.fillStyle = "#17305c";
+  context.font = "700 44px Manrope, sans-serif";
+  context.textBaseline = "top";
+  context.fillText(title, 34, 42);
+
+  context.fillStyle = "#4a6297";
+  context.font = "600 28px Manrope, sans-serif";
+  context.fillText(description || statusLine, 34, 112);
+
+  context.font = "500 24px Manrope, sans-serif";
+  context.fillText(detail, 34, 164);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
 }
 
 function updatePrivateGameBubbleGeometry(entry) {
@@ -2528,12 +2566,12 @@ function updatePrivateGameBubbleGeometry(entry) {
   if (Math.abs((entry.geometryAspectRatio ?? 0) - aspectRatio) < 0.01) {
     return;
   }
-  const width = PRIVATE_BROWSER_SHARE.screenWidth * 0.62;
+  const width = PRIVATE_BROWSER_SHARE.screenWidth;
   const height = width / Math.max(0.1, aspectRatio);
   entry.frame.geometry.dispose();
   entry.frame.geometry = new THREE.PlaneGeometry(width, height);
   entry.frameShell.geometry.dispose();
-  entry.frameShell.geometry = new THREE.PlaneGeometry(width + 0.7, height + 0.7);
+  entry.frameShell.geometry = new THREE.PlaneGeometry(width + 1.2, height + 1.2);
   entry.geometryAspectRatio = aspectRatio;
 }
 
@@ -2571,11 +2609,11 @@ function ensurePrivateGameBubbleEntry(session = {}) {
     return existing;
   }
   const aspectRatio = getPrivateGameBubbleAspectRatio(session);
-  const width = PRIVATE_BROWSER_SHARE.screenWidth * 0.62;
+  const width = PRIVATE_BROWSER_SHARE.screenWidth;
   const height = width / aspectRatio;
   const group = new THREE.Group();
   const frameShell = new THREE.Mesh(
-    new THREE.PlaneGeometry(width + 0.7, height + 0.7),
+    new THREE.PlaneGeometry(width + 1.2, height + 1.2),
     new THREE.MeshBasicMaterial({
       color: new THREE.Color("#0d1537"),
       transparent: true,
@@ -2643,18 +2681,13 @@ function updatePrivateGameBubblePresentation(entry) {
   }
   const desiredMap = previewFrame?.data_url ? entry.liveTexture : entry.placeholderTexture;
   const showingPlaceholder = desiredMap === entry.placeholderTexture;
-  const baseWidth = PRIVATE_BROWSER_SHARE.screenWidth * 0.62;
-  const baseHeight = baseWidth / Math.max(0.1, getPrivateGameBubbleAspectRatio(entry.session));
-  const bubbleWidth = PRIVATE_BROWSER_SHARE.placeholderVideoWidth;
-  const bubbleHeight = bubbleWidth / PRIVATE_BROWSER_SHARE.placeholderAspectRatio;
-  const scaleX = showingPlaceholder ? bubbleWidth / baseWidth : 1;
-  const scaleY = showingPlaceholder ? bubbleHeight / Math.max(0.1, baseHeight) : 1;
-  entry.frame.scale.set(scaleX, scaleY, 1);
+  entry.frame.scale.set(1, 1, 1);
   entry.frame.position.set(0, 0, 0);
   entry.frame.material.depthTest = false;
-  entry.frame.material.opacity = showingPlaceholder ? 0.96 : 1;
-  entry.frame.renderOrder = showingPlaceholder ? 11 : 10;
-  entry.frameShell.visible = false;
+  entry.frame.material.opacity = showingPlaceholder ? 0.99 : 1;
+  entry.frame.renderOrder = 10;
+  entry.frameShell.visible = true;
+  entry.frameShell.material.opacity = showingPlaceholder ? 0.94 : 0.92;
   if (entry.frame.material.map !== desiredMap) {
     entry.frame.material.map = desiredMap;
     entry.frame.material.needsUpdate = true;
@@ -2689,9 +2722,8 @@ function updatePrivateGameBubbles(deltaSeconds = 0.016, elapsedSeconds = 0) {
       entry.group.visible = false;
       continue;
     }
-    const showingLiveMedia = Boolean(session?.latest_preview?.data_url);
     entry.targetPosition.copy(hostPosition);
-    entry.targetPosition.y += getSharedBrowserScreenOffsetY(showingLiveMedia, elapsedSeconds);
+    entry.targetPosition.y += getSharedBrowserScreenOffsetY(true, elapsedSeconds);
     entry.position.lerp(entry.targetPosition, 1 - Math.exp(-deltaSeconds * 8));
     entry.group.position.copy(entry.position);
     entry.group.rotation.set(0, 0, 0);
