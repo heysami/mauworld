@@ -179,6 +179,7 @@ function buildShellBridgeScript() {
           previewLoopStarted: false,
           previewTimer: null,
           previewPending: false,
+          lastPreview: null,
         };
 
         function clone(value) {
@@ -573,6 +574,7 @@ function buildShellBridgeScript() {
           try {
             const preview = await rasterizeNode(getPreviewTarget());
             if (preview && preview.data_url) {
+              state.lastPreview = clone(preview);
               post("preview", {
                 preview,
                 reason: reason || undefined,
@@ -702,10 +704,17 @@ function buildShellBridgeScript() {
             return;
           }
           if (type === "capture-preview") {
-            void publishAutomaticPreview({
-              force: true,
-              reason: "hide-final",
-            });
+            if (state.lastPreview?.data_url) {
+              post("preview", {
+                preview: clone(state.lastPreview),
+                reason: "hide-final",
+              }, { force: true });
+            } else {
+              void publishAutomaticPreview({
+                force: true,
+                reason: "hide-final",
+              });
+            }
             return;
           }
           if (type === "destroy") {
