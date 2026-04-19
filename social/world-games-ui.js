@@ -1256,6 +1256,19 @@ export function createWorldGameShell(options = {}) {
     return getGameTitle(state.game ?? state.session?.game ?? {}, "Nearby Game");
   }
 
+  function getAuthoritativeStarted(session = state.session) {
+    const authoritativeState = state.authoritativeState;
+    if (
+      authoritativeState
+      && typeof authoritativeState === "object"
+      && !Array.isArray(authoritativeState)
+      && Object.prototype.hasOwnProperty.call(authoritativeState, "started")
+    ) {
+      return authoritativeState.started === true;
+    }
+    return session?.started === true;
+  }
+
   function sendToFrame(type, payload = {}) {
     if (!elements.frame?.contentWindow) {
       return;
@@ -1348,6 +1361,7 @@ export function createWorldGameShell(options = {}) {
   function renderSummary() {
     const session = state.session;
     const context = computeRole(session);
+    const matchStarted = getAuthoritativeStarted(session);
     const ownerProfileId = String(state.session?.game?.owner_profile_id ?? state.game?.owner_profile_id ?? "").trim();
     const viewerProfileId = String(options.getProfileId?.() ?? "").trim();
     const canCopy = Boolean(session?.session_id && viewerProfileId && ownerProfileId && viewerProfileId !== ownerProfileId);
@@ -1378,20 +1392,24 @@ export function createWorldGameShell(options = {}) {
     }
     if (elements.status) {
       elements.status.textContent = state.status || (
-        session?.started
+        matchStarted
           ? "The match is live."
-          : (context.claimedSeatId ? (context.ready ? "You are ready." : "Claimed seat. Mark ready when you are set.") : "Claim an open seat, or stay as a viewer.")
+          : (context.isHost
+            ? "Use the game window to start the match."
+            : (context.claimedSeatId
+              ? (context.ready ? "You are ready." : "Claimed seat. Mark ready when you are set.")
+              : "Claim an open seat, or stay as a viewer."))
       );
     }
     if (elements.ready) {
-      const showReady = Boolean(context.claimedSeatId && !session?.started);
+      const showReady = Boolean(context.claimedSeatId && !matchStarted);
       elements.ready.hidden = !showReady;
       elements.ready.disabled = Boolean(state.loading);
       elements.ready.textContent = context.ready ? "Unready" : "Ready";
     }
     if (elements.start) {
-      elements.start.hidden = !context.isHost;
-      elements.start.disabled = Boolean(state.loading);
+      elements.start.hidden = true;
+      elements.start.disabled = true;
     }
     if (elements.copy) {
       elements.copy.hidden = !canCopy;
