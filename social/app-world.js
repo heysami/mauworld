@@ -7433,6 +7433,13 @@ function ensureGameShareEntry(session) {
   let entry = sceneState.gameShareEntries.get(sessionId);
   if (entry) {
     entry.session = session;
+    if (Array.isArray(entry.clickablePayloads) && entry.clickablePayloads.length > 0) {
+      for (const payload of entry.clickablePayloads) {
+        if (!sceneState.clickable.includes(payload)) {
+          sceneState.clickable.push(payload);
+        }
+      }
+    }
     updateGameShareGeometry(entry);
     return entry;
   }
