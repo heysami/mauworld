@@ -167,9 +167,9 @@ function buildShellBridgeScript() {
               document.body.append(root);
             }
           }
+          root.style.display = "block";
           root.style.width = "100%";
-          root.style.height = "100%";
-          root.style.minHeight = "100%";
+          root.style.minHeight = "100vh";
           state.root = root;
           return root;
         }
@@ -368,18 +368,15 @@ function buildShellBridgeScript() {
 function injectShellBridge(sourceHtml = "") {
   const bridgeScript = buildShellBridgeScript();
   const bridgeStyle = `
-    <style>
+    <style data-mauworld-game-bridge>
       html, body {
         margin: 0;
-        width: 100%;
-        height: 100%;
-        background: #071122;
+        padding: 0;
       }
 
       #mauworld-game-root {
         width: 100%;
-        height: 100%;
-        min-height: 100%;
+        min-height: 100vh;
       }
     </style>
   `;
