@@ -21,6 +21,30 @@ test("normalizeWorldGameManifest applies Mauworld multiplayer defaults", () => {
   assert.equal(manifest.seats.length, 2);
 });
 
+test("normalizeWorldGameManifest preserves semantic multiplayer seat labels", () => {
+  const manifest = normalizeWorldGameManifest({
+    title: "Neon Tic-Tac-Toe",
+    multiplayer_mode: "turn-based",
+    min_players: 2,
+    max_players: 2,
+    seats: ["X", "O"],
+  });
+
+  assert.deepEqual(manifest.seats, ["X", "O"]);
+});
+
+test("normalizeWorldGameManifest accepts alternate seat label keys", () => {
+  const manifest = normalizeWorldGameManifest({
+    title: "Chess",
+    multiplayer_mode: "turn-based",
+    min_players: 2,
+    max_players: 2,
+    player_roles: ["White", "Black"],
+  });
+
+  assert.deepEqual(manifest.seats, ["White", "Black"]);
+});
+
 test("sanitizeWorldGameHtml accepts a registered single-file game", () => {
   const html = sanitizeWorldGameHtml(`
     <!DOCTYPE html>

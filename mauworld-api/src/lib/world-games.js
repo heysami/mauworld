@@ -166,6 +166,12 @@ export function normalizeWorldGameManifest(input = {}) {
     width: clampInteger(input.preview?.width, 480, 160, 1280),
     height: clampInteger(input.preview?.height, 270, 90, 720),
   };
+  const seatLabels = input.seats
+    ?? input.seat_labels
+    ?? input.seatLabels
+    ?? input.player_roles
+    ?? input.playerRoles
+    ?? input.roles;
   return {
     title: rawTitle,
     description,
@@ -175,7 +181,7 @@ export function normalizeWorldGameManifest(input = {}) {
     allow_viewers: allowViewers,
     aspect_ratio: aspectRatio,
     preview,
-    seats: buildSeatLabels(input.seats, maxPlayers),
+    seats: buildSeatLabels(seatLabels, maxPlayers),
   };
 }
 
@@ -289,6 +295,7 @@ function buildGameGenerationPrompt(input = {}) {
     "- api.session.claimed_seat_id is the current viewer's claimed seat id when seated",
     "- api.session.seats is an array of seat objects, not a keyed map",
     "- each seat entry includes seat_id, label, viewer_session_id, display_name, and ready",
+    "- when a game has unique player identities, read them from api.session.seats and api.session.claimed_seat_id instead of inventing a separate seat system",
     "- api.getState(): read the current authoritative state",
     "- api.setState(nextState): host only, publishes authoritative state to everyone",
     "- api.sendAction(action): non-host players send semantic actions to the host",
@@ -296,6 +303,8 @@ function buildGameGenerationPrompt(input = {}) {
     "- api.publishPreview(elementOrCanvas): publish a live preview frame after rendering",
     "Manifest requirements:",
     '- manifest must include title, description, multiplayer_mode ("single", "turn-based", or "realtime"), min_players, max_players, allow_viewers, aspect_ratio, and preview.',
+    "- for multiplayer games with named roles, manifest.seats must list those semantic seat labels in order, for example ['X', 'O'] or ['White', 'Black']",
+    "- if the UI says 'Claim X' or 'Claim White', that same label must appear in manifest.seats so the Mauworld shell can show the role identity correctly",
     "- Keep the game simple, readable, and self-contained.",
     `User request:\n${userPrompt}`,
   ].join("\n\n");
