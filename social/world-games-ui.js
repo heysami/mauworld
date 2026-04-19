@@ -130,6 +130,29 @@ function getGameTitle(game = {}, fallback = "Untitled Game") {
   return clipText(game?.title ?? game?.manifest?.title ?? fallback, 96) || fallback;
 }
 
+function getLegacyClaimSeatAliases(game = {}) {
+  const source = String(game?.source_html ?? "").trim();
+  if (!source) {
+    return [];
+  }
+  const aliases = [];
+  const seen = new Set();
+  const pattern = /(?:api\.)?claimSeat\((['"])([^'"\\]{1,32})\1\)/g;
+  for (const match of source.matchAll(pattern)) {
+    const alias = clipText(match[2] ?? "", 32);
+    if (!alias) {
+      continue;
+    }
+    const normalized = alias.toLowerCase();
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    aliases.push(alias);
+  }
+  return aliases;
+}
+
 function buildShellBridgeScript() {
   return `
     <script>
@@ -431,6 +454,9 @@ function buildShellBridgeScript() {
               normalizedSeats[seatId] = seat;
             }
             const alias = legacyAliases[index];
+            if (alias && !seat.legacy_seat_id) {
+              seat.legacy_seat_id = alias;
+            }
             if (alias && !Object.prototype.hasOwnProperty.call(normalizedSeats, alias)) {
               normalizedSeats[alias] = seat.viewer_session_id ? { ...seat, legacy_seat_id: alias } : null;
             }
@@ -478,6 +504,39 @@ function buildShellBridgeScript() {
           normalized.isHost = normalized.isHost === true || normalized.role === "host";
           normalized.ready = normalized.ready === true || (claimedSeat ? claimedSeat.ready === true : false);
           return normalized;
+        }
+
+        function mapRequestedSeatId(session, seatId) {
+          const requestedSeatId = String(seatId || "").trim();
+          if (!requestedSeatId) {
+            return "";
+          }
+          const normalizedRequestedSeatId = requestedSeatId.toLowerCase();
+          const seats = Array.isArray(session && session.seats) ? session.seats : [];
+          for (const seat of seats) {
+            if (!seat || typeof seat !== "object") {
+              continue;
+            }
+            const actualSeatId = String(seat.seat_id || "").trim();
+            const legacySeatId = String(seat.legacy_seat_id || "").trim();
+            if (
+              (actualSeatId && actualSeatId.toLowerCase() === normalizedRequestedSeatId)
+              || (legacySeatId && legacySeatId.toLowerCase() === normalizedRequestedSeatId)
+            ) {
+              return actualSeatId || requestedSeatId;
+            }
+          }
+          const aliasSeat = session && session.seats && typeof session.seats === "object"
+            ? (
+              session.seats[requestedSeatId]
+              || session.seats[requestedSeatId.toUpperCase()]
+              || session.seats[requestedSeatId.toLowerCase()]
+            )
+            : null;
+          if (aliasSeat && typeof aliasSeat === "object" && aliasSeat.seat_id) {
+            return String(aliasSeat.seat_id);
+          }
+          return requestedSeatId;
         }
 
         async function publishAutomaticPreview() {
@@ -544,7 +603,7 @@ function buildShellBridgeScript() {
               post("action", { action: clone(action) });
             },
             claimSeat(seatId) {
-              post("claim-seat", { seatId: String(seatId ?? "") });
+              post("claim-seat", { seatId: mapRequestedSeatId(state.session, seatId) });
             },
             releaseSeat() {
               post("release-seat");
@@ -1228,6 +1287,7 @@ export function createWorldGameShell(options = {}) {
     }
     const context = computeRole(session);
     const seats = normalizeSeatList(session);
+    const legacyAliases = getLegacyClaimSeatAliases(state.game ?? session.game ?? {});
     const seatCountLabel = seats.length > 0
       ? `${seats.length} player${seats.length === 1 ? "" : "s"}`
       : getPlayerCountLabel(session.game?.manifest ?? state.game?.manifest ?? {});
@@ -1236,9 +1296,10 @@ export function createWorldGameShell(options = {}) {
         <strong>Seats</strong>
         <span>${escapeHtml(seatCountLabel)}</span>
       </div>
-      ${seats.map((seat) => {
+      ${seats.map((seat, index) => {
         const isClaimedByViewer = context.claimedSeatId === seat.seat_id;
         const open = !seat.viewer_session_id;
+        const seatAlias = legacyAliases[index] ? ` (${legacyAliases[index]})` : "";
         const label = open
           ? "Claim"
           : isClaimedByViewer
@@ -1247,7 +1308,7 @@ export function createWorldGameShell(options = {}) {
         return `
           <div class="mw-game-shell__seat ${open ? "is-open" : ""}">
             <div>
-              <strong>${escapeHtml(seat.label || seat.seat_id)}</strong>
+              <strong>${escapeHtml(`${seat.label || seat.seat_id}${seatAlias}`)}</strong>
               <span>${escapeHtml(seat.display_name || (open ? "Open seat" : "Player"))}</span>
             </div>
             <div class="mw-game-shell__seat-actions">
