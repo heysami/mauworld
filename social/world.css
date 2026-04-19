@@ -1179,6 +1179,19 @@ body.is-world-loading .world-panel {
   font-size: 0.78rem;
 }
 
+.world-group-summary__member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.world-group-summary__member-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .world-group-summary__badge {
   display: inline-flex;
   align-items: center;
@@ -1190,6 +1203,20 @@ body.is-world-loading .world-panel {
   font-size: 0.7rem;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.world-group-summary__kick {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(61, 87, 182, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--world-ink);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .world-voice-panel {

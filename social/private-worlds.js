@@ -5920,13 +5920,22 @@ function renderPrivateShareGroupSummary() {
     elements.panelShareGroupSummary.hidden = true;
     return;
   }
-  const memberNames = getPrivateShareGroupSessions(anchorSession.sessionId)
+  const contributorEntries = getPrivateShareGroupSessions(anchorSession.sessionId)
     .filter((session) => isPrivateBrowserMemberSession(session))
-    .map((session) => getPrivateDisplayNameForSessionId(session.hostSessionId) || session.hostSessionId)
-    .filter(Boolean);
+    .map((session) => ({
+      sessionId: String(session.sessionId ?? "").trim(),
+      displayName: getPrivateDisplayNameForSessionId(session.hostSessionId) || session.hostSessionId || "Nearby visitor",
+      shareKindLabel: getBrowserShareKindLabel(getPrivateBrowserSessionShareKind(session)),
+    }))
+    .filter((entry) => entry.sessionId);
   const hostName = getPrivateDisplayNameForSessionId(anchorSession.hostSessionId) || "Nearby host";
   const viewerCount = Math.min(getPrivateBrowserSessionViewerCount(anchorSession), getPrivateBrowserSessionMaxViewers(anchorSession));
   const maxViewers = getPrivateBrowserSessionMaxViewers(anchorSession);
+  const canKickMembers = Boolean(
+    localSession
+    && isPrivateBrowserOriginSession(localSession)
+    && String(localSession.sessionId ?? "").trim() === String(anchorSession.sessionId ?? "").trim(),
+  );
   const pendingState = state.pendingShareJoin?.anchorSessionId === anchorSession.sessionId
     ? state.pendingShareJoin.approved
       ? "Approved. Choose what to share."
@@ -5945,12 +5954,39 @@ function renderPrivateShareGroupSummary() {
     <div class="world-group-summary__meta">
       <span>${htmlEscape(hostName)}</span>
       <span>${viewerCount}/${maxViewers} viewers</span>
-      <span>${memberNames.length} contributor${memberNames.length === 1 ? "" : "s"}</span>
+      <span>${contributorEntries.length} contributor${contributorEntries.length === 1 ? "" : "s"}</span>
     </div>
     <div class="world-group-summary__body">${htmlEscape(summaryCopy)}</div>
-    ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
+    ${contributorEntries.length > 0 ? `
+      <ul class="world-group-summary__list">
+        ${contributorEntries.map((entry) => `
+          <li>
+            <div class="world-group-summary__member">
+              <span class="world-group-summary__member-name">${htmlEscape(entry.displayName)}</span>
+              <span class="world-group-summary__badge">${htmlEscape(entry.shareKindLabel)}</span>
+            </div>
+            ${canKickMembers ? `<button type="button" class="world-group-summary__kick" data-private-share-member-kick="${htmlEscape(entry.sessionId)}">Kick</button>` : ""}
+          </li>
+        `).join("")}
+      </ul>
+    ` : ""}
     ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
   `;
+  if (canKickMembers) {
+    for (const button of elements.panelShareGroupSummary.querySelectorAll("[data-private-share-member-kick]")) {
+      bindPrivatePanelPress(button, () => {
+        const memberSessionId = String(button.getAttribute("data-private-share-member-kick") ?? "").trim();
+        const sent = sendWorldSocketMessage({
+          type: "share:member-kick",
+          anchorSessionId: anchorSession.sessionId,
+          memberSessionId,
+        });
+        if (!sent) {
+          setPrivateBrowserStatus("Private world share is offline right now.");
+        }
+      });
+    }
+  }
 }
 
 function renderPrivateGameShareGroupSummary() {
@@ -5964,13 +6000,22 @@ function renderPrivateGameShareGroupSummary() {
     elements.panelShareGroupSummary.hidden = true;
     return;
   }
-  const memberNames = getPrivateGameShareGroupSessions(anchorSession.session_id)
+  const contributorEntries = getPrivateGameShareGroupSessions(anchorSession.session_id)
     .filter((session) => isPrivateGameMemberSession(session))
-    .map((session) => getPrivateGameHostName(session))
-    .filter(Boolean);
+    .map((session) => ({
+      sessionId: String(session?.session_id ?? session?.id ?? "").trim(),
+      displayName: getPrivateGameHostName(session) || "Nearby visitor",
+      shareKindLabel: "Game",
+    }))
+    .filter((entry) => entry.sessionId);
   const hostName = getPrivateGameHostName(anchorSession);
   const viewerCount = Math.max(0, Number(anchorSession?.viewer_count ?? anchorSession?.viewerCount) || 0);
   const maxViewers = Math.max(1, Number(anchorSession?.max_viewers ?? anchorSession?.maxViewers) || PRIVATE_WORLD_MAX_RECIPIENTS);
+  const canKickMembers = Boolean(
+    localSession
+    && isPrivateGameOriginSession(localSession)
+    && String(localSession?.session_id ?? "").trim() === String(anchorSession?.session_id ?? "").trim(),
+  );
   const pendingState = state.pendingShareJoin?.anchorSessionId === String(anchorSession?.session_id ?? "").trim()
     ? state.pendingShareJoin.approved
       ? "Approved. Share your game to add it to this nearby group."
@@ -5989,12 +6034,39 @@ function renderPrivateGameShareGroupSummary() {
     <div class="world-group-summary__meta">
       <span>${htmlEscape(hostName)}</span>
       <span>${viewerCount}/${maxViewers} viewers</span>
-      <span>${memberNames.length} contributor${memberNames.length === 1 ? "" : "s"}</span>
+      <span>${contributorEntries.length} contributor${contributorEntries.length === 1 ? "" : "s"}</span>
     </div>
     <div class="world-group-summary__body">${htmlEscape(summaryCopy)}</div>
-    ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
+    ${contributorEntries.length > 0 ? `
+      <ul class="world-group-summary__list">
+        ${contributorEntries.map((entry) => `
+          <li>
+            <div class="world-group-summary__member">
+              <span class="world-group-summary__member-name">${htmlEscape(entry.displayName)}</span>
+              <span class="world-group-summary__badge">${htmlEscape(entry.shareKindLabel)}</span>
+            </div>
+            ${canKickMembers ? `<button type="button" class="world-group-summary__kick" data-private-share-member-kick="${htmlEscape(entry.sessionId)}">Kick</button>` : ""}
+          </li>
+        `).join("")}
+      </ul>
+    ` : ""}
     ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
   `;
+  if (canKickMembers) {
+    for (const button of elements.panelShareGroupSummary.querySelectorAll("[data-private-share-member-kick]")) {
+      bindPrivatePanelPress(button, () => {
+        const memberSessionId = String(button.getAttribute("data-private-share-member-kick") ?? "").trim();
+        const sent = sendWorldSocketMessage({
+          type: "share:member-kick",
+          anchorSessionId: String(anchorSession?.session_id ?? "").trim(),
+          memberSessionId,
+        });
+        if (!sent) {
+          setPrivateBrowserStatus("Private world share is offline right now.");
+        }
+      });
+    }
+  }
 }
 
 function isPrivateShareJoinCancellationPending(anchorSessionId = "") {
@@ -16090,6 +16162,10 @@ function connectWorldSocket() {
         pushPrivateChatEntry(payload);
       } else if (payload.type === "chat:error") {
         pushEvent("chat:error", payload.message || "Could not send chat");
+      } else if (payload.type === "share:kicked") {
+        if (payload.message) {
+          setPrivateBrowserStatus(payload.message);
+        }
       } else if (payload.type === "browser:session") {
         updatePrivateBrowserSessionState(payload.session ?? {});
       } else if (payload.type === "game:session") {

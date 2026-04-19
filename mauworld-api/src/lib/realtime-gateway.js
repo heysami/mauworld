@@ -257,6 +257,10 @@ export class RealtimeGateway {
       await this.handleShareJoinDecision(client, message);
       return;
     }
+    if (type === "share:member-kick") {
+      await this.handleShareMemberKick(client, message);
+      return;
+    }
     if (type === "voice:start") {
       await this.handleVoiceStart(client, message);
       return;
@@ -1439,6 +1443,68 @@ export class RealtimeGateway {
         : this.buildSessionContextPayload(anchorSession, interactionSettings),
       message: approved ? "Join approved." : "Join request declined.",
     });
+  }
+
+  async handleShareMemberKick(client, message) {
+    if (!client.worldSnapshotId || client.isGuest) {
+      return;
+    }
+    const anchorSessionId = String(message.anchorSessionId ?? "").trim();
+    const memberSessionId = String(message.memberSessionId ?? "").trim();
+    if (!anchorSessionId || !memberSessionId) {
+      return;
+    }
+    const browserAnchorSession = this.browserManager.getSession(anchorSessionId);
+    if (browserAnchorSession) {
+      const memberSession = this.browserManager.getSession(memberSessionId);
+      if (
+        !isListedLiveSession(browserAnchorSession)
+        || !memberSession
+        || !isMemberSession(memberSession)
+        || getAnchorSessionId(memberSession) !== anchorSessionId
+        || String(browserAnchorSession.hostSessionId ?? "").trim() !== client.viewerSessionId
+      ) {
+        return;
+      }
+      this.clearApprovedShareJoin(anchorSessionId, memberSession.hostSessionId);
+      const memberClient = this.clients.get(memberSession.hostSessionId);
+      if (memberClient) {
+        sendJson(memberClient, {
+          type: "share:kicked",
+          anchorSessionId,
+          memberSessionId,
+          message: "The original sharer stopped your contributor share. Ask again to rejoin.",
+        });
+      }
+      await this.browserManager.stopSession(memberSession.id ?? memberSession.sessionId);
+      return;
+    }
+    const gameAnchorSession = this.gameShares.getSession(anchorSessionId);
+    const memberGameSession = this.gameShares.getSession(memberSessionId);
+    if (
+      !gameAnchorSession
+      || !memberGameSession
+      || gameAnchorSession.listed_live === false
+      || String(gameAnchorSession.group_role ?? "").trim().toLowerCase() !== "origin"
+      || String(memberGameSession.group_role ?? "").trim().toLowerCase() !== "member"
+      || String(memberGameSession.anchor_session_id ?? memberGameSession.anchorSessionId ?? "").trim() !== anchorSessionId
+      || String(gameAnchorSession.host_viewer_session_id ?? gameAnchorSession.hostViewerSessionId ?? "").trim() !== client.viewerSessionId
+    ) {
+      return;
+    }
+    this.clearApprovedShareJoin(anchorSessionId, memberGameSession.host_viewer_session_id);
+    const memberClient = this.clients.get(memberGameSession.host_viewer_session_id);
+    if (memberClient) {
+      sendJson(memberClient, {
+        type: "share:kicked",
+        anchorSessionId,
+        memberSessionId,
+        message: "The original sharer stopped your contributor share. Ask again to rejoin.",
+      });
+    }
+    for (const stopped of this.gameShares.stopSessionTree(memberGameSession.id ?? memberGameSession.session_id)) {
+      this.broadcastGameStop(stopped);
+    }
   }
 
   clearVoiceJoinOffer(sessionId) {

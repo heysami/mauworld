@@ -164,6 +164,9 @@ export function createWorldRealtimeClient(options = {}) {
     decideShareJoin(anchorSessionId, requesterSessionId, approved) {
       return send("share:join-decision", { anchorSessionId, requesterSessionId, approved });
     },
+    kickShareMember(anchorSessionId, memberSessionId) {
+      return send("share:member-kick", { anchorSessionId, memberSessionId });
+    },
     startVoice(input = {}) {
       const payload =
         typeof input === "object" && input

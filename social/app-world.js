@@ -34,7 +34,7 @@ import {
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
-import { createWorldRealtimeClient } from "./world-realtime.js?v=20260419gamejoin1";
+import { createWorldRealtimeClient } from "./world-realtime.js?v=20260419kick1";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 import {
   createWorldGamesApi,
@@ -2925,6 +2925,15 @@ function renderVoiceJoinRequests() {
   }
 }
 
+function kickShareMember(anchorSessionId, memberSessionId) {
+  const kicked = state.realtimeClient?.kickShareMember?.(anchorSessionId, memberSessionId) === true;
+  if (!kicked) {
+    showToast("Realtime share is offline.");
+    return false;
+  }
+  return true;
+}
+
 function renderShareGroupSummary() {
   if (!elements.shareGroupSummary) {
     return;
@@ -2937,13 +2946,22 @@ function renderShareGroupSummary() {
     return;
   }
   const groupSessions = getShareGroupSessions(anchorSession.sessionId);
-  const memberNames = groupSessions
+  const contributorEntries = groupSessions
     .filter((session) => isBrowserMemberSession(session))
-    .map((session) => getPresenceDisplayNameForSessionId(session.hostSessionId))
-    .filter(Boolean);
+    .map((session) => ({
+      sessionId: String(session.sessionId ?? "").trim(),
+      displayName: getPresenceDisplayNameForSessionId(session.hostSessionId) || session.hostSessionId || "Nearby visitor",
+      shareKindLabel: getBrowserShareKindLabel(getBrowserSessionShareKind(session)),
+    }))
+    .filter((entry) => entry.sessionId);
   const hostName = getPresenceDisplayNameForSessionId(anchorSession.hostSessionId) || "Nearby host";
   const viewerCount = Math.min(getBrowserSessionViewerCount(anchorSession), getBrowserSessionMaxViewers(anchorSession));
   const maxViewers = getBrowserSessionMaxViewers(anchorSession);
+  const canKickMembers = Boolean(
+    localSession
+    && isBrowserOriginSession(localSession)
+    && String(localSession.sessionId ?? "").trim() === String(anchorSession.sessionId ?? "").trim(),
+  );
   const pendingState = state.pendingShareJoin?.anchorSessionId === anchorSession.sessionId
     ? state.pendingShareJoin.approved
       ? "Approved. Choose what to share."
@@ -2963,12 +2981,31 @@ function renderShareGroupSummary() {
     <div class="world-group-summary__meta">
       <span>${htmlEscape(hostName)}</span>
       <span>${viewerCount}/${maxViewers} viewers</span>
-      <span>${memberNames.length} contributor${memberNames.length === 1 ? "" : "s"}</span>
+      <span>${contributorEntries.length} contributor${contributorEntries.length === 1 ? "" : "s"}</span>
     </div>
     <div class="world-group-summary__body">${htmlEscape(summaryCopy)}</div>
-    ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
+    ${contributorEntries.length > 0 ? `
+      <ul class="world-group-summary__list">
+        ${contributorEntries.map((entry) => `
+          <li>
+            <div class="world-group-summary__member">
+              <span class="world-group-summary__member-name">${htmlEscape(entry.displayName)}</span>
+              <span class="world-group-summary__badge">${htmlEscape(entry.shareKindLabel)}</span>
+            </div>
+            ${canKickMembers ? `<button type="button" class="world-group-summary__kick" data-share-member-kick="${htmlEscape(entry.sessionId)}">Kick</button>` : ""}
+          </li>
+        `).join("")}
+      </ul>
+    ` : ""}
     ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
   `;
+  if (canKickMembers) {
+    for (const button of elements.shareGroupSummary.querySelectorAll("[data-share-member-kick]")) {
+      bindPanelPress(button, () => {
+        kickShareMember(anchorSession.sessionId, String(button.getAttribute("data-share-member-kick") ?? "").trim());
+      });
+    }
+  }
 }
 
 function renderGameShareGroupSummary() {
@@ -2982,13 +3019,22 @@ function renderGameShareGroupSummary() {
     elements.shareGroupSummary.hidden = true;
     return;
   }
-  const memberNames = getGameShareGroupSessions(anchorSession.session_id)
+  const contributorEntries = getGameShareGroupSessions(anchorSession.session_id)
     .filter((session) => isGameMemberSession(session))
-    .map((session) => getGameSessionHostName(session))
-    .filter(Boolean);
+    .map((session) => ({
+      sessionId: String(session?.session_id ?? session?.id ?? "").trim(),
+      displayName: getGameSessionHostName(session) || "Nearby visitor",
+      shareKindLabel: "Game",
+    }))
+    .filter((entry) => entry.sessionId);
   const hostName = getGameSessionHostName(anchorSession);
   const viewerCount = Math.max(0, Number(anchorSession?.viewer_count ?? anchorSession?.viewerCount) || 0);
   const maxViewers = Math.max(1, Number(anchorSession?.max_viewers ?? anchorSession?.maxViewers) || getInteractionConfig().maxRecipients);
+  const canKickMembers = Boolean(
+    localSession
+    && isGameOriginSession(localSession)
+    && String(localSession?.session_id ?? "").trim() === String(anchorSession?.session_id ?? "").trim(),
+  );
   const pendingState = state.pendingShareJoin?.anchorSessionId === String(anchorSession?.session_id ?? "").trim()
     ? state.pendingShareJoin.approved
       ? "Approved. Share your game to add it to this nearby group."
@@ -3007,12 +3053,31 @@ function renderGameShareGroupSummary() {
     <div class="world-group-summary__meta">
       <span>${htmlEscape(hostName)}</span>
       <span>${viewerCount}/${maxViewers} viewers</span>
-      <span>${memberNames.length} contributor${memberNames.length === 1 ? "" : "s"}</span>
+      <span>${contributorEntries.length} contributor${contributorEntries.length === 1 ? "" : "s"}</span>
     </div>
     <div class="world-group-summary__body">${htmlEscape(summaryCopy)}</div>
-    ${memberNames.length > 0 ? `<div class="world-group-summary__contributors">${htmlEscape(memberNames.join(" • "))}</div>` : ""}
+    ${contributorEntries.length > 0 ? `
+      <ul class="world-group-summary__list">
+        ${contributorEntries.map((entry) => `
+          <li>
+            <div class="world-group-summary__member">
+              <span class="world-group-summary__member-name">${htmlEscape(entry.displayName)}</span>
+              <span class="world-group-summary__badge">${htmlEscape(entry.shareKindLabel)}</span>
+            </div>
+            ${canKickMembers ? `<button type="button" class="world-group-summary__kick" data-share-member-kick="${htmlEscape(entry.sessionId)}">Kick</button>` : ""}
+          </li>
+        `).join("")}
+      </ul>
+    ` : ""}
     ${pendingState ? `<div class="world-group-summary__note">${htmlEscape(pendingState)}</div>` : ""}
   `;
+  if (canKickMembers) {
+    for (const button of elements.shareGroupSummary.querySelectorAll("[data-share-member-kick]")) {
+      bindPanelPress(button, () => {
+        kickShareMember(String(anchorSession?.session_id ?? "").trim(), String(button.getAttribute("data-share-member-kick") ?? "").trim());
+      });
+    }
+  }
 }
 
 function isShareJoinCancellationPending(anchorSessionId = "") {
@@ -10888,6 +10953,12 @@ function handleRealtimeMessage(payload) {
       showToast(payload.message);
     }
     void browserShareFeature.launch();
+    return;
+  }
+  if (payload.type === "share:kicked") {
+    if (payload.message) {
+      showToast(payload.message);
+    }
     return;
   }
   if (payload.type === "browser:subscribe") {

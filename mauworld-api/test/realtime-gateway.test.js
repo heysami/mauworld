@@ -476,6 +476,67 @@ test("approved public nearby game join creates an unlisted member game share", a
   await gateway.dispose();
 });
 
+test("public origin can kick a nearby game contributor", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "viewer_host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const requester = createClient({
+    viewerSessionId: "viewer_requester",
+    position: { x: 24, y: 0, z: 0 },
+  });
+  gateway.clients.set(host.viewerSessionId, host);
+  gateway.clients.set(requester.viewerSessionId, requester);
+
+  const anchorSession = {
+    id: "game_anchor",
+    session_id: "game_anchor",
+    host_viewer_session_id: host.viewerSessionId,
+    world_snapshot_id: host.worldSnapshotId,
+    binding_key: host.worldSnapshotId,
+    group_role: "origin",
+    listed_live: true,
+  };
+  const memberSession = {
+    id: "game_member",
+    session_id: "game_member",
+    host_viewer_session_id: requester.viewerSessionId,
+    world_snapshot_id: host.worldSnapshotId,
+    binding_key: host.worldSnapshotId,
+    group_role: "member",
+    anchor_session_id: anchorSession.session_id,
+  };
+  gateway.gameShares.getSession = (sessionId) => {
+    if (sessionId === anchorSession.session_id) {
+      return anchorSession;
+    }
+    if (sessionId === memberSession.session_id) {
+      return memberSession;
+    }
+    return null;
+  };
+  gateway.gameShares.stopSessionTree = (sessionId) => sessionId === memberSession.session_id ? [memberSession] : [];
+  const stoppedSessionIds = [];
+  gateway.broadcastGameStop = (session) => {
+    stoppedSessionIds.push(session.session_id);
+  };
+
+  await gateway.handleShareMemberKick(host, {
+    anchorSessionId: anchorSession.session_id,
+    memberSessionId: memberSession.session_id,
+  });
+
+  assert.deepEqual(stoppedSessionIds, [memberSession.session_id]);
+  assert.equal(
+    requester.socket.sent.some((message) =>
+      message.type === "share:kicked" && message.memberSessionId === memberSession.session_id),
+    true,
+  );
+
+  await gateway.dispose();
+});
+
 test("public nearby share starts as an origin when no anchor is nearby", async () => {
   const gateway = createGateway();
   const host = createClient({ viewerSessionId: "viewer_host" });
@@ -633,6 +694,66 @@ test("approved public nearby join creates a member share linked to the anchor", 
   assert.equal(capturedStart?.listedLive, false);
   assert.equal(capturedStart?.movementLocked, false);
   assert.equal(capturedStart?.title, "");
+
+  await gateway.dispose();
+});
+
+test("public origin can kick a nearby share contributor", async () => {
+  const gateway = createGateway();
+  const host = createClient({
+    viewerSessionId: "viewer_host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const requester = createClient({
+    viewerSessionId: "viewer_requester",
+    position: { x: 32, y: 0, z: 0 },
+  });
+  gateway.clients.set(host.viewerSessionId, host);
+  gateway.clients.set(requester.viewerSessionId, requester);
+
+  const anchorSession = {
+    id: "anchor_session",
+    sessionId: "anchor_session",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.worldSnapshotId,
+    sessionMode: "display-share",
+    groupRole: "origin",
+    listedLive: true,
+  };
+  const memberSession = {
+    id: "member_session",
+    sessionId: "member_session",
+    hostSessionId: requester.viewerSessionId,
+    worldSnapshotId: host.worldSnapshotId,
+    sessionMode: "display-share",
+    groupRole: "member",
+    anchorSessionId: anchorSession.sessionId,
+  };
+  gateway.browserManager.getSession = (sessionId) => {
+    if (sessionId === anchorSession.id) {
+      return anchorSession;
+    }
+    if (sessionId === memberSession.id) {
+      return memberSession;
+    }
+    return null;
+  };
+  const stoppedSessionIds = [];
+  gateway.browserManager.stopSession = async (sessionId) => {
+    stoppedSessionIds.push(sessionId);
+  };
+
+  await gateway.handleShareMemberKick(host, {
+    anchorSessionId: anchorSession.sessionId,
+    memberSessionId: memberSession.sessionId,
+  });
+
+  assert.deepEqual(stoppedSessionIds, [memberSession.sessionId]);
+  assert.equal(
+    requester.socket.sent.some((message) =>
+      message.type === "share:kicked" && message.memberSessionId === memberSession.sessionId),
+    true,
+  );
 
   await gateway.dispose();
 });
