@@ -13239,6 +13239,72 @@ function findProjectedPlayerHit(pointerSource) {
   return matchedPlayerId;
 }
 
+function inspectProjectedPlayerHit(pointerSource) {
+  const metrics = getPreviewPointerMetrics(pointerSource);
+  if (!metrics) {
+    return null;
+  }
+  const { preview, rect, canvasX, canvasY } = metrics;
+  const rayHit = raycastPreviewPointer(pointerSource);
+  const players = [];
+  for (const [entityId, object] of preview.entityMeshes.entries()) {
+    if (String(object?.userData?.privateWorldEntityKind ?? "").trim() !== "player") {
+      continue;
+    }
+    const worldPosition = object.getWorldPosition(new THREE.Vector3());
+    const projected = projectWorldPointToPreviewScreen(worldPosition, preview, rect);
+    const worldScale = object.getWorldScale(new THREE.Vector3());
+    const dominantScale = Math.max(
+      0.01,
+      Number(worldScale.x ?? 0) || 0,
+      Number(worldScale.y ?? 0) || 0,
+      Number(worldScale.z ?? 0) || 0,
+    );
+    const unitsPerPixel = getPreviewWorldUnitsPerPixel(
+      preview.camera.position.distanceTo(worldPosition),
+      preview,
+      rect,
+    );
+    const radiusPx = Math.max(
+      28,
+      ((PRIVATE_PLAYER_METRICS.height * dominantScale) / Math.max(0.0001, unitsPerPixel)) * 0.42,
+    );
+    players.push({
+      entityId,
+      playerId: String(object.userData?.privateWorldPlayerId || entityId || "").trim(),
+      visible: object.visible !== false,
+      projected,
+      radiusPx,
+      distancePx: projected ? Math.hypot(canvasX - projected.x, canvasY - projected.y) : null,
+    });
+  }
+  return {
+    canvasX,
+    canvasY,
+    mode: state.mode,
+    localParticipantRole: getLocalParticipant()?.join_role || "",
+    rayHit: rayHit ? {
+      entityId: String(rayHit.object?.userData?.privateWorldEntityId || "").trim(),
+      entityKind: String(rayHit.object?.userData?.privateWorldEntityKind || "").trim(),
+      playerId: String(rayHit.object?.userData?.privateWorldPlayerId || "").trim(),
+      distance: Number(rayHit.distance ?? 0) || 0,
+    } : null,
+    projectedMatch: findProjectedPlayerHit(pointerSource),
+    players,
+  };
+}
+
+function installPrivateDebugTools() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.__mwPrivateDebug = {
+    inspectPlayerClick(clientX, clientY) {
+      return inspectProjectedPlayerHit({ clientX, clientY });
+    },
+  };
+}
+
 function syncPreviewCanvasCursor() {
   if (!elements.previewCanvas) {
     return;
@@ -20736,6 +20802,7 @@ async function handleLaunchRequest(options = {}) {
 
 async function init() {
   bindEvents();
+  installPrivateDebugTools();
   renderEventLog();
   renderPrivateChat();
   renderPrivateShare();
