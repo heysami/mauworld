@@ -26,6 +26,7 @@ const DYNAMIC_ANGULAR_DAMPING = 3.6;
 const DYNAMIC_INTERACTION_LEASE_MS = 220;
 const DYNAMIC_INTERACTION_MAX_STATES = 12;
 const DYNAMIC_INTERACTION_DISTANCE_BUFFER = PRIVATE_WORLD_BLOCK_UNIT * 1.35;
+const CLIENT_REPLICATED_POSE_TTL_MS = 180;
 const SCRIPTED_PLATFORM_MIN_DURATION_MS = 100;
 const SCRIPTED_PLATFORM_MAX_DURATION_MS = 600000;
 const SCRIPTED_PLATFORM_DEFAULT_DURATION_MS = 3000;
@@ -785,11 +786,93 @@ function findSupportingCarryPlatform(runtime, rider) {
   return bestMatch;
 }
 
+function clearClientReplicatedPose(player) {
+  if (!player) {
+    return;
+  }
+  player.client_replication_pose = null;
+  player.client_replication_updated_at_ms = 0;
+  player.last_client_replication_seq = 0;
+}
+
+function getFreshClientReplicatedPose(player, nowMs = Date.now()) {
+  if (!player?.occupied_by_profile_id) {
+    return null;
+  }
+  const pose = player.client_replication_pose;
+  const updatedAt = Math.max(0, Number(player.client_replication_updated_at_ms ?? 0) || 0);
+  if (!pose || updatedAt <= 0 || nowMs - updatedAt > CLIENT_REPLICATED_POSE_TTL_MS) {
+    return null;
+  }
+  return pose;
+}
+
 function applyOccupiedPlayerPose(runtime, player, input = {}) {
   if (!runtime || !player) {
     return null;
   }
   const motionSeq = Number(input.motionSeq ?? input.motion_seq);
+  const rawPosition = input.position && typeof input.position === "object" ? input.position : {};
+  const rawVelocity = input.velocity && typeof input.velocity === "object" ? input.velocity : {};
+  const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
+  const currentBodyPosition = body ? vec3(body.translation(), player.position) : vec3(player.position);
+  const currentBodyVelocity = body ? vec3(body.linvel(), player.velocity) : vec3(player.velocity);
+  const forceClientPose = input.force_client_pose === true
+    || input.forceClientPose === true
+    || input.force_runtime_pose === true
+    || input.forceRuntimePose === true
+    || input.client_authoritative_pose === true;
+  if (forceClientPose) {
+    const previousReplicationSeq = Math.max(0, Number(player.last_client_replication_seq ?? 0) || 0);
+    const existingPose = getFreshClientReplicatedPose(player) ?? {
+      position: cloneJson(player.position),
+      velocity: cloneJson(player.velocity),
+      rotation: cloneJson(player.rotation),
+    };
+    if (Number.isFinite(motionSeq) && motionSeq < previousReplicationSeq) {
+      return {
+        player_entity_id: player.id,
+        position: cloneJson(existingPose.position),
+        velocity: cloneJson(existingPose.velocity),
+        heading_y: mustFinite(existingPose.rotation?.y, player.rotation?.y ?? 0),
+        motion_seq: previousReplicationSeq,
+        ignored: true,
+        mirrored_only: true,
+      };
+    }
+    const resolvedHeadingY = Number(input.headingY ?? input.heading_y ?? rawPosition.heading_y ?? rawPosition.heading);
+    const mirroredPosition = {
+      x: mustFinite(rawPosition.x ?? input.position_x, currentBodyPosition.x),
+      y: mustFinite(rawPosition.y ?? input.position_y, currentBodyPosition.y),
+      z: mustFinite(rawPosition.z ?? input.position_z, currentBodyPosition.z),
+    };
+    const mirroredVelocity = {
+      x: mustFinite(rawVelocity.x ?? input.velocity_x, currentBodyVelocity.x),
+      y: mustFinite(rawVelocity.y ?? input.velocity_y, currentBodyVelocity.y),
+      z: mustFinite(rawVelocity.z ?? input.velocity_z, currentBodyVelocity.z),
+    };
+    const mirroredRotation = cloneJson(player.rotation);
+    if (Number.isFinite(resolvedHeadingY)) {
+      mirroredRotation.y = Number(normalizeAngle(resolvedHeadingY).toFixed(6));
+    }
+    player.client_replication_pose = {
+      position: mirroredPosition,
+      velocity: mirroredVelocity,
+      rotation: mirroredRotation,
+    };
+    player.client_replication_updated_at_ms = Date.now();
+    if (Number.isFinite(motionSeq)) {
+      player.last_client_replication_seq = Math.max(previousReplicationSeq, motionSeq);
+    }
+    return {
+      player_entity_id: player.id,
+      position: cloneJson(mirroredPosition),
+      velocity: cloneJson(mirroredVelocity),
+      heading_y: mustFinite(mirroredRotation?.y, 0),
+      motion_seq: Number.isFinite(motionSeq) ? Math.max(previousReplicationSeq, motionSeq) : previousReplicationSeq,
+      mirrored_only: true,
+    };
+  }
   const previousMotionSeq = Math.max(0, Number(player.last_client_motion_seq ?? 0) || 0);
   if (Number.isFinite(motionSeq) && motionSeq < previousMotionSeq) {
     return {
@@ -801,16 +884,6 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
       ignored: true,
     };
   }
-  const rawPosition = input.position && typeof input.position === "object" ? input.position : {};
-  const rawVelocity = input.velocity && typeof input.velocity === "object" ? input.velocity : {};
-  const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
-  const currentBodyPosition = body ? vec3(body.translation(), player.position) : vec3(player.position);
-  const currentBodyVelocity = body ? vec3(body.linvel(), player.velocity) : vec3(player.velocity);
-  const forceClientPose = input.force_client_pose === true
-    || input.forceClientPose === true
-    || input.force_runtime_pose === true
-    || input.forceRuntimePose === true
-    || input.client_authoritative_pose === true;
   const preserveVertical = !forceClientPose && player.body_mode !== "ghost";
   const supportingCarryPlatform = preserveVertical ? findSupportingCarryPlatform(runtime, player) : null;
   const preservePlanar = !forceClientPose && Boolean(supportingCarryPlatform);
@@ -1330,6 +1403,9 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       material_override: null,
       last_client_motion_seq: 0,
       jumpBufferedUntilMs: 0,
+      client_replication_pose: null,
+      client_replication_updated_at_ms: 0,
+      last_client_replication_seq: 0,
     };
   });
   const dynamicObjects = (sceneDoc.primitives ?? []).map((entry) => ({
@@ -1457,11 +1533,15 @@ function syncParticipantOccupancy(simulation, participants = []) {
   );
 
   for (const player of simulation.players) {
+    const previousOccupiedByProfileId = player.occupied_by_profile_id;
     const participant = occupiedByEntityId.get(player.id) ?? null;
     player.occupied_by_profile_id = participant?.profile_id ?? null;
     player.occupied_by_username = participant?.profile?.username ?? null;
     player.occupied_by_display_name = participant?.profile?.display_name ?? participant?.display_name ?? null;
     player.ready = participant?.ready_state?.ready === true;
+    if (!player.occupied_by_profile_id || player.occupied_by_profile_id !== previousOccupiedByProfileId) {
+      clearClientReplicatedPose(player);
+    }
     if (!player.occupied_by_profile_id) {
       player.pressedKeys.clear();
       player.ready = false;
@@ -1509,6 +1589,15 @@ function preserveRebuiltOccupiedPlayerState(nextRuntime, previousRuntime = null)
     player.occupied_by_username = previousPlayer.occupied_by_username ?? null;
     player.occupied_by_display_name = previousPlayer.occupied_by_display_name ?? null;
     player.ready = previousPlayer.ready === true;
+    player.client_replication_pose = cloneJson(previousPlayer.client_replication_pose);
+    player.client_replication_updated_at_ms = Math.max(
+      0,
+      Number(previousPlayer.client_replication_updated_at_ms ?? 0) || 0,
+    );
+    player.last_client_replication_seq = Math.max(
+      0,
+      Number(previousPlayer.last_client_replication_seq ?? 0) || 0,
+    );
     const body = nextRuntime.physics?.playerBodies?.get(player.id) ?? null;
     if (!body) {
       continue;
@@ -1894,33 +1983,36 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     tick: runtime.tick,
     elapsed_ms: Number(runtime.elapsedMs.toFixed(0)),
     started_at: runtime.startedAt ?? null,
-    players: runtime.players.map((entry) => ({
-      id: entry.id,
-      label: entry.label,
-      scale: entry.scale,
-      position: cloneJson(entry.position),
-      rotation: cloneJson(entry.rotation),
-      velocity: cloneJson(entry.velocity),
-      angular_velocity: cloneJson(entry.angular_velocity),
-      camera_mode: entry.camera_mode,
-      fixed_top_down_direction: String(entry.fixed_top_down_direction ?? "north").trim().toLowerCase() || "north",
-      fixed_top_down_angle: mustFinite(entry.fixed_top_down_angle, 90),
-      fixed_top_down_distance: mustFinite(entry.fixed_top_down_distance, DEFAULT_PLAYER_ORTHOGONAL_DISTANCE),
-      fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
-      fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
-      movement_enabled: entry.movement_enabled !== false,
-      jump_enabled: entry.jump_enabled === true,
-      body_mode: entry.body_mode,
-      occupiable: entry.occupiable !== false,
-      occupied_by_profile_id: entry.occupied_by_profile_id,
-      occupied_by_username: entry.occupied_by_username,
-      occupied_by_display_name: entry.occupied_by_display_name,
-      ready: entry.ready === true,
-      on_ground: entry.onGround === true,
-      sleeping: entry.sleeping === true,
-      visible: entry.visibility !== false,
-      material_override: cloneJson(entry.material_override),
-    })),
+    players: runtime.players.map((entry) => {
+      const replicatedPose = getFreshClientReplicatedPose(entry);
+      return {
+        id: entry.id,
+        label: entry.label,
+        scale: entry.scale,
+        position: cloneJson(replicatedPose?.position ?? entry.position),
+        rotation: cloneJson(replicatedPose?.rotation ?? entry.rotation),
+        velocity: cloneJson(replicatedPose?.velocity ?? entry.velocity),
+        angular_velocity: cloneJson(entry.angular_velocity),
+        camera_mode: entry.camera_mode,
+        fixed_top_down_direction: String(entry.fixed_top_down_direction ?? "north").trim().toLowerCase() || "north",
+        fixed_top_down_angle: mustFinite(entry.fixed_top_down_angle, 90),
+        fixed_top_down_distance: mustFinite(entry.fixed_top_down_distance, DEFAULT_PLAYER_ORTHOGONAL_DISTANCE),
+        fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
+        fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
+        movement_enabled: entry.movement_enabled !== false,
+        jump_enabled: entry.jump_enabled === true,
+        body_mode: entry.body_mode,
+        occupiable: entry.occupiable !== false,
+        occupied_by_profile_id: entry.occupied_by_profile_id,
+        occupied_by_username: entry.occupied_by_username,
+        occupied_by_display_name: entry.occupied_by_display_name,
+        ready: entry.ready === true,
+        on_ground: entry.onGround === true,
+        sleeping: entry.sleeping === true,
+        visible: entry.visibility !== false,
+        material_override: cloneJson(entry.material_override),
+      };
+    }),
     dynamic_objects: runtime.dynamicObjects.map((entry) => ({
       id: entry.id,
       entity_kind: entry.entity_kind ?? "primitive",
