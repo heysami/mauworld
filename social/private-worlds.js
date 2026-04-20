@@ -105,6 +105,11 @@ const PRIVATE_PLAYER_RUNTIME = {
   verticalSnapDistance: PRIVATE_WORLD_BLOCK_UNIT * 0.5,
 };
 const PRIVATE_RUNTIME_STATUS_THROTTLE_MS = 240;
+const PRIVATE_RUNTIME_SNAPSHOT_PRIORITY = {
+  worldDetail: 1,
+  worldSnapshot: 1,
+  liveSocket: 2,
+};
 const PRIVATE_MOVEMENT_INTENT_KEYS = [
   "w",
   "a",
@@ -960,6 +965,8 @@ const state = {
   sceneDrawerTab: "scenes",
   activeLockEntityKey: "",
   runtimeSnapshot: null,
+  runtimeSnapshotSourcePriority: 0,
+  runtimeSnapshotWorldKey: "",
   pressedRuntimeKeys: new Set(),
   predictedPossessedPlayer: null,
   launcherTab: "access",
@@ -1925,6 +1932,105 @@ function slugToken(value) {
     .slice(0, 40);
 }
 
+function slugPrivateEntityToken(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function renormalizePrivateEntityId(prefix, value) {
+  const cleaned = slugPrivateEntityToken(value);
+  return cleaned ? `${prefix}_${cleaned}` : null;
+}
+
+function normalizePrivateEntityId(prefix, value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  if (raw.toLowerCase().startsWith(`${prefix}_`)) {
+    const suffix = slugPrivateEntityToken(raw.slice(prefix.length + 1));
+    if (suffix) {
+      return `${prefix}_${suffix}`;
+    }
+  }
+  return renormalizePrivateEntityId(prefix, raw);
+}
+
+function collectPrivateEntityIdVariants(prefix, value, maxDepth = 4) {
+  const variants = new Set();
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return variants;
+  }
+  variants.add(raw);
+  const normalized = normalizePrivateEntityId(prefix, raw);
+  if (normalized) {
+    variants.add(normalized);
+  }
+  let current = raw;
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    current = renormalizePrivateEntityId(prefix, current);
+    if (!current || variants.has(current)) {
+      break;
+    }
+    variants.add(current);
+  }
+  current = normalized;
+  for (let depth = 0; current && depth < maxDepth; depth += 1) {
+    current = renormalizePrivateEntityId(prefix, current);
+    if (!current || variants.has(current)) {
+      break;
+    }
+    variants.add(current);
+  }
+  return variants;
+}
+
+function resolvePrivateEntityIdAlias(prefix, value, knownIds = []) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  const candidates = Array.from(new Set(
+    (Array.isArray(knownIds) ? knownIds : [])
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean),
+  ));
+  if (candidates.length === 0) {
+    return normalizePrivateEntityId(prefix, raw) ?? raw;
+  }
+  const requestedVariants = collectPrivateEntityIdVariants(prefix, raw);
+  for (const candidate of candidates) {
+    if (requestedVariants.has(candidate)) {
+      return candidate;
+    }
+  }
+  for (const candidate of candidates) {
+    const candidateVariants = collectPrivateEntityIdVariants(prefix, candidate);
+    for (const variant of candidateVariants) {
+      if (requestedVariants.has(variant)) {
+        return candidate;
+      }
+    }
+  }
+  return normalizePrivateEntityId(prefix, raw) ?? raw;
+}
+
+function getRuntimePlayerIds(snapshot = state.runtimeSnapshot) {
+  return Array.isArray(snapshot?.players)
+    ? snapshot.players
+      .map((entry) => String(entry?.id ?? "").trim())
+      .filter(Boolean)
+    : [];
+}
+
+function resolvePrivatePlayerEntityId(value, knownIds = getRuntimePlayerIds()) {
+  return resolvePrivateEntityIdAlias("player", value, knownIds);
+}
+
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value ?? null));
 }
@@ -2324,7 +2430,7 @@ function getPrivateBrowserHostPosition(hostSessionId = "") {
     return null;
   }
   const getPlayerAnchorPosition = (playerEntityId = "") => {
-    const playerId = String(playerEntityId ?? "").trim();
+    const playerId = resolvePrivatePlayerEntityId(playerEntityId, getRuntimePlayerIds()) ?? String(playerEntityId ?? "").trim();
     if (!playerId) {
       return null;
     }
@@ -7981,7 +8087,7 @@ async function runRefreshAuthState() {
     state.selectedSceneId = "";
     state.selectedPrefabId = "";
     state.selectedScriptFunctionId = "";
-    state.runtimeSnapshot = null;
+    clearRuntimeSnapshot();
     state.privateChatEntries = [];
     state.activeChats.clear();
     state.livePresence.clear();
@@ -8853,19 +8959,81 @@ function getLocalParticipant(world = state.selectedWorld) {
   return world.active_instance.participants.find((entry) => entry.guest_session_id === getGuestSessionId()) ?? null;
 }
 
+function getRuntimeSnapshotWorldKey(world = state.selectedWorld) {
+  const worldId = String(world?.world_id ?? "").trim();
+  const creatorUsername = String(world?.creator?.username ?? "").trim().toLowerCase();
+  return worldId && creatorUsername ? `${creatorUsername}:${worldId}` : "";
+}
+
+function clearRuntimeSnapshot() {
+  state.runtimeSnapshot = null;
+  state.runtimeSnapshotSourcePriority = 0;
+  state.runtimeSnapshotWorldKey = "";
+}
+
+function setRuntimeSnapshot(nextRuntime, options = {}) {
+  const sourcePriority = Math.max(0, Number(options.sourcePriority ?? 0) || 0);
+  const worldKey = String(options.worldKey ?? getRuntimeSnapshotWorldKey()).trim();
+  const previousRuntime = state.runtimeSnapshot;
+  const previousWorldKey = String(state.runtimeSnapshotWorldKey ?? "").trim();
+  if (!nextRuntime) {
+    if (options.clear !== false) {
+      clearRuntimeSnapshot();
+    }
+    return {
+      accepted: options.clear !== false,
+      previousRuntime,
+      snapshot: state.runtimeSnapshot,
+    };
+  }
+  const nextTick = Number.isFinite(Number(nextRuntime.tick)) ? Number(nextRuntime.tick) : -1;
+  const currentTick = Number.isFinite(Number(previousRuntime?.tick)) ? Number(previousRuntime.tick) : -1;
+  const currentPriority = Math.max(0, Number(state.runtimeSnapshotSourcePriority ?? 0) || 0);
+  const sameWorld = !previousWorldKey || !worldKey || previousWorldKey === worldKey;
+  if (sameWorld && previousRuntime) {
+    if (nextTick < currentTick) {
+      return {
+        accepted: false,
+        previousRuntime,
+        snapshot: previousRuntime,
+      };
+    }
+    if (nextTick === currentTick && sourcePriority < currentPriority) {
+      return {
+        accepted: false,
+        previousRuntime,
+        snapshot: previousRuntime,
+      };
+    }
+  }
+  state.runtimeSnapshot = nextRuntime;
+  state.runtimeSnapshotSourcePriority = sourcePriority;
+  state.runtimeSnapshotWorldKey = worldKey;
+  return {
+    accepted: true,
+    previousRuntime,
+    snapshot: nextRuntime,
+  };
+}
+
 function getPossessedRuntimePlayer() {
   const localParticipant = getLocalParticipant();
   if (!localParticipant?.player_entity_id) {
     return null;
   }
-  return state.runtimeSnapshot?.players?.find((entry) => entry.id === localParticipant.player_entity_id) ?? null;
+  const playerId = resolvePrivatePlayerEntityId(localParticipant.player_entity_id, getRuntimePlayerIds());
+  if (!playerId) {
+    return null;
+  }
+  return state.runtimeSnapshot?.players?.find((entry) => entry.id === playerId) ?? null;
 }
 
 function getLocallyControlledPlayerEntityId() {
   const localParticipant = getLocalParticipant();
-  return localParticipant?.join_role === "player"
-    ? String(localParticipant.player_entity_id ?? "").trim()
-    : "";
+  if (localParticipant?.join_role !== "player") {
+    return "";
+  }
+  return resolvePrivatePlayerEntityId(localParticipant.player_entity_id, getRuntimePlayerIds()) ?? "";
 }
 
 function clearPossessedPlayerPrediction() {
@@ -9103,15 +9271,23 @@ function setMode(mode, options = {}) {
 function syncRuntimeFromWorld(world = state.selectedWorld) {
   const nextRuntime = world?.active_instance?.runtime ?? null;
   if (!nextRuntime) {
-    if (!world?.active_instance) {
-      state.runtimeSnapshot = null;
+    if (
+      !world?.active_instance
+      || getRuntimeSnapshotWorldKey(world) !== String(state.runtimeSnapshotWorldKey ?? "").trim()
+    ) {
+      clearRuntimeSnapshot();
     }
     return;
   }
-  const nextTick = Number(nextRuntime.tick ?? 0);
-  const currentTick = Number(state.runtimeSnapshot?.tick ?? -1);
-  if (!state.runtimeSnapshot || nextTick >= currentTick) {
-    state.runtimeSnapshot = nextRuntime;
+  const result = setRuntimeSnapshot(nextRuntime, {
+    sourcePriority: PRIVATE_RUNTIME_SNAPSHOT_PRIORITY.worldDetail,
+    worldKey: getRuntimeSnapshotWorldKey(world),
+  });
+  if (world?.active_instance) {
+    world.active_instance.runtime = result.snapshot ?? null;
+    if (result.snapshot?.status) {
+      world.active_instance.status = result.snapshot.status;
+    }
   }
 }
 
@@ -16601,6 +16777,10 @@ function updatePreviewFromSelection(options = {}) {
       .filter((entry) => entry?.id != null)
       .map((entry) => [String(entry.id), entry]),
   );
+  const runtimePlayerIds = runtimeTransforms.players
+    .map((entry) => String(entry?.id ?? "").trim())
+    .filter(Boolean);
+  const renderedScenePlayerIds = new Set();
   const useRuntimePrimitivePreview = state.mode === "play" && runtimeTransforms.dynamicObjects.length > 0;
   const renderPrimitiveMesh = (primitiveSource = {}, options = {}) => {
     const authoredPrimitive = options.authoredPrimitive ?? null;
@@ -16816,7 +16996,14 @@ function updatePreviewFromSelection(options = {}) {
   }
 
   for (const player of sceneDoc.players ?? []) {
-    const runtimePlayer = runtimeTransforms.playerById.get(player.id);
+    const authoredPlayerId = String(player?.id ?? "").trim();
+    const resolvedPlayerId = state.mode === "play"
+      ? (resolvePrivatePlayerEntityId(authoredPlayerId, runtimePlayerIds) ?? authoredPlayerId)
+      : authoredPlayerId;
+    if (resolvedPlayerId) {
+      renderedScenePlayerIds.add(resolvedPlayerId);
+    }
+    const runtimePlayer = runtimeTransforms.playerById.get(resolvedPlayerId) ?? runtimeTransforms.playerById.get(authoredPlayerId);
     const resolvedPlayerScale = runtimePlayer?.scale || player.scale || 1;
     const mesh = addMesh(
       new THREE.CapsuleGeometry(
@@ -16835,17 +17022,17 @@ function updatePreviewFromSelection(options = {}) {
       runtimePlayer?.position || player.position || { x: 0, y: 1, z: 0 },
       runtimePlayer?.rotation || player.rotation || { x: 0, y: 0, z: 0 },
       { x: resolvedPlayerScale, y: resolvedPlayerScale, z: resolvedPlayerScale },
-      { id: player.id, kind: "player" },
+      { id: resolvedPlayerId || player.id, kind: "player" },
     );
     applyRenderableVisibility(mesh, {
       runtimeVisible: runtimePlayer?.visible !== false,
     });
-    mesh.userData.privateWorldPlayerId = player.id;
+    mesh.userData.privateWorldPlayerId = resolvedPlayerId || player.id;
   }
 
   for (const runtimePlayer of runtimeTransforms.players) {
-    const playerId = runtimePlayer.id;
-    if ((sceneDoc.players ?? []).some((entry) => entry.id === playerId)) {
+    const playerId = String(runtimePlayer?.id ?? "").trim();
+    if (!playerId || renderedScenePlayerIds.has(playerId)) {
       continue;
     }
     const mesh = addMesh(
@@ -17081,24 +17268,27 @@ function connectWorldSocket() {
           void openWorld(world.world_id, world.creator.username, true);
         }
       } else if (payload.type === "world:runtime") {
-        const previousRuntime = state.runtimeSnapshot;
-        state.runtimeSnapshot = payload.snapshot ?? null;
+        const result = setRuntimeSnapshot(payload.snapshot ?? null, {
+          sourcePriority: PRIVATE_RUNTIME_SNAPSHOT_PRIORITY.liveSocket,
+          worldKey: getRuntimeSnapshotWorldKey(state.selectedWorld),
+        });
+        const previousRuntime = result.previousRuntime;
         if (state.selectedWorld?.active_instance) {
-          state.selectedWorld.active_instance.runtime = payload.snapshot ?? null;
-          if (payload.snapshot?.status) {
-            state.selectedWorld.active_instance.status = payload.snapshot.status;
+          state.selectedWorld.active_instance.runtime = result.snapshot ?? null;
+          if (result.snapshot?.status) {
+            state.selectedWorld.active_instance.status = result.snapshot.status;
           }
         }
-        if (state.selectedWorld?.active_instance && payload.snapshot?.active_scene_id) {
-          state.selectedWorld.active_instance.active_scene_id = payload.snapshot.active_scene_id;
+        if (state.selectedWorld?.active_instance && result.snapshot?.active_scene_id) {
+          state.selectedWorld.active_instance.active_scene_id = result.snapshot.active_scene_id;
           state.selectedSceneId = resolvePreferredSelectedSceneId(state.selectedWorld, {
             previousSelectedSceneId: state.selectedSceneId,
           });
         }
         reconcilePossessedPlayerPrediction();
         renderRuntimeStatusThrottled();
-        const activeSceneChanged = String(previousRuntime?.active_scene_id ?? "") !== String(payload.snapshot?.active_scene_id ?? "");
-        if (activeSceneChanged || !syncPreviewRuntimeSnapshot(payload.snapshot)) {
+        const activeSceneChanged = String(previousRuntime?.active_scene_id ?? "") !== String(result.snapshot?.active_scene_id ?? "");
+        if (activeSceneChanged || !syncPreviewRuntimeSnapshot(result.snapshot)) {
           updatePreviewFromSelection({ forceRebuild: true });
         }
       } else if (payload.type === "world:error") {
