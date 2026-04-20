@@ -420,7 +420,7 @@ test("key press rules remain repeatable and can reapply force", () => {
         {
           id: "crate_one",
           shape: "box",
-          position: { x: 0, y: 1, z: 0 },
+          position: { x: 4, y: 1, z: 0 },
           scale: { x: 1, y: 1, z: 1 },
           rotation: { x: 0, y: 0, z: 0 },
           material: { color: "#ffffff", texture_preset: "none" },
@@ -467,6 +467,70 @@ test("key press rules remain repeatable and can reapply force", () => {
   assert.ok(simulation.runtime.dynamicObjects[0].velocity.y > firstVelocity);
 });
 
+test("runtime can disable jumping while keeping space key rules active", () => {
+  const simulation = buildSimulation({
+    participants: [{
+      profile_id: "profile_one",
+      profile: { username: "maker", display_name: "Maker" },
+      join_role: "player",
+      player_entity_id: "player_one",
+      ready_state: { ready: true },
+    }],
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: 0, z: 0 } },
+      voxels: [],
+      primitives: [
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 4, y: 1, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#ffffff", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: { gravity_scale: 0, restitution: 0, friction: 0, mass: 1 },
+        },
+      ],
+      screens: [],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 0, y: 1, z: 0 },
+        scale: 1,
+        body_mode: "rigid",
+        camera_mode: "third_person",
+        jump_enabled: false,
+      }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [
+        {
+          id: "rule_key_force",
+          trigger: "key_press",
+          action: "apply_force",
+          key: "space",
+          target_id: "crate_one",
+          payload: { force: { x: 0, y: 4, z: 0 } },
+        },
+      ],
+    },
+  });
+  const runtime = simulation.runtime;
+  const playerId = runtime.players[0].id;
+  const beforePlayerY = runtime.players[0].position.y;
+
+  stepPrivateWorldSimulation(runtime, {
+    deltaMs: 50,
+    pendingInputs: [{ playerId, key: "space", state: "down" }],
+  });
+
+  assert.ok(runtime.dynamicObjects[0].velocity.y > 0);
+  assert.ok(Math.abs(runtime.players[0].position.y - beforePlayerY) < 0.05);
+  assert.ok(runtime.players[0].velocity.y <= 0.05);
+});
+
 test("runtime snapshots preserve authored player and object scale", () => {
   const simulation = buildSimulation({
     participants: [],
@@ -498,6 +562,7 @@ test("runtime snapshots preserve authored player and object scale", () => {
         fixed_top_down_width: 80,
         fixed_top_down_height: 48,
         movement_enabled: false,
+        jump_enabled: false,
       }],
       texts: [],
       trigger_zones: [],
@@ -515,6 +580,7 @@ test("runtime snapshots preserve authored player and object scale", () => {
   assert.equal(snapshot.players[0].fixed_top_down_width, 80);
   assert.equal(snapshot.players[0].fixed_top_down_height, 48);
   assert.equal(snapshot.players[0].movement_enabled, false);
+  assert.equal(snapshot.players[0].jump_enabled, false);
   assert.deepEqual(snapshot.dynamic_objects[0].scale, { x: 6, y: 4, z: 3 });
 });
 

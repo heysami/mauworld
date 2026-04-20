@@ -940,6 +940,10 @@ function isPlayerMovementEnabled(player = {}) {
   return player?.movement_enabled !== false;
 }
 
+function isPlayerJumpEnabled(player = {}) {
+  return player?.jump_enabled !== false;
+}
+
 function raycastPlayerGround(runtime, player) {
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
   const collider = runtime.physics?.playerColliders?.get(player.id) ?? null;
@@ -967,7 +971,7 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   const forward = pressed.has("w") || pressed.has("arrowup");
   const backward = pressed.has("s") || pressed.has("arrowdown");
   const sprint = movementEnabled && pressed.has("shift");
-  const jumpEdge = movementEnabled && inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
+  const jumpEdge = isPlayerJumpEnabled(player) && inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
   const desired = movementEnabled
     ? (player.usesLookHeading === true
     ? getRelativePlayerMovement(player, pressed)
@@ -1081,6 +1085,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
       fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
       movement_enabled: entry.movement_enabled !== false,
+      jump_enabled: entry.jump_enabled !== false,
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
       initialPosition: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
@@ -1674,6 +1679,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
       fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
       movement_enabled: entry.movement_enabled !== false,
+      jump_enabled: entry.jump_enabled !== false,
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
       occupied_by_profile_id: entry.occupied_by_profile_id,

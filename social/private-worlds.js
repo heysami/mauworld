@@ -377,6 +377,7 @@ const TOOL_PRESET_BUILTINS = {
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
         movement_enabled: true,
+        jump_enabled: true,
         body_mode: "rigid",
         occupiable: true,
       },
@@ -396,6 +397,7 @@ const TOOL_PRESET_BUILTINS = {
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
         movement_enabled: true,
+        jump_enabled: true,
         body_mode: "ghost",
         occupiable: true,
       },
@@ -832,6 +834,7 @@ function createBaseToolPresetEntry(kind) {
       fixed_top_down_width: 0,
       fixed_top_down_height: 0,
       movement_enabled: true,
+      jump_enabled: true,
       body_mode: "rigid",
       occupiable: true,
     };
@@ -9518,6 +9521,7 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     fixedTopDownWidth: Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? 0) || 0),
     fixedTopDownHeight: Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? 0) || 0),
     movementEnabled: normalizePlayerMovementEnabled(runtimePlayer.movement_enabled ?? true),
+    jumpEnabled: normalizePlayerJumpEnabled(runtimePlayer.jump_enabled ?? true),
     bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
     onGround: runtimePlayer.on_ground === true,
   };
@@ -9553,6 +9557,10 @@ function isPlayerMovementToggleCameraMode(value = "third_person") {
 }
 
 function normalizePlayerMovementEnabled(value = true) {
+  return value !== false;
+}
+
+function normalizePlayerJumpEnabled(value = true) {
   return value !== false;
 }
 
@@ -9843,6 +9851,9 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   prediction.movementEnabled = normalizePlayerMovementEnabled(
     runtimePlayer.movement_enabled ?? prediction.movementEnabled ?? true,
   );
+  prediction.jumpEnabled = normalizePlayerJumpEnabled(
+    runtimePlayer.jump_enabled ?? prediction.jumpEnabled ?? true,
+  );
   prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
     runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
   );
@@ -9906,6 +9917,9 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   prediction.cameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
   prediction.movementEnabled = normalizePlayerMovementEnabled(
     runtimePlayer.movement_enabled ?? prediction.movementEnabled ?? true,
+  );
+  prediction.jumpEnabled = normalizePlayerJumpEnabled(
+    runtimePlayer.jump_enabled ?? prediction.jumpEnabled ?? true,
   );
   prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
     runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
@@ -11860,6 +11874,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const orthogonalMode = isOrthogonalCameraMode(cameraMode);
     const movementToggleMode = isPlayerMovementToggleCameraMode(cameraMode);
     const movementEnabled = normalizePlayerMovementEnabled(entry.movement_enabled ?? true);
+    const jumpEnabled = normalizePlayerJumpEnabled(entry.jump_enabled ?? true);
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownDirection = normalizePlayerFixedTopDownDirection(entry.fixed_top_down_direction ?? "north");
     const fixedTopDownAngle = normalizePlayerFixedTopDownAngle(entry.fixed_top_down_angle ?? 90);
@@ -11909,6 +11924,10 @@ function renderEntityInspector(sceneDoc, selected = null) {
           <span>Allow movement</span>
         </div>
       ` : ""}
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="jump_enabled" data-value-type="checkbox" ${jumpEnabled ? "checked" : ""} />
+        <span>Allow jump with Space</span>
+      </div>
       ${orthogonalMode ? `
         <p class="pw-inspector-note">${fixedTopDownNote}</p>
         <div class="pw-inspector-grid pw-inspector-grid--2">
@@ -18168,6 +18187,7 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
       fixed_top_down_width: prediction.fixedTopDownWidth,
       fixed_top_down_height: prediction.fixedTopDownHeight,
       movement_enabled: prediction.movementEnabled,
+      jump_enabled: prediction.jumpEnabled,
       body_mode: prediction.bodyMode,
       on_ground: prediction.onGround,
     };

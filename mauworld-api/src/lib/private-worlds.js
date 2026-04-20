@@ -510,6 +510,10 @@ function normalizeAllowedPlayerMovementEnabled(value = true) {
   return value !== false;
 }
 
+function normalizeAllowedPlayerJumpEnabled(value = true) {
+  return value !== false;
+}
+
 function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
   const cameraMode = normalizeAllowedPlayerCameraMode(entry.camera_mode ?? entry.cameraMode ?? "third_person");
   const fixedTopDownDirection = normalizeAllowedPlayerFixedTopDownDirection(
@@ -526,6 +530,9 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
   ).toFixed(4));
   const movementEnabled = normalizeAllowedPlayerMovementEnabled(
     entry.movement_enabled ?? entry.movementEnabled ?? true,
+  );
+  const jumpEnabled = normalizeAllowedPlayerJumpEnabled(
+    entry.jump_enabled ?? entry.jumpEnabled ?? true,
   );
   const bodyMode = String(entry.body_mode ?? entry.bodyMode ?? "rigid").trim().toLowerCase();
   return {
@@ -551,6 +558,7 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
       4096,
     ).toFixed(4)),
     movement_enabled: movementEnabled,
+    jump_enabled: jumpEnabled,
     body_mode: ALLOWED_PLAYER_BODY_MODES.has(bodyMode) ? bodyMode : "rigid",
     occupiable: entry.occupiable !== false,
   };
@@ -1287,6 +1295,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         fixed_top_down_width: entry.fixed_top_down_width,
         fixed_top_down_height: entry.fixed_top_down_height,
         movement_enabled: entry.movement_enabled,
+        jump_enabled: entry.jump_enabled,
         body_mode: entry.body_mode,
       })),
       dynamic_objects: resolvedDoc.primitives.map((entry) => ({

@@ -64,6 +64,7 @@ test("normalizeSceneDoc gives player spawns a character-scale default", () => {
   assert.equal(scene.players[0].scale, 5);
   assert.deepEqual(scene.players[0].position, { x: 0, y: 4.5, z: 0 });
   assert.equal(scene.players[0].movement_enabled, true);
+  assert.equal(scene.players[0].jump_enabled, true);
 });
 
 test("normalizeSceneDoc keeps fixed orthogonal player framing fields", () => {
@@ -77,6 +78,7 @@ test("normalizeSceneDoc keeps fixed orthogonal player framing fields", () => {
       fixed_top_down_width: 82,
       fixed_top_down_height: 46,
       movement_enabled: false,
+      jump_enabled: false,
     }],
   });
 
@@ -86,6 +88,7 @@ test("normalizeSceneDoc keeps fixed orthogonal player framing fields", () => {
   assert.equal(scene.players[0].fixed_top_down_width, 82);
   assert.equal(scene.players[0].fixed_top_down_height, 46);
   assert.equal(scene.players[0].movement_enabled, false);
+  assert.equal(scene.players[0].jump_enabled, false);
 });
 
 test("normalizeSceneDoc keeps orthogonal follow camera distance", () => {
