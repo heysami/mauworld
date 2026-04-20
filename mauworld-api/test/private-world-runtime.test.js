@@ -215,6 +215,81 @@ test("dynamic objects can ignore gravity while staying rigid", () => {
   assert.ok(Math.abs(simulation.runtime.dynamicObjects[0].position.y - beforeObjectY) < 0.0001);
 });
 
+test("moving platforms can carry players and objects resting on top", () => {
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [
+        {
+          id: "platform_one",
+          shape: "box",
+          position: { x: 0, y: 0.5, z: 0 },
+          scale: { x: 4, y: 1, z: 4 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#8899aa", texture_preset: "none" },
+          rigid_mode: "ghost",
+          physics: {
+            gravity_scale: 0,
+            ignore_gravity: true,
+            carry_riders: true,
+            restitution: 0,
+            friction: 0.4,
+            mass: 1,
+          },
+        },
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 0.8, y: 1.5, z: 0.3 },
+          scale: { x: 1, y: 1, z: 1 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#d0aa88", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: {
+            gravity_scale: 0,
+            ignore_gravity: true,
+            restitution: 0,
+            friction: 0.4,
+            mass: 1,
+          },
+        },
+      ],
+      screens: [],
+      players: [{ id: "player_one", label: "Player One", position: { x: 0.2, y: 1.9, z: -0.25 }, scale: 1, body_mode: "rigid", camera_mode: "third_person" }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const runtime = simulation.runtime;
+  const platform = runtime.dynamicObjects.find((entry) => entry.id.endsWith("platform-one"));
+  const crate = runtime.dynamicObjects.find((entry) => entry.id.endsWith("crate-one"));
+  const player = runtime.players[0];
+  const platformBody = runtime.physics.objectBodies.get(platform.id);
+  const targetPosition = { x: 2.3, y: 1.1, z: -1.4 };
+
+  platformBody.setNextKinematicTranslation?.(targetPosition);
+  platformBody.setTranslation(targetPosition, true);
+
+  stepPrivateWorldSimulation(runtime, {
+    deltaMs: 50,
+    pendingInputs: [],
+  });
+
+  assert.ok(Math.abs(platform.position.x - targetPosition.x) < 0.001);
+  assert.ok(Math.abs(platform.position.y - targetPosition.y) < 0.001);
+  assert.ok(Math.abs(platform.position.z - targetPosition.z) < 0.001);
+  assert.ok(Math.abs((player.position.x - 0.2) - 2.3) < 0.15);
+  assert.ok(Math.abs((player.position.y - 1.9) - 0.6) < 0.05);
+  assert.ok(Math.abs((player.position.z + 0.25) + 1.4) < 0.05);
+  assert.ok(Math.abs((crate.position.x - 0.8) - 2.3) < 0.05);
+  assert.ok(Math.abs((crate.position.y - 1.5) - 0.6) < 0.05);
+  assert.ok(Math.abs((crate.position.z - 0.3) + 1.4) < 0.05);
+});
+
 test("timer rules enqueue a scene switch once after their delay", () => {
   const nextScene = {
     id: "scene_next",

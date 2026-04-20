@@ -11624,6 +11624,10 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <span>Ignore gravity</span>
       </div>
       <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="physics.carry_riders" data-value-type="checkbox" ${entry.physics?.carry_riders === true ? "checked" : ""} />
+        <span>Carry riders</span>
+      </div>
+      <div class="pw-checkbox">
         <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible === true ? "checked" : ""} />
         <span>Invisible in play</span>
       </div>
@@ -11727,6 +11731,10 @@ function renderEntityInspector(sceneDoc, selected = null) {
       <div class="pw-checkbox">
         <input type="checkbox" data-entity-field="physics.ignore_gravity" data-value-type="checkbox" ${entry.physics?.ignore_gravity === true ? "checked" : ""} />
         <span>Ignore gravity</span>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="physics.carry_riders" data-value-type="checkbox" ${entry.physics?.carry_riders === true ? "checked" : ""} />
+        <span>Carry riders</span>
       </div>
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>

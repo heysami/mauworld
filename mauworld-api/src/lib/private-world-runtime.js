@@ -24,6 +24,9 @@ const DYNAMIC_ANGULAR_DAMPING = 3.6;
 const DYNAMIC_INTERACTION_LEASE_MS = 220;
 const DYNAMIC_INTERACTION_MAX_STATES = 12;
 const DYNAMIC_INTERACTION_DISTANCE_BUFFER = PRIVATE_WORLD_BLOCK_UNIT * 1.35;
+const PLATFORM_CARRY_DELTA_EPSILON = 0.0001;
+const PLATFORM_CARRY_VERTICAL_TOLERANCE = 0.24;
+const PLATFORM_CARRY_HORIZONTAL_BUFFER = 0.14;
 const MAX_DELTA_SECONDS = 0.08;
 const FLOOR_HALF_EXTENT = 4096;
 
@@ -399,6 +402,187 @@ function syncEntryFromRapierBody(entry, body) {
     entry.angular_velocity = vec3(body.angvel(), entry.angular_velocity);
   }
   entry.sleeping = body.isSleeping?.() === true;
+}
+
+function collectPreStepBodyState(simulation) {
+  const riders = new Map();
+  for (const player of simulation.players ?? []) {
+    riders.set(player.id, {
+      id: player.id,
+      kind: "player",
+      position: cloneJson(player.position),
+      halfExtents: getBodyHalfExtents(player),
+    });
+  }
+  for (const entry of simulation.dynamicObjects ?? []) {
+    riders.set(entry.id, {
+      id: entry.id,
+      kind: "dynamic_object",
+      position: cloneJson(entry.position),
+      halfExtents: getBodyHalfExtents(entry),
+    });
+  }
+  const platforms = (simulation.dynamicObjects ?? [])
+    .filter((entry) => entry.physics?.carry_riders === true)
+    .map((entry) => ({
+      id: entry.id,
+      position: cloneJson(entry.position),
+      halfExtents: getBodyHalfExtents(entry),
+    }));
+  return { riders, platforms };
+}
+
+function wasRiderStandingOnPlatform(riderState, platformState) {
+  if (!riderState || !platformState || riderState.id === platformState.id) {
+    return false;
+  }
+  const riderBottom = mustFinite(riderState.position?.y, 0) - mustFinite(riderState.halfExtents?.y, 0);
+  const platformTop = mustFinite(platformState.position?.y, 0) + mustFinite(platformState.halfExtents?.y, 0);
+  const verticalGap = riderBottom - platformTop;
+  if (verticalGap < -PLATFORM_CARRY_VERTICAL_TOLERANCE || verticalGap > PLATFORM_CARRY_VERTICAL_TOLERANCE) {
+    return false;
+  }
+  const limitX = mustFinite(platformState.halfExtents?.x, 0) + mustFinite(riderState.halfExtents?.x, 0) + PLATFORM_CARRY_HORIZONTAL_BUFFER;
+  const limitZ = mustFinite(platformState.halfExtents?.z, 0) + mustFinite(riderState.halfExtents?.z, 0) + PLATFORM_CARRY_HORIZONTAL_BUFFER;
+  return (
+    Math.abs(mustFinite(riderState.position?.x, 0) - mustFinite(platformState.position?.x, 0)) <= limitX
+    && Math.abs(mustFinite(riderState.position?.z, 0) - mustFinite(platformState.position?.z, 0)) <= limitZ
+  );
+}
+
+function resolveCarryDeltaComponent(platformDelta, riderDelta) {
+  if (Math.abs(platformDelta) <= PLATFORM_CARRY_DELTA_EPSILON) {
+    return 0;
+  }
+  if (Math.abs(riderDelta) <= PLATFORM_CARRY_DELTA_EPSILON || Math.sign(riderDelta) !== Math.sign(platformDelta)) {
+    return platformDelta;
+  }
+  return platformDelta - (Math.sign(platformDelta) * Math.min(Math.abs(platformDelta), Math.abs(riderDelta)));
+}
+
+function translatePlayerByDelta(runtime, player, delta) {
+  if (!runtime || !player) {
+    return;
+  }
+  const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
+  const currentPosition = body ? vec3(body.translation(), player.position) : vec3(player.position);
+  const nextPosition = {
+    x: currentPosition.x + mustFinite(delta?.x, 0),
+    y: currentPosition.y + mustFinite(delta?.y, 0),
+    z: currentPosition.z + mustFinite(delta?.z, 0),
+  };
+  player.position = nextPosition;
+  player.sleeping = false;
+  if (!body) {
+    return;
+  }
+  if (player.body_mode === "ghost" && typeof body.setNextKinematicTranslation === "function") {
+    body.setNextKinematicTranslation(nextPosition);
+  }
+  body.setTranslation(nextPosition, true);
+  body.wakeUp?.();
+}
+
+function translateDynamicObjectByDelta(runtime, entry, delta) {
+  if (!runtime || !entry) {
+    return;
+  }
+  const body = runtime.physics?.objectBodies?.get(entry.id) ?? null;
+  const currentPosition = body ? vec3(body.translation(), entry.position) : vec3(entry.position);
+  const nextPosition = {
+    x: currentPosition.x + mustFinite(delta?.x, 0),
+    y: currentPosition.y + mustFinite(delta?.y, 0),
+    z: currentPosition.z + mustFinite(delta?.z, 0),
+  };
+  entry.position = nextPosition;
+  entry.sleeping = false;
+  if (!body) {
+    return;
+  }
+  if (entry.rigid_mode === "ghost" && typeof body.setNextKinematicTranslation === "function") {
+    body.setNextKinematicTranslation(nextPosition);
+  }
+  body.setTranslation(nextPosition, true);
+  body.wakeUp?.();
+}
+
+function carryPlatformRiders(simulation, preStepState) {
+  if (!simulation || !preStepState?.platforms?.length) {
+    return;
+  }
+  const riderAssignments = new Map();
+  for (const platformState of preStepState.platforms) {
+    const platform = simulation.dynamicObjects.find((entry) => entry.id === platformState.id) ?? null;
+    if (!platform) {
+      continue;
+    }
+    const platformDelta = {
+      x: mustFinite(platform.position?.x, 0) - mustFinite(platformState.position?.x, 0),
+      y: mustFinite(platform.position?.y, 0) - mustFinite(platformState.position?.y, 0),
+      z: mustFinite(platform.position?.z, 0) - mustFinite(platformState.position?.z, 0),
+    };
+    if (
+      Math.abs(platformDelta.x) <= PLATFORM_CARRY_DELTA_EPSILON
+      && Math.abs(platformDelta.y) <= PLATFORM_CARRY_DELTA_EPSILON
+      && Math.abs(platformDelta.z) <= PLATFORM_CARRY_DELTA_EPSILON
+    ) {
+      continue;
+    }
+    for (const riderState of preStepState.riders.values()) {
+      if (!wasRiderStandingOnPlatform(riderState, platformState)) {
+        continue;
+      }
+      const previousAssignment = riderAssignments.get(riderState.id);
+      const previousGap = previousAssignment?.verticalGap ?? Number.POSITIVE_INFINITY;
+      const verticalGap = Math.abs(
+        (mustFinite(riderState.position?.y, 0) - mustFinite(riderState.halfExtents?.y, 0))
+        - (mustFinite(platformState.position?.y, 0) + mustFinite(platformState.halfExtents?.y, 0))
+      );
+      if (verticalGap <= previousGap) {
+        riderAssignments.set(riderState.id, {
+          platformDelta,
+          verticalGap,
+        });
+      }
+    }
+  }
+
+  for (const [riderId, assignment] of riderAssignments.entries()) {
+    const riderState = preStepState.riders.get(riderId);
+    if (!riderState) {
+      continue;
+    }
+    const rider = riderState.kind === "player"
+      ? simulation.players.find((entry) => entry.id === riderId)
+      : simulation.dynamicObjects.find((entry) => entry.id === riderId);
+    if (!rider) {
+      continue;
+    }
+    const currentPosition = vec3(rider.position);
+    const riderDisplacement = {
+      x: currentPosition.x - mustFinite(riderState.position?.x, 0),
+      y: currentPosition.y - mustFinite(riderState.position?.y, 0),
+      z: currentPosition.z - mustFinite(riderState.position?.z, 0),
+    };
+    const carryDelta = {
+      x: resolveCarryDeltaComponent(assignment.platformDelta.x, riderDisplacement.x),
+      y: resolveCarryDeltaComponent(assignment.platformDelta.y, riderDisplacement.y),
+      z: resolveCarryDeltaComponent(assignment.platformDelta.z, riderDisplacement.z),
+    };
+    if (
+      Math.abs(carryDelta.x) <= PLATFORM_CARRY_DELTA_EPSILON
+      && Math.abs(carryDelta.y) <= PLATFORM_CARRY_DELTA_EPSILON
+      && Math.abs(carryDelta.z) <= PLATFORM_CARRY_DELTA_EPSILON
+    ) {
+      continue;
+    }
+    if (riderState.kind === "player") {
+      translatePlayerByDelta(simulation, rider, carryDelta);
+      rider.onGround = rider.body_mode === "ghost" ? false : raycastPlayerGround(simulation, rider);
+    } else {
+      translateDynamicObjectByDelta(simulation, rider, carryDelta);
+    }
+  }
 }
 
 function applyOccupiedPlayerPose(runtime, player, input = {}) {
@@ -1224,6 +1408,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
   const deltaSeconds = clampNumber(mustFinite(options.deltaMs, DEFAULT_TICK_MS) / 1000, 0.001, MAX_DELTA_SECONDS);
   const inputEdgesByPlayerId = new Map();
   const pendingInputs = Array.isArray(options.pendingInputs) ? options.pendingInputs : [];
+  const preStepBodyState = collectPreStepBodyState(simulation);
   releaseExpiredDynamicAuthorities(simulation);
   for (const input of pendingInputs) {
     const player = simulation.players.find((entry) => entry.id === input.playerId);
@@ -1302,6 +1487,8 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
     for (const object of simulation.dynamicObjects) {
       syncEntryFromRapierBody(object, simulation.physics.objectBodies.get(object.id));
     }
+
+    carryPlatformRiders(simulation, preStepBodyState);
   }
 
   refreshTriggerOccupancy(simulation);

@@ -248,6 +248,7 @@ test("normalizeSceneDoc keeps object gravity ignore toggles", () => {
         id: "crate",
         rigid_mode: "rigid",
         physics: {
+          carry_riders: true,
           gravity_scale: 1,
           ignore_gravity: true,
         },
@@ -259,6 +260,7 @@ test("normalizeSceneDoc keeps object gravity ignore toggles", () => {
         asset_id: "asset_model_123",
         rigid_mode: "rigid",
         physics: {
+          carry_riders: true,
           gravity_scale: 1,
           ignore_gravity: true,
         },
@@ -266,7 +268,9 @@ test("normalizeSceneDoc keeps object gravity ignore toggles", () => {
     ],
   });
 
+  assert.equal(scene.primitives[0].physics.carry_riders, true);
   assert.equal(scene.primitives[0].physics.ignore_gravity, true);
+  assert.equal(scene.models[0].physics.carry_riders, true);
   assert.equal(scene.models[0].physics.ignore_gravity, true);
 });
 
