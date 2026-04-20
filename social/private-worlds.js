@@ -9040,6 +9040,14 @@ function getLocallyControlledPlayerEntityId() {
   return resolvePrivatePlayerEntityId(localParticipant.player_entity_id, getRuntimePlayerIds()) ?? "";
 }
 
+function getLocalPossessedPlayerPrediction(playerId = getLocallyControlledPlayerEntityId()) {
+  const prediction = state.predictedPossessedPlayer;
+  if (!prediction?.playerId || !playerId || prediction.playerId !== playerId) {
+    return null;
+  }
+  return prediction;
+}
+
 function clearPossessedPlayerPrediction() {
   state.predictedPossessedPlayer = null;
   resetRuntimeLookSync();
@@ -9147,36 +9155,21 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
     return null;
   }
   const intent = buildRuntimeMovementIntent();
-  const nextPositionX = Number(runtimePlayer.position?.x);
   const nextPositionY = Number(runtimePlayer.position?.y);
-  const nextPositionZ = Number(runtimePlayer.position?.z);
-  const nextVelocityX = Number(runtimePlayer.velocity?.x);
   const nextVelocityY = Number(runtimePlayer.velocity?.y);
-  const nextVelocityZ = Number(runtimePlayer.velocity?.z);
-  const serverPosition = new THREE.Vector3(
-    Number.isFinite(nextPositionX) ? nextPositionX : prediction.position.x,
-    Number.isFinite(nextPositionY) ? nextPositionY : prediction.position.y,
-    Number.isFinite(nextPositionZ) ? nextPositionZ : prediction.position.z,
-  );
-  const serverVelocity = new THREE.Vector3(
-    Number.isFinite(nextVelocityX) ? nextVelocityX : prediction.velocity.x,
-    Number.isFinite(nextVelocityY) ? nextVelocityY : prediction.velocity.y,
-    Number.isFinite(nextVelocityZ) ? nextVelocityZ : prediction.velocity.z,
-  );
-  if (prediction.position.distanceTo(serverPosition) >= PRIVATE_PLAYER_RUNTIME.snapDistance) {
-    prediction.position.copy(serverPosition);
-    prediction.velocity.copy(serverVelocity);
-  } else if (!intent.active) {
-    const correctionAlpha = PRIVATE_PLAYER_RUNTIME.idleCorrectionAlpha;
-    prediction.position.x += (serverPosition.x - prediction.position.x) * correctionAlpha;
-    prediction.position.z += (serverPosition.z - prediction.position.z) * correctionAlpha;
-    prediction.velocity.x += (serverVelocity.x - prediction.velocity.x) * Math.min(0.4, correctionAlpha + 0.14);
-    prediction.velocity.z += (serverVelocity.z - prediction.velocity.z) * Math.min(0.4, correctionAlpha + 0.14);
-    prediction.position.y = serverPosition.y;
-    prediction.velocity.y = serverVelocity.y;
-  } else if (Math.abs(serverPosition.y - prediction.position.y) >= PRIVATE_PLAYER_RUNTIME.verticalSnapDistance) {
-    prediction.position.y = serverPosition.y;
-    prediction.velocity.y = serverVelocity.y;
+  if (Number.isFinite(nextPositionY)) {
+    if (Math.abs(nextPositionY - prediction.position.y) >= PRIVATE_PLAYER_RUNTIME.verticalSnapDistance) {
+      prediction.position.y = nextPositionY;
+    } else {
+      prediction.position.y += (nextPositionY - prediction.position.y) * 0.35;
+    }
+  }
+  if (Number.isFinite(nextVelocityY)) {
+    prediction.velocity.y = nextVelocityY;
+  }
+  if (!intent.active) {
+    prediction.velocity.x += (0 - prediction.velocity.x) * 0.18;
+    prediction.velocity.z += (0 - prediction.velocity.z) * 0.18;
   }
   const nextRotationX = Number(runtimePlayer.rotation?.x);
   const nextRotationY = Number(runtimePlayer.rotation?.y);
@@ -17044,7 +17037,24 @@ function updatePreviewFromSelection(options = {}) {
       renderedScenePlayerIds.add(resolvedPlayerId);
     }
     const runtimePlayer = runtimeTransforms.playerById.get(resolvedPlayerId) ?? runtimeTransforms.playerById.get(authoredPlayerId);
-    const resolvedPlayerScale = runtimePlayer?.scale || player.scale || 1;
+    const localPrediction = state.mode === "play"
+      ? getLocalPossessedPlayerPrediction(resolvedPlayerId || authoredPlayerId)
+      : null;
+    const resolvedPlayerScale = localPrediction?.scale || runtimePlayer?.scale || player.scale || 1;
+    const renderedPlayerPosition = localPrediction
+      ? {
+          x: localPrediction.position.x,
+          y: localPrediction.position.y,
+          z: localPrediction.position.z,
+        }
+      : (runtimePlayer?.position || player.position || { x: 0, y: 1, z: 0 });
+    const renderedPlayerRotation = localPrediction
+      ? {
+          x: localPrediction.rotation.x,
+          y: localPrediction.rotation.y,
+          z: localPrediction.rotation.z,
+        }
+      : (runtimePlayer?.rotation || player.rotation || { x: 0, y: 0, z: 0 });
     const mesh = addMesh(
       new THREE.CapsuleGeometry(
         PRIVATE_PLAYER_METRICS.width / 2,
@@ -17059,8 +17069,8 @@ function updatePreviewFromSelection(options = {}) {
           selected: isSelected("player", player.id),
         },
       ),
-      runtimePlayer?.position || player.position || { x: 0, y: 1, z: 0 },
-      runtimePlayer?.rotation || player.rotation || { x: 0, y: 0, z: 0 },
+      renderedPlayerPosition,
+      renderedPlayerRotation,
       { x: resolvedPlayerScale, y: resolvedPlayerScale, z: resolvedPlayerScale },
       { id: resolvedPlayerId || player.id, kind: "player" },
     );
@@ -17075,6 +17085,24 @@ function updatePreviewFromSelection(options = {}) {
     if (!playerId || renderedScenePlayerIds.has(playerId)) {
       continue;
     }
+    const localPrediction = state.mode === "play"
+      ? getLocalPossessedPlayerPrediction(playerId)
+      : null;
+    const renderedPlayerPosition = localPrediction
+      ? {
+          x: localPrediction.position.x,
+          y: localPrediction.position.y,
+          z: localPrediction.position.z,
+        }
+      : (runtimePlayer.position || { x: 0, y: 1, z: 0 });
+    const renderedPlayerRotation = localPrediction
+      ? {
+          x: localPrediction.rotation.x,
+          y: localPrediction.rotation.y,
+          z: localPrediction.rotation.z,
+        }
+      : (runtimePlayer.rotation || { x: 0, y: 0, z: 0 });
+    const renderedPlayerScale = localPrediction?.scale || runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE;
     const mesh = addMesh(
       new THREE.CapsuleGeometry(
         PRIVATE_PLAYER_METRICS.width / 2,
@@ -17085,17 +17113,17 @@ function updatePreviewFromSelection(options = {}) {
       makeMaterial(
         { color: runtimePlayer?.occupied_by_username ? "#ff5a6f" : (runtimePlayer?.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f"), texture_preset: "none" },
         {
-          x: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
-          y: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
-          z: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
+          x: renderedPlayerScale,
+          y: renderedPlayerScale,
+          z: renderedPlayerScale,
         },
       ),
-      runtimePlayer.position || { x: 0, y: 1, z: 0 },
-      runtimePlayer.rotation || { x: 0, y: 0, z: 0 },
+      renderedPlayerPosition,
+      renderedPlayerRotation,
       {
-        x: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
-        y: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
-        z: runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE,
+        x: renderedPlayerScale,
+        y: renderedPlayerScale,
+        z: renderedPlayerScale,
       },
       { id: playerId, kind: "player" },
     );
