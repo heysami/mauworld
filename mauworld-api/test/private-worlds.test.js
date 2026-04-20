@@ -88,6 +88,24 @@ test("normalizeSceneDoc keeps fixed orthogonal player framing fields", () => {
   assert.equal(scene.players[0].movement_enabled, false);
 });
 
+test("normalizeSceneDoc keeps orthogonal follow camera distance", () => {
+  const scene = normalizeSceneDoc({
+    players: [{
+      id: "player_a",
+      label: "Player A",
+      camera_mode: "orthogonal",
+      fixed_top_down_direction: "east",
+      fixed_top_down_angle: 45,
+      fixed_top_down_distance: 36,
+    }],
+  });
+
+  assert.equal(scene.players[0].camera_mode, "orthogonal");
+  assert.equal(scene.players[0].fixed_top_down_direction, "east");
+  assert.equal(scene.players[0].fixed_top_down_angle, 45);
+  assert.equal(scene.players[0].fixed_top_down_distance, 36);
+});
+
 test("normalizeSceneDoc maps legacy top-down camera modes to orthogonal variants", () => {
   const scene = normalizeSceneDoc({
     players: [
@@ -95,6 +113,7 @@ test("normalizeSceneDoc maps legacy top-down camera modes to orthogonal variants
         id: "player_a",
         label: "Player A",
         camera_mode: "top_down",
+        fixed_top_down_distance: 34,
       },
       {
         id: "player_b",
@@ -109,6 +128,7 @@ test("normalizeSceneDoc maps legacy top-down camera modes to orthogonal variants
   });
 
   assert.equal(scene.players[0].camera_mode, "orthogonal");
+  assert.equal(scene.players[0].fixed_top_down_distance, 34);
   assert.equal(scene.players[1].camera_mode, "fixed_orthogonal");
   assert.equal(scene.players[1].fixed_top_down_direction, "south_west");
   assert.equal(scene.players[1].fixed_top_down_angle, 0);

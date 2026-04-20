@@ -336,6 +336,42 @@ test("runtime snapshots preserve authored player and object scale", () => {
   assert.deepEqual(snapshot.dynamic_objects[0].scale, { x: 6, y: 4, z: 3 });
 });
 
+test("runtime snapshots preserve orthogonal follow camera distance", () => {
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: {
+        gravity: { x: 0, y: -9.8, z: 0 },
+        camera_mode: "third_person",
+      },
+      voxels: [],
+      primitives: [],
+      screens: [],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 0, y: 4.5, z: 0 },
+        scale: 5,
+        body_mode: "rigid",
+        camera_mode: "orthogonal",
+        fixed_top_down_direction: "east",
+        fixed_top_down_angle: 45,
+        fixed_top_down_distance: 36,
+      }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.equal(snapshot.players[0].camera_mode, "orthogonal");
+  assert.equal(snapshot.players[0].fixed_top_down_direction, "east");
+  assert.equal(snapshot.players[0].fixed_top_down_angle, 45);
+  assert.equal(snapshot.players[0].fixed_top_down_distance, 36);
+});
+
 test("runtime snapshots include dynamic motion metadata for continuous client smoothing", () => {
   const simulation = buildSimulation({
     participants: [],

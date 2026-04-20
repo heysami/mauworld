@@ -7,6 +7,7 @@ await RAPIER.init({});
 const DEFAULT_TICK_MS = 16;
 const DEFAULT_BROADCAST_MS = 33;
 const PRIVATE_WORLD_BLOCK_UNIT = 5;
+const DEFAULT_PLAYER_ORTHOGONAL_DISTANCE = 28;
 const PLAYER_DIMENSIONS = {
   width: 0.6,
   height: 1.8,
@@ -793,6 +794,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       camera_mode: entry.camera_mode,
       fixed_top_down_direction: String(entry.fixed_top_down_direction ?? "north").trim().toLowerCase() || "north",
       fixed_top_down_angle: mustFinite(entry.fixed_top_down_angle, 90),
+      fixed_top_down_distance: mustFinite(entry.fixed_top_down_distance, DEFAULT_PLAYER_ORTHOGONAL_DISTANCE),
       fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
       fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
       movement_enabled: entry.movement_enabled !== false,
@@ -1354,6 +1356,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       camera_mode: entry.camera_mode,
       fixed_top_down_direction: String(entry.fixed_top_down_direction ?? "north").trim().toLowerCase() || "north",
       fixed_top_down_angle: mustFinite(entry.fixed_top_down_angle, 90),
+      fixed_top_down_distance: mustFinite(entry.fixed_top_down_distance, DEFAULT_PLAYER_ORTHOGONAL_DISTANCE),
       fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
       fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
       movement_enabled: entry.movement_enabled !== false,

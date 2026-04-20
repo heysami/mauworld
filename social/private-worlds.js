@@ -344,6 +344,7 @@ const TOOL_PRESET_BUILTINS = {
         camera_mode: "third_person",
         fixed_top_down_direction: "north",
         fixed_top_down_angle: 90,
+        fixed_top_down_distance: PRIVATE_PLAYER_VIEW.defaultRadius,
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
         movement_enabled: true,
@@ -362,6 +363,7 @@ const TOOL_PRESET_BUILTINS = {
         camera_mode: "third_person",
         fixed_top_down_direction: "north",
         fixed_top_down_angle: 90,
+        fixed_top_down_distance: PRIVATE_PLAYER_VIEW.defaultRadius,
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
         movement_enabled: true,
@@ -797,6 +799,7 @@ function createBaseToolPresetEntry(kind) {
       camera_mode: "third_person",
       fixed_top_down_direction: "north",
       fixed_top_down_angle: 90,
+      fixed_top_down_distance: PRIVATE_PLAYER_VIEW.defaultRadius,
       fixed_top_down_width: 0,
       fixed_top_down_height: 0,
       movement_enabled: true,
@@ -9418,6 +9421,7 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     cameraMode: normalizePlayerCameraMode(runtimePlayer.camera_mode ?? "third_person"),
     fixedTopDownDirection: normalizePlayerFixedTopDownDirection(runtimePlayer.fixed_top_down_direction ?? "north"),
     fixedTopDownAngle: normalizePlayerFixedTopDownAngle(runtimePlayer.fixed_top_down_angle ?? 90),
+    fixedTopDownDistance: normalizePlayerFixedTopDownDistance(runtimePlayer.fixed_top_down_distance ?? PRIVATE_PLAYER_VIEW.defaultRadius),
     fixedTopDownWidth: Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? 0) || 0),
     fixedTopDownHeight: Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? 0) || 0),
     movementEnabled: normalizePlayerMovementEnabled(runtimePlayer.movement_enabled ?? true),
@@ -9488,6 +9492,15 @@ function normalizePlayerFixedTopDownAngle(value = 90) {
   return PLAYER_FIXED_TOP_DOWN_ANGLE_OPTIONS.some((option) => Number(option.value) === normalized)
     ? normalized
     : 90;
+}
+
+function normalizePlayerFixedTopDownDistance(value = PRIVATE_PLAYER_VIEW.defaultRadius) {
+  return clampNumber(
+    value,
+    PRIVATE_PLAYER_VIEW.defaultRadius,
+    PRIVATE_WORLD_BLOCK_UNIT * 2,
+    4096,
+  );
 }
 
 function getPlayerFixedTopDownDirectionVector(direction = "north") {
@@ -9584,6 +9597,24 @@ function isActivePossessedPlayerMovementEnabled() {
 }
 
 function getPlayerFixedTopDownWindow(player = {}, world = state.selectedWorld) {
+  if (!isFixedTopDownCameraMode(player?.camera_mode ?? "")) {
+    const distance = normalizePlayerFixedTopDownDistance(
+      player?.fixed_top_down_distance ?? PRIVATE_PLAYER_VIEW.defaultRadius,
+    );
+    const viewportWidth = Math.max(1, Number(state.preview?.viewportWidth) || 1);
+    const viewportHeight = Math.max(1, Number(state.preview?.viewportHeight) || 1);
+    const aspect = viewportWidth / Math.max(1, viewportHeight);
+    if (aspect >= 1) {
+      return {
+        width: Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, distance * aspect),
+        height: Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, distance),
+      };
+    }
+    return {
+      width: Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, distance),
+      height: Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, distance / Math.max(0.0001, aspect)),
+    };
+  }
   const direction = normalizePlayerFixedTopDownDirection(player?.fixed_top_down_direction ?? "north");
   const angle = normalizePlayerFixedTopDownAngle(player?.fixed_top_down_angle ?? 90);
   const orientation = getPlayerFixedTopDownOrientation(direction, angle);
@@ -9725,6 +9756,9 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   prediction.fixedTopDownAngle = normalizePlayerFixedTopDownAngle(
     runtimePlayer.fixed_top_down_angle ?? prediction.fixedTopDownAngle ?? 90,
   );
+  prediction.fixedTopDownDistance = normalizePlayerFixedTopDownDistance(
+    runtimePlayer.fixed_top_down_distance ?? prediction.fixedTopDownDistance ?? PRIVATE_PLAYER_VIEW.defaultRadius,
+  );
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
@@ -9785,6 +9819,9 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   );
   prediction.fixedTopDownAngle = normalizePlayerFixedTopDownAngle(
     runtimePlayer.fixed_top_down_angle ?? prediction.fixedTopDownAngle ?? 90,
+  );
+  prediction.fixedTopDownDistance = normalizePlayerFixedTopDownDistance(
+    runtimePlayer.fixed_top_down_distance ?? prediction.fixedTopDownDistance ?? PRIVATE_PLAYER_VIEW.defaultRadius,
   );
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
@@ -11705,9 +11742,12 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownDirection = normalizePlayerFixedTopDownDirection(entry.fixed_top_down_direction ?? "north");
     const fixedTopDownAngle = normalizePlayerFixedTopDownAngle(entry.fixed_top_down_angle ?? 90);
+    const fixedTopDownDistance = normalizePlayerFixedTopDownDistance(
+      entry.fixed_top_down_distance ?? PRIVATE_PLAYER_VIEW.defaultRadius,
+    );
     const fixedTopDownNote = fixedTopDownMode
       ? "Orthogonal fixed locks the camera over the world center. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and width and height at 0 frame the full private world."
-      : "Orthogonal follows the occupied player. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and width and height at 0 use the default follow framing.";
+      : "Orthogonal follows the occupied player. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and camera distance sets the follow framing.";
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Everyone enters as a floating viewer. Possession happens by clicking a player in Play mode.</p>
       <label>
@@ -11767,16 +11807,18 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <div class="pw-inspector-grid pw-inspector-grid--2">
           <div>
             <label>
-              <span>Window Width</span>
-              <input type="number" step="0.1" min="0" data-entity-field="fixed_top_down_width" data-value-type="number" value="${htmlEscape(entry.fixed_top_down_width ?? 0)}" />
+              <span>${fixedTopDownMode ? "Window Width" : "Camera Distance"}</span>
+              <input type="number" step="0.1" min="${fixedTopDownMode ? "0" : htmlEscape(PRIVATE_WORLD_BLOCK_UNIT * 2)}" data-entity-field="${fixedTopDownMode ? "fixed_top_down_width" : "fixed_top_down_distance"}" data-value-type="number" value="${htmlEscape(fixedTopDownMode ? (entry.fixed_top_down_width ?? 0) : fixedTopDownDistance)}" />
             </label>
           </div>
-          <div>
+          ${fixedTopDownMode ? `
+            <div>
             <label>
               <span>Window Height</span>
               <input type="number" step="0.1" min="0" data-entity-field="fixed_top_down_height" data-value-type="number" value="${htmlEscape(entry.fixed_top_down_height ?? 0)}" />
             </label>
-          </div>
+            </div>
+          ` : ""}
         </div>
       ` : ""}
     `;
@@ -16865,6 +16907,7 @@ function buildPreviewRevisionSceneDoc(sceneDoc = {}) {
       delete player.camera_mode;
       delete player.fixed_top_down_direction;
       delete player.fixed_top_down_angle;
+      delete player.fixed_top_down_distance;
       delete player.fixed_top_down_width;
       delete player.fixed_top_down_height;
       delete player.movement_enabled;
@@ -17633,7 +17676,9 @@ function applyFixedTopDownPreviewCamera(preview, player = {}, world = state.sele
   camera.bottom = -windowSize.height / 2;
   const target = new THREE.Vector3(targetX, targetY, targetZ);
   const maxSpan = Math.max(windowSize.width, windowSize.height, rig.width, rig.length, rig.height);
-  const distance = Math.max(rig.height, maxSpan * 2.5) + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding;
+  const distance = isFixedTopDownCameraMode(player?.camera_mode ?? "")
+    ? Math.max(rig.height, maxSpan * 2.5) + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding
+    : normalizePlayerFixedTopDownDistance(player?.fixed_top_down_distance ?? PRIVATE_PLAYER_VIEW.defaultRadius);
   camera.near = 0.1;
   camera.far = Math.max(240, distance + maxSpan * 4 + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding);
   camera.position.copy(target).addScaledVector(orientation.cameraOffsetDirection, distance);
@@ -17992,6 +18037,7 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
       camera_mode: prediction.cameraMode,
       fixed_top_down_direction: prediction.fixedTopDownDirection,
       fixed_top_down_angle: prediction.fixedTopDownAngle,
+      fixed_top_down_distance: prediction.fixedTopDownDistance,
       fixed_top_down_width: prediction.fixedTopDownWidth,
       fixed_top_down_height: prediction.fixedTopDownHeight,
       movement_enabled: prediction.movementEnabled,

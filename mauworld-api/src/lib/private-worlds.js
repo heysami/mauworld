@@ -81,6 +81,7 @@ const ALLOWED_RULE_ACTIONS = new Set([
 const PRIVATE_WORLD_BLOCK_UNIT = 5;
 const PRIVATE_PLAYER_DEFAULT_SCALE = PRIVATE_WORLD_BLOCK_UNIT;
 const PRIVATE_PLAYER_STANDING_CENTER_Y = (PRIVATE_PLAYER_DEFAULT_SCALE * 1.8) / 2;
+const DEFAULT_PLAYER_ORTHOGONAL_DISTANCE = 28;
 
 function nowIso() {
   return new Date().toISOString();
@@ -514,6 +515,12 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
   const fixedTopDownAngle = normalizeAllowedPlayerFixedTopDownAngle(
     entry.fixed_top_down_angle ?? entry.fixedTopDownAngle ?? 90,
   );
+  const fixedTopDownDistance = Number(clampNumber(
+    entry.fixed_top_down_distance ?? entry.fixedTopDownDistance ?? DEFAULT_PLAYER_ORTHOGONAL_DISTANCE,
+    DEFAULT_PLAYER_ORTHOGONAL_DISTANCE,
+    PRIVATE_WORLD_BLOCK_UNIT * 2,
+    4096,
+  ).toFixed(4));
   const movementEnabled = normalizeAllowedPlayerMovementEnabled(
     entry.movement_enabled ?? entry.movementEnabled ?? true,
   );
@@ -527,6 +534,7 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     camera_mode: cameraMode,
     fixed_top_down_direction: fixedTopDownDirection,
     fixed_top_down_angle: fixedTopDownAngle,
+    fixed_top_down_distance: fixedTopDownDistance,
     fixed_top_down_width: Number(clampNumber(
       entry.fixed_top_down_width ?? entry.fixedTopDownWidth ?? 0,
       0,
@@ -1242,6 +1250,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         camera_mode: entry.camera_mode,
         fixed_top_down_direction: entry.fixed_top_down_direction,
         fixed_top_down_angle: entry.fixed_top_down_angle,
+        fixed_top_down_distance: entry.fixed_top_down_distance,
         fixed_top_down_width: entry.fixed_top_down_width,
         fixed_top_down_height: entry.fixed_top_down_height,
         movement_enabled: entry.movement_enabled,
