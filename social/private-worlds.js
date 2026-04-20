@@ -9506,18 +9506,16 @@ function applyPossessedCameraModeRig(cameraMode = "third_person", runtimePlayer 
   const resolvedMode = normalizePlayerCameraMode(cameraMode);
   const previousMode = normalizePlayerCameraMode(options.previousCameraMode ?? "");
   const headingY = Number(runtimePlayer?.rotation?.y);
+  if (resolvedMode !== previousMode) {
+    const nextHeadingY = isFixedTopDownCameraMode(resolvedMode)
+      ? getPlayerFixedTopDownOrientation(runtimePlayer?.fixed_top_down_direction ?? "north").headingY
+      : (Number.isFinite(headingY) ? headingY : getRuntimeInputHeadingY());
+    releaseHeldRuntimeKeys({ headingY: nextHeadingY });
+    privateInputState.keys.clear();
+    privateInputState.sprintHoldSeconds = 0;
+  }
   if (isCameraOnlyPossessedCameraMode(resolvedMode) && !isCameraOnlyPossessedCameraMode(previousMode)) {
-    const fixedHeadingY = getPlayerFixedTopDownOrientation(runtimePlayer?.fixed_top_down_direction ?? "north").headingY;
-    const heldRuntimeKeys = releaseHeldRuntimeKeys({ headingY: fixedHeadingY });
-    privateInputState.keys.clear();
-    for (const key of heldRuntimeKeys) {
-      privateInputState.keys.add(key);
-    }
-    privateInputState.sprintHoldSeconds = 0;
     syncCameraOnlyPossessedAnchor(runtimePlayer);
-  } else if (!isCameraOnlyPossessedCameraMode(resolvedMode) && isCameraOnlyPossessedCameraMode(previousMode)) {
-    privateInputState.keys.clear();
-    privateInputState.sprintHoldSeconds = 0;
   }
   if (isFixedTopDownCameraMode(resolvedMode)) {
     privateInputState.yaw = getPlayerFixedTopDownOrientation(runtimePlayer?.fixed_top_down_direction ?? "north").headingY;
@@ -9905,7 +9903,6 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     }
     prediction.velocity.x = 0;
     prediction.velocity.z = 0;
-    prediction.rotation.y = getPlayerFixedTopDownOrientation(prediction.fixedTopDownDirection).headingY;
     return prediction;
   }
   const dt = clampNumber(deltaSeconds, 1 / 60, 0, 0.05);
@@ -17911,7 +17908,7 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
       mesh.rotation.set(prediction.rotation.x, prediction.rotation.y, prediction.rotation.z);
       mesh.scale.setScalar(prediction.scale);
       applyRenderableVisibility(mesh, {
-        runtimeVisible: prediction.cameraMode !== "fixed_top_down_first_person",
+        runtimeVisible: player.visible !== false,
       });
       if (mesh.userData.privateWorldRuntimeTargetPosition) {
         mesh.userData.privateWorldRuntimeTargetPosition.copy(mesh.position);
@@ -17950,7 +17947,7 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
     return player;
   }
   applyRenderableVisibility(mesh, {
-    runtimeVisible: normalizePlayerCameraMode(player.camera_mode ?? "third_person") !== "fixed_top_down_first_person",
+    runtimeVisible: player.visible !== false,
   });
   return {
     ...player,
