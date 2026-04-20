@@ -958,6 +958,37 @@ function raycastPlayerGround(runtime, player) {
   return Boolean(hit && hit.timeOfImpact <= half.y + 0.08);
 }
 
+function primeQueuedPlayerJump(runtime, player, nowMs = mustFinite(runtime?.elapsedMs, 0)) {
+  if (!runtime || !player || player.body_mode === "ghost" || !isPlayerJumpEnabled(player)) {
+    return false;
+  }
+  const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
+  if (!body) {
+    player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + PLAYER_JUMP_BUFFER_MS);
+    return false;
+  }
+  player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + PLAYER_JUMP_BUFFER_MS);
+  player.onGround = raycastPlayerGround(runtime, player);
+  if (!player.onGround) {
+    player.sleeping = false;
+    body.wakeUp?.();
+    return false;
+  }
+  const currentVelocity = vec3(body.linvel(), player.velocity);
+  const nextVelocity = {
+    x: currentVelocity.x,
+    y: PLAYER_JUMP_VELOCITY,
+    z: currentVelocity.z,
+  };
+  player.velocity = nextVelocity;
+  player.onGround = false;
+  player.sleeping = false;
+  player.jumpBufferedUntilMs = 0;
+  body.setLinvel(nextVelocity, true);
+  body.wakeUp?.();
+  return true;
+}
+
 function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   const physics = runtime.physics;
   const body = physics?.playerBodies?.get(player.id) ?? null;
@@ -2171,6 +2202,9 @@ export class PrivateWorldRuntime {
         accepted: true,
         player_entity_id: occupiedPlayer.id,
       };
+    }
+    if (normalizedKey === "space" && state !== "up" && !occupiedPlayer.pressedKeys.has("space")) {
+      primeQueuedPlayerJump(simulation.runtime, occupiedPlayer);
     }
     simulation.pendingInputs.push({
       playerId: occupiedPlayer.id,

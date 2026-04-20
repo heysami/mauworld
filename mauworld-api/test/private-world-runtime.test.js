@@ -915,6 +915,69 @@ test("runtime input queues directly against a live simulation without forcing a 
   assert.equal(simulation.pendingInputs[0].headingY, 1.25);
 });
 
+test("runtime queued jump primes the occupied player before the next tick", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: {
+        gravity: { x: 0, y: -9.8, z: 0 },
+        camera_mode: "third_person",
+      },
+      voxels: [],
+      primitives: [],
+      screens: [],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 0, y: 4.5, z: 0 },
+        scale: 5,
+        body_mode: "rigid",
+        camera_mode: "third_person",
+        jump_enabled: true,
+      }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const player = simulation.runtime.players[0];
+  for (let index = 0; index < 60; index += 1) {
+    stepPrivateWorldSimulation(simulation.runtime, {
+      deltaMs: 16,
+      pendingInputs: [],
+    });
+  }
+  const beforeY = player.position.y;
+
+  const result = await manager.queueInputByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: player.occupied_by_profile_id },
+    key: "space",
+    state: "down",
+  });
+
+  assert.equal(result.accepted, true);
+  assert.ok(player.velocity.y > 0);
+  assert.equal(player.onGround, false);
+  assert.equal(player.sleeping, false);
+  assert.equal(simulation.pendingInputs.length, 1);
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 16,
+    pendingInputs: simulation.pendingInputs.splice(0),
+  });
+  assert.ok(player.position.y > beforeY);
+});
+
 test("runtime look-only input updates heading without queuing a stale movement trail", async () => {
   const manager = new PrivateWorldRuntime({
     store: {},
