@@ -814,7 +814,7 @@ function isClientAuthoritativeRigidPlayer(player, nowMs = Date.now()) {
   return Boolean(
     player?.occupied_by_profile_id
     && player?.body_mode !== "ghost"
-    && getFreshClientReplicatedPose(player, nowMs),
+    && player?.client_replication_pose,
   );
 }
 
@@ -2352,6 +2352,7 @@ export class PrivateWorldRuntime {
     const nextPosition = vec3(occupiedPlayer.initialPosition, occupiedPlayer.position);
     const nextRotation = vec3(occupiedPlayer.initialRotation, occupiedPlayer.rotation);
 
+    clearClientReplicatedPose(occupiedPlayer);
     occupiedPlayer.position = nextPosition;
     occupiedPlayer.rotation = nextRotation;
     occupiedPlayer.velocity = { x: 0, y: 0, z: 0 };
@@ -2413,6 +2414,7 @@ export class PrivateWorldRuntime {
     if (!occupiedPlayer) {
       return { synced: false };
     }
+    const useClientAuthoritativePose = force_client_pose === true || isClientAuthoritativeRigidPlayer(occupiedPlayer);
     const syncedPose = applyOccupiedPlayerPose(simulation.runtime, occupiedPlayer, {
       position,
       position_x,
@@ -2425,7 +2427,7 @@ export class PrivateWorldRuntime {
       motion_seq,
       headingY,
       heading_y,
-      force_client_pose,
+      force_client_pose: useClientAuthoritativePose,
     });
     return {
       synced: true,
