@@ -10193,7 +10193,10 @@ function getPrivatePlatformCarryRecoveryTolerance(playerHalf = {}, platformHalf 
   );
   return Math.max(
     PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE,
-    Math.min(PRIVATE_WORLD_BLOCK_UNIT * 0.5, scaledRecovery),
+    Math.min(
+      Math.max(PRIVATE_WORLD_BLOCK_UNIT * 0.9, playerHalfY),
+      scaledRecovery,
+    ),
   );
 }
 
@@ -10279,6 +10282,42 @@ function addPrivateSupportSurface(surfaces, surface = {}, probe = null) {
   });
 }
 
+function getPrivateDynamicEntryMotionSample(entry = null, options = {}) {
+  const entryId = String(entry?.id ?? "").trim();
+  const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
+  const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+  const useAuthoritative = options.authoritative === true;
+  let worldPosition = null;
+  if (options.worldSpace === true && mesh && typeof mesh.getWorldPosition === "function") {
+    const resolvedWorldPosition = mesh.getWorldPosition(new THREE.Vector3());
+    worldPosition = {
+      x: Number(resolvedWorldPosition?.x ?? 0) || 0,
+      y: Number(resolvedWorldPosition?.y ?? 0) || 0,
+      z: Number(resolvedWorldPosition?.z ?? 0) || 0,
+    };
+  }
+  const positionSource = useAuthoritative
+    ? (worldPosition ?? motionState?.authoritativePosition ?? entry?.position ?? motionState?.renderPosition ?? mesh?.position ?? null)
+    : (worldPosition ?? motionState?.renderPosition ?? mesh?.position ?? motionState?.authoritativePosition ?? entry?.position ?? null);
+  const velocitySource = useAuthoritative
+    ? (motionState?.authoritativeVelocity ?? entry?.velocity ?? motionState?.renderVelocity ?? null)
+    : (motionState?.renderVelocity ?? entry?.velocity ?? motionState?.authoritativeVelocity ?? null);
+  return {
+    mesh,
+    motionState,
+    position: {
+      x: Number(positionSource?.x ?? mesh?.position?.x ?? entry?.position?.x ?? 0) || 0,
+      y: Number(positionSource?.y ?? mesh?.position?.y ?? entry?.position?.y ?? 0) || 0,
+      z: Number(positionSource?.z ?? mesh?.position?.z ?? entry?.position?.z ?? 0) || 0,
+    },
+    velocity: {
+      x: Number(velocitySource?.x ?? entry?.velocity?.x ?? 0) || 0,
+      y: Number(velocitySource?.y ?? entry?.velocity?.y ?? 0) || 0,
+      z: Number(velocitySource?.z ?? entry?.velocity?.z ?? 0) || 0,
+    },
+  };
+}
+
 function getPrivatePossessedSupportSurfaces(prediction, desiredPosition = prediction?.position) {
   if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
     return [];
@@ -10317,22 +10356,13 @@ function getPrivatePossessedSupportSurfaces(prediction, desiredPosition = predic
         continue;
       }
       const kind = entry?.entity_kind === "model" ? "model" : "primitive";
-      const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
-      const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+      const motionSample = getPrivateDynamicEntryMotionSample(entry);
       addPrivateSupportSurface(surfaces, {
-        position: {
-          x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
-          y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
-          z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
-        },
+        position: motionSample.position,
         size: getPrivateCollisionEntrySize(kind, entry),
         rotation: entry.rotation,
         carry_riders: entry?.carry_riders === true,
-        velocity: {
-          x: Number(motionState?.renderVelocity?.x ?? entry.velocity?.x ?? 0) || 0,
-          y: Number(motionState?.renderVelocity?.y ?? entry.velocity?.y ?? 0) || 0,
-          z: Number(motionState?.renderVelocity?.z ?? entry.velocity?.z ?? 0) || 0,
-        },
+        velocity: motionSample.velocity,
         entryId,
         entry,
       }, probe);
@@ -10407,21 +10437,14 @@ function getLocalCarryPlatformSupport(playerLike = null) {
     const kind = entry?.entity_kind === "model" ? "model" : "primitive";
     const size = getPrivateCollisionEntrySize(kind, entry);
     const half = getHalfExtentsFromScale(size);
-    const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
-    const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
-    const position = {
-      x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
-      y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
-      z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
-    };
-    const velocity = {
-      x: Number(motionState?.renderVelocity?.x ?? entry.velocity?.x ?? 0) || 0,
-      y: Number(motionState?.renderVelocity?.y ?? entry.velocity?.y ?? 0) || 0,
-      z: Number(motionState?.renderVelocity?.z ?? entry.velocity?.z ?? 0) || 0,
-    };
+    const motionSample = getPrivateDynamicEntryMotionSample(entry);
+    const position = motionSample.position;
+    const velocity = motionSample.velocity;
     const platformTop = position.y + half.y;
     const verticalGap = playerBottom - platformTop;
-    const verticalTolerance = getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
+    const verticalTolerance = playerLike?.onGround === true
+      ? getPrivatePlatformCarryRecoveryTolerance(playerHalf, half)
+      : getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
     if (
       verticalGap < -verticalTolerance
       || verticalGap > verticalTolerance
@@ -10475,18 +10498,9 @@ function getLocalCarryPlatformStateById(platformId = "") {
   const kind = entry?.entity_kind === "model" ? "model" : "primitive";
   const size = getPrivateCollisionEntrySize(kind, entry);
   const half = getHalfExtentsFromScale(size);
-  const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
-  const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
-  const position = {
-    x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
-    y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
-    z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
-  };
-  const velocity = {
-    x: Number(motionState?.renderVelocity?.x ?? entry.velocity?.x ?? 0) || 0,
-    y: Number(motionState?.renderVelocity?.y ?? entry.velocity?.y ?? 0) || 0,
-    z: Number(motionState?.renderVelocity?.z ?? entry.velocity?.z ?? 0) || 0,
-  };
+  const motionSample = getPrivateDynamicEntryMotionSample(entry);
+  const position = motionSample.position;
+  const velocity = motionSample.velocity;
   return {
     entry,
     entryId,
@@ -10602,7 +10616,9 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     };
   }
   const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
-  const supportVerticalTolerance = getPrivatePlatformCarryVerticalTolerance(playerHalf);
+  const supportVerticalTolerance = prediction.onGround === true
+    ? getPrivatePlatformCarryRecoveryTolerance(playerHalf)
+    : getPrivatePlatformCarryVerticalTolerance(playerHalf);
   const startPosition = options.startPosition ?? prediction.position;
   const desiredPosition = options.desiredPosition ?? prediction.position;
   const supportResult = resolvePlayerGroundSupport({
@@ -10650,6 +10666,13 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     if (Number.isFinite(surfaceY)) {
       groundY = surfaceY + playerHalf.y;
       resolvedHasSupport = true;
+      if (!carrySupport && projectedSurface?.carrySupport?.entryId) {
+        carrySupport = {
+          ...projectedSurface.carrySupport,
+          supportedPlayerY: groundY,
+        };
+        velocityY = Number(carrySupport?.velocity?.y ?? 0) || 0;
+      }
     }
   }
   if (!resolvedHasSupport) {
@@ -10691,7 +10714,7 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
   const playerBottom = playerPosition.y - playerHalf.y;
   const overlapRecovery = playerLike?.onGround === true;
   let bestSurface = null;
-  const considerSurface = (position = {}, size = {}) => {
+  const considerSurface = (position = {}, size = {}, metadata = null) => {
     const half = getHalfExtentsFromScale(size);
     const topY = (Number(position.y ?? 0) || 0) + half.y;
     const verticalTolerance = overlapRecovery
@@ -10711,6 +10734,26 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
     if (!bestSurface || topY > bestSurface.surfaceY) {
       bestSurface = {
         surfaceY: topY,
+        carrySupport: metadata?.carry_riders === true
+          ? {
+              entry: metadata?.entry ?? null,
+              entryId: String(metadata?.entryId ?? "").trim(),
+              position: {
+                x: Number(position.x ?? 0) || 0,
+                y: Number(position.y ?? 0) || 0,
+                z: Number(position.z ?? 0) || 0,
+              },
+              velocity: {
+                x: Number(metadata?.velocity?.x ?? 0) || 0,
+                y: Number(metadata?.velocity?.y ?? 0) || 0,
+                z: Number(metadata?.velocity?.z ?? 0) || 0,
+              },
+              surfaceY: topY,
+              supportedPlayerY: topY + playerHalf.y,
+              verticalGap: playerBottom - topY,
+              absoluteGap: Math.abs(playerBottom - topY),
+            }
+          : null,
       };
     }
   };
@@ -10742,15 +10785,16 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
         continue;
       }
       const kind = entry?.entity_kind === "model" ? "model" : "primitive";
-      const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
-      const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+      const motionSample = getPrivateDynamicEntryMotionSample(entry);
       considerSurface(
-        {
-          x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
-          y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
-          z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
-        },
+        motionSample.position,
         getPrivateCollisionEntrySize(kind, entry),
+        {
+          carry_riders: entry?.carry_riders === true,
+          velocity: motionSample.velocity,
+          entryId,
+          entry,
+        },
       );
     }
   }
@@ -10763,7 +10807,11 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
     if (primitive?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(primitive?.rigid_mode)) {
       continue;
     }
-    considerSurface(primitive.position, getPrivateCollisionEntrySize("primitive", primitive));
+    considerSurface(primitive.position, getPrivateCollisionEntrySize("primitive", primitive), {
+      carry_riders: primitive?.physics?.carry_riders === true,
+      entryId: primitiveId,
+      entry: primitive,
+    });
   }
 
   for (const model of sceneDoc?.models ?? []) {
@@ -10774,7 +10822,11 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
     if (model?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(model?.rigid_mode)) {
       continue;
     }
-    considerSurface(model.position, getPrivateCollisionEntrySize("model", model));
+    considerSurface(model.position, getPrivateCollisionEntrySize("model", model), {
+      carry_riders: model?.physics?.carry_riders === true,
+      entryId: modelId,
+      entry: model,
+    });
   }
 
   if (!bestSurface && playerLike?.onGround === true) {
@@ -15087,6 +15139,9 @@ function installPrivateDebugTools() {
     const runtimeEntry = runtimePlayer ?? runtimeObject ?? null;
     const mesh = state.preview?.entityMeshes?.get(resolvedEntityId) ?? null;
     const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+    const worldPosition = mesh?.getWorldPosition
+      ? mesh.getWorldPosition(new THREE.Vector3())
+      : null;
     return {
       runtime: runtimeEntry ? {
         position: runtimeEntry.position ? {
@@ -15106,6 +15161,11 @@ function installPrivateDebugTools() {
           y: Number(motionState?.renderPosition?.y ?? mesh.position.y ?? 0) || 0,
           z: Number(motionState?.renderPosition?.z ?? mesh.position.z ?? 0) || 0,
         },
+        worldPosition: worldPosition ? {
+          x: Number(worldPosition.x ?? 0) || 0,
+          y: Number(worldPosition.y ?? 0) || 0,
+          z: Number(worldPosition.z ?? 0) || 0,
+        } : null,
         velocity: {
           x: Number(motionState?.renderVelocity?.x ?? runtimeEntry?.velocity?.x ?? 0) || 0,
           y: Number(motionState?.renderVelocity?.y ?? runtimeEntry?.velocity?.y ?? 0) || 0,
