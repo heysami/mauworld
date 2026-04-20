@@ -6,6 +6,7 @@ import {
   compileSceneDoc,
   computeMiniatureDimensions,
   createDefaultSceneDoc,
+  resolveEntityIdAlias,
   normalizeSceneDoc,
   resolvePrivateWorldSize,
   validatePrivateWorldExportPackage,
@@ -260,6 +261,29 @@ test("normalizeSceneDoc can preserve already-normalized ids for internal scene r
   assert.equal(scene.players[0].id, "player_player-1");
 });
 
+test("normalizeSceneDoc keeps canonical player ids stable across repeated normalization", () => {
+  const once = normalizeSceneDoc({
+    players: [
+      { id: "player_player-1", label: "Player 1" },
+    ],
+  });
+  const twice = normalizeSceneDoc(once);
+
+  assert.equal(once.players[0].id, "player_player-1");
+  assert.equal(twice.players[0].id, "player_player-1");
+});
+
+test("resolveEntityIdAlias matches repeated player id renormalization artifacts", () => {
+  assert.equal(
+    resolveEntityIdAlias("player", "player_player-1", ["player_player-player-player-1"]),
+    "player_player-player-player-1",
+  );
+  assert.equal(
+    resolveEntityIdAlias("player", "player_player-player-player-1", ["player_player-1"]),
+    "player_player-1",
+  );
+});
+
 test("export validation preserves prefab docs and locked lineage credits", () => {
   const exported = buildPrivateWorldExportPackage({
     world: {
@@ -308,7 +332,7 @@ test("export validation preserves prefab docs and locked lineage credits", () =>
   assert.equal(parsed.credits.origin_creator_username, "maker");
   assert.equal(parsed.world.default_scene_name, "Main Scene");
   assert.equal(parsed.prefabs.length, 1);
-  assert.equal(parsed.prefabs[0].prefab_doc.primitives[0].id, "primitive_primitive-portal");
+  assert.equal(parsed.prefabs[0].prefab_doc.primitives[0].id, "primitive_portal");
   assert.equal(parsed.prefabs[0].prefab_doc.texts[0].id, "text3d_text-portal");
   assert.equal(parsed.prefabs[0].prefab_doc.texts[0].value, "Portal");
   assert.equal(parsed.scenes[0].name, "Main Scene");

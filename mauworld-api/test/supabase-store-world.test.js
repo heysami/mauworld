@@ -1051,7 +1051,7 @@ test("findNearestPrivateWorldAnchor skips blocked pillar anchors", async () => {
   );
 });
 
-test("occupyPrivateWorldParticipant upserts ready state for repeated possession clicks", async () => {
+test("occupyPrivateWorldParticipant resolves canonical player clicks against repeated runtime ids", async () => {
   const freshIso = new Date(Date.now() - 5_000).toISOString();
   const state = {
     tables: {
@@ -1116,7 +1116,7 @@ test("occupyPrivateWorldParticipant upserts ready state for repeated possession 
     profile: {
       id: "profile_creator",
     },
-    playerEntityId: "player_player-player-player-1",
+    playerEntityId: "player_player-1",
   };
 
   const first = await MauworldStore.prototype.occupyPrivateWorldParticipant.call(fakeStore, input);

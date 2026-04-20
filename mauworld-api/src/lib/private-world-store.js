@@ -10,6 +10,7 @@ import {
   computeMiniatureDimensions,
   createDefaultSceneDoc,
   generatePrivateWorldId,
+  resolveEntityIdAlias,
   normalizeSceneDoc,
   normalizeUsername,
   resolvePrivateWorldSize,
@@ -42,6 +43,10 @@ async function maybeSingle(dataPromise, message) {
 
 function dedupe(values = []) {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function resolvePlayerEntityId(value, knownIds = []) {
+  return resolveEntityIdAlias("player", value, knownIds);
 }
 
 function cloneJson(value) {
@@ -1049,16 +1054,19 @@ function serializeCollaborator(row) {
   };
 }
 
-function serializeVisibleParticipant(row, { guestSessionId = "" } = {}) {
+function serializeVisibleParticipant(row, { guestSessionId = "", playerEntityIds = [] } = {}) {
   const requesterGuestSessionId = String(guestSessionId ?? "").trim();
   const isLocalGuest = !row.profile_id && requesterGuestSessionId && row.guest_session_id === requesterGuestSessionId;
   if (row.visible_to_others === false && !isLocalGuest) {
     return null;
   }
+  const resolvedPlayerEntityId = row.player_entity_id
+    ? (resolvePlayerEntityId(row.player_entity_id, playerEntityIds) ?? row.player_entity_id)
+    : null;
   return {
     id: row.id,
     join_role: row.join_role,
-    player_entity_id: row.player_entity_id ?? null,
+    player_entity_id: resolvedPlayerEntityId,
     guest_session_id: isLocalGuest ? row.guest_session_id : null,
     ready: row.ready_state?.ready === true,
     profile: row.profile
@@ -1197,7 +1205,10 @@ async function buildWorldDetail(store, {
               height: activeInstance.miniature_height,
             },
             participants: activeParticipants
-              .map((row) => serializeVisibleParticipant(row, { guestSessionId }))
+              .map((row) => serializeVisibleParticipant(row, {
+                guestSessionId,
+                playerEntityIds: runtimeSnapshot?.players?.map((entry) => entry.id) ?? [],
+              }))
               .filter(Boolean),
             viewer_count: activeParticipants.length,
             visible_participant_count: activeParticipants.filter((row) => row.visible_to_others !== false).length,
@@ -1259,7 +1270,11 @@ function pickDefaultPlayerEntity(sceneDoc = {}, participants = []) {
   const candidateIds = (sceneDoc.players ?? [])
     .filter((entry) => entry.occupiable !== false)
     .map((entry) => entry.id);
-  const occupied = new Set(participants.map((row) => row.player_entity_id).filter(Boolean));
+  const occupied = new Set(
+    participants
+      .map((row) => resolvePlayerEntityId(row.player_entity_id, candidateIds))
+      .filter(Boolean),
+  );
   return candidateIds.find((id) => !occupied.has(id)) ?? null;
 }
 
@@ -2482,13 +2497,15 @@ export function installPrivateWorldStore(MauworldStore) {
     }
     const runtimeSnapshot = this.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
       ?? await syncRuntimeForWorld(this, world, creator);
-    const requestedPlayerId = String(input.playerEntityId ?? "").trim();
+    const runtimePlayerIds = runtimeSnapshot?.players?.map((entry) => entry.id).filter(Boolean) ?? [];
+    const requestedPlayerId = resolvePlayerEntityId(input.playerEntityId, runtimePlayerIds);
     const playerEntry = runtimeSnapshot?.players?.find((entry) => entry.id === requestedPlayerId)
       ?? null;
     if (!playerEntry) {
       throw new HttpError(404, "Player entity not found in the active scene");
     }
-    if (playerEntry.occupied_by_username && participant.player_entity_id !== requestedPlayerId) {
+    const currentParticipantPlayerId = resolvePlayerEntityId(participant.player_entity_id, runtimePlayerIds);
+    if (playerEntry.occupied_by_username && currentParticipantPlayerId !== requestedPlayerId) {
       throw new HttpError(409, "That player entity is already occupied");
     }
 
@@ -2939,17 +2956,25 @@ export function installPrivateWorldStore(MauworldStore) {
         : null;
       const lodBand = resolveMiniatureLodBand(row, viewerPresence);
       const compiledMiniature = cloneJson(scene.compiled_doc?.miniature ?? {});
+      const miniaturePlayerIds = [
+        ...(runtimeSnapshot?.players?.map((entry) => entry.id) ?? []),
+        ...(compiledMiniature.players?.map((entry) => entry.id) ?? []),
+      ];
       const liveVisiblePlayers = participants
         .filter((entry) => entry.player_entity_id)
-        .map((entry) => ({
-          player_entity_id: entry.player_entity_id,
-          username: entry.profile?.username ?? null,
-          position: cloneJson(
-            runtimeSnapshot?.players?.find((candidate) => candidate.id === entry.player_entity_id)?.position
-            ?? compiledMiniature.players?.find((candidate) => candidate.id === entry.player_entity_id)?.position
-            ?? null,
-          ),
-        }))
+        .map((entry) => {
+          const resolvedPlayerId = resolvePlayerEntityId(entry.player_entity_id, miniaturePlayerIds)
+            ?? entry.player_entity_id;
+          return {
+            player_entity_id: resolvedPlayerId,
+            username: entry.profile?.username ?? null,
+            position: cloneJson(
+              runtimeSnapshot?.players?.find((candidate) => candidate.id === resolvedPlayerId)?.position
+              ?? compiledMiniature.players?.find((candidate) => candidate.id === resolvedPlayerId)?.position
+              ?? null,
+            ),
+          };
+        })
         .filter((entry) => entry.position);
       const miniaturePayload = lodBand === "near"
         ? {

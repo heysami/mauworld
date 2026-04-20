@@ -1,6 +1,6 @@
 import * as RAPIER from "@dimforge/rapier3d-compat/rapier.es.js";
 import { HttpError } from "./http.js";
-import { normalizeSceneDoc } from "./private-worlds.js";
+import { normalizeSceneDoc, resolveEntityIdAlias } from "./private-worlds.js";
 
 await RAPIER.init({});
 
@@ -461,6 +461,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   const sceneDoc = normalizeSceneDoc(resolvedSceneDoc, {
     preserveNormalizedIds: compiledResolvedSceneDoc != null,
   });
+  const authoredPlayerIds = normalizeSceneDoc(sceneRow?.scene_doc ?? {}).players.map((entry) => entry.id);
   const staticSolids = (sceneDoc.voxels ?? []).map((entry) => ({
     id: entry.id,
     position: vec3(entry.position),
@@ -472,26 +473,29 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   }));
   const players = (sceneDoc.players ?? []).map((entry) => {
     const scale = Math.max(0.25, mustFinite(entry.scale, PRIVATE_WORLD_BLOCK_UNIT));
+    const canonicalId = authoredPlayerIds.length > 0
+      ? (resolveEntityIdAlias("player", entry.id, authoredPlayerIds) ?? entry.id)
+      : entry.id;
     return {
-    kind: "player",
-    id: entry.id,
-    label: entry.label,
-    scale,
-    camera_mode: entry.camera_mode,
-    body_mode: entry.body_mode,
-    occupiable: entry.occupiable !== false,
-    initialPosition: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
-    position: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
-    rotation: vec3(entry.rotation),
-    velocity: { x: 0, y: 0, z: 0 },
-    onGround: false,
-    occupied_by_profile_id: null,
-    occupied_by_username: null,
-    occupied_by_display_name: null,
-    ready: false,
-    pressedKeys: new Set(),
-    visibility: true,
-    material_override: null,
+      kind: "player",
+      id: canonicalId,
+      label: entry.label,
+      scale,
+      camera_mode: entry.camera_mode,
+      body_mode: entry.body_mode,
+      occupiable: entry.occupiable !== false,
+      initialPosition: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
+      position: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
+      rotation: vec3(entry.rotation),
+      velocity: { x: 0, y: 0, z: 0 },
+      onGround: false,
+      occupied_by_profile_id: null,
+      occupied_by_username: null,
+      occupied_by_display_name: null,
+      ready: false,
+      pressedKeys: new Set(),
+      visibility: true,
+      material_override: null,
     };
   });
   const dynamicObjects = (sceneDoc.primitives ?? []).map((entry) => ({
@@ -589,10 +593,15 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
 }
 
 function syncParticipantOccupancy(simulation, participants = []) {
+  const runtimePlayerIds = simulation.players.map((entry) => entry.id).filter(Boolean);
   const occupiedByEntityId = new Map(
     participants
       .filter((entry) => entry.join_role === "player" && entry.player_entity_id)
-      .map((entry) => [entry.player_entity_id, entry]),
+      .map((entry) => {
+        const resolvedPlayerId = resolveEntityIdAlias("player", entry.player_entity_id, runtimePlayerIds);
+        return resolvedPlayerId ? [resolvedPlayerId, entry] : null;
+      })
+      .filter(Boolean),
   );
 
   for (const player of simulation.players) {

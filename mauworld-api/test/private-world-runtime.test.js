@@ -257,6 +257,78 @@ test("runtime keeps resolved-scene player ids stable for participant occupancy l
   assert.equal(snapshot.players[0].occupied_by_username, "maker");
 });
 
+test("runtime repairs compiled player id drift back onto authored player slots", () => {
+  const simulation = buildSimulation({
+    sceneRow: {
+      id: "scene_runtime",
+      name: "Runtime Scene",
+      scene_doc: {
+        settings: {
+          gravity: { x: 0, y: -9.8, z: 0 },
+          camera_mode: "third_person",
+        },
+        voxels: [],
+        primitives: [],
+        screens: [],
+        players: [
+          {
+            id: "player_player-1",
+            label: "Player One",
+            position: { x: 0, y: 4.5, z: 0 },
+            scale: 5,
+            body_mode: "rigid",
+            camera_mode: "third_person",
+          },
+        ],
+        texts: [],
+        trigger_zones: [],
+        prefabs: [],
+        particles: [],
+        rules: [],
+      },
+      compiled_doc: {
+        runtime: {
+          resolved_scene_doc: {
+            settings: {
+              gravity: { x: 0, y: -9.8, z: 0 },
+              camera_mode: "third_person",
+            },
+            voxels: [],
+            primitives: [],
+            screens: [],
+            players: [
+              {
+                id: "player_player-player-player-1",
+                label: "Player One",
+                position: { x: 0, y: 4.5, z: 0 },
+                scale: 5,
+                body_mode: "rigid",
+                camera_mode: "third_person",
+              },
+            ],
+            texts: [],
+            trigger_zones: [],
+            prefabs: [],
+            particles: [],
+            rules: [],
+          },
+        },
+      },
+    },
+    participants: [{
+      profile_id: "profile_one",
+      profile: { username: "maker", display_name: "Maker" },
+      join_role: "player",
+      player_entity_id: "player_player-player-player-1",
+      ready_state: { ready: true },
+    }],
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.equal(snapshot.players[0].id, "player_player-1");
+  assert.equal(snapshot.players[0].occupied_by_username, "maker");
+});
+
 test("runtime input queues directly against a live simulation without forcing a world resync", async () => {
   const manager = new PrivateWorldRuntime({
     store: {},

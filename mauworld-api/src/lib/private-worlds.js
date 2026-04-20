@@ -95,6 +95,86 @@ function slugToken(value) {
     .replace(/^-|-$/g, "");
 }
 
+function renormalizeEntityId(prefix, value) {
+  const cleaned = slugToken(value);
+  return cleaned ? `${prefix}_${cleaned}` : null;
+}
+
+export function normalizeEntityId(prefix, value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  if (raw.toLowerCase().startsWith(`${prefix}_`)) {
+    const suffix = slugToken(raw.slice(prefix.length + 1));
+    if (suffix) {
+      return `${prefix}_${suffix}`;
+    }
+  }
+  return renormalizeEntityId(prefix, raw);
+}
+
+function collectEntityIdVariants(prefix, value, maxDepth = 4) {
+  const variants = new Set();
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return variants;
+  }
+  variants.add(raw);
+  const normalized = normalizeEntityId(prefix, raw);
+  if (normalized) {
+    variants.add(normalized);
+  }
+  let current = raw;
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    current = renormalizeEntityId(prefix, current);
+    if (!current || variants.has(current)) {
+      break;
+    }
+    variants.add(current);
+  }
+  current = normalized;
+  for (let depth = 0; current && depth < maxDepth; depth += 1) {
+    current = renormalizeEntityId(prefix, current);
+    if (!current || variants.has(current)) {
+      break;
+    }
+    variants.add(current);
+  }
+  return variants;
+}
+
+export function resolveEntityIdAlias(prefix, value, knownIds = []) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  const candidates = Array.from(new Set(
+    (Array.isArray(knownIds) ? knownIds : [])
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean),
+  ));
+  if (candidates.length === 0) {
+    return normalizeEntityId(prefix, raw) ?? raw;
+  }
+  const requestedVariants = collectEntityIdVariants(prefix, raw);
+  for (const candidate of candidates) {
+    if (requestedVariants.has(candidate)) {
+      return candidate;
+    }
+  }
+  for (const candidate of candidates) {
+    const candidateVariants = collectEntityIdVariants(prefix, candidate);
+    for (const variant of candidateVariants) {
+      if (requestedVariants.has(variant)) {
+        return candidate;
+      }
+    }
+  }
+  const normalized = normalizeEntityId(prefix, raw);
+  return candidates.includes(normalized) ? normalized : (normalized ?? raw);
+}
+
 function plainSearchText(values = []) {
   return values
     .map((value) => stripMarkdown(String(value ?? "")))
@@ -156,17 +236,9 @@ function sanitizeEuler3(input = {}) {
 }
 
 function ensureEntityId(prefix, value, options = {}) {
-  const preserveNormalizedIds = options?.preserveNormalizedIds === true;
-  const raw = String(value ?? "").trim();
-  if (preserveNormalizedIds && raw.toLowerCase().startsWith(`${prefix}_`)) {
-    const suffix = slugToken(raw.slice(prefix.length + 1));
-    if (suffix) {
-      return `${prefix}_${suffix}`;
-    }
-  }
-  const cleaned = slugToken(value);
-  if (cleaned) {
-    return `${prefix}_${cleaned}`;
+  const normalized = normalizeEntityId(prefix, value);
+  if (normalized) {
+    return normalized;
   }
   return `${prefix}_${crypto.randomBytes(4).toString("hex")}`;
 }
