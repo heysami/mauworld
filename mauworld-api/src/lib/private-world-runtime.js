@@ -457,14 +457,55 @@ function wasRiderStandingOnPlatform(riderState, platformState) {
   );
 }
 
-function resolveCarryDeltaComponent(platformDelta, riderDelta) {
-  if (Math.abs(platformDelta) <= PLATFORM_CARRY_DELTA_EPSILON) {
+function getPlayerDesiredPlanarMovement(player) {
+  const pressed = player?.pressedKeys instanceof Set ? player.pressedKeys : new Set();
+  const movementEnabled = isPlayerMovementEnabled(player);
+  const left = pressed.has("a") || pressed.has("arrowleft");
+  const right = pressed.has("d") || pressed.has("arrowright");
+  const forward = pressed.has("w") || pressed.has("arrowup");
+  const backward = pressed.has("s") || pressed.has("arrowdown");
+  const sprint = movementEnabled && pressed.has("shift");
+  const desired = movementEnabled
+    ? (player?.usesLookHeading === true
+      ? getRelativePlayerMovement(player, pressed)
+      : normalizePlanarVector(
+        Number(right) - Number(left),
+        Number(backward) - Number(forward),
+      ))
+    : { x: 0, z: 0 };
+  return {
+    desired,
+    sprint,
+  };
+}
+
+function getPlayerAllowedCarryRelativeDelta(player, deltaSeconds) {
+  if (!player) {
+    return { x: 0, y: 0, z: 0 };
+  }
+  const { desired, sprint } = getPlayerDesiredPlanarMovement(player);
+  const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
+  const safeDeltaSeconds = Math.max(0, mustFinite(deltaSeconds, 0));
+  return {
+    x: desired.x * speed * safeDeltaSeconds,
+    y: 0,
+    z: desired.z * speed * safeDeltaSeconds,
+  };
+}
+
+function resolveCarryTargetRelativeDelta(currentRelativeDelta, allowedRelativeDelta) {
+  const current = mustFinite(currentRelativeDelta, 0);
+  const allowed = mustFinite(allowedRelativeDelta, 0);
+  if (Math.abs(allowed) <= PLATFORM_CARRY_DELTA_EPSILON) {
     return 0;
   }
-  if (Math.abs(riderDelta) <= PLATFORM_CARRY_DELTA_EPSILON || Math.sign(riderDelta) !== Math.sign(platformDelta)) {
-    return platformDelta;
+  if (Math.abs(current) <= PLATFORM_CARRY_DELTA_EPSILON) {
+    return 0;
   }
-  return platformDelta - (Math.sign(platformDelta) * Math.min(Math.abs(platformDelta), Math.abs(riderDelta)));
+  if (Math.sign(current) !== Math.sign(allowed)) {
+    return allowed;
+  }
+  return Math.abs(current) > Math.abs(allowed) ? allowed : current;
 }
 
 function translatePlayerByDelta(runtime, player, delta) {
@@ -607,7 +648,7 @@ function advanceScriptedPlatformMotions(simulation, deltaSeconds) {
   }
 }
 
-function carryPlatformRiders(simulation, preStepState) {
+function carryPlatformRiders(simulation, preStepState, deltaSeconds = 0) {
   if (!simulation || !preStepState?.platforms?.length) {
     return;
   }
@@ -660,15 +701,36 @@ function carryPlatformRiders(simulation, preStepState) {
       continue;
     }
     const currentPosition = vec3(rider.position);
-    const riderDisplacement = {
-      x: currentPosition.x - mustFinite(riderState.position?.x, 0),
-      y: currentPosition.y - mustFinite(riderState.position?.y, 0),
-      z: currentPosition.z - mustFinite(riderState.position?.z, 0),
+    const baseTargetPosition = {
+      x: mustFinite(riderState.position?.x, 0) + mustFinite(assignment.platformDelta?.x, 0),
+      y: mustFinite(riderState.position?.y, 0) + mustFinite(assignment.platformDelta?.y, 0),
+      z: mustFinite(riderState.position?.z, 0) + mustFinite(assignment.platformDelta?.z, 0),
+    };
+    const currentRelativeDelta = {
+      x: currentPosition.x - baseTargetPosition.x,
+      y: currentPosition.y - baseTargetPosition.y,
+      z: currentPosition.z - baseTargetPosition.z,
+    };
+    const allowedRelativeDelta = riderState.kind === "player"
+      ? getPlayerAllowedCarryRelativeDelta(rider, deltaSeconds)
+      : { x: 0, y: 0, z: 0 };
+    if (
+      riderState.kind === "player"
+      && rider.body_mode !== "ghost"
+      && rider.onGround !== true
+      && currentRelativeDelta.y > PLATFORM_CARRY_DELTA_EPSILON
+    ) {
+      allowedRelativeDelta.y = currentRelativeDelta.y;
+    }
+    const targetPosition = {
+      x: baseTargetPosition.x + resolveCarryTargetRelativeDelta(currentRelativeDelta.x, allowedRelativeDelta.x),
+      y: baseTargetPosition.y + resolveCarryTargetRelativeDelta(currentRelativeDelta.y, allowedRelativeDelta.y),
+      z: baseTargetPosition.z + resolveCarryTargetRelativeDelta(currentRelativeDelta.z, allowedRelativeDelta.z),
     };
     const carryDelta = {
-      x: resolveCarryDeltaComponent(assignment.platformDelta.x, riderDisplacement.x),
-      y: resolveCarryDeltaComponent(assignment.platformDelta.y, riderDisplacement.y),
-      z: resolveCarryDeltaComponent(assignment.platformDelta.z, riderDisplacement.z),
+      x: targetPosition.x - currentPosition.x,
+      y: targetPosition.y - currentPosition.y,
+      z: targetPosition.z - currentPosition.z,
     };
     if (
       Math.abs(carryDelta.x) <= PLATFORM_CARRY_DELTA_EPSILON
@@ -1733,7 +1795,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
       syncEntryFromRapierBody(object, simulation.physics.objectBodies.get(object.id));
     }
 
-    carryPlatformRiders(simulation, preStepBodyState);
+    carryPlatformRiders(simulation, preStepBodyState, deltaSeconds);
   }
 
   refreshTriggerOccupancy(simulation);

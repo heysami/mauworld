@@ -10262,7 +10262,7 @@ function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = pred
 
   if (runtimeMatchesSelectedScene) {
     for (const entry of runtime.dynamic_objects ?? []) {
-      if (!isPrivateCollisionModeRigid(entry?.rigid_mode)) {
+      if (!isPrivateCollisionModeRigid(entry?.rigid_mode) || entry?.carry_riders === true) {
         continue;
       }
       const kind = entry?.entity_kind === "model" ? "model" : "primitive";
@@ -10287,7 +10287,7 @@ function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = pred
   }
 
   for (const primitive of sceneDoc?.primitives ?? []) {
-    if (!isPrivateCollisionModeRigid(primitive?.rigid_mode)) {
+    if (!isPrivateCollisionModeRigid(primitive?.rigid_mode) || primitive?.physics?.carry_riders === true) {
       continue;
     }
     addPrivateCollisionBlocker(blockers, {
@@ -10297,7 +10297,7 @@ function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = pred
     }, probe);
   }
   for (const model of sceneDoc?.models ?? []) {
-    if (!isPrivateCollisionModeRigid(model?.rigid_mode)) {
+    if (!isPrivateCollisionModeRigid(model?.rigid_mode) || model?.physics?.carry_riders === true) {
       continue;
     }
     addPrivateCollisionBlocker(blockers, {
@@ -10349,7 +10349,7 @@ function getPrivateDynamicObjectCollisionBlockers(objectId = "", objectSize = { 
   if (runtimeMatchesSelectedScene) {
     for (const entry of runtime.dynamic_objects ?? []) {
       const entryId = String(entry?.id ?? "").trim();
-      if (!entryId || entryId === resolvedObjectId || !isPrivateCollisionModeRigid(entry?.rigid_mode)) {
+      if (!entryId || entryId === resolvedObjectId || !isPrivateCollisionModeRigid(entry?.rigid_mode) || entry?.carry_riders === true) {
         continue;
       }
       const kind = entry?.entity_kind === "model" ? "model" : "primitive";
@@ -10374,7 +10374,7 @@ function getPrivateDynamicObjectCollisionBlockers(objectId = "", objectSize = { 
   }
 
   for (const primitive of sceneDoc?.primitives ?? []) {
-    if (!isPrivateCollisionModeRigid(primitive?.rigid_mode)) {
+    if (!isPrivateCollisionModeRigid(primitive?.rigid_mode) || primitive?.physics?.carry_riders === true) {
       continue;
     }
     addPrivateCollisionBlocker(blockers, {
@@ -10384,7 +10384,7 @@ function getPrivateDynamicObjectCollisionBlockers(objectId = "", objectSize = { 
     }, probe);
   }
   for (const model of sceneDoc?.models ?? []) {
-    if (!isPrivateCollisionModeRigid(model?.rigid_mode)) {
+    if (!isPrivateCollisionModeRigid(model?.rigid_mode) || model?.physics?.carry_riders === true) {
       continue;
     }
     addPrivateCollisionBlocker(blockers, {

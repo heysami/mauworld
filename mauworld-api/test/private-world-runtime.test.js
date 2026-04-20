@@ -368,6 +368,61 @@ test("moving platforms can carry players and objects resting on top", () => {
   assert.ok(Math.abs((crate.position.z - 0.3) + 1.4) < 0.05);
 });
 
+test("moving platforms correct shove-like lateral drift and keep riders aligned", () => {
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [
+        {
+          id: "platform_one",
+          shape: "box",
+          position: { x: 0, y: 0.5, z: 0 },
+          scale: { x: 4, y: 1, z: 4 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#8899aa", texture_preset: "none" },
+          rigid_mode: "ghost",
+          physics: {
+            gravity_scale: 0,
+            ignore_gravity: true,
+            carry_riders: true,
+            restitution: 0,
+            friction: 0.4,
+            mass: 1,
+          },
+        },
+      ],
+      screens: [],
+      players: [{ id: "player_one", label: "Player One", position: { x: 0.2, y: 1.9, z: -0.25 }, scale: 1, body_mode: "rigid", camera_mode: "third_person" }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const runtime = simulation.runtime;
+  const platform = runtime.dynamicObjects.find((entry) => entry.id.endsWith("platform-one"));
+  const player = runtime.players[0];
+  const platformBody = runtime.physics.objectBodies.get(platform.id);
+  const playerBody = runtime.physics.playerBodies.get(player.id);
+  const targetPosition = { x: 2.3, y: 1.1, z: -1.4 };
+
+  platformBody.setNextKinematicTranslation?.(targetPosition);
+  platformBody.setTranslation(targetPosition, true);
+  playerBody.setTranslation({ x: 2.1, y: 2.5, z: 0.95 }, true);
+  playerBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+
+  stepPrivateWorldSimulation(runtime, {
+    deltaMs: 50,
+    pendingInputs: [],
+  });
+
+  assert.ok(Math.abs((player.position.x - 0.2) - 2.3) < 0.15);
+  assert.ok(Math.abs((player.position.y - 1.9) - 0.6) < 0.05);
+  assert.ok(Math.abs((player.position.z + 0.25) + 1.4) < 0.15);
+});
+
 test("scene_start move_platform scripts move rigid platforms diagonally and carry riders", () => {
   const sceneDoc = {
     settings: { gravity: { x: 0, y: -9.8, z: 0 } },
