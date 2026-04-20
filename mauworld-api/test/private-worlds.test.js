@@ -71,12 +71,14 @@ test("normalizeSceneDoc keeps fixed top-down player framing fields", () => {
       id: "player_a",
       label: "Player A",
       camera_mode: "fixed_top_down",
+      fixed_top_down_direction: "east",
       fixed_top_down_width: 82,
       fixed_top_down_height: 46,
     }],
   });
 
   assert.equal(scene.players[0].camera_mode, "fixed_top_down");
+  assert.equal(scene.players[0].fixed_top_down_direction, "east");
   assert.equal(scene.players[0].fixed_top_down_width, 82);
   assert.equal(scene.players[0].fixed_top_down_height, 46);
 });

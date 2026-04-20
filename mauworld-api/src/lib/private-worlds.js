@@ -40,6 +40,7 @@ const ALLOWED_TEMPLATE_SIZES = new Set(["small", "medium", "large"]);
 const ALLOWED_TEXTURE_PRESETS = new Set(["none", "grass", "wood", "wall", "floor", "stone", "glass", "metal", "fabric"]);
 const ALLOWED_PRIMITIVE_SHAPES = new Set(["box", "sphere", "capsule", "cylinder", "cone", "plane", "panel"]);
 const ALLOWED_PLAYER_CAMERA_MODES = new Set(["first_person", "third_person", "top_down", "fixed_top_down"]);
+const ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS = new Set(["north", "east", "south", "west"]);
 const ALLOWED_PLAYER_BODY_MODES = new Set(["rigid", "ghost"]);
 const ALLOWED_FACING_MODES = new Set(["fixed", "billboard", "upright_billboard"]);
 const ALLOWED_SCENE_SKYBOXES = new Set(["blank", "day", "sunset", "night"]);
@@ -452,6 +453,9 @@ function sanitizeScreenEntry(entry = {}, index = 0, options = {}) {
 
 function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
   const cameraMode = String(entry.camera_mode ?? entry.cameraMode ?? "third_person").trim().toLowerCase();
+  const fixedTopDownDirection = String(
+    entry.fixed_top_down_direction ?? entry.fixedTopDownDirection ?? "north",
+  ).trim().toLowerCase();
   const bodyMode = String(entry.body_mode ?? entry.bodyMode ?? "rigid").trim().toLowerCase();
   return {
     id: ensureEntityId("player", entry.id || `player-${index + 1}`, options),
@@ -460,6 +464,9 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     rotation: sanitizeEuler3(entry.rotation),
     scale: Number(clampNumber(entry.scale, PRIVATE_PLAYER_DEFAULT_SCALE, 0.25, 12).toFixed(4)),
     camera_mode: ALLOWED_PLAYER_CAMERA_MODES.has(cameraMode) ? cameraMode : "third_person",
+    fixed_top_down_direction: ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS.has(fixedTopDownDirection)
+      ? fixedTopDownDirection
+      : "north",
     fixed_top_down_width: Number(clampNumber(
       entry.fixed_top_down_width ?? entry.fixedTopDownWidth ?? 0,
       0,
@@ -1174,6 +1181,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         rotation: entry.rotation,
         scale: entry.scale,
         camera_mode: entry.camera_mode,
+        fixed_top_down_direction: entry.fixed_top_down_direction,
         fixed_top_down_width: entry.fixed_top_down_width,
         fixed_top_down_height: entry.fixed_top_down_height,
         body_mode: entry.body_mode,
