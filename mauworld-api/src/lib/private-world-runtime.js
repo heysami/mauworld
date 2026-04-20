@@ -445,7 +445,8 @@ function wasRiderStandingOnPlatform(riderState, platformState) {
     return false;
   }
   const verticalGap = getRiderPlatformVerticalGap(riderState, platformState);
-  if (verticalGap < -PLATFORM_CARRY_VERTICAL_TOLERANCE || verticalGap > PLATFORM_CARRY_VERTICAL_TOLERANCE) {
+  const verticalTolerance = getPlatformCarryVerticalTolerance(riderState, platformState);
+  if (verticalGap < -verticalTolerance || verticalGap > verticalTolerance) {
     return false;
   }
   const limitX = mustFinite(platformState.halfExtents?.x, 0) + mustFinite(riderState.halfExtents?.x, 0) + PLATFORM_CARRY_HORIZONTAL_BUFFER;
@@ -460,6 +461,19 @@ function getRiderPlatformVerticalGap(riderState, platformState) {
   const riderBottom = mustFinite(riderState.position?.y, 0) - mustFinite(riderState.halfExtents?.y, 0);
   const platformTop = mustFinite(platformState.position?.y, 0) + mustFinite(platformState.halfExtents?.y, 0);
   return riderBottom - platformTop;
+}
+
+function getPlatformCarryVerticalTolerance(riderState, platformState) {
+  const riderHalfY = Math.max(0, mustFinite(riderState?.halfExtents?.y, 0));
+  const platformHalfY = Math.max(0, mustFinite(platformState?.halfExtents?.y, 0));
+  const scaledTolerance = Math.max(
+    riderHalfY * 0.28,
+    platformHalfY * 0.5,
+  );
+  return Math.max(
+    PLATFORM_CARRY_VERTICAL_TOLERANCE,
+    Math.min(PRIVATE_WORLD_BLOCK_UNIT * 0.25, scaledTolerance),
+  );
 }
 
 function getPlayerDesiredPlanarMovement(player) {

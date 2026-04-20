@@ -10126,6 +10126,19 @@ function getPrivateCollisionEntrySize(kind, entry = {}) {
   return toPlainCollisionScale(size, { x: 1, y: 1, z: 1 });
 }
 
+function getPrivatePlatformCarryVerticalTolerance(playerHalf = {}, platformHalf = null) {
+  const playerHalfY = Math.max(0, Number(playerHalf?.y ?? 0) || 0);
+  const platformHalfY = Math.max(0, Number(platformHalf?.y ?? 0) || 0);
+  const scaledTolerance = Math.max(
+    playerHalfY * 0.28,
+    platformHalfY * 0.5,
+  );
+  return Math.max(
+    PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE,
+    Math.min(PRIVATE_WORLD_BLOCK_UNIT * 0.25, scaledTolerance),
+  );
+}
+
 function buildPrivateCollisionProbe(startPosition = {}, desiredPosition = {}, playerSize = {}) {
   const probePadding = PRIVATE_WORLD_BLOCK_UNIT * 2;
   const playerHalf = getHalfExtentsFromScale(playerSize);
@@ -10350,9 +10363,10 @@ function getLocalCarryPlatformSupport(playerLike = null) {
     };
     const platformTop = position.y + half.y;
     const verticalGap = playerBottom - platformTop;
+    const verticalTolerance = getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
     if (
-      verticalGap < -PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE
-      || verticalGap > PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE
+      verticalGap < -verticalTolerance
+      || verticalGap > verticalTolerance
     ) {
       continue;
     }
@@ -10530,6 +10544,7 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     };
   }
   const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
+  const supportVerticalTolerance = getPrivatePlatformCarryVerticalTolerance(playerHalf);
   const startPosition = options.startPosition ?? prediction.position;
   const desiredPosition = options.desiredPosition ?? prediction.position;
   const supportResult = resolvePlayerGroundSupport({
@@ -10537,7 +10552,7 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     desiredPosition,
     playerSize: getPrivatePlayerCollisionSize(prediction.scale),
     blockers: getPrivatePossessedSupportSurfaces(prediction, desiredPosition),
-    verticalTolerance: PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE,
+    verticalTolerance: supportVerticalTolerance,
   });
   let carrySupport = null;
   let groundY = Number.NaN;
@@ -10582,7 +10597,7 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
   if (!resolvedHasSupport) {
     const storedGroundY = Number(prediction.groundY);
     const playerY = Number(desiredPosition?.y ?? prediction.position?.y);
-    const fallbackTolerance = Math.max(0.08, PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE * 0.5);
+    const fallbackTolerance = Math.max(0.08, supportVerticalTolerance * 0.5);
     if (
       Number.isFinite(storedGroundY)
       && Number.isFinite(playerY)
@@ -10620,7 +10635,8 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
   const considerSurface = (position = {}, size = {}) => {
     const half = getHalfExtentsFromScale(size);
     const topY = (Number(position.y ?? 0) || 0) + half.y;
-    if (topY > playerBottom + PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE) {
+    const verticalTolerance = getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
+    if (topY > playerBottom + verticalTolerance) {
       return;
     }
     const limitX = half.x + playerHalf.x;
