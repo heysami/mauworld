@@ -11563,6 +11563,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const primitiveFacingEditor = isPrimitivePanelShape(entry)
       ? buildFacingModeEditor(entry, "Fixed uses the saved rotation. Billboard turns this panel toward each viewer, and upright billboard only rotates around Y.")
       : "";
+    const gravityIgnored = entry.rigid_mode === "ghost" || entry.physics?.ignore_gravity === true;
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Physics objects can collide, stack, bounce, and carry particles or trails. Invisible objects stay translucent in Build mode so their light and transform are still easy to edit.</p>
       <div class="pw-inspector-grid pw-inspector-grid--2">
@@ -11588,7 +11589,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <div>
           <label>
             <span>Gravity</span>
-            <input type="number" step="0.1" data-entity-field="physics.gravity_scale" data-value-type="number" value="${htmlEscape(entry.physics?.gravity_scale ?? 1)}" />
+            <input type="number" step="0.1" data-entity-field="physics.gravity_scale" data-value-type="number" value="${htmlEscape(entry.physics?.gravity_scale ?? 1)}" ${gravityIgnored ? "disabled" : ""} />
           </label>
         </div>
         <div>
@@ -11617,6 +11618,10 @@ function renderEntityInspector(sceneDoc, selected = null) {
             <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" placeholder="optional group name" />
           </label>
         </div>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="physics.ignore_gravity" data-value-type="checkbox" ${entry.physics?.ignore_gravity === true ? "checked" : ""} />
+        <span>Ignore gravity</span>
       </div>
       <div class="pw-checkbox">
         <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible === true ? "checked" : ""} />
@@ -11669,6 +11674,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
   }
 
   if (kind === "model") {
+    const gravityIgnored = entry.rigid_mode === "ghost" || entry.physics?.ignore_gravity === true;
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Custom model assets use their stored GLB for rendering and an approximate box collider from the saved bounds.</p>
       <label>
@@ -11702,7 +11708,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <div>
           <label>
             <span>Gravity</span>
-            <input type="number" step="0.1" data-entity-field="physics.gravity_scale" data-value-type="number" value="${htmlEscape(entry.physics?.gravity_scale ?? 1)}" />
+            <input type="number" step="0.1" data-entity-field="physics.gravity_scale" data-value-type="number" value="${htmlEscape(entry.physics?.gravity_scale ?? 1)}" ${gravityIgnored ? "disabled" : ""} />
           </label>
         </div>
         <div>
@@ -11717,6 +11723,10 @@ function renderEntityInspector(sceneDoc, selected = null) {
             <input type="number" step="0.05" data-entity-field="physics.friction" data-value-type="number" value="${htmlEscape(entry.physics?.friction ?? 0.72)}" />
           </label>
         </div>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="physics.ignore_gravity" data-value-type="checkbox" ${entry.physics?.ignore_gravity === true ? "checked" : ""} />
+        <span>Ignore gravity</span>
       </div>
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>

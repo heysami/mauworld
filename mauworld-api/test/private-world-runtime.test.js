@@ -177,6 +177,44 @@ test("active worlds keep player movement and dynamic physics live before scene s
   assert.ok(snapshot.dynamic_objects[0].position.y < beforeObjectY);
 });
 
+test("dynamic objects can ignore gravity while staying rigid", () => {
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 0, y: 12, z: 0 },
+          scale: { x: 2, y: 2, z: 2 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#88aadd", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: { gravity_scale: 1, ignore_gravity: true, restitution: 0, friction: 0.4, mass: 1 },
+        },
+      ],
+      screens: [],
+      players: [{ id: "player_one", label: "Player One", position: { x: 0, y: 4.5, z: 0 }, scale: 5, body_mode: "rigid", camera_mode: "third_person" }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const beforeObjectY = simulation.runtime.dynamicObjects[0].position.y;
+
+  for (let index = 0; index < 8; index += 1) {
+    stepPrivateWorldSimulation(simulation.runtime, {
+      deltaMs: 50,
+      pendingInputs: [],
+    });
+  }
+
+  assert.ok(Math.abs(simulation.runtime.dynamicObjects[0].position.y - beforeObjectY) < 0.0001);
+});
+
 test("timer rules enqueue a scene switch once after their delay", () => {
   const nextScene = {
     id: "scene_next",

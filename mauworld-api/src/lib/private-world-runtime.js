@@ -297,7 +297,9 @@ function destroyPhysicsState(physics = null) {
 }
 
 function createPrimitiveBody(runtime, entry) {
-  const gravityScale = mustFinite(entry.physics?.gravity_scale, entry.rigid_mode === "ghost" ? 0 : 1);
+  const gravityScale = entry.physics?.ignore_gravity === true
+    ? 0
+    : mustFinite(entry.physics?.gravity_scale, entry.rigid_mode === "ghost" ? 0 : 1);
   const friction = clampNumber(mustFinite(entry.physics?.friction, 0.7), 0, 5);
   const restitution = clampNumber(mustFinite(entry.physics?.restitution, 0.18), 0, 1.25);
   const mass = Math.max(0.05, mustFinite(entry.physics?.mass, 1));

@@ -350,6 +350,7 @@ export function resolvePrivateWorldSize(input = {}) {
 function sanitizePhysics(input = {}, { rigid = true } = {}) {
   return {
     rigid: rigid !== false,
+    ignore_gravity: input.ignore_gravity === true || input.ignoreGravity === true,
     gravity_scale: Number(clampNumber(input.gravity_scale, 1, 0, 4).toFixed(4)),
     restitution: Number(clampNumber(input.restitution, 0.12, 0, 1.4).toFixed(4)),
     friction: Number(clampNumber(input.friction, 0.72, 0, 2).toFixed(4)),

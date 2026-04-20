@@ -241,6 +241,35 @@ test("normalizeSceneDoc keeps object panel shapes and facing modes", () => {
   assert.equal(scene.primitives[0].facing_mode, "billboard");
 });
 
+test("normalizeSceneDoc keeps object gravity ignore toggles", () => {
+  const scene = normalizeSceneDoc({
+    primitives: [
+      {
+        id: "crate",
+        rigid_mode: "rigid",
+        physics: {
+          gravity_scale: 1,
+          ignore_gravity: true,
+        },
+      },
+    ],
+    models: [
+      {
+        id: "statue",
+        asset_id: "asset_model_123",
+        rigid_mode: "rigid",
+        physics: {
+          gravity_scale: 1,
+          ignore_gravity: true,
+        },
+      },
+    ],
+  });
+
+  assert.equal(scene.primitives[0].physics.ignore_gravity, true);
+  assert.equal(scene.models[0].physics.ignore_gravity, true);
+});
+
 test("normalizeSceneDoc keeps panels and facing modes for flat authored surfaces", () => {
   const scene = normalizeSceneDoc({
     panels: [
