@@ -116,7 +116,7 @@ const PRIVATE_POSSESSION_DEBUG = {
   serverColor: "#4be7ff",
   tetherColor: "#ffe15a",
 };
-const PRIVATE_PLAYER_JUMP_HEIGHT = 12.5 * PRIVATE_WORLD_BLOCK_UNIT;
+const PRIVATE_PLAYER_JUMP_HEIGHT = (12.5 * PRIVATE_WORLD_BLOCK_UNIT) / 3;
 const PRIVATE_PLAYER_RUNTIME = {
   moveSpeed: 4.317 * PRIVATE_WORLD_BLOCK_UNIT,
   sprintSpeed: 5.612 * PRIVATE_WORLD_BLOCK_UNIT,
@@ -9693,6 +9693,8 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     localJumpUntilMs: 0,
     jumpVisualOffsetY: 0,
     jumpVisualVelocityY: 0,
+    localCarryPlatformId: "",
+    localCarryPlatformPosition: null,
     motionState: null,
   };
   return prediction;
@@ -10204,6 +10206,7 @@ function getLocalCarryPlatformSupport(playerLike = null) {
     if (!bestSupport || absoluteGap < bestSupport.absoluteGap) {
       bestSupport = {
         entry,
+        entryId,
         position,
         velocity,
         surfaceY: platformTop,
@@ -10214,6 +10217,92 @@ function getLocalCarryPlatformSupport(playerLike = null) {
     }
   }
   return bestSupport;
+}
+
+function getLocalCarryPlatformStateById(platformId = "") {
+  const resolvedPlatformId = String(platformId ?? "").trim();
+  if (!resolvedPlatformId) {
+    return null;
+  }
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  if (!runtime) {
+    return null;
+  }
+  const entry = (runtime.dynamic_objects ?? []).find((candidate) => {
+    if (candidate?.carry_riders !== true) {
+      return false;
+    }
+    return String(candidate?.id ?? "").trim() === resolvedPlatformId;
+  }) ?? null;
+  if (!entry) {
+    return null;
+  }
+  const entryId = String(entry?.id ?? "").trim();
+  const kind = entry?.entity_kind === "model" ? "model" : "primitive";
+  const size = getPrivateCollisionEntrySize(kind, entry);
+  const half = getHalfExtentsFromScale(size);
+  const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
+  const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+  const position = {
+    x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
+    y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
+    z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
+  };
+  const velocity = {
+    x: Number(motionState?.renderVelocity?.x ?? entry.velocity?.x ?? 0) || 0,
+    y: Number(motionState?.renderVelocity?.y ?? entry.velocity?.y ?? 0) || 0,
+    z: Number(motionState?.renderVelocity?.z ?? entry.velocity?.z ?? 0) || 0,
+  };
+  return {
+    entry,
+    entryId,
+    position,
+    velocity,
+    size,
+    half,
+    surfaceY: position.y + half.y,
+  };
+}
+
+function applyLocalCarryPlatformDelta(prediction = null) {
+  if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    return null;
+  }
+  const platformState = getLocalCarryPlatformStateById(prediction.localCarryPlatformId);
+  if (!platformState) {
+    prediction.localCarryPlatformId = "";
+    prediction.localCarryPlatformPosition = null;
+    return null;
+  }
+  const previousPosition = prediction.localCarryPlatformPosition;
+  if (
+    previousPosition
+    && Number.isFinite(Number(previousPosition.x))
+    && Number.isFinite(Number(previousPosition.y))
+    && Number.isFinite(Number(previousPosition.z))
+  ) {
+    const deltaX = platformState.position.x - Number(previousPosition.x);
+    const deltaY = platformState.position.y - Number(previousPosition.y);
+    const deltaZ = platformState.position.z - Number(previousPosition.z);
+    if (
+      Math.abs(deltaX) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
+      || Math.abs(deltaY) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
+      || Math.abs(deltaZ) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
+    ) {
+      prediction.position.x += deltaX;
+      prediction.position.y += deltaY;
+      prediction.position.z += deltaZ;
+      if (Number.isFinite(Number(prediction.groundY))) {
+        prediction.groundY = Number(prediction.groundY) + deltaY;
+      }
+    }
+  }
+  prediction.localCarryPlatformPosition = {
+    x: platformState.position.x,
+    y: platformState.position.y,
+    z: platformState.position.z,
+  };
+  return platformState;
 }
 
 function getLocalPossessedGroundSupport(prediction = null) {
@@ -10577,6 +10666,9 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const preJumpLocalJumpActive = prediction.localJumpUntilMs > now
     || prediction.jumpVisualOffsetY > 0.0001
     || prediction.jumpVisualVelocityY > 0.0001;
+  if (rigidBodyMode && !preJumpLocalJumpActive) {
+    applyLocalCarryPlatformDelta(prediction);
+  }
   const preJumpGroundSupport = rigidBodyMode && !preJumpLocalJumpActive
     ? getLocalPossessedGroundSupport(prediction)
     : null;
@@ -10618,19 +10710,10 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const localJumpActive = prediction.localJumpUntilMs > now
     || prediction.jumpVisualOffsetY > 0.0001
     || prediction.jumpVisualVelocityY > 0.0001;
-  const carryPlatformSupport = rigidBodyMode && !localJumpActive
-    ? (preJumpGroundSupport?.carrySupport ?? getLocalCarryPlatformSupport(prediction))
-    : null;
-  const supportVelocityX = Number(carryPlatformSupport?.velocity?.x ?? 0) || 0;
-  const supportVelocityZ = Number(carryPlatformSupport?.velocity?.z ?? 0) || 0;
   const desiredPosition = {
-    x: prediction.position.x
-      + prediction.velocity.x * dt
-      + (Math.abs(supportVelocityX) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON ? supportVelocityX * dt : 0),
+    x: prediction.position.x + prediction.velocity.x * dt,
     y: prediction.position.y,
-    z: prediction.position.z
-      + prediction.velocity.z * dt
-      + (Math.abs(supportVelocityZ) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON ? supportVelocityZ * dt : 0),
+    z: prediction.position.z + prediction.velocity.z * dt,
   };
   if (isPrivateCollisionModeRigid(prediction.bodyMode)) {
     const collision = resolvePlayerMovementAgainstBlockers({
@@ -10712,6 +10795,17 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     prediction.velocity.y = 0;
   }
   prediction.onGround = !currentJumpActive && hasLocalSupport;
+  if (!currentJumpActive && resolvedGroundSupport?.carrySupport?.entryId) {
+    prediction.localCarryPlatformId = String(resolvedGroundSupport.carrySupport.entryId ?? "");
+    prediction.localCarryPlatformPosition = {
+      x: Number(resolvedGroundSupport.carrySupport.position?.x ?? prediction.position.x) || 0,
+      y: Number(resolvedGroundSupport.carrySupport.position?.y ?? prediction.position.y) || 0,
+      z: Number(resolvedGroundSupport.carrySupport.position?.z ?? prediction.position.z) || 0,
+    };
+  } else if (currentJumpActive || !resolvedGroundSupport?.carrySupport) {
+    prediction.localCarryPlatformId = "";
+    prediction.localCarryPlatformPosition = null;
+  }
   if (intent.active) {
     prediction.rotation.y = intent.headingY;
   }
