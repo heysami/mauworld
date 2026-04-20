@@ -2326,27 +2326,19 @@ export function installPrivateWorldStore(MauworldStore) {
       "Could not load player ready state",
     );
     if (participant.join_role === "player") {
-      if (existingReadyState) {
-        await must(
-          this.serviceClient
-            .from("private_world_ready_states")
-            .update({ ready: false, updated_at: nowIso() })
-            .eq("instance_id", instance.id)
-            .eq("participant_id", participant.id),
-          "Could not reset player ready state",
-        );
-      } else {
-        await must(
-          this.serviceClient
-            .from("private_world_ready_states")
-            .insert({
-              instance_id: instance.id,
-              participant_id: participant.id,
-              ready: false,
-            }),
-          "Could not create player ready state",
-        );
-      }
+      await must(
+        this.serviceClient
+          .from("private_world_ready_states")
+          .upsert({
+            instance_id: instance.id,
+            participant_id: participant.id,
+            ready: false,
+            updated_at: nowIso(),
+          }, {
+            onConflict: "instance_id,participant_id",
+          }),
+        "Could not create player ready state",
+      );
     } else if (existingReadyState) {
       await must(
         this.serviceClient
@@ -2515,35 +2507,19 @@ export function installPrivateWorldStore(MauworldStore) {
         .single(),
       "Could not occupy private world player",
     );
-    const existingReadyState = await maybeSingle(
+    await must(
       this.serviceClient
         .from("private_world_ready_states")
-        .select("*")
-        .eq("instance_id", instance.id)
-        .eq("participant_id", participant.id)
-        .maybeSingle(),
-      "Could not load player ready state",
+        .upsert({
+          instance_id: instance.id,
+          participant_id: participant.id,
+          ready: false,
+          updated_at: nowIso(),
+        }, {
+          onConflict: "instance_id,participant_id",
+        }),
+      "Could not create player ready state",
     );
-    if (existingReadyState) {
-      await must(
-        this.serviceClient
-          .from("private_world_ready_states")
-          .update({ ready: false, updated_at: nowIso() })
-          .eq("participant_id", participant.id),
-        "Could not reset player ready state",
-      );
-    } else {
-      await must(
-        this.serviceClient
-          .from("private_world_ready_states")
-          .insert({
-            instance_id: instance.id,
-            participant_id: participant.id,
-            ready: false,
-          }),
-        "Could not create player ready state",
-      );
-    }
 
     emitPrivateWorldEvent(this, {
       type: "participant:occupied",

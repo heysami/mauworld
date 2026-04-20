@@ -48,6 +48,7 @@ class FakeQuery {
     this.orderBy = null;
     this.orFilters = [];
     this.limitCount = null;
+    this.upsertConflictColumns = [];
   }
 
   select() {
@@ -68,6 +69,16 @@ class FakeQuery {
   insert(payload) {
     this.action = "insert";
     this.payload = Array.isArray(payload) ? payload : [payload];
+    return this;
+  }
+
+  upsert(payload, options = {}) {
+    this.action = "upsert";
+    this.payload = Array.isArray(payload) ? payload : [payload];
+    this.upsertConflictColumns = String(options.onConflict ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
     return this;
   }
 
@@ -232,6 +243,29 @@ class FakeQuery {
       this.state.tables[this.table] = tableRows;
       return {
         data: this.singleRow ? insertedRows[0] ?? null : insertedRows,
+        error: null,
+      };
+    }
+
+    if (this.action === "upsert") {
+      const conflictColumns = this.upsertConflictColumns;
+      const upsertedRows = [];
+      for (const payloadRow of this.payload) {
+        const nextRow = cloneRow(payloadRow);
+        const existingRow = conflictColumns.length > 0
+          ? tableRows.find((row) => conflictColumns.every((column) => row[column] === nextRow[column]))
+          : null;
+        if (existingRow) {
+          Object.assign(existingRow, nextRow);
+          upsertedRows.push(cloneRow(existingRow));
+        } else {
+          tableRows.push(nextRow);
+          upsertedRows.push(cloneRow(nextRow));
+        }
+      }
+      this.state.tables[this.table] = tableRows;
+      return {
+        data: this.singleRow ? upsertedRows[0] ?? null : upsertedRows,
         error: null,
       };
     }
@@ -1015,6 +1049,90 @@ test("findNearestPrivateWorldAnchor skips blocked pillar anchors", async () => {
     { x: anchor.x, y: anchor.y, z: anchor.z },
     { x: 0, y: 0, z: 0 },
   );
+});
+
+test("occupyPrivateWorldParticipant upserts ready state for repeated possession clicks", async () => {
+  const freshIso = new Date(Date.now() - 5_000).toISOString();
+  const state = {
+    tables: {
+      private_worlds: [
+        {
+          id: "world_row_live",
+          world_id: "mw_live",
+          creator_profile_id: "profile_creator",
+        },
+      ],
+      user_profiles: [
+        {
+          id: "profile_creator",
+          username: "maker",
+          display_name: "Maker",
+        },
+      ],
+      private_world_active_instances: [
+        {
+          id: "instance_live",
+          world_id: "world_row_live",
+          status: "active",
+        },
+      ],
+      private_world_participants: [
+        {
+          id: "participant_live",
+          instance_id: "instance_live",
+          profile_id: "profile_creator",
+          guest_session_id: null,
+          join_role: "viewer",
+          player_entity_id: null,
+          visible_to_others: true,
+          last_seen_at: freshIso,
+          updated_at: freshIso,
+        },
+      ],
+      private_world_ready_states: [],
+    },
+    queryLog: [],
+  };
+
+  const fakeStore = {
+    serviceClient: createFakeServiceClient(state),
+    privateWorldRuntime: {
+      getSnapshotByWorldRef() {
+        return {
+          players: [
+            {
+              id: "player_player-player-player-1",
+              occupied_by_username: null,
+            },
+          ],
+        };
+      },
+    },
+  };
+
+  const input = {
+    worldId: "mw_live",
+    creatorUsername: "maker",
+    profile: {
+      id: "profile_creator",
+    },
+    playerEntityId: "player_player-player-player-1",
+  };
+
+  const first = await MauworldStore.prototype.occupyPrivateWorldParticipant.call(fakeStore, input);
+  const second = await MauworldStore.prototype.occupyPrivateWorldParticipant.call(fakeStore, input);
+
+  assert.equal(first.occupied, true);
+  assert.equal(second.occupied, true);
+  assert.equal(state.tables.private_world_ready_states.length, 1);
+  assert.deepEqual(state.tables.private_world_ready_states[0], {
+    instance_id: "instance_live",
+    participant_id: "participant_live",
+    ready: false,
+    updated_at: state.tables.private_world_ready_states[0].updated_at,
+  });
+  assert.equal(state.tables.private_world_participants[0].join_role, "player");
+  assert.equal(state.tables.private_world_participants[0].player_entity_id, "player_player-player-player-1");
 });
 
 test("findNearestPrivateWorldAnchor skips blocked post-card footprints", async () => {
