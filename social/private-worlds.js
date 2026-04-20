@@ -40,7 +40,7 @@ import {
   buildPrivateWorldBrowserResultsMarkup,
   getPrivateWorldBrowserKey,
 } from "./private-world-browser.js";
-import { resolvePlayerMovementAgainstBlockers } from "./private-player-collision.mjs";
+import { resolvePlayerMovementAgainstBlockers } from "./private-player-collision.mjs?v=20260420c";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 import {
   createWorldGamesApi,
