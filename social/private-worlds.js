@@ -19041,6 +19041,24 @@ async function releasePlayer() {
   sendPrivatePresence(true);
 }
 
+async function enterBuildMode() {
+  if (!state.selectedWorld) {
+    return;
+  }
+  const localParticipant = getLocalParticipant(state.selectedWorld);
+  if (localParticipant?.join_role === "player") {
+    const confirmed = window.confirm(
+      "You are currently inside a player.\n\nSwitching to build mode will leave that player. Continue?",
+    );
+    if (!confirmed) {
+      return;
+    }
+    await releasePlayer();
+  }
+  setMode("build", { syncPanelTab: false });
+  renderSelectedWorld();
+}
+
 async function leaveWorld() {
   if (!state.selectedWorld) {
     return;
@@ -20080,8 +20098,9 @@ function bindEvents() {
     resumePrivateBrowserMediaPlayback();
   });
   elements.panelModeBuild?.addEventListener("click", () => {
-    setMode("build", { syncPanelTab: false });
-    renderSelectedWorld();
+    void enterBuildMode().catch((error) => {
+      setStatus(error.message || "Could not enter build mode.");
+    });
   });
   elements.panelModePlay?.addEventListener("click", () => {
     void enterPlayMode().catch((error) => {
