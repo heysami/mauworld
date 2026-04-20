@@ -83,7 +83,7 @@ test("normalizeSceneDoc keeps fixed top-down player framing fields", () => {
   assert.equal(scene.players[0].fixed_top_down_height, 46);
 });
 
-test("normalizeSceneDoc allows fixed top-down first-person player framing", () => {
+test("normalizeSceneDoc maps removed fifth camera mode to fixed top-down", () => {
   const scene = normalizeSceneDoc({
     players: [{
       id: "player_a",
@@ -95,7 +95,7 @@ test("normalizeSceneDoc allows fixed top-down first-person player framing", () =
     }],
   });
 
-  assert.equal(scene.players[0].camera_mode, "fixed_top_down_first_person");
+  assert.equal(scene.players[0].camera_mode, "fixed_top_down");
   assert.equal(scene.players[0].fixed_top_down_direction, "south");
   assert.equal(scene.players[0].fixed_top_down_width, 54);
   assert.equal(scene.players[0].fixed_top_down_height, 30);

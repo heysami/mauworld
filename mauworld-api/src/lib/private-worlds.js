@@ -44,7 +44,6 @@ const ALLOWED_PLAYER_CAMERA_MODES = new Set([
   "third_person",
   "top_down",
   "fixed_top_down",
-  "fixed_top_down_first_person",
 ]);
 const ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS = new Set(["north", "east", "south", "west"]);
 const ALLOWED_PLAYER_BODY_MODES = new Set(["rigid", "ghost"]);
@@ -457,8 +456,16 @@ function sanitizeScreenEntry(entry = {}, index = 0, options = {}) {
   };
 }
 
+function normalizeAllowedPlayerCameraMode(value = "third_person") {
+  const normalized = String(value ?? "third_person").trim().toLowerCase();
+  if (normalized === "fixed_top_down_first_person") {
+    return "fixed_top_down";
+  }
+  return ALLOWED_PLAYER_CAMERA_MODES.has(normalized) ? normalized : "third_person";
+}
+
 function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
-  const cameraMode = String(entry.camera_mode ?? entry.cameraMode ?? "third_person").trim().toLowerCase();
+  const cameraMode = normalizeAllowedPlayerCameraMode(entry.camera_mode ?? entry.cameraMode ?? "third_person");
   const fixedTopDownDirection = String(
     entry.fixed_top_down_direction ?? entry.fixedTopDownDirection ?? "north",
   ).trim().toLowerCase();
@@ -469,7 +476,7 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     position: sanitizeVector3(entry.position, { x: 0, y: PRIVATE_PLAYER_STANDING_CENTER_Y, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
     scale: Number(clampNumber(entry.scale, PRIVATE_PLAYER_DEFAULT_SCALE, 0.25, 12).toFixed(4)),
-    camera_mode: ALLOWED_PLAYER_CAMERA_MODES.has(cameraMode) ? cameraMode : "third_person",
+    camera_mode: cameraMode,
     fixed_top_down_direction: ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS.has(fixedTopDownDirection)
       ? fixedTopDownDirection
       : "north",
@@ -1002,9 +1009,9 @@ export function normalizeSceneDoc(input = {}, options = {}) {
   const normalizationOptions = {
     preserveNormalizedIds: options.preserveNormalizedIds === true,
   };
-  const settingsCameraMode = String(source.settings?.camera_mode ?? source.settings?.cameraMode ?? "third_person")
-    .trim()
-    .toLowerCase();
+  const settingsCameraMode = normalizeAllowedPlayerCameraMode(
+    source.settings?.camera_mode ?? source.settings?.cameraMode ?? "third_person",
+  );
   const settingsSkybox = String(source.settings?.skybox ?? source.settings?.skyboxPreset ?? "blank")
     .trim()
     .toLowerCase();
@@ -1098,9 +1105,7 @@ export function normalizeSceneDoc(input = {}, options = {}) {
   return {
     settings: {
       gravity: sanitizeVector3(source.settings?.gravity, { x: 0, y: -9.8, z: 0 }, { min: -40, max: 40 }),
-      camera_mode: ALLOWED_PLAYER_CAMERA_MODES.has(settingsCameraMode)
-        ? settingsCameraMode
-        : "third_person",
+      camera_mode: settingsCameraMode,
       start_on_ready: source.settings?.start_on_ready !== false,
       skybox: ALLOWED_SCENE_SKYBOXES.has(settingsSkybox) ? settingsSkybox : "blank",
       ambient_light: ALLOWED_SCENE_AMBIENT_LIGHT_MODES.has(settingsAmbientLight) ? settingsAmbientLight : "even",

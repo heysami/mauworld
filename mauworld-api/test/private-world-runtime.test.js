@@ -325,7 +325,7 @@ test("runtime snapshots preserve authored player and object scale", () => {
 
   const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
   assert.equal(snapshot.players[0].scale, 5);
-  assert.equal(snapshot.players[0].camera_mode, "fixed_top_down_first_person");
+  assert.equal(snapshot.players[0].camera_mode, "fixed_top_down");
   assert.equal(snapshot.players[0].fixed_top_down_direction, "west");
   assert.equal(snapshot.players[0].fixed_top_down_width, 80);
   assert.equal(snapshot.players[0].fixed_top_down_height, 48);
@@ -702,7 +702,7 @@ test("runtime rebuild preserves occupied player pose for same-scene camera edits
   const rebuiltPlayer = simulation.runtime.players[0];
   const rebuiltBody = simulation.runtime.physics.playerBodies.get(rebuiltPlayer.id);
   const translation = rebuiltBody.translation();
-  assert.equal(snapshot.players[0].camera_mode, "fixed_top_down_first_person");
+  assert.equal(snapshot.players[0].camera_mode, "fixed_top_down");
   assert.equal(snapshot.players[0].fixed_top_down_direction, "east");
   assert.ok(Math.abs(rebuiltPlayer.position.x - 7.25) < 0.0001);
   assert.ok(Math.abs(rebuiltPlayer.position.z + 4.5) < 0.0001);
