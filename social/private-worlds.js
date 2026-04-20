@@ -97,6 +97,10 @@ const PRIVATE_PLAYER_CAMERA = {
   thirdPersonHeight: 2.2,
   topDownHeight: 8,
 };
+const PRIVATE_POSSESSION_DEBUG = {
+  serverColor: "#4be7ff",
+  tetherColor: "#ffe15a",
+};
 const PRIVATE_PLAYER_RUNTIME = {
   moveSpeed: 4.317 * PRIVATE_WORLD_BLOCK_UNIT,
   sprintSpeed: 5.612 * PRIVATE_WORLD_BLOCK_UNIT,
@@ -12040,6 +12044,13 @@ function renderRuntimeStatus() {
   const runtimeObjects = runtime?.dynamic_objects ?? [];
   const defaultScene = getDefaultScene(world);
   const localParticipant = getLocalParticipant(world);
+  const authoritativePlayer = localParticipant?.join_role === "player"
+    ? getPossessedRuntimePlayer()
+    : null;
+  const localDisplayPlayer = authoritativePlayer
+    ? (getLocalPossessedPlayerPrediction(authoritativePlayer.id) ?? authoritativePlayer)
+    : null;
+  const possessionDrift = getPossessionDriftMetrics(localDisplayPlayer, authoritativePlayer);
   elements.runtimeStatus.innerHTML = `
     <div class="pw-world-meta__row">
       <strong>Status</strong>
@@ -12059,6 +12070,16 @@ function renderRuntimeStatus() {
         ? "You are inside a player. Ready Up marks this player as prepared, and Leave Player returns to viewer mode."
         : "Viewers can walk around immediately. Click a player capsule to inhabit it, then Ready Up appears for that player."}</span>
     </div>
+    ${possessionDrift ? `
+      <div class="pw-world-meta__row">
+        <strong>Possession Debug</strong>
+        <span>cyan wireframe = server body · yellow tether = drift · total ${possessionDrift.totalDistance.toFixed(2)} · planar ${possessionDrift.planarDistance.toFixed(2)} · dY ${possessionDrift.deltaY.toFixed(2)}</span>
+      </div>
+      <div class="pw-world-meta__row">
+        <strong>Local vs Server</strong>
+        <span>local ${localDisplayPlayer.position.x.toFixed(2)}, ${localDisplayPlayer.position.y.toFixed(2)}, ${localDisplayPlayer.position.z.toFixed(2)} · server ${authoritativePlayer.position.x.toFixed(2)}, ${authoritativePlayer.position.y.toFixed(2)}, ${authoritativePlayer.position.z.toFixed(2)}</span>
+      </div>
+    ` : ""}
     ${runtimePlayers.length > 0 ? `
       <div class="pw-world-meta__row">
         <strong>Positions</strong>
@@ -15130,10 +15151,13 @@ function syncPrivateLocalAvatar(preview, elapsedSeconds) {
 }
 
 function updatePossessedCamera(preview, deltaSeconds = 0) {
+  const authoritativePlayer = getPossessedRuntimePlayer();
   const player = getPossessedPreviewPlayer(preview, deltaSeconds);
   if (!player) {
+    hidePossessionDebugVisual(preview);
     return false;
   }
+  updatePossessionDebugVisual(preview, player, authoritativePlayer);
   const yaw = normalizeAngle(privateInputState.yaw);
   const pitch = clampNumber(
     privateInputState.pitch,
@@ -15183,6 +15207,132 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
   preview.camera.lookAt(lookTarget);
   state.viewerCameraPosition.copy(preview.camera.position);
   return true;
+}
+
+function getPossessionDriftMetrics(localPlayer = null, authoritativePlayer = null) {
+  if (!localPlayer?.position || !authoritativePlayer?.position) {
+    return null;
+  }
+  const deltaX = (Number(authoritativePlayer.position.x) || 0) - (Number(localPlayer.position.x) || 0);
+  const deltaY = (Number(authoritativePlayer.position.y) || 0) - (Number(localPlayer.position.y) || 0);
+  const deltaZ = (Number(authoritativePlayer.position.z) || 0) - (Number(localPlayer.position.z) || 0);
+  return {
+    deltaX,
+    deltaY,
+    deltaZ,
+    planarDistance: Math.hypot(deltaX, deltaZ),
+    totalDistance: Math.hypot(deltaX, deltaY, deltaZ),
+  };
+}
+
+function ensurePossessionDebugVisual(preview = state.preview) {
+  if (!preview) {
+    return null;
+  }
+  if (preview.possessionDebug) {
+    return preview.possessionDebug;
+  }
+  const group = new THREE.Group();
+  group.visible = false;
+
+  const serverBody = new THREE.Mesh(
+    new THREE.CapsuleGeometry(
+      PRIVATE_PLAYER_METRICS.width / 2,
+      PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
+      8,
+      16,
+    ),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_POSSESSION_DEBUG.serverColor),
+      wireframe: true,
+      transparent: true,
+      opacity: 0.96,
+      depthTest: false,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  serverBody.renderOrder = 999;
+  group.add(serverBody);
+
+  const serverMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 12, 10),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_POSSESSION_DEBUG.serverColor),
+      transparent: true,
+      opacity: 0.98,
+      depthTest: false,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  serverMarker.renderOrder = 1000;
+  group.add(serverMarker);
+
+  const tether = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(),
+      new THREE.Vector3(),
+    ]),
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color(PRIVATE_POSSESSION_DEBUG.tetherColor),
+      transparent: true,
+      opacity: 0.94,
+      depthTest: false,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  tether.renderOrder = 998;
+  group.add(tether);
+
+  preview.scene.add(group);
+  preview.possessionDebug = {
+    group,
+    serverBody,
+    serverMarker,
+    tether,
+    tetherPoints: [new THREE.Vector3(), new THREE.Vector3()],
+  };
+  return preview.possessionDebug;
+}
+
+function hidePossessionDebugVisual(preview = state.preview) {
+  if (preview?.possessionDebug?.group) {
+    preview.possessionDebug.group.visible = false;
+  }
+}
+
+function updatePossessionDebugVisual(preview = state.preview, localPlayer = null, authoritativePlayer = null) {
+  const debug = ensurePossessionDebugVisual(preview);
+  if (!debug || !localPlayer?.position || !authoritativePlayer?.position) {
+    hidePossessionDebugVisual(preview);
+    return null;
+  }
+  const serverPosition = authoritativePlayer.position;
+  const serverRotation = authoritativePlayer.rotation ?? {};
+  const serverScale = Math.max(0.25, Number(authoritativePlayer.scale ?? localPlayer.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
+  debug.group.visible = true;
+  debug.serverBody.position.set(
+    Number(serverPosition.x ?? 0) || 0,
+    Number(serverPosition.y ?? 0) || 0,
+    Number(serverPosition.z ?? 0) || 0,
+  );
+  debug.serverBody.rotation.set(
+    Number(serverRotation.x ?? 0) || 0,
+    Number(serverRotation.y ?? 0) || 0,
+    Number(serverRotation.z ?? 0) || 0,
+  );
+  debug.serverBody.scale.setScalar(serverScale * 1.01);
+  debug.serverMarker.position.copy(debug.serverBody.position);
+  debug.tetherPoints[0].set(
+    Number(localPlayer.position.x ?? 0) || 0,
+    Number(localPlayer.position.y ?? 0) || 0,
+    Number(localPlayer.position.z ?? 0) || 0,
+  );
+  debug.tetherPoints[1].copy(debug.serverBody.position);
+  debug.tether.geometry.setFromPoints(debug.tetherPoints);
+  return getPossessionDriftMetrics(localPlayer, authoritativePlayer);
 }
 
 function buildPreviewEnvironment(preview) {
@@ -15541,6 +15691,7 @@ function ensurePreview() {
     browserShares: new THREE.Group(),
     gameShares: new THREE.Group(),
     trails: new THREE.Group(),
+    possessionDebug: null,
     raycaster: new THREE.Raycaster(),
     entityPickables: [],
     transformPickables: [],
@@ -15587,7 +15738,9 @@ function ensurePreview() {
       if (state.preview.viewerAvatar) {
         state.preview.viewerAvatar.group.visible = false;
       }
+      renderRuntimeStatusThrottled();
     } else {
+      hidePossessionDebugVisual(state.preview);
       updatePrivateMovement(state.preview, deltaSeconds);
       syncPrivateLocalAvatar(state.preview, timestamp / 1000);
     }
