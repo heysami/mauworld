@@ -4,8 +4,8 @@ import { normalizeSceneDoc } from "./private-worlds.js";
 
 await RAPIER.init({});
 
-const DEFAULT_TICK_MS = 50;
-const DEFAULT_BROADCAST_MS = 33;
+const DEFAULT_TICK_MS = 16;
+const DEFAULT_BROADCAST_MS = 16;
 const PRIVATE_WORLD_BLOCK_UNIT = 5;
 const PLAYER_DIMENSIONS = {
   width: 0.6,
