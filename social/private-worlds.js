@@ -151,6 +151,7 @@ const PRIVATE_RUNTIME_SNAPSHOT_PRIORITY = {
 const PRIVATE_RUNTIME_LOOK_SYNC_MS = 45;
 const PRIVATE_RUNTIME_LOOK_SYNC_EPSILON = 0.0025;
 const PRIVATE_POSSESSED_PRESENCE_INTERVAL_MS = 33;
+const PRIVATE_POSSESSED_PRESENCE_HTTP_MIRROR_MS = 90;
 const PRIVATE_MOVEMENT_INTENT_KEYS = [
   "w",
   "a",
@@ -1109,6 +1110,7 @@ const state = {
   trailAccumulator: 0,
   lastPrivateMotionSeq: 0,
   lastPresenceSentAt: 0,
+  lastPresenceHttpMirrorAt: 0,
   lastRuntimeLookSentAt: 0,
   lastRuntimeLookHeadingY: null,
   lastRuntimeInteractionSentAt: 0,
@@ -5745,6 +5747,19 @@ function sendWorldSocketMessage(payload) {
   if (!state.worldSocket || state.worldSocket.readyState !== WebSocket.OPEN) {
     return false;
   }
+  if (typeof window !== "undefined" && window.__mwPrivateDebug) {
+    const history = Array.isArray(window.__mwPrivateDebug.sentMessages)
+      ? window.__mwPrivateDebug.sentMessages
+      : [];
+    history.push({
+      at: Date.now(),
+      payload: cloneJson(payload),
+    });
+    if (history.length > 40) {
+      history.splice(0, history.length - 40);
+    }
+    window.__mwPrivateDebug.sentMessages = history;
+  }
   state.worldSocket.send(JSON.stringify(payload));
   return true;
 }
@@ -5916,7 +5931,36 @@ function sendPrivatePresence(force = false) {
     payload.velocity_z = possessedPose.velocity_z;
     payload.force_runtime_pose = true;
   }
-  return sendWorldSocketMessage(payload);
+  const socketSent = sendWorldSocketMessage(payload);
+  if (
+    possessedPose
+    && localParticipant.join_role === "player"
+    && state.selectedWorld
+  ) {
+    const shouldMirrorHttp =
+      force
+      || !socketSent
+      || now - Number(state.lastPresenceHttpMirrorAt ?? 0) >= PRIVATE_POSSESSED_PRESENCE_HTTP_MIRROR_MS;
+    if (shouldMirrorHttp) {
+      state.lastPresenceHttpMirrorAt = now;
+      void apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/input`, {
+        method: "POST",
+        body: {
+          creatorUsername: state.selectedWorld.creator.username,
+          heading_y: payload.heading_y,
+          position_x: payload.position_x,
+          position_y: payload.position_y,
+          position_z: payload.position_z,
+          velocity_x: payload.velocity_x,
+          velocity_y: payload.velocity_y,
+          velocity_z: payload.velocity_z,
+          motion_seq: payload.motion_seq,
+          force_client_pose: true,
+        },
+      }).catch(() => {});
+    }
+  }
+  return socketSent;
 }
 
 function buildRuntimeDynamicInteractionPayloads() {
@@ -14980,9 +15024,188 @@ function installPrivateDebugTools() {
   if (typeof window === "undefined") {
     return;
   }
+  const normalizeDebugRuntimeKey = (value = "") => String(value ?? "").trim().toLowerCase();
+  const pressDebugRuntimeKey = (value = "") => {
+    const key = normalizeDebugRuntimeKey(value);
+    if (!RUNTIME_INPUT_KEYS.has(key)) {
+      return false;
+    }
+    if (shouldDrivePrivateRuntimeInput()) {
+      if (key === "space") {
+        return triggerRuntimeJumpPulse({
+          headingY: getRuntimeInputHeadingY(),
+        });
+      }
+      if (shouldBlockRuntimeMovementInputKey(key)) {
+        if (state.pressedRuntimeKeys.has(key)) {
+          state.pressedRuntimeKeys.delete(key);
+          void sendRuntimeInput(key, "up", {
+            headingY: getRuntimeInputHeadingY(),
+          });
+        }
+        return false;
+      }
+      if (state.pressedRuntimeKeys.has(key)) {
+        return true;
+      }
+      state.pressedRuntimeKeys.add(key);
+      void sendRuntimeInput(key, "down", {
+        headingY: getRuntimeInputHeadingY(),
+      });
+      return true;
+    }
+    privateInputState.keys.add(key);
+    return true;
+  };
+  const releaseDebugRuntimeKey = (value = "") => {
+    const key = normalizeDebugRuntimeKey(value);
+    if (!RUNTIME_INPUT_KEYS.has(key)) {
+      return false;
+    }
+    if (shouldDrivePrivateRuntimeInput()) {
+      if (key === "space") {
+        state.pressedRuntimeKeys.delete(key);
+        return true;
+      }
+      state.pressedRuntimeKeys.delete(key);
+      void sendRuntimeInput(key, "up", {
+        headingY: getRuntimeInputHeadingY(),
+      });
+      return true;
+    }
+    privateInputState.keys.delete(key);
+    return true;
+  };
+  const getDebugEntityPose = (entityId = "") => {
+    const resolvedEntityId = String(entityId ?? "").trim();
+    if (!resolvedEntityId) {
+      return null;
+    }
+    const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+    const runtimePlayer = (runtime?.players ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedEntityId) ?? null;
+    const runtimeObject = (runtime?.dynamic_objects ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedEntityId) ?? null;
+    const runtimeEntry = runtimePlayer ?? runtimeObject ?? null;
+    const mesh = state.preview?.entityMeshes?.get(resolvedEntityId) ?? null;
+    const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+    return {
+      runtime: runtimeEntry ? {
+        position: runtimeEntry.position ? {
+          x: Number(runtimeEntry.position.x ?? 0) || 0,
+          y: Number(runtimeEntry.position.y ?? 0) || 0,
+          z: Number(runtimeEntry.position.z ?? 0) || 0,
+        } : null,
+        velocity: runtimeEntry.velocity ? {
+          x: Number(runtimeEntry.velocity.x ?? 0) || 0,
+          y: Number(runtimeEntry.velocity.y ?? 0) || 0,
+          z: Number(runtimeEntry.velocity.z ?? 0) || 0,
+        } : null,
+      } : null,
+      render: mesh ? {
+        position: {
+          x: Number(motionState?.renderPosition?.x ?? mesh.position.x ?? 0) || 0,
+          y: Number(motionState?.renderPosition?.y ?? mesh.position.y ?? 0) || 0,
+          z: Number(motionState?.renderPosition?.z ?? mesh.position.z ?? 0) || 0,
+        },
+        velocity: {
+          x: Number(motionState?.renderVelocity?.x ?? runtimeEntry?.velocity?.x ?? 0) || 0,
+          y: Number(motionState?.renderVelocity?.y ?? runtimeEntry?.velocity?.y ?? 0) || 0,
+          z: Number(motionState?.renderVelocity?.z ?? runtimeEntry?.velocity?.z ?? 0) || 0,
+        },
+      } : null,
+      occupiedBy: runtimePlayer ? {
+        username: String(runtimePlayer.occupied_by_username ?? "").trim(),
+        displayName: String(runtimePlayer.occupied_by_display_name ?? "").trim(),
+      } : null,
+    };
+  };
   window.__mwPrivateDebug = {
     inspectPlayerClick(clientX, clientY) {
       return inspectProjectedPlayerHit({ clientX, clientY });
+    },
+    pressRuntimeKey(key) {
+      return pressDebugRuntimeKey(key);
+    },
+    releaseRuntimeKey(key) {
+      return releaseDebugRuntimeKey(key);
+    },
+    async holdRuntimeKeys(keys = [], durationMs = 0) {
+      const activeKeys = Array.isArray(keys) ? keys : [keys];
+      for (const key of activeKeys) {
+        pressDebugRuntimeKey(key);
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(durationMs) || 0)));
+      for (const key of [...activeKeys].reverse()) {
+        releaseDebugRuntimeKey(key);
+      }
+      return true;
+    },
+    flushPresence(force = true) {
+      return sendPrivatePresence(force === true);
+    },
+    flushLook(force = true) {
+      return syncRuntimeLookHeading(force === true);
+    },
+    getEntityPose(entityId) {
+      return getDebugEntityPose(entityId);
+    },
+    describePlayerPlatform(playerId, platformId) {
+      const resolvedPlayerId = String(playerId ?? "").trim();
+      const resolvedPlatformId = String(platformId ?? "").trim();
+      const playerPose = getDebugEntityPose(resolvedPlayerId);
+      const platformPose = getDebugEntityPose(resolvedPlatformId);
+      const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+      const runtimePlayer = (runtime?.players ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedPlayerId) ?? null;
+      const runtimePlatform = (runtime?.dynamic_objects ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedPlatformId) ?? null;
+      const prediction = resolvedPlayerId && resolvedPlayerId === getLocallyControlledPlayerEntityId()
+        ? getLocalPossessedPlayerPrediction()
+        : null;
+      const playerScale = Math.max(
+        0.25,
+        Number(prediction?.scale ?? runtimePlayer?.scale ?? state.preview?.entityMeshes?.get(resolvedPlayerId)?.scale?.x ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE,
+      );
+      const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(playerScale));
+      const platformSize = runtimePlatform
+        ? getPrivateCollisionEntrySize(runtimePlatform?.entity_kind === "model" ? "model" : "primitive", runtimePlatform)
+        : null;
+      const platformHalf = platformSize ? getHalfExtentsFromScale(platformSize) : null;
+      const playerRenderPosition = prediction?.position ?? playerPose?.render?.position ?? playerPose?.runtime?.position ?? null;
+      const platformRenderPosition = platformPose?.render?.position ?? platformPose?.runtime?.position ?? null;
+      const playerBottom = playerRenderPosition ? Number(playerRenderPosition.y ?? 0) - playerHalf.y : Number.NaN;
+      const platformTop = platformRenderPosition && platformHalf ? Number(platformRenderPosition.y ?? 0) + platformHalf.y : Number.NaN;
+      return {
+        mode: state.mode,
+        joined: state.joined === true,
+        role: getLocalParticipant()?.join_role || "",
+        pressedKeys: [...state.pressedRuntimeKeys],
+        player: {
+          id: resolvedPlayerId,
+          prediction: prediction ? {
+            position: {
+              x: Number(prediction.position?.x ?? 0) || 0,
+              y: Number(prediction.position?.y ?? 0) || 0,
+              z: Number(prediction.position?.z ?? 0) || 0,
+            },
+            onGround: prediction.onGround === true,
+            groundY: Number(prediction.groundY ?? Number.NaN),
+            localCarryPlatformId: String(prediction.localCarryPlatformId ?? "").trim(),
+          } : null,
+          pose: playerPose,
+          bottomY: playerBottom,
+        },
+        platform: {
+          id: resolvedPlatformId,
+          pose: platformPose,
+          topY: platformTop,
+        },
+        verticalGap: Number.isFinite(playerBottom) && Number.isFinite(platformTop)
+          ? playerBottom - platformTop
+          : Number.NaN,
+      };
+    },
+    getSentMessages() {
+      return Array.isArray(window.__mwPrivateDebug?.sentMessages)
+        ? cloneJson(window.__mwPrivateDebug.sentMessages)
+        : [];
     },
   };
 }

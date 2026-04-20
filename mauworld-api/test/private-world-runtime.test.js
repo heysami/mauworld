@@ -1547,6 +1547,82 @@ test("runtime applies forced client pose to occupied rigid players in client-aut
   assert.ok(Math.abs(mirroredPlayer.rotation.y - 1.1) < 0.0001);
 });
 
+test("runtime queues heading-only input while force-mirroring the latest client pose", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [{
+        id: "platform_one",
+        shape: "box",
+        position: { x: 2.3, y: 1.1, z: -1.4 },
+        scale: { x: 4, y: 1, z: 4 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#88aadd", texture_preset: "none" },
+        rigid_mode: "ghost",
+        physics: {
+          gravity_scale: 0,
+          restitution: 0,
+          friction: 0.4,
+          mass: 1,
+          carry_riders: true,
+        },
+      }],
+      screens: [],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 2.5, y: 2.5, z: -1.65 },
+        scale: 1,
+        body_mode: "rigid",
+        camera_mode: "third_person",
+      }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const player = simulation.runtime.players[0];
+  const profileId = player.occupied_by_profile_id;
+
+  const result = await manager.queueInputByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId },
+    heading_y: 1.2,
+    position_x: 1.1,
+    position_y: 2.3,
+    position_z: -3.4,
+    velocity_x: 0,
+    velocity_y: 0,
+    velocity_z: 0,
+    motion_seq: 15,
+    force_client_pose: true,
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  const mirroredPlayer = snapshot.players.find((entry) => entry.id === player.id);
+  assert.equal(result.accepted, true);
+  assert.equal(result.player_entity_id, player.id);
+  assert.ok(Math.abs(player.position.x - 1.1) < 0.0001);
+  assert.ok(Math.abs(player.position.y - 2.3) < 0.0001);
+  assert.ok(Math.abs(player.position.z + 3.4) < 0.0001);
+  assert.ok(Math.abs(player.rotation.y - 1.2) < 0.0001);
+  assert.ok(Math.abs(mirroredPlayer.position.x - 1.1) < 0.0001);
+  assert.ok(Math.abs(mirroredPlayer.position.y - 2.3) < 0.0001);
+  assert.ok(Math.abs(mirroredPlayer.position.z + 3.4) < 0.0001);
+  assert.ok(Math.abs(mirroredPlayer.rotation.y - 1.2) < 0.0001);
+});
+
 test("runtime keeps stale client-authoritative riders out of server platform carry", async () => {
   const manager = new PrivateWorldRuntime({
     store: {},

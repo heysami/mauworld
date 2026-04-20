@@ -685,6 +685,11 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       velocity_y: req.body?.velocity_y,
       velocity_z: req.body?.velocity_z,
       motion_seq: req.body?.motion_seq,
+      force_client_pose:
+        req.body?.force_client_pose === true
+        || req.body?.forceRuntimePose === true
+        || req.body?.force_runtime_pose === true
+        || req.body?.forceClientPose === true,
     });
     jsonOk(res, payload);
   }));
