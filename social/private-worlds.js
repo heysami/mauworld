@@ -53,6 +53,7 @@ import {
   resolveContinuousMotionStateAgainstBlockers,
   stepContinuousMotionState,
 } from "./private-runtime-motion.mjs?v=20260420b";
+import { normalizePrivateInputKey } from "./private-input.mjs";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -5569,11 +5570,7 @@ function selectedWorldMatchesLaunchRequest(launch = getLaunchRequest(), world = 
 }
 
 function normalizeRuntimeKey(event) {
-  const key = String(event.key ?? "").trim().toLowerCase();
-  if (key === " ") {
-    return "space";
-  }
-  return key;
+  return normalizePrivateInputKey(event);
 }
 
 function focusPrivateWorldCanvas(options = {}) {
