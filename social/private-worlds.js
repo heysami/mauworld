@@ -11588,7 +11588,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const cameraMode = normalizePlayerCameraMode(entry.camera_mode ?? "third_person");
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownNote = cameraMode === "fixed_top_down_first_person"
-      ? "Fixed top down first person turns the occupied player into a camera-only top-down view. You move the camera, not a body on the ground. Direction rotates the window. Set width and height to 0 to include the full private world."
+      ? "Fixed top down first person turns the occupied player into a camera-only top-down perspective view. Drag to pan the camera, not a body on the ground. Direction rotates the window. Set width and height to 0 to include the full private world."
       : "Fixed top down locks the camera over the world center. Direction rotates the framed map. Set width and height to 0 to include the full private world.";
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Everyone enters as a floating viewer. Possession happens by clicking a player in Play mode.</p>
@@ -15852,7 +15852,7 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
   }
   if (player.camera_mode === "fixed_top_down_first_person") {
     updateCameraOnlyPossessedMovement(deltaSeconds);
-    const camera = applyFixedTopDownPreviewCamera(preview, player, state.selectedWorld, {
+    const camera = applyFixedTopDownPerspectivePreviewCamera(preview, player, state.selectedWorld, {
       center: {
         x: state.viewerPosition.x,
         y: state.viewerPosition.y,
@@ -17485,6 +17485,37 @@ function activatePerspectivePreviewCamera(preview = state.preview) {
   camera.aspect = Math.max(1, Number(preview?.viewportWidth) || 1) / Math.max(1, Number(preview?.viewportHeight) || 1);
   camera.updateProjectionMatrix();
   setPreviewViewport(preview);
+  return camera;
+}
+
+function applyFixedTopDownPerspectivePreviewCamera(preview, player = {}, world = state.selectedWorld, options = {}) {
+  const camera = activatePerspectivePreviewCamera(preview);
+  if (!camera) {
+    return null;
+  }
+  const rig = getPrivateViewerRigConfig(world);
+  const windowSize = getPlayerFixedTopDownWindow(player, world);
+  const orientation = getPlayerFixedTopDownOrientation(player?.fixed_top_down_direction ?? "north");
+  const centerX = Number(options?.center?.x);
+  const centerY = Number(options?.center?.y);
+  const centerZ = Number(options?.center?.z);
+  const targetX = Number.isFinite(centerX) ? centerX : 0;
+  const targetY = Number.isFinite(centerY) ? centerY : 0;
+  const targetZ = Number.isFinite(centerZ) ? centerZ : 0;
+  const aspect = Math.max(0.0001, windowSize.width / Math.max(0.0001, windowSize.height));
+  const fovRadians = THREE.MathUtils.degToRad(Number(camera.fov) || 58);
+  const cameraHeight = Math.max(
+    PRIVATE_WORLD_BLOCK_UNIT * 2,
+    windowSize.height / Math.max(0.0001, 2 * Math.tan(fovRadians / 2)),
+  );
+  camera.aspect = aspect;
+  camera.near = 0.1;
+  camera.far = Math.max(240, cameraHeight + rig.height + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding * 2 + 40);
+  camera.position.set(targetX, targetY + cameraHeight, targetZ);
+  camera.up.copy(orientation.upVector);
+  camera.lookAt(targetX, targetY, targetZ);
+  camera.updateProjectionMatrix();
+  computeContainedPreviewViewport(preview, windowSize.width, windowSize.height);
   return camera;
 }
 
