@@ -17,6 +17,7 @@ const PLAYER_MOVE_SPEED = 4.317 * PRIVATE_WORLD_BLOCK_UNIT;
 const PLAYER_SPRINT_SPEED = 5.612 * PRIVATE_WORLD_BLOCK_UNIT;
 const PLAYER_ACCELERATION = 26;
 const PLAYER_JUMP_VELOCITY = Math.sqrt(Math.abs(-9.8) * 2 * (1.25 * PRIVATE_WORLD_BLOCK_UNIT));
+const PLAYER_JUMP_BUFFER_MS = 160;
 const PLAYER_LINEAR_DAMPING = 6.5;
 const PLAYER_ANGULAR_DAMPING = 10;
 const DYNAMIC_LINEAR_DAMPING = 1.8;
@@ -971,7 +972,13 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   const forward = pressed.has("w") || pressed.has("arrowup");
   const backward = pressed.has("s") || pressed.has("arrowdown");
   const sprint = movementEnabled && pressed.has("shift");
+  const nowMs = mustFinite(runtime?.elapsedMs, 0);
   const jumpEdge = isPlayerJumpEnabled(player) && inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
+  if (jumpEdge) {
+    player.jumpBufferedUntilMs = nowMs + PLAYER_JUMP_BUFFER_MS;
+  } else if (mustFinite(player.jumpBufferedUntilMs, 0) < nowMs) {
+    player.jumpBufferedUntilMs = 0;
+  }
   const desired = movementEnabled
     ? (player.usesLookHeading === true
     ? getRelativePlayerMovement(player, pressed)
@@ -1013,9 +1020,10 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
     z: currentVelocity.z + (targetVelocityZ - currentVelocity.z) * blend,
   };
   player.onGround = raycastPlayerGround(runtime, player);
-  if (jumpEdge && player.onGround) {
+  if (mustFinite(player.jumpBufferedUntilMs, 0) >= nowMs && player.onGround) {
     nextVelocity.y = PLAYER_JUMP_VELOCITY;
     player.onGround = false;
+    player.jumpBufferedUntilMs = 0;
   }
   body.setLinvel(nextVelocity, true);
   body.setRotation(toRapierRotation(player.rotation), true);
@@ -1104,6 +1112,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       visibility: true,
       material_override: null,
       last_client_motion_seq: 0,
+      jumpBufferedUntilMs: 0,
     };
   });
   const dynamicObjects = (sceneDoc.primitives ?? []).map((entry) => ({
