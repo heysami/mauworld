@@ -3917,92 +3917,10 @@ function releaseHeldRuntimeKeys(options = {}) {
   return keys;
 }
 
-function getPreviewCameraFocusPoint(preview = state.preview, planeY = 0) {
-  if (!preview?.camera || !preview?.raycaster) {
-    return null;
-  }
-  const resolvedPlaneY = Number(planeY);
-  const focusPlane = new THREE.Plane(
-    new THREE.Vector3(0, 1, 0),
-    -(Number.isFinite(resolvedPlaneY) ? resolvedPlaneY : 0),
-  );
-  const focusPoint = new THREE.Vector3();
-  preview.camera.updateMatrixWorld();
-  preview.raycaster.setFromCamera(new THREE.Vector2(0, 0), preview.camera);
-  return preview.raycaster.ray.intersectPlane(focusPlane, focusPoint)
-    ? focusPoint
-    : null;
-}
-
-function getActivePossessedFixedTopDownPlayerFrame(runtimePlayer = getPossessedRuntimePlayer()) {
-  if (!runtimePlayer) {
-    return null;
-  }
-  return {
-    ...runtimePlayer,
-    fixed_top_down_direction: normalizePlayerFixedTopDownDirection(
-      runtimePlayer.fixed_top_down_direction
-      ?? state.predictedPossessedPlayer?.fixedTopDownDirection
-      ?? getActivePossessedFixedTopDownDirection(),
-    ),
-    fixed_top_down_width: Math.max(
-      0,
-      Number(
-        runtimePlayer.fixed_top_down_width
-        ?? state.predictedPossessedPlayer?.fixedTopDownWidth
-        ?? 0,
-      ) || 0,
-    ),
-    fixed_top_down_height: Math.max(
-      0,
-      Number(
-        runtimePlayer.fixed_top_down_height
-        ?? state.predictedPossessedPlayer?.fixedTopDownHeight
-        ?? 0,
-      ) || 0,
-    ),
-  };
-}
-
-function getFixedTopDownWindowHalfExtents(player = {}, world = state.selectedWorld) {
-  const windowSize = getPlayerFixedTopDownWindow(player, world);
-  const orientation = getPlayerFixedTopDownOrientation(player?.fixed_top_down_direction ?? "north");
-  const halfWidth = windowSize.width / 2;
-  const halfHeight = windowSize.height / 2;
-  return {
-    x: Math.abs(orientation.rightVector.x) * halfWidth + Math.abs(orientation.upVector.x) * halfHeight,
-    z: Math.abs(orientation.rightVector.z) * halfWidth + Math.abs(orientation.upVector.z) * halfHeight,
-  };
-}
-
-function clampFixedTopDownCameraCenter(position, player = {}, world = state.selectedWorld) {
-  if (!position) {
-    return position;
-  }
-  const bounds = getPrivateWorldBounds(world);
-  const halfExtents = getFixedTopDownWindowHalfExtents(player, world);
-  const minCenterX = bounds.minX + halfExtents.x;
-  const maxCenterX = bounds.maxX - halfExtents.x;
-  const minCenterZ = bounds.minZ + halfExtents.z;
-  const maxCenterZ = bounds.maxZ - halfExtents.z;
-  position.x = minCenterX <= maxCenterX
-    ? clampNumber(position.x, position.x, minCenterX, maxCenterX)
-    : (bounds.minX + bounds.maxX) / 2;
-  position.z = minCenterZ <= maxCenterZ
-    ? clampNumber(position.z, position.z, minCenterZ, maxCenterZ)
-    : (bounds.minZ + bounds.maxZ) / 2;
-  position.y = clampNumber(position.y, position.y, bounds.minY, bounds.maxY);
-  return position;
-}
-
-function syncCameraOnlyPossessedAnchor(runtimePlayer = getPossessedRuntimePlayer(), options = {}) {
-  const focusPlaneY = Number(runtimePlayer?.position?.y);
-  const focusPoint = options.preservePreviewFocus === false
-    ? null
-    : getPreviewCameraFocusPoint(state.preview, Number.isFinite(focusPlaneY) ? focusPlaneY : state.viewerPosition.y);
-  const nextX = Number(focusPoint?.x ?? runtimePlayer?.position?.x);
+function syncCameraOnlyPossessedAnchor(runtimePlayer = getPossessedRuntimePlayer()) {
+  const nextX = Number(runtimePlayer?.position?.x);
   const nextY = Number(runtimePlayer?.position?.y);
-  const nextZ = Number(focusPoint?.z ?? runtimePlayer?.position?.z);
+  const nextZ = Number(runtimePlayer?.position?.z);
   if (Number.isFinite(nextX)) {
     state.viewerPosition.x = nextX;
   }
@@ -4012,11 +3930,7 @@ function syncCameraOnlyPossessedAnchor(runtimePlayer = getPossessedRuntimePlayer
   if (Number.isFinite(nextZ)) {
     state.viewerPosition.z = nextZ;
   }
-  clampFixedTopDownCameraCenter(
-    state.viewerPosition,
-    getActivePossessedFixedTopDownPlayerFrame(runtimePlayer) ?? runtimePlayer ?? {},
-    state.selectedWorld,
-  );
+  clampViewerPositionToWorldBounds(state.viewerPosition);
 }
 
 function getPrivateCameraMovementBasis(preview = state.preview) {
@@ -10036,8 +9950,6 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
 function updateCameraOnlyPossessedMovement(deltaSeconds = 0) {
   const dt = clampNumber(deltaSeconds, 1 / 60, 0, 0.05);
   const intent = buildRuntimeMovementIntent(privateInputState.keys);
-  const runtimePlayer = getPossessedRuntimePlayer();
-  const fixedTopDownPlayer = getActivePossessedFixedTopDownPlayerFrame(runtimePlayer);
   privateInputState.sprintHoldSeconds = intent.sprint
     ? Math.min(PRIVATE_SPRINT.rampSeconds, privateInputState.sprintHoldSeconds + dt)
     : Math.max(
@@ -10050,11 +9962,7 @@ function updateCameraOnlyPossessedMovement(deltaSeconds = 0) {
   const speedMultiplier = intent.sprint ? getPrivateSprintSpeedMultiplier() : 1;
   state.viewerPosition.x += intent.x * dt * PRIVATE_CAMERA.movementSpeed * speedMultiplier;
   state.viewerPosition.z += intent.z * dt * PRIVATE_CAMERA.movementSpeed * speedMultiplier;
-  clampFixedTopDownCameraCenter(
-    state.viewerPosition,
-    fixedTopDownPlayer ?? runtimePlayer ?? {},
-    state.selectedWorld,
-  );
+  clampViewerPositionToWorldBounds(state.viewerPosition);
   return true;
 }
 
@@ -10069,20 +9977,18 @@ function panCameraOnlyPossessedByScreenDelta(deltaX = 0, deltaY = 0, preview = s
   const viewport = getPreviewViewport(preview);
   const viewportWidth = Math.max(1, Number(viewport?.width) || 1);
   const viewportHeight = Math.max(1, Number(viewport?.height) || 1);
-  const fixedTopDownPlayer = getActivePossessedFixedTopDownPlayerFrame(runtimePlayer);
-  const windowSize = getPlayerFixedTopDownWindow(fixedTopDownPlayer ?? runtimePlayer, state.selectedWorld);
-  const orientation = getPlayerFixedTopDownOrientation(
-    fixedTopDownPlayer?.fixed_top_down_direction ?? getActivePossessedFixedTopDownDirection(),
-  );
+  const windowSize = getPlayerFixedTopDownWindow({
+    ...runtimePlayer,
+    fixed_top_down_direction: getActivePossessedFixedTopDownDirection(),
+    fixed_top_down_width: state.predictedPossessedPlayer?.fixedTopDownWidth ?? runtimePlayer.fixed_top_down_width,
+    fixed_top_down_height: state.predictedPossessedPlayer?.fixedTopDownHeight ?? runtimePlayer.fixed_top_down_height,
+  }, state.selectedWorld);
+  const orientation = getPlayerFixedTopDownOrientation(getActivePossessedFixedTopDownDirection());
   const worldDeltaX = -deltaX * (windowSize.width / viewportWidth);
   const worldDeltaY = deltaY * (windowSize.height / viewportHeight);
   state.viewerPosition.addScaledVector(orientation.rightVector, worldDeltaX);
   state.viewerPosition.addScaledVector(orientation.upVector, worldDeltaY);
-  clampFixedTopDownCameraCenter(
-    state.viewerPosition,
-    fixedTopDownPlayer ?? runtimePlayer,
-    state.selectedWorld,
-  );
+  clampViewerPositionToWorldBounds(state.viewerPosition);
   return true;
 }
 
@@ -15950,7 +15856,6 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     return true;
   }
   if (player.camera_mode === "fixed_top_down_first_person") {
-    clampFixedTopDownCameraCenter(state.viewerPosition, player, state.selectedWorld);
     updateCameraOnlyPossessedMovement(deltaSeconds);
     const camera = applyFixedTopDownPerspectivePreviewCamera(preview, player, state.selectedWorld, {
       center: {
@@ -17606,19 +17511,15 @@ function applyFixedTopDownPerspectivePreviewCamera(preview, player = {}, world =
   const targetX = Number.isFinite(centerX) ? centerX : 0;
   const targetY = Number.isFinite(centerY) ? centerY : 0;
   const targetZ = Number.isFinite(centerZ) ? centerZ : 0;
-  const target = clampFixedTopDownCameraCenter(
-    new THREE.Vector3(targetX, targetY, targetZ),
-    player,
-    world,
-  );
+  const target = new THREE.Vector3(targetX, targetY, targetZ);
   const aspect = Math.max(0.0001, windowSize.width / Math.max(0.0001, windowSize.height));
   const halfWidth = windowSize.width / 2;
   const halfHeight = windowSize.height / 2;
   const corners = [
-    target.clone().addScaledVector(orientation.rightVector, -halfWidth).addScaledVector(orientation.upVector, -halfHeight),
-    target.clone().addScaledVector(orientation.rightVector, halfWidth).addScaledVector(orientation.upVector, -halfHeight),
-    target.clone().addScaledVector(orientation.rightVector, -halfWidth).addScaledVector(orientation.upVector, halfHeight),
-    target.clone().addScaledVector(orientation.rightVector, halfWidth).addScaledVector(orientation.upVector, halfHeight),
+    new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, -halfWidth).addScaledVector(orientation.upVector, -halfHeight),
+    new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, halfWidth).addScaledVector(orientation.upVector, -halfHeight),
+    new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, -halfWidth).addScaledVector(orientation.upVector, halfHeight),
+    new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, halfWidth).addScaledVector(orientation.upVector, halfHeight),
   ];
   const offsetDirection = orientation.upVector.clone().multiplyScalar(-1);
   offsetDirection.y = 1.35;
