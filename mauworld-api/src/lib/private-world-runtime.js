@@ -943,6 +943,53 @@ function syncParticipantOccupancy(simulation, participants = []) {
   syncRapierOccupancy(simulation);
 }
 
+function preserveRebuiltOccupiedPlayerState(nextRuntime, previousRuntime = null) {
+  if (!nextRuntime || !previousRuntime) {
+    return;
+  }
+  const previousPlayersById = new Map(
+    (previousRuntime.players ?? [])
+      .filter((entry) => entry?.id)
+      .map((entry) => [entry.id, entry]),
+  );
+  for (const player of nextRuntime.players ?? []) {
+    const previousPlayer = previousPlayersById.get(player.id);
+    if (!previousPlayer?.occupied_by_profile_id) {
+      continue;
+    }
+    player.position = vec3(previousPlayer.position, player.position);
+    player.rotation = vec3(previousPlayer.rotation, player.rotation);
+    player.velocity = vec3(previousPlayer.velocity, player.velocity);
+    player.angular_velocity = vec3(previousPlayer.angular_velocity, player.angular_velocity);
+    player.onGround = previousPlayer.onGround === true;
+    player.sleeping = previousPlayer.sleeping === true;
+    player.usesLookHeading = previousPlayer.usesLookHeading === true;
+    player.last_client_motion_seq = Math.max(0, Number(previousPlayer.last_client_motion_seq ?? 0) || 0);
+    player.pressedKeys = previousPlayer.pressedKeys instanceof Set
+      ? new Set(previousPlayer.pressedKeys)
+      : new Set();
+    player.occupied_by_profile_id = previousPlayer.occupied_by_profile_id ?? null;
+    player.occupied_by_username = previousPlayer.occupied_by_username ?? null;
+    player.occupied_by_display_name = previousPlayer.occupied_by_display_name ?? null;
+    player.ready = previousPlayer.ready === true;
+    const body = nextRuntime.physics?.playerBodies?.get(player.id) ?? null;
+    if (!body) {
+      continue;
+    }
+    if (player.body_mode === "ghost" && typeof body.setNextKinematicTranslation === "function") {
+      body.setNextKinematicTranslation(player.position);
+    }
+    body.setTranslation(player.position, true);
+    body.setLinvel(player.velocity, true);
+    body.setRotation(toRapierRotation(player.rotation), true);
+    if (player.sleeping === true) {
+      body.sleep?.();
+    } else {
+      body.wakeUp?.();
+    }
+  }
+}
+
 export function createPrivateWorldSimulationState(input = {}) {
   const runtime = seedSceneRuntime(input.sceneRow, {
     sceneStarted: input.sceneStarted === true,
@@ -1522,7 +1569,8 @@ export class PrivateWorldRuntime {
         nextStatus: context.instance.status,
         nextSceneStarted,
       })) {
-        destroyPhysicsState(simulation.runtime.physics);
+        const previousRuntime = simulation.runtime;
+        destroyPhysicsState(previousRuntime.physics);
         simulation.runtime = seedSceneRuntime(activeScene, {
           sceneStarted: nextSceneStarted,
           status: context.instance.status,
@@ -1530,6 +1578,9 @@ export class PrivateWorldRuntime {
           tick: mustFinite(runtimeState.tick, 0),
           elapsedMs: mustFinite(runtimeState.scene_elapsed_ms, 0),
         });
+        if (previousRuntime.sceneRowId === activeScene.id) {
+          preserveRebuiltOccupiedPlayerState(simulation.runtime, previousRuntime);
+        }
       } else {
         simulation.runtime.status = context.instance.status;
         simulation.runtime.sceneStarted = nextSceneStarted;

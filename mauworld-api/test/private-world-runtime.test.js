@@ -50,6 +50,62 @@ function buildSimulation(input = {}) {
   });
 }
 
+function createQuery(rows = []) {
+  let result = Array.isArray(rows) ? [...rows] : [];
+  return {
+    select() {
+      return this;
+    },
+    eq(column, value) {
+      result = result.filter((entry) => entry?.[column] === value);
+      return this;
+    },
+    in(column, values = []) {
+      const allowed = new Set(values);
+      result = result.filter((entry) => allowed.has(entry?.[column]));
+      return this;
+    },
+    order(column, { ascending = true } = {}) {
+      result = [...result].sort((left, right) => {
+        if (left?.[column] === right?.[column]) {
+          return 0;
+        }
+        return left?.[column] > right?.[column] ? 1 : -1;
+      });
+      if (!ascending) {
+        result.reverse();
+      }
+      return this;
+    },
+    maybeSingle() {
+      if (!result.length) {
+        return Promise.resolve({
+          data: null,
+          error: { code: "PGRST116" },
+        });
+      }
+      return Promise.resolve({
+        data: result[0],
+        error: null,
+      });
+    },
+    then(resolve, reject) {
+      return Promise.resolve({
+        data: result,
+        error: null,
+      }).then(resolve, reject);
+    },
+  };
+}
+
+function createFakeServiceClient(tables = {}) {
+  return {
+    from(table) {
+      return createQuery(tables[table] ?? []);
+    },
+  };
+}
+
 test("runtime step applies player input and moves occupied players", () => {
   const simulation = buildSimulation();
   const runtime = simulation.runtime;
@@ -549,6 +605,114 @@ test("runtime look-only input updates heading without queuing a stale movement t
   assert.equal(result.accepted, true);
   assert.equal(simulation.pendingInputs.length, 0);
   assert.ok(Math.abs(simulation.runtime.players[0].rotation.y - 0.9) < 0.0001);
+});
+
+test("runtime rebuild preserves occupied player pose for same-scene camera edits", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {
+      serviceClient: createFakeServiceClient({
+        private_worlds: [{
+          id: "world_row",
+          world_id: "mw_runtime",
+          creator_profile_id: "profile_one",
+          default_scene_id: "scene_runtime",
+        }],
+        user_profiles: [{
+          id: "profile_one",
+          username: "maker",
+          display_name: "Maker",
+        }],
+        private_world_active_instances: [{
+          id: "instance_runtime",
+          world_id: "world_row",
+          active_scene_id: "scene_runtime",
+          status: "started",
+          runtime_state: {
+            tick: 12,
+            scene_elapsed_ms: 240,
+            scene_started: true,
+          },
+        }],
+        private_world_scenes: [{
+          id: "scene_runtime",
+          world_id: "world_row",
+          name: "Runtime Scene",
+          version: 2,
+          created_at: "2026-04-20T00:00:00.000Z",
+          updated_at: "2026-04-20T00:05:00.000Z",
+          scene_doc: {
+            settings: {
+              gravity: { x: 0, y: -9.8, z: 0 },
+              camera_mode: "third_person",
+            },
+            voxels: [],
+            primitives: [],
+            screens: [],
+            players: [{
+              id: "player_one",
+              label: "Player One",
+              position: { x: 0, y: 1, z: 0 },
+              scale: 1,
+              body_mode: "rigid",
+              camera_mode: "fixed_top_down_first_person",
+              fixed_top_down_direction: "east",
+            }],
+            texts: [],
+            trigger_zones: [],
+            prefabs: [],
+            particles: [],
+            rules: [],
+          },
+        }],
+        private_world_participants: [{
+          id: "participant_one",
+          instance_id: "instance_runtime",
+          profile_id: "profile_one",
+          join_role: "player",
+          player_entity_id: "player_player-one",
+        }],
+        private_world_ready_states: [{
+          instance_id: "instance_runtime",
+          participant_id: "participant_one",
+          ready: true,
+        }],
+      }),
+    },
+  });
+  const simulation = buildSimulation();
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const player = simulation.runtime.players[0];
+  player.position = { x: 7.25, y: 1, z: -4.5 };
+  player.rotation = { x: 0, y: 0.62, z: 0 };
+  player.velocity = { x: 1.5, y: 0, z: -2.25 };
+  player.last_client_motion_seq = 14;
+  player.usesLookHeading = true;
+  const body = simulation.runtime.physics.playerBodies.get(player.id);
+  body.setTranslation(player.position, true);
+  body.setLinvel(player.velocity, true);
+
+  const snapshot = await manager.syncWorldByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+  });
+
+  const rebuiltPlayer = simulation.runtime.players[0];
+  const rebuiltBody = simulation.runtime.physics.playerBodies.get(rebuiltPlayer.id);
+  const translation = rebuiltBody.translation();
+  assert.equal(snapshot.players[0].camera_mode, "fixed_top_down_first_person");
+  assert.equal(snapshot.players[0].fixed_top_down_direction, "east");
+  assert.ok(Math.abs(rebuiltPlayer.position.x - 7.25) < 0.0001);
+  assert.ok(Math.abs(rebuiltPlayer.position.z + 4.5) < 0.0001);
+  assert.ok(Math.abs(rebuiltPlayer.rotation.y - 0.62) < 0.0001);
+  assert.ok(Math.abs(rebuiltPlayer.velocity.x - 1.5) < 0.0001);
+  assert.ok(Math.abs(rebuiltPlayer.velocity.z + 2.25) < 0.0001);
+  assert.equal(rebuiltPlayer.last_client_motion_seq, 14);
+  assert.equal(rebuiltPlayer.occupied_by_profile_id, "profile_one");
+  assert.ok(Math.abs(translation.x - 7.25) < 0.0001);
+  assert.ok(Math.abs(translation.z + 4.5) < 0.0001);
 });
 
 test("runtime resets an occupied player back to the authored spawn before release", async () => {
