@@ -7,6 +7,7 @@ import {
   PrivateWorldRuntime,
   shouldRebuildPrivateWorldRuntime,
 } from "../src/lib/private-world-runtime.js";
+import { compilePrivateWorldScriptDsl } from "../src/lib/private-worlds.js";
 
 function buildSimulation(input = {}) {
   return createPrivateWorldSimulationState({
@@ -288,6 +289,74 @@ test("moving platforms can carry players and objects resting on top", () => {
   assert.ok(Math.abs((crate.position.x - 0.8) - 2.3) < 0.05);
   assert.ok(Math.abs((crate.position.y - 1.5) - 0.6) < 0.05);
   assert.ok(Math.abs((crate.position.z - 0.3) + 1.4) < 0.05);
+});
+
+test("scene_start move_platform scripts move rigid platforms diagonally and carry riders", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [
+      {
+        id: "moving_platform",
+        shape: "box",
+        position: { x: 0, y: 0.5, z: 0 },
+        scale: { x: 4, y: 1, z: 4 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#8fd4ff", texture_preset: "metal" },
+        rigid_mode: "rigid",
+        physics: {
+          gravity_scale: 0,
+          ignore_gravity: true,
+          carry_riders: true,
+          restitution: 0,
+          friction: 0.9,
+          mass: 200,
+        },
+      },
+    ],
+    screens: [],
+    players: [{ id: "player_one", label: "Player One", position: { x: 0.2, y: 1.9, z: -0.25 }, scale: 1, body_mode: "rigid", camera_mode: "third_person" }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    particles: [],
+    rules: [],
+    script_dsl: "scene_start -> move_platform to moving_platform delta(6,0,6) duration 3s loop pingpong",
+  };
+  const compiledScript = compilePrivateWorldScriptDsl(sceneDoc.script_dsl, {
+    entityAliases: new Map([
+      ["moving_platform", "primitive_moving-platform"],
+    ]),
+  });
+  const simulation = buildSimulation({
+    sceneRow: {
+      id: "scene_runtime",
+      name: "Runtime Scene",
+      scene_doc: sceneDoc,
+      compiled_doc: {
+        runtime: {
+          dsl_rules: compiledScript.rules,
+        },
+      },
+    },
+    sceneDoc,
+  });
+  const runtime = simulation.runtime;
+  const platform = runtime.dynamicObjects.find((entry) => entry.id.endsWith("moving-platform"));
+  const player = runtime.players[0];
+  const beforePlayer = { ...player.position };
+
+  for (let index = 0; index < 12; index += 1) {
+    stepPrivateWorldSimulation(runtime, {
+      deltaMs: 80,
+      pendingInputs: [],
+    });
+  }
+
+  assert.ok(Math.abs(platform.position.x - 1.92) < 0.15);
+  assert.ok(Math.abs(platform.position.z - 1.92) < 0.15);
+  assert.ok(Math.abs((player.position.x - beforePlayer.x) - 1.92) < 0.25);
+  assert.ok(Math.abs((player.position.z - beforePlayer.z) - 1.92) < 0.25);
 });
 
 test("timer rules enqueue a scene switch once after their delay", () => {

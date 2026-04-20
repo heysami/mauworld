@@ -71,6 +71,7 @@ const ALLOWED_RULE_TRIGGERS = new Set([
 const ALLOWED_RULE_ACTIONS = new Set([
   "apply_force",
   "teleport",
+  "move_platform",
   "switch_scene",
   "set_material",
   "set_visibility",
@@ -646,7 +647,22 @@ function buildRuleDsl(rules = []) {
       ]
         .filter(Boolean)
         .join(" ");
-      return `${rule.trigger} -> ${rule.action}${scope ? ` ${scope}` : ""}`;
+      const actionParts = [`${rule.action}${scope ? ` ${scope}` : ""}`];
+      if (rule.action === "move_platform") {
+        const delta = rule.payload?.motion_delta ?? rule.payload?.delta ?? null;
+        if (delta) {
+          actionParts.push(`delta(${mustFinite(delta.x, 0)},${mustFinite(delta.y, 0)},${mustFinite(delta.z, 0)})`);
+        }
+        const durationMs = mustFinite(rule.payload?.duration_ms ?? rule.payload?.motion_duration_ms, 0);
+        if (durationMs > 0) {
+          actionParts.push(`duration ${durationMs}ms`);
+        }
+        const loopMode = String(rule.payload?.loop_mode ?? rule.payload?.motion_loop ?? rule.payload?.loop ?? "").trim().toLowerCase();
+        if (loopMode) {
+          actionParts.push(`loop ${loopMode}`);
+        }
+      }
+      return `${rule.trigger} -> ${actionParts.join(" ")}`;
     })
     .join("\n");
 }
@@ -820,6 +836,10 @@ export function compilePrivateWorldScriptDsl(input, options = {}) {
         rule.payload.position = vector.value;
         continue;
       }
+      if (vector?.kind === "delta" || vector?.kind === "offset" || vector?.kind === "path") {
+        rule.payload.motion_delta = vector.value;
+        continue;
+      }
       if (token === "to" && next) {
         rule.target_id = resolveEntityAlias(aliasMap, next);
         tokenIndex += 1;
@@ -843,6 +863,17 @@ export function compilePrivateWorldScriptDsl(input, options = {}) {
         tokenIndex += 1;
       } else if (token === "enabled" && next) {
         rule.payload.enabled = next === "true";
+        tokenIndex += 1;
+      } else if (token === "duration" && next) {
+        const match = String(next).match(/^([-0-9.]+)(ms|s)?$/i);
+        if (match) {
+          const value = Number(match[1]);
+          const unit = String(match[2] ?? "ms").toLowerCase();
+          rule.payload.duration_ms = clampInteger(unit === "s" ? value * 1000 : value, 3000, 100, 600000);
+          tokenIndex += 1;
+        }
+      } else if ((token === "loop" || token === "mode" || token === "repeat") && next) {
+        rule.payload.loop_mode = String(next).trim().toLowerCase();
         tokenIndex += 1;
       } else if (token === "force" && actionTokens.length >= tokenIndex + 4) {
         rule.payload.force = sanitizeVector3({

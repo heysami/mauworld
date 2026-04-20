@@ -754,6 +754,7 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       messages: req.body?.messages,
       targetLabel: req.body?.targetLabel,
       currentArtifact: req.body?.currentArtifact,
+      entityContext: req.body?.entityContext,
     });
     jsonOk(res, payload);
   }));
@@ -773,6 +774,7 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       targetLabel: req.body?.targetLabel,
       currentArtifact: req.body?.currentArtifact,
       viewportSummary: req.body?.viewportSummary,
+      entityContext: req.body?.entityContext,
     });
     jsonOk(res, payload);
   }));

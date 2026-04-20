@@ -504,19 +504,26 @@ test("compilePrivateWorldScriptDsl translates DSL triggers and actions", () => {
   const compiled = compilePrivateWorldScriptDsl(`
     zone_enter from trigger_start -> apply_force to crate force(0,4,0)
     all_players_ready -> start_scene
+    scene_start -> move_platform to moving_platform delta(6,0,6) duration 3s loop pingpong
   `, {
     entityAliases: new Map([
       ["trigger_start", "trigger_start"],
       ["crate", "primitive_crate"],
+      ["moving_platform", "primitive_moving_platform"],
     ]),
   });
 
-  assert.equal(compiled.rules.length, 2);
+  assert.equal(compiled.rules.length, 3);
   assert.equal(compiled.rules[0].trigger, "zone_enter");
   assert.equal(compiled.rules[0].source_id, "trigger_start");
   assert.equal(compiled.rules[0].target_id, "primitive_crate");
   assert.deepEqual(compiled.rules[0].payload.force, { x: 0, y: 4, z: 0 });
   assert.equal(compiled.rules[1].action, "start_scene");
+  assert.equal(compiled.rules[2].action, "move_platform");
+  assert.equal(compiled.rules[2].target_id, "primitive_moving_platform");
+  assert.deepEqual(compiled.rules[2].payload.motion_delta, { x: 6, y: 0, z: 6 });
+  assert.equal(compiled.rules[2].payload.duration_ms, 3000);
+  assert.equal(compiled.rules[2].payload.loop_mode, "pingpong");
 });
 
 test("compileSceneDoc flattens linked prefab instances into runtime scene data", () => {

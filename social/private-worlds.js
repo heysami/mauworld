@@ -294,6 +294,35 @@ const TOOL_PRESET_BUILTINS = {
       },
     },
     {
+      id: "moving-platform-diagonal",
+      name: "Moving Platform",
+      builtin: true,
+      scriptTemplate: {
+        name: "Diagonal Platform Motion",
+        body: "scene_start -> move_platform to {{id}} delta(10,0,10) duration 3s loop pingpong",
+      },
+      entry: {
+        label: "Moving Platform",
+        shape: "box",
+        scale: { x: PRIVATE_WORLD_BLOCK_UNIT * 2.4, y: PRIVATE_WORLD_BLOCK_UNIT * 0.32, z: PRIVATE_WORLD_BLOCK_UNIT * 1.4 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#8fd4ff", texture_preset: "metal" },
+        rigid_mode: "rigid",
+        physics: {
+          gravity_scale: 0,
+          ignore_gravity: true,
+          carry_riders: true,
+          restitution: 0,
+          friction: 0.9,
+          mass: 200,
+        },
+        particle_effect: "",
+        trail_effect: "",
+        invisible: false,
+        group_id: "",
+      },
+    },
+    {
       id: "poster-panel",
       name: "Panel",
       builtin: true,
@@ -5010,6 +5039,35 @@ function buildSceneLogicAiObjective(prompt, selectedFunction = ensureSelectedScr
     .join(" ");
 }
 
+function buildSceneLogicEntityContext() {
+  const scene = getSelectedScene();
+  const sceneDoc = scene?.compiled_doc?.runtime?.resolved_scene_doc ?? scene?.scene_doc ?? null;
+  if (!sceneDoc) {
+    return "";
+  }
+  const sections = [
+    ["players", "Players", "player"],
+    ["primitives", "Primitives", "primitive"],
+    ["models", "Models", "model"],
+    ["trigger_zones", "Trigger zones", "trigger"],
+    ["texts", "Texts", "text"],
+    ["particles", "Particles", "particle"],
+    ["screens", "Screens", "screen"],
+  ];
+  const lines = [];
+  for (const [key, label, kind] of sections) {
+    const entries = Array.isArray(sceneDoc[key]) ? sceneDoc[key] : [];
+    if (!entries.length) {
+      continue;
+    }
+    lines.push(`${label}:`);
+    for (const [index, entry] of entries.slice(0, 12).entries()) {
+      lines.push(`- ${entry.id}: ${getDisplayNameForEntity(kind, entry, index)} · ${buildEntitySummary(kind, entry)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 function buildScreenAiObjective(entry, prompt) {
   const viewport = entry ? getScreenTextureRenderSize(entry) : null;
   return [
@@ -5045,6 +5103,7 @@ function getAiDialogTargetContext(dialog = state.aiDialog) {
       targetLabel: selectedFunction?.name ? `Logic function ${selectedFunction.name}` : "Scene logic function",
       currentArtifact: selectedFunction?.body || "",
       viewportSummary: "",
+      entityContext: buildSceneLogicEntityContext(),
     };
   }
   if (dialog.artifactType === "texture") {
@@ -5292,6 +5351,7 @@ async function generateAiDialogResult() {
         targetLabel: request.targetLabel,
         currentArtifact: request.currentArtifact,
         viewportSummary: request.viewportSummary,
+        entityContext: request.entityContext,
         outputTarget: elements.aiDialogResult,
         mirrorToAiOutput: state.aiDialog.targetKind === "world",
       });
@@ -9215,6 +9275,39 @@ function normalizeGeneratedScriptBody(value = "") {
     .trim();
 }
 
+function buildScriptTemplateFunctionName(functions = [], baseName = "Logic Function") {
+  const normalizedBase = String(baseName ?? "").trim() || "Logic Function";
+  const existingNames = new Set(functions.map((entry) => String(entry?.name ?? "").trim().toLowerCase()).filter(Boolean));
+  if (!existingNames.has(normalizedBase.toLowerCase())) {
+    return normalizedBase;
+  }
+  let index = 2;
+  while (existingNames.has(`${normalizedBase} ${index}`.toLowerCase())) {
+    index += 1;
+  }
+  return `${normalizedBase} ${index}`;
+}
+
+function appendScriptTemplateFunction(sceneDoc, template = {}, context = {}) {
+  if (!sceneDoc || !template?.body) {
+    return false;
+  }
+  const functions = parseScriptFunctionLibrary(sceneDoc.script_dsl || "");
+  const body = String(template.body ?? "")
+    .replaceAll("{{id}}", String(context.entityId ?? "").trim())
+    .trim();
+  if (!body) {
+    return false;
+  }
+  functions.push(normalizeScriptFunctionEntry({
+    id: createScriptFunctionId(template.name || context.entityId || "logic"),
+    name: buildScriptTemplateFunctionName(functions, template.name || "Logic Function"),
+    body,
+  }, functions.length));
+  sceneDoc.script_dsl = serializeScriptFunctionLibrary(functions);
+  return true;
+}
+
 function focusSelectedScriptFunctionBody() {
   window.setTimeout(() => {
     elements.scriptFunctionBody?.focus?.();
@@ -11120,6 +11213,12 @@ function buildToolPresetSummary(kind, entry = {}) {
     if ((Number(entry.material?.emissive_intensity) || 0) > 0) {
       extra.push(`light ${roundPrivateValue(entry.material.emissive_intensity, 1)}`);
     }
+    if (entry.physics?.ignore_gravity === true) {
+      extra.push("no gravity");
+    }
+    if (entry.physics?.carry_riders === true) {
+      extra.push("carry riders");
+    }
     if (entry.invisible === true) {
       extra.push("hidden in play");
     }
@@ -11213,9 +11312,13 @@ function renderToolPresetPanel() {
     elements.toolPresetTitle.textContent = `${buildToolPresetDisplayName(kind)} Presets`;
   }
   if (elements.toolPresetHint) {
-    elements.toolPresetHint.textContent = saveFromSelection
-      ? `New ${buildToolPresetDisplayName(kind).toLowerCase()} placements will use this preset. Save or update from the selected item when it looks right.`
-      : `New ${buildToolPresetDisplayName(kind).toLowerCase()} placements will use this preset until you switch to another one.`;
+    if (selectedPreset?.scriptTemplate) {
+      elements.toolPresetHint.textContent = "Placing this preset also adds a ready-to-run scene logic function for diagonal platform motion.";
+    } else {
+      elements.toolPresetHint.textContent = saveFromSelection
+        ? `New ${buildToolPresetDisplayName(kind).toLowerCase()} placements will use this preset. Save or update from the selected item when it looks right.`
+        : `New ${buildToolPresetDisplayName(kind).toLowerCase()} placements will use this preset until you switch to another one.`;
+    }
   }
   if (elements.toolPresetSelect) {
     elements.toolPresetSelect.innerHTML = presetOptions.map((preset) => `
@@ -15671,7 +15774,8 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
   }
   if (kind === "primitive") {
     const nextId = `primitive_${(sceneDoc.primitives?.length ?? 0) + 1}`;
-    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
+    const preset = getToolPreset(kind);
+    const presetEntry = extractToolPresetEntry(kind, preset?.entry);
     return {
       kind,
       id: nextId,
@@ -15682,6 +15786,11 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
           position: deepClone(placement.position),
           ...deepClone(presetEntry),
         });
+        if (preset?.scriptTemplate) {
+          appendScriptTemplateFunction(sceneDoc, preset.scriptTemplate, {
+            entityId: nextId,
+          });
+        }
       },
     };
   }
@@ -20535,6 +20644,7 @@ async function generateAi(kind, options = {}) {
       targetLabel: options.targetLabel ?? "",
       currentArtifact: options.currentArtifact ?? "",
       viewportSummary: options.viewportSummary ?? "",
+      entityContext: options.entityContext ?? "",
     },
   });
   const text = String(payload.text ?? "").trim();

@@ -24,6 +24,9 @@ const DYNAMIC_ANGULAR_DAMPING = 3.6;
 const DYNAMIC_INTERACTION_LEASE_MS = 220;
 const DYNAMIC_INTERACTION_MAX_STATES = 12;
 const DYNAMIC_INTERACTION_DISTANCE_BUFFER = PRIVATE_WORLD_BLOCK_UNIT * 1.35;
+const SCRIPTED_PLATFORM_MIN_DURATION_MS = 100;
+const SCRIPTED_PLATFORM_MAX_DURATION_MS = 600000;
+const SCRIPTED_PLATFORM_DEFAULT_DURATION_MS = 3000;
 const PLATFORM_CARRY_DELTA_EPSILON = 0.0001;
 const PLATFORM_CARRY_VERTICAL_TOLERANCE = 0.24;
 const PLATFORM_CARRY_HORIZONTAL_BUFFER = 0.14;
@@ -504,6 +507,100 @@ function translateDynamicObjectByDelta(runtime, entry, delta) {
   }
   body.setTranslation(nextPosition, true);
   body.wakeUp?.();
+}
+
+function normalizeScriptedPlatformLoopMode(value = "pingpong") {
+  const normalized = String(value ?? "pingpong").trim().toLowerCase();
+  if (normalized === "loop" || normalized === "repeat") {
+    return "loop";
+  }
+  if (normalized === "once" || normalized === "one_way") {
+    return "once";
+  }
+  return "pingpong";
+}
+
+function registerScriptedPlatformMotion(simulation, entry, payload = {}) {
+  if (!simulation || !entry?.id) {
+    return false;
+  }
+  const delta = vec3(payload.motion_delta ?? payload.delta ?? payload.offset, { x: 0, y: 0, z: 0 });
+  if (
+    Math.abs(delta.x) <= PLATFORM_CARRY_DELTA_EPSILON
+    && Math.abs(delta.y) <= PLATFORM_CARRY_DELTA_EPSILON
+    && Math.abs(delta.z) <= PLATFORM_CARRY_DELTA_EPSILON
+  ) {
+    return false;
+  }
+  simulation.scriptedPlatformMotions.set(entry.id, {
+    targetId: entry.id,
+    basePosition: cloneJson(entry.position),
+    delta,
+    durationMs: clampNumber(
+      mustFinite(payload.duration_ms ?? payload.motion_duration_ms, SCRIPTED_PLATFORM_DEFAULT_DURATION_MS),
+      SCRIPTED_PLATFORM_DEFAULT_DURATION_MS,
+      SCRIPTED_PLATFORM_MIN_DURATION_MS,
+      SCRIPTED_PLATFORM_MAX_DURATION_MS,
+    ),
+    loopMode: normalizeScriptedPlatformLoopMode(payload.loop_mode ?? payload.motion_loop ?? payload.loop),
+    startedAtMs: mustFinite(simulation.currentStepStartElapsedMs, simulation.elapsedMs),
+  });
+  return true;
+}
+
+function resolveScriptedPlatformProgress(controller, elapsedMs) {
+  const durationMs = Math.max(SCRIPTED_PLATFORM_MIN_DURATION_MS, mustFinite(controller?.durationMs, SCRIPTED_PLATFORM_DEFAULT_DURATION_MS));
+  const rawProgress = Math.max(0, elapsedMs) / durationMs;
+  if (controller?.loopMode === "loop") {
+    return rawProgress % 1;
+  }
+  if (controller?.loopMode === "once") {
+    return clampNumber(rawProgress, 0, 1);
+  }
+  const cycleProgress = rawProgress % 2;
+  return cycleProgress <= 1 ? cycleProgress : 2 - cycleProgress;
+}
+
+function advanceScriptedPlatformMotions(simulation, deltaSeconds) {
+  if (!simulation?.scriptedPlatformMotions?.size) {
+    return;
+  }
+  for (const [targetId, controller] of simulation.scriptedPlatformMotions.entries()) {
+    const entry = simulation.dynamicObjects.find((candidate) => candidate.id === targetId) ?? null;
+    const body = simulation.physics?.objectBodies?.get(targetId) ?? null;
+    if (!entry || !body) {
+      simulation.scriptedPlatformMotions.delete(targetId);
+      continue;
+    }
+    const progress = resolveScriptedPlatformProgress(
+      controller,
+      Math.max(0, mustFinite(simulation.elapsedMs, 0) - mustFinite(controller.startedAtMs, 0)),
+    );
+    const nextPosition = {
+      x: mustFinite(controller.basePosition?.x, 0) + mustFinite(controller.delta?.x, 0) * progress,
+      y: mustFinite(controller.basePosition?.y, 0) + mustFinite(controller.delta?.y, 0) * progress,
+      z: mustFinite(controller.basePosition?.z, 0) + mustFinite(controller.delta?.z, 0) * progress,
+    };
+    const previousPosition = vec3(entry.position);
+    const nextVelocity = deltaSeconds > 0
+      ? {
+        x: (nextPosition.x - previousPosition.x) / deltaSeconds,
+        y: (nextPosition.y - previousPosition.y) / deltaSeconds,
+        z: (nextPosition.z - previousPosition.z) / deltaSeconds,
+      }
+      : vec3(entry.velocity);
+    entry.position = nextPosition;
+    entry.velocity = nextVelocity;
+    entry.sleeping = false;
+    body.setBodyType?.(RAPIER.RigidBodyType.KinematicPositionBased, true);
+    body.setGravityScale?.(0, true);
+    body.setLinvel?.(nextVelocity, true);
+    if (typeof body.setNextKinematicTranslation === "function") {
+      body.setNextKinematicTranslation(nextPosition);
+    }
+    body.setTranslation(nextPosition, true);
+    body.wakeUp?.();
+  }
 }
 
 function carryPlatformRiders(simulation, preStepState) {
@@ -1098,11 +1195,13 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     triggerZones,
     ruleState: {
       firedRuleIds: new Set(),
+      sceneStartFired: sceneStarted === true && elapsedMs > 0,
     },
     particleState,
     textState,
     recentEvents: [],
     commandQueue: [],
+    scriptedPlatformMotions: new Map(),
     physics: null,
   };
   initializeRapierRuntime(runtime);
@@ -1297,6 +1396,19 @@ function executeRuleAction(simulation, rule, context = {}) {
     return;
   }
 
+  if (rule.action === "move_platform") {
+    const target = simulation.dynamicObjects.find((entry) => entry.id === targetId) ?? null;
+    if (target && registerScriptedPlatformMotion(simulation, target, rule.payload)) {
+      pushRuntimeEvent(simulation, {
+        type: "move_platform",
+        rule_id: rule.id,
+        target_id: target.id,
+      });
+    }
+    markRuleFired();
+    return;
+  }
+
   if (rule.action === "set_material") {
     const target = findTargetBody(simulation, targetId);
     if (target) {
@@ -1408,6 +1520,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
   const deltaSeconds = clampNumber(mustFinite(options.deltaMs, DEFAULT_TICK_MS) / 1000, 0.001, MAX_DELTA_SECONDS);
   const inputEdgesByPlayerId = new Map();
   const pendingInputs = Array.isArray(options.pendingInputs) ? options.pendingInputs : [];
+  simulation.currentStepStartElapsedMs = simulation.elapsedMs;
   const preStepBodyState = collectPreStepBodyState(simulation);
   releaseExpiredDynamicAuthorities(simulation);
   for (const input of pendingInputs) {
@@ -1454,6 +1567,16 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
   simulation.tick += 1;
   simulation.elapsedMs += deltaSeconds * 1000;
 
+  if (simulation.sceneStarted === true && simulation.ruleState.sceneStartFired !== true) {
+    for (const rule of simulation.rules ?? []) {
+      if (rule.trigger !== "scene_start" || simulation.ruleState.firedRuleIds.has(rule.id)) {
+        continue;
+      }
+      executeRuleAction(simulation, rule, { oneShot: true });
+    }
+    simulation.ruleState.sceneStartFired = true;
+  }
+
   syncRapierOccupancy(simulation);
 
   for (const player of occupiedPlayers) {
@@ -1475,6 +1598,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
   }
 
   if (simulation.physics?.world) {
+    advanceScriptedPlatformMotions(simulation, deltaSeconds);
     simulation.physics.world.gravity = toRapierVector(simulation.gravity);
     simulation.physics.world.timestep = deltaSeconds;
     simulation.physics.world.step(simulation.physics.eventQueue);
@@ -1515,6 +1639,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
     }
   }
 
+  simulation.currentStepStartElapsedMs = simulation.elapsedMs;
   return simulation;
 }
 
