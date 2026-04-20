@@ -443,9 +443,7 @@ function wasRiderStandingOnPlatform(riderState, platformState) {
   if (!riderState || !platformState || riderState.id === platformState.id) {
     return false;
   }
-  const riderBottom = mustFinite(riderState.position?.y, 0) - mustFinite(riderState.halfExtents?.y, 0);
-  const platformTop = mustFinite(platformState.position?.y, 0) + mustFinite(platformState.halfExtents?.y, 0);
-  const verticalGap = riderBottom - platformTop;
+  const verticalGap = getRiderPlatformVerticalGap(riderState, platformState);
   if (verticalGap < -PLATFORM_CARRY_VERTICAL_TOLERANCE || verticalGap > PLATFORM_CARRY_VERTICAL_TOLERANCE) {
     return false;
   }
@@ -455,6 +453,12 @@ function wasRiderStandingOnPlatform(riderState, platformState) {
     Math.abs(mustFinite(riderState.position?.x, 0) - mustFinite(platformState.position?.x, 0)) <= limitX
     && Math.abs(mustFinite(riderState.position?.z, 0) - mustFinite(platformState.position?.z, 0)) <= limitZ
   );
+}
+
+function getRiderPlatformVerticalGap(riderState, platformState) {
+  const riderBottom = mustFinite(riderState.position?.y, 0) - mustFinite(riderState.halfExtents?.y, 0);
+  const platformTop = mustFinite(platformState.position?.y, 0) + mustFinite(platformState.halfExtents?.y, 0);
+  return riderBottom - platformTop;
 }
 
 function getPlayerDesiredPlanarMovement(player) {
@@ -676,10 +680,7 @@ function carryPlatformRiders(simulation, preStepState, deltaSeconds = 0) {
       }
       const previousAssignment = riderAssignments.get(riderState.id);
       const previousGap = previousAssignment?.verticalGap ?? Number.POSITIVE_INFINITY;
-      const verticalGap = Math.abs(
-        (mustFinite(riderState.position?.y, 0) - mustFinite(riderState.halfExtents?.y, 0))
-        - (mustFinite(platformState.position?.y, 0) + mustFinite(platformState.halfExtents?.y, 0))
-      );
+      const verticalGap = Math.abs(getRiderPlatformVerticalGap(riderState, platformState));
       if (verticalGap <= previousGap) {
         riderAssignments.set(riderState.id, {
           platformDelta,
@@ -748,6 +749,42 @@ function carryPlatformRiders(simulation, preStepState, deltaSeconds = 0) {
   }
 }
 
+function findSupportingCarryPlatform(runtime, rider) {
+  if (!runtime || !rider) {
+    return null;
+  }
+  const riderBody = runtime.physics?.playerBodies?.get(rider.id) ?? null;
+  const riderState = {
+    id: rider.id,
+    position: riderBody ? vec3(riderBody.translation(), rider.position) : vec3(rider.position),
+    halfExtents: getBodyHalfExtents(rider),
+  };
+  let bestMatch = null;
+  for (const entry of runtime.dynamicObjects ?? []) {
+    if (entry?.physics?.carry_riders !== true) {
+      continue;
+    }
+    const body = runtime.physics?.objectBodies?.get(entry.id) ?? null;
+    const platformState = {
+      id: entry.id,
+      position: body ? vec3(body.translation(), entry.position) : vec3(entry.position),
+      halfExtents: getBodyHalfExtents(entry),
+    };
+    if (!wasRiderStandingOnPlatform(riderState, platformState)) {
+      continue;
+    }
+    const verticalGap = Math.abs(getRiderPlatformVerticalGap(riderState, platformState));
+    if (!bestMatch || verticalGap < bestMatch.verticalGap) {
+      bestMatch = {
+        entry,
+        platformState,
+        verticalGap,
+      };
+    }
+  }
+  return bestMatch;
+}
+
 function applyOccupiedPlayerPose(runtime, player, input = {}) {
   if (!runtime || !player) {
     return null;
@@ -770,19 +807,29 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
   const currentBodyPosition = body ? vec3(body.translation(), player.position) : vec3(player.position);
   const currentBodyVelocity = body ? vec3(body.linvel(), player.velocity) : vec3(player.velocity);
   const preserveVertical = player.body_mode !== "ghost";
+  const supportingCarryPlatform = preserveVertical ? findSupportingCarryPlatform(runtime, player) : null;
+  const preservePlanar = Boolean(supportingCarryPlatform);
   const nextPosition = {
-    x: mustFinite(rawPosition.x ?? input.position_x, currentBodyPosition.x),
+    x: preservePlanar
+      ? currentBodyPosition.x
+      : mustFinite(rawPosition.x ?? input.position_x, currentBodyPosition.x),
     y: preserveVertical
       ? currentBodyPosition.y
       : mustFinite(rawPosition.y ?? input.position_y, currentBodyPosition.y),
-    z: mustFinite(rawPosition.z ?? input.position_z, currentBodyPosition.z),
+    z: preservePlanar
+      ? currentBodyPosition.z
+      : mustFinite(rawPosition.z ?? input.position_z, currentBodyPosition.z),
   };
   const nextVelocity = {
-    x: mustFinite(rawVelocity.x ?? input.velocity_x, currentBodyVelocity.x),
+    x: preservePlanar
+      ? currentBodyVelocity.x
+      : mustFinite(rawVelocity.x ?? input.velocity_x, currentBodyVelocity.x),
     y: preserveVertical
       ? currentBodyVelocity.y
       : mustFinite(rawVelocity.y ?? input.velocity_y, currentBodyVelocity.y),
-    z: mustFinite(rawVelocity.z ?? input.velocity_z, currentBodyVelocity.z),
+    z: preservePlanar
+      ? currentBodyVelocity.z
+      : mustFinite(rawVelocity.z ?? input.velocity_z, currentBodyVelocity.z),
   };
   const resolvedHeadingY = Number(input.headingY ?? input.heading_y ?? rawPosition.heading_y ?? rawPosition.heading);
 

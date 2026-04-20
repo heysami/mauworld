@@ -1328,6 +1328,87 @@ test("runtime syncs the occupied server body to a client-authored pose", async (
   assert.ok(Math.abs(velocity.z + 3) < 0.0001);
 });
 
+test("runtime ignores client planar pose updates while a player is standing on a carry platform", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [{
+        id: "platform_one",
+        shape: "box",
+        position: { x: 2.3, y: 1.1, z: -1.4 },
+        scale: { x: 4, y: 1, z: 4 },
+        rotation: { x: 0, y: 0, z: 0 },
+        material: { color: "#88aadd", texture_preset: "none" },
+        rigid_mode: "ghost",
+        physics: {
+          gravity_scale: 0,
+          restitution: 0,
+          friction: 0.4,
+          mass: 1,
+          carry_riders: true,
+        },
+      }],
+      screens: [],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 2.5, y: 2.5, z: -1.65 },
+        scale: 1,
+        body_mode: "rigid",
+        camera_mode: "third_person",
+      }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const player = simulation.runtime.players[0];
+  const profileId = player.occupied_by_profile_id;
+  const body = simulation.runtime.physics.playerBodies.get(player.id);
+  const beforePosition = { ...player.position };
+  const beforeVelocity = { ...player.velocity };
+
+  const result = await manager.syncOccupiedPlayerPoseByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId },
+    position_x: beforePosition.x - 1.2,
+    position_y: beforePosition.y - 0.4,
+    position_z: beforePosition.z + 1.35,
+    velocity_x: -7,
+    velocity_y: 0.5,
+    velocity_z: 6,
+    heading_y: 1.1,
+  });
+
+  const translation = body.translation();
+  const velocity = body.linvel();
+  assert.equal(result.synced, true);
+  assert.ok(Math.abs(player.position.x - beforePosition.x) < 0.0001);
+  assert.ok(Math.abs(player.position.y - beforePosition.y) < 0.0001);
+  assert.ok(Math.abs(player.position.z - beforePosition.z) < 0.0001);
+  assert.ok(Math.abs(player.velocity.x - beforeVelocity.x) < 0.0001);
+  assert.ok(Math.abs(player.velocity.y - beforeVelocity.y) < 0.0001);
+  assert.ok(Math.abs(player.velocity.z - beforeVelocity.z) < 0.0001);
+  assert.ok(Math.abs(player.rotation.y - 1.1) < 0.0001);
+  assert.ok(Math.abs(translation.x - beforePosition.x) < 0.0001);
+  assert.ok(Math.abs(translation.y - beforePosition.y) < 0.0001);
+  assert.ok(Math.abs(translation.z - beforePosition.z) < 0.0001);
+  assert.ok(Math.abs(velocity.x - beforeVelocity.x) < 0.0001);
+  assert.ok(Math.abs(velocity.y - beforeVelocity.y) < 0.0001);
+  assert.ok(Math.abs(velocity.z - beforeVelocity.z) < 0.0001);
+});
+
 test("runtime leases nearby dynamic objects to the interacting player and applies their state", async () => {
   const manager = new PrivateWorldRuntime({
     store: {},

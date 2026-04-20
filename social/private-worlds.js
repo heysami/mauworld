@@ -132,6 +132,9 @@ const PRIVATE_DYNAMIC_RUNTIME = {
   interactionTransfer: 0.84,
 };
 const PRIVATE_RUNTIME_STATUS_THROTTLE_MS = 240;
+const PRIVATE_PLATFORM_CARRY_DELTA_EPSILON = 0.0001;
+const PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE = 0.24;
+const PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER = 0.14;
 const PRIVATE_RUNTIME_SNAPSHOT_PRIORITY = {
   worldDetail: 1,
   worldSnapshot: 1,
@@ -9651,12 +9654,13 @@ function applyPossessedPlanarAuthorityFollow(prediction = null, motionState = nu
     return false;
   }
   const intentActive = options.intentActive === true;
+  const force = options.force === true;
   const authoritativeX = Number(motionState.authoritativePosition?.x);
   const authoritativeZ = Number(motionState.authoritativePosition?.z);
   const authoritativeError = Number.isFinite(authoritativeX) && Number.isFinite(authoritativeZ)
     ? Math.hypot(authoritativeX - prediction.position.x, authoritativeZ - prediction.position.z)
     : 0;
-  if (intentActive && authoritativeError <= PRIVATE_PLAYER_RUNTIME.snapDistance) {
+  if (!force && intentActive && authoritativeError <= PRIVATE_PLAYER_RUNTIME.snapDistance) {
     return false;
   }
   const nextX = Number(motionState.renderPosition?.x);
@@ -10055,6 +10059,9 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   const runtimeAirborne = rigidBodyMode
     ? (runtimePlayer.on_ground !== true || (Number.isFinite(nextVelocityY) && Math.abs(nextVelocityY) >= 0.05))
     : (Number.isFinite(nextVelocityY) && Math.abs(nextVelocityY) >= 0.05);
+  const carryPlatformSupport = rigidBodyMode && (prediction.onGround || runtimePlayer.on_ground === true)
+    ? getLocalCarryPlatformSupport(prediction)
+    : null;
   if (rigidBodyMode) {
     syncPossessedPlayerMotionState(prediction, runtimePlayer, {
       renderPosition: prediction.motionState?.renderPosition ?? {
@@ -10074,6 +10081,7 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
     }
     applyPossessedPlanarAuthorityFollow(prediction, prediction.motionState, {
       intentActive: intent.active,
+      force: Boolean(carryPlatformSupport),
     });
     const reconciledRenderY = Number(prediction.motionState?.renderPosition?.y);
     if (Number.isFinite(reconciledRenderY)) {
@@ -10230,6 +10238,77 @@ function addPrivateCollisionBlocker(blockers, blocker = {}, probe = null) {
       z: Number(blocker.rotation?.z ?? 0) || 0,
     },
   });
+}
+
+function getLocalCarryPlatformSupport(playerLike = null) {
+  if (!playerLike?.position) {
+    return null;
+  }
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  if (!runtime) {
+    return null;
+  }
+  const playerScale = Math.max(
+    0.25,
+    Number(playerLike.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE,
+  );
+  const playerSize = getPrivatePlayerCollisionSize(playerScale);
+  const playerHalf = getHalfExtentsFromScale(playerSize);
+  const playerPosition = {
+    x: Number(playerLike.position?.x ?? 0) || 0,
+    y: Number(playerLike.position?.y ?? 0) || 0,
+    z: Number(playerLike.position?.z ?? 0) || 0,
+  };
+  const playerBottom = playerPosition.y - playerHalf.y;
+  let bestSupport = null;
+  for (const entry of runtime.dynamic_objects ?? []) {
+    if (entry?.carry_riders !== true) {
+      continue;
+    }
+    const entryId = String(entry?.id ?? "").trim();
+    const kind = entry?.entity_kind === "model" ? "model" : "primitive";
+    const size = getPrivateCollisionEntrySize(kind, entry);
+    const half = getHalfExtentsFromScale(size);
+    const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
+    const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+    const position = {
+      x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
+      y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
+      z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
+    };
+    const velocity = {
+      x: Number(motionState?.renderVelocity?.x ?? entry.velocity?.x ?? 0) || 0,
+      y: Number(motionState?.renderVelocity?.y ?? entry.velocity?.y ?? 0) || 0,
+      z: Number(motionState?.renderVelocity?.z ?? entry.velocity?.z ?? 0) || 0,
+    };
+    const platformTop = position.y + half.y;
+    const verticalGap = playerBottom - platformTop;
+    if (
+      verticalGap < -PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE
+      || verticalGap > PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE
+    ) {
+      continue;
+    }
+    const limitX = half.x + playerHalf.x + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER;
+    const limitZ = half.z + playerHalf.z + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER;
+    if (
+      Math.abs(playerPosition.x - position.x) > limitX
+      || Math.abs(playerPosition.z - position.z) > limitZ
+    ) {
+      continue;
+    }
+    const absoluteGap = Math.abs(verticalGap);
+    if (!bestSupport || absoluteGap < bestSupport.absoluteGap) {
+      bestSupport = {
+        entry,
+        position,
+        velocity,
+        verticalGap,
+        absoluteGap,
+      };
+    }
+  }
+  return bestSupport;
 }
 
 function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = prediction?.position) {
@@ -10425,6 +10504,9 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const runtimeAirborne = rigidBodyMode
     ? (runtimePlayer.on_ground !== true || (Number.isFinite(runtimeVelocityY) && Math.abs(runtimeVelocityY) >= 0.05))
     : (Number.isFinite(runtimeVelocityY) && Math.abs(runtimeVelocityY) >= 0.05);
+  const carryPlatformSupport = rigidBodyMode && (prediction.onGround || runtimePlayer.on_ground === true)
+    ? getLocalCarryPlatformSupport(prediction)
+    : null;
   const jumpPulseSeq = Math.max(0, Number(state.runtimeJumpPulseSeq ?? 0) || 0);
   const jumpPulseAt = Math.max(0, Number(state.runtimeJumpPulseAt ?? 0) || 0);
   const jumpPulsePending = jumpPulseSeq > Math.max(0, Number(prediction.lastConsumedJumpPulseSeq ?? 0) || 0);
@@ -10455,10 +10537,16 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   } else if (jumpPulsePending && !jumpPulseFresh) {
     prediction.lastConsumedJumpPulseSeq = jumpPulseSeq;
   }
+  const supportVelocityX = Number(carryPlatformSupport?.velocity?.x ?? 0) || 0;
+  const supportVelocityZ = Number(carryPlatformSupport?.velocity?.z ?? 0) || 0;
   const desiredPosition = {
-    x: prediction.position.x + prediction.velocity.x * dt,
+    x: prediction.position.x
+      + prediction.velocity.x * dt
+      + (Math.abs(supportVelocityX) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON ? supportVelocityX * dt : 0),
     y: prediction.position.y,
-    z: prediction.position.z + prediction.velocity.z * dt,
+    z: prediction.position.z
+      + prediction.velocity.z * dt
+      + (Math.abs(supportVelocityZ) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON ? supportVelocityZ * dt : 0),
   };
   if (isPrivateCollisionModeRigid(prediction.bodyMode)) {
     const collision = resolvePlayerMovementAgainstBlockers({
@@ -10517,6 +10605,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     });
     applyPossessedPlanarAuthorityFollow(prediction, motionState, {
       intentActive: intent.active,
+      force: Boolean(carryPlatformSupport),
     });
   }
   if (runtimeAirborne) {
