@@ -10265,6 +10265,42 @@ function getLocalCarryPlatformStateById(platformId = "") {
   };
 }
 
+function getRememberedCarryPlatformSupport(prediction = null) {
+  if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    return null;
+  }
+  const platformState = getLocalCarryPlatformStateById(prediction.localCarryPlatformId);
+  if (!platformState) {
+    return null;
+  }
+  const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
+  const carryOffset = prediction.localCarryPlatformOffset;
+  const relativeX = Number.isFinite(Number(carryOffset?.x))
+    ? Number(carryOffset.x)
+    : ((Number(prediction.position?.x ?? 0) || 0) - platformState.position.x);
+  const relativeZ = Number.isFinite(Number(carryOffset?.z))
+    ? Number(carryOffset.z)
+    : ((Number(prediction.position?.z ?? 0) || 0) - platformState.position.z);
+  const limitX = platformState.half.x + playerHalf.x + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER;
+  const limitZ = platformState.half.z + playerHalf.z + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER;
+  if (Math.abs(relativeX) > limitX || Math.abs(relativeZ) > limitZ) {
+    return null;
+  }
+  const supportedPlayerY = Number.isFinite(Number(carryOffset?.y))
+    ? (platformState.position.y + Number(carryOffset.y))
+    : (platformState.surfaceY + playerHalf.y);
+  return {
+    entry: platformState.entry,
+    entryId: platformState.entryId,
+    position: platformState.position,
+    velocity: platformState.velocity,
+    surfaceY: platformState.surfaceY,
+    supportedPlayerY,
+    verticalGap: 0,
+    absoluteGap: 0,
+  };
+}
+
 function applyLocalCarryPlatformDelta(prediction = null) {
   if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
     return null;
@@ -10333,7 +10369,8 @@ function getLocalPossessedGroundSupport(prediction = null) {
     };
   }
   const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
-  const carrySupport = getLocalCarryPlatformSupport(prediction);
+  const carrySupport = getLocalCarryPlatformSupport(prediction)
+    ?? getRememberedCarryPlatformSupport(prediction);
   const projectedSurface = getPrivatePlayerProjectedShadowSurface({
     ...prediction,
     onGround: false,
@@ -16582,7 +16619,7 @@ function getPrivateSprintSpeedMultiplier() {
 }
 
 function isLocalViewerJumpMode() {
-  return state.mode === "play" && !shouldDrivePrivateRuntimeInput();
+  return false;
 }
 
 function ensureViewerAvatar(preview) {
