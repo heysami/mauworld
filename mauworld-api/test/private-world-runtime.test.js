@@ -1412,6 +1412,77 @@ test("runtime rejects dynamic interaction claims from another player while a lea
   assert.equal(simulation.runtime.dynamicObjects[0].authority_owner_profile_id, "profile_one");
 });
 
+test("runtime rejects dynamic interaction claims for carry-rider platforms", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: {
+        gravity: { x: 0, y: -9.8, z: 0 },
+        camera_mode: "third_person",
+      },
+      voxels: [],
+      primitives: [
+        {
+          id: "platform_one",
+          shape: "box",
+          position: { x: 0, y: 0.5, z: -4 },
+          scale: { x: 4, y: 1, z: 4 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#8fd4ff", texture_preset: "metal" },
+          rigid_mode: "rigid",
+          physics: {
+            gravity_scale: 0,
+            ignore_gravity: true,
+            carry_riders: true,
+            restitution: 0,
+            friction: 0.9,
+            mass: 200,
+          },
+        },
+      ],
+      screens: [],
+      players: [{ id: "player_one", label: "Player One", position: { x: 0, y: 1, z: 0 }, scale: 1, body_mode: "rigid", camera_mode: "third_person" }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const profileId = simulation.runtime.players[0].occupied_by_profile_id;
+  const result = await manager.syncDynamicInteractionsByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId, username: "maker" },
+    interactionStates: [
+      {
+        object_id: "platform_one",
+        interaction_seq: 7,
+        position_x: 0.5,
+        position_y: 0.5,
+        position_z: -5.5,
+        velocity_x: 0,
+        velocity_y: 0,
+        velocity_z: -8,
+      },
+    ],
+  });
+
+  const entry = simulation.runtime.dynamicObjects[0];
+  assert.equal(result.synced, true);
+  assert.deepEqual(result.accepted_object_ids, []);
+  assert.deepEqual(result.rejected_object_ids, ["primitive_platform-one"]);
+  assert.equal(entry.authority_owner_profile_id, null);
+  assert.ok(Math.abs(entry.position.x - 0) < 0.0001);
+  assert.ok(Math.abs(entry.position.z + 4) < 0.0001);
+});
+
 test("runtime ignores out-of-order motion sequences and keeps the newest client pose", async () => {
   const manager = new PrivateWorldRuntime({
     store: {},

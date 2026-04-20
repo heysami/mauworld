@@ -818,7 +818,7 @@ function applyDynamicInteractionStates(runtime, occupiedPlayer, profile, interac
       continue;
     }
     const entry = runtime.dynamicObjects.find((candidate) => candidate.id === objectId) ?? null;
-    if (!entry || entry.rigid_mode === "ghost") {
+    if (!entry || entry.rigid_mode === "ghost" || entry.physics?.carry_riders === true) {
       rejected.push(objectId);
       continue;
     }
@@ -1824,6 +1824,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       authority_owner_username: entry.authority_owner_username,
       authority_lease_until_ms: Number(entry.authority_lease_until_ms ?? 0) || 0,
       rigid_mode: entry.rigid_mode,
+      carry_riders: entry.physics?.carry_riders === true,
       visible: entry.visibility !== false,
       material: cloneJson(entry.material),
       material_override: cloneJson(entry.material_override),
