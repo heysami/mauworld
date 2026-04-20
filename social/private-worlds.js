@@ -9566,7 +9566,8 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     movementEnabled: normalizePlayerMovementEnabled(runtimePlayer.movement_enabled ?? true),
     jumpEnabled: normalizePlayerJumpEnabled(runtimePlayer.jump_enabled ?? true),
     bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
-    onGround: runtimePlayer.on_ground === true,
+    groundY: Number.isFinite(positionY) ? positionY : 0,
+    onGround: runtimePlayer.on_ground === true || String(runtimePlayer.body_mode ?? "rigid").trim().toLowerCase() === "ghost",
     jumpHeld: false,
     lastConsumedJumpPulseSeq: 0,
     localJumpUntilMs: 0,
@@ -9981,6 +9982,15 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
+  if (!isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    const runtimePositionY = Number(runtimePlayer.position?.y);
+    if (Number.isFinite(runtimePositionY)) {
+      prediction.groundY = runtimePositionY;
+      if (Math.abs(Number(prediction.velocity.y ?? 0) || 0) < 0.05 && prediction.localJumpUntilMs <= performance.now()) {
+        prediction.position.y = runtimePositionY;
+      }
+    }
+  }
   if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
     releaseHeldRuntimeKeys({
       headingY: getRuntimeInputHeadingY(),
@@ -9999,31 +10009,45 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   const now = performance.now();
   const intent = buildRuntimeMovementIntent();
   const nextVelocityY = Number(runtimePlayer.velocity?.y);
-  const runtimeAirborne = runtimePlayer.on_ground !== true
-    || (Number.isFinite(nextVelocityY) && Math.abs(nextVelocityY) >= 0.05);
-  syncPossessedPlayerMotionState(prediction, runtimePlayer, {
-    renderPosition: prediction.motionState?.renderPosition ?? {
-      x: prediction.position.x,
-      y: prediction.position.y - Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0),
-      z: prediction.position.z,
-    },
-    renderVelocity: prediction.motionState?.renderVelocity ?? {
-      x: prediction.velocity.x,
-      y: prediction.velocity.y,
-      z: prediction.velocity.z,
-    },
-    receivedAtMs: now,
-  });
-  if (runtimeAirborne) {
-    resetPossessedPlayerJumpBridge(prediction);
-  }
-  const reconciledRenderY = Number(prediction.motionState?.renderPosition?.y);
-  if (Number.isFinite(reconciledRenderY)) {
-    prediction.position.y = reconciledRenderY + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
-  }
-  const reconciledRenderVelocityY = Number(prediction.motionState?.renderVelocity?.y);
-  if (Number.isFinite(reconciledRenderVelocityY)) {
-    prediction.velocity.y = reconciledRenderVelocityY;
+  const rigidBodyMode = isPrivateCollisionModeRigid(prediction.bodyMode);
+  const runtimeAirborne = rigidBodyMode
+    ? (runtimePlayer.on_ground !== true || (Number.isFinite(nextVelocityY) && Math.abs(nextVelocityY) >= 0.05))
+    : (Number.isFinite(nextVelocityY) && Math.abs(nextVelocityY) >= 0.05);
+  if (rigidBodyMode) {
+    syncPossessedPlayerMotionState(prediction, runtimePlayer, {
+      renderPosition: prediction.motionState?.renderPosition ?? {
+        x: prediction.position.x,
+        y: prediction.position.y - Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0),
+        z: prediction.position.z,
+      },
+      renderVelocity: prediction.motionState?.renderVelocity ?? {
+        x: prediction.velocity.x,
+        y: prediction.velocity.y,
+        z: prediction.velocity.z,
+      },
+      receivedAtMs: now,
+    });
+    if (runtimeAirborne) {
+      resetPossessedPlayerJumpBridge(prediction);
+    }
+    const reconciledRenderY = Number(prediction.motionState?.renderPosition?.y);
+    if (Number.isFinite(reconciledRenderY)) {
+      prediction.position.y = reconciledRenderY + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
+    }
+    const reconciledRenderVelocityY = Number(prediction.motionState?.renderVelocity?.y);
+    if (Number.isFinite(reconciledRenderVelocityY)) {
+      prediction.velocity.y = reconciledRenderVelocityY;
+    }
+  } else {
+    const runtimePositionY = Number(runtimePlayer.position?.y);
+    const localJumpActive = prediction.localJumpUntilMs > now || Math.abs(Number(prediction.velocity.y ?? 0) || 0) >= 0.05;
+    if (!localJumpActive && Number.isFinite(runtimePositionY)) {
+      prediction.groundY = runtimePositionY;
+      prediction.position.y = runtimePositionY;
+    }
+    if (!localJumpActive && Number.isFinite(nextVelocityY)) {
+      prediction.velocity.y = nextVelocityY;
+    }
   }
   if (!intent.active) {
     prediction.velocity.x += (0 - prediction.velocity.x) * 0.18;
@@ -10044,9 +10068,17 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   if (intent.active) {
     prediction.rotation.y = intent.headingY;
   }
-  prediction.onGround = runtimePlayer.on_ground === true
-    && prediction.localJumpUntilMs <= now
-    && prediction.jumpVisualOffsetY <= 0.0001;
+  prediction.onGround = rigidBodyMode
+    ? (
+      runtimePlayer.on_ground === true
+      && prediction.localJumpUntilMs <= now
+      && prediction.jumpVisualOffsetY <= 0.0001
+    )
+    : (
+      prediction.localJumpUntilMs <= now
+      && Math.abs(Number(prediction.velocity.y ?? 0) || 0) < 0.05
+      && Math.abs(prediction.position.y - Number(prediction.groundY ?? prediction.position.y ?? 0)) <= 0.05
+    );
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
   prediction.cameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
   prediction.movementEnabled = normalizePlayerMovementEnabled(
@@ -10344,8 +10376,10 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const intent = buildRuntimeMovementIntent();
   const now = performance.now();
   const runtimeVelocityY = Number(runtimePlayer.velocity?.y);
-  const runtimeAirborne = runtimePlayer.on_ground !== true
-    || (Number.isFinite(runtimeVelocityY) && Math.abs(runtimeVelocityY) >= 0.05);
+  const rigidBodyMode = isPrivateCollisionModeRigid(prediction.bodyMode);
+  const runtimeAirborne = rigidBodyMode
+    ? (runtimePlayer.on_ground !== true || (Number.isFinite(runtimeVelocityY) && Math.abs(runtimeVelocityY) >= 0.05))
+    : (Number.isFinite(runtimeVelocityY) && Math.abs(runtimeVelocityY) >= 0.05);
   const jumpPulseSeq = Math.max(0, Number(state.runtimeJumpPulseSeq ?? 0) || 0);
   const jumpPulseAt = Math.max(0, Number(state.runtimeJumpPulseAt ?? 0) || 0);
   const jumpPulsePending = jumpPulseSeq > Math.max(0, Number(prediction.lastConsumedJumpPulseSeq ?? 0) || 0);
@@ -10359,15 +10393,19 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   if (
     jumpPulseFresh
     && prediction.jumpEnabled
-    && (prediction.onGround || runtimePlayer.on_ground === true)
-    && isPrivateCollisionModeRigid(prediction.bodyMode)
+    && (prediction.onGround || (rigidBodyMode && runtimePlayer.on_ground === true))
   ) {
     prediction.onGround = false;
     prediction.lastConsumedJumpPulseSeq = jumpPulseSeq;
-    prediction.localJumpUntilMs = now + PRIVATE_PLAYER_RUNTIME.localJumpHoldMs;
-    prediction.jumpVisualVelocityY = PRIVATE_PLAYER_RUNTIME.jumpVelocity;
-    if (prediction.jumpVisualOffsetY <= 0.0001) {
-      prediction.jumpVisualOffsetY = 0;
+    if (rigidBodyMode) {
+      prediction.localJumpUntilMs = now + PRIVATE_PLAYER_RUNTIME.localJumpHoldMs;
+      prediction.jumpVisualVelocityY = PRIVATE_PLAYER_RUNTIME.jumpVelocity;
+      if (prediction.jumpVisualOffsetY <= 0.0001) {
+        prediction.jumpVisualOffsetY = 0;
+      }
+    } else {
+      prediction.localJumpUntilMs = now + PRIVATE_PLAYER_RUNTIME.localJumpHoldMs;
+      prediction.velocity.y = PRIVATE_PLAYER_RUNTIME.jumpVelocity;
     }
   } else if (jumpPulsePending && !jumpPulseFresh) {
     prediction.lastConsumedJumpPulseSeq = jumpPulseSeq;
@@ -10394,6 +10432,34 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     prediction.position.x = desiredPosition.x;
     prediction.position.z = desiredPosition.z;
   }
+  if (!rigidBodyMode) {
+    if (!prediction.onGround || Math.abs(Number(prediction.velocity.y ?? 0) || 0) >= 0.05) {
+      prediction.velocity.y -= PRIVATE_PLAYER_RUNTIME.gravity * dt;
+      prediction.position.y += prediction.velocity.y * dt;
+      const groundY = Number(prediction.groundY ?? runtimePlayer.position?.y ?? prediction.position.y);
+      if (prediction.position.y <= groundY) {
+        prediction.position.y = groundY;
+        prediction.groundY = groundY;
+        prediction.velocity.y = 0;
+        prediction.onGround = true;
+        prediction.localJumpUntilMs = 0;
+      } else {
+        prediction.onGround = false;
+      }
+    } else {
+      const groundY = Number(runtimePlayer.position?.y);
+      if (Number.isFinite(groundY)) {
+        prediction.groundY = groundY;
+        prediction.position.y = groundY;
+      }
+      prediction.velocity.y = 0;
+      prediction.onGround = true;
+    }
+    if (intent.active) {
+      prediction.rotation.y = intent.headingY;
+    }
+    return prediction;
+  }
   const motionState = prediction.motionState ?? syncPossessedPlayerMotionState(prediction, runtimePlayer);
   if (motionState) {
     stepContinuousMotionState(motionState, {
@@ -10408,12 +10474,9 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   if (runtimeAirborne) {
     resetPossessedPlayerJumpBridge(prediction);
   } else if (
-    isPrivateCollisionModeRigid(prediction.bodyMode)
-    && (
-      prediction.localJumpUntilMs > now
-      || prediction.jumpVisualOffsetY > 0.0001
-      || prediction.jumpVisualVelocityY > 0.0001
-    )
+    prediction.localJumpUntilMs > now
+    || prediction.jumpVisualOffsetY > 0.0001
+    || prediction.jumpVisualVelocityY > 0.0001
   ) {
     prediction.jumpVisualVelocityY -= PRIVATE_PLAYER_RUNTIME.gravity * dt;
     prediction.jumpVisualOffsetY = Math.max(
@@ -12079,7 +12142,6 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const movementToggleMode = isPlayerMovementToggleCameraMode(cameraMode);
     const movementEnabled = normalizePlayerMovementEnabled(entry.movement_enabled ?? true);
     const jumpEnabled = normalizePlayerJumpEnabled(entry.jump_enabled ?? true);
-    const rigidBodyMode = isPrivateCollisionModeRigid(entry.body_mode ?? "rigid");
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownDirection = normalizePlayerFixedTopDownDirection(entry.fixed_top_down_direction ?? "north");
     const fixedTopDownAngle = normalizePlayerFixedTopDownAngle(entry.fixed_top_down_angle ?? 90);
@@ -12130,8 +12192,8 @@ function renderEntityInspector(sceneDoc, selected = null) {
         </div>
       ` : ""}
       <div class="pw-checkbox">
-        <input type="checkbox" data-entity-field="jump_enabled" data-value-type="checkbox" ${jumpEnabled ? "checked" : ""} ${rigidBodyMode ? "" : "disabled"} />
-        <span>${rigidBodyMode ? "Allow jump with Space" : "Jump only works on rigid bodies"}</span>
+        <input type="checkbox" data-entity-field="jump_enabled" data-value-type="checkbox" ${jumpEnabled ? "checked" : ""} />
+        <span>Allow jump with Space</span>
       </div>
       ${orthogonalMode ? `
         <p class="pw-inspector-note">${fixedTopDownNote}</p>

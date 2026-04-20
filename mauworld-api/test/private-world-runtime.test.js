@@ -168,6 +168,41 @@ test("runtime buffers an initial jump press until a grounded occupied player set
   assert.ok(player.position.y > 4.5);
 });
 
+test("runtime lets occupied ghost players jump with space", () => {
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [],
+      screens: [],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 0, y: 4.5, z: 0 },
+        scale: 5,
+        body_mode: "ghost",
+        camera_mode: "third_person",
+        jump_enabled: true,
+      }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const player = simulation.runtime.players[0];
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 16,
+    pendingInputs: [{ playerId: player.id, key: "space", state: "down" }],
+  });
+
+  assert.equal(player.onGround, false);
+  assert.ok(player.velocity.y > 0);
+  assert.ok(player.position.y > 4.5);
+});
+
 test("active worlds keep player movement and dynamic physics live before scene start", () => {
   const simulation = buildSimulation({
     sceneStarted: false,

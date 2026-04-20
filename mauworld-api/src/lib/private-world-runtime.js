@@ -401,7 +401,9 @@ function syncEntryFromRapierBody(entry, body) {
   }
   entry.position = vec3(body.translation(), entry.position);
   entry.rotation = quaternionToEuler(body.rotation());
-  entry.velocity = vec3(body.linvel(), entry.velocity);
+  entry.velocity = entry.kind === "player" && entry.body_mode === "ghost"
+    ? vec3(entry.velocity, entry.velocity)
+    : vec3(body.linvel(), entry.velocity);
   if (entry.angular_velocity !== undefined) {
     entry.angular_velocity = vec3(body.angvel(), entry.angular_velocity);
   }
@@ -721,8 +723,19 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
   };
   const resolvedHeadingY = Number(input.headingY ?? input.heading_y ?? rawPosition.heading_y ?? rawPosition.heading);
 
+  if (player.body_mode === "ghost" && Math.abs(nextVelocity.y) < 0.05) {
+    player.groundPositionY = nextPosition.y;
+  }
+
   player.position = nextPosition;
   player.velocity = nextVelocity;
+  if (player.body_mode === "ghost") {
+    player.onGround = isGhostPlayerGrounded({
+      ...player,
+      position: nextPosition,
+      velocity: nextVelocity,
+    });
+  }
   if (Number.isFinite(resolvedHeadingY)) {
     setPlayerLookHeading(player, resolvedHeadingY);
     player.usesLookHeading = true;
@@ -945,6 +958,20 @@ function isPlayerJumpEnabled(player = {}) {
   return player?.jump_enabled !== false;
 }
 
+function getGhostPlayerGroundY(player = {}) {
+  return mustFinite(
+    player.groundPositionY,
+    player.initialPosition?.y ?? player.position?.y ?? 0,
+  );
+}
+
+function isGhostPlayerGrounded(player = {}) {
+  return (
+    Math.abs(mustFinite(player.velocity?.y, 0)) < 0.05
+    && Math.abs(mustFinite(player.position?.y, 0) - getGhostPlayerGroundY(player)) <= 0.08
+  );
+}
+
 function raycastPlayerGround(runtime, player) {
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
   const collider = runtime.physics?.playerColliders?.get(player.id) ?? null;
@@ -959,13 +986,33 @@ function raycastPlayerGround(runtime, player) {
 }
 
 function primeQueuedPlayerJump(runtime, player, nowMs = mustFinite(runtime?.elapsedMs, 0)) {
-  if (!runtime || !player || player.body_mode === "ghost" || !isPlayerJumpEnabled(player)) {
+  if (!runtime || !player || !isPlayerJumpEnabled(player)) {
     return false;
   }
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
   if (!body) {
     player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + PLAYER_JUMP_BUFFER_MS);
     return false;
+  }
+  if (player.body_mode === "ghost") {
+    player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + PLAYER_JUMP_BUFFER_MS);
+    player.onGround = isGhostPlayerGrounded(player);
+    if (!player.onGround) {
+      player.sleeping = false;
+      body.wakeUp?.();
+      return false;
+    }
+    player.velocity = {
+      x: mustFinite(player.velocity?.x, 0),
+      y: PLAYER_JUMP_VELOCITY,
+      z: mustFinite(player.velocity?.z, 0),
+    };
+    player.onGround = false;
+    player.sleeping = false;
+    player.jumpBufferedUntilMs = 0;
+    body.setLinvel(player.velocity, true);
+    body.wakeUp?.();
+    return true;
   }
   player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + PLAYER_JUMP_BUFFER_MS);
   player.onGround = raycastPlayerGround(runtime, player);
@@ -1024,19 +1071,41 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
 
   if (player.body_mode === "ghost") {
     const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
+    const gravity = Math.abs(mustFinite(runtime?.gravity?.y, -9.8));
+    const groundY = getGhostPlayerGroundY(player);
+    const currentVelocity = vec3(player.velocity);
+    let nextVelocityY = currentVelocity.y;
+    if (mustFinite(player.jumpBufferedUntilMs, 0) >= nowMs && player.onGround) {
+      nextVelocityY = PLAYER_JUMP_VELOCITY;
+      player.onGround = false;
+      player.jumpBufferedUntilMs = 0;
+    } else {
+      nextVelocityY -= gravity * deltaSeconds;
+    }
+    let nextPositionY = player.position.y + nextVelocityY * deltaSeconds;
+    if (nextPositionY <= groundY) {
+      nextPositionY = groundY;
+      nextVelocityY = 0;
+      player.onGround = true;
+      player.groundPositionY = groundY;
+    } else {
+      player.onGround = false;
+    }
     const nextPosition = {
       x: player.position.x + desired.x * speed * deltaSeconds,
-      y: player.position.y,
+      y: nextPositionY,
       z: player.position.z + desired.z * speed * deltaSeconds,
     };
     player.velocity = {
       x: desired.x * speed,
-      y: 0,
+      y: nextVelocityY,
       z: desired.z * speed,
     };
     body.setNextKinematicTranslation(nextPosition);
     body.setTranslation(nextPosition, true);
+    body.setLinvel(player.velocity, true);
     body.setRotation(toRapierRotation(player.rotation), true);
+    player.position = nextPosition;
     return;
   }
 
@@ -1109,6 +1178,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   }));
   const players = (sceneDoc.players ?? []).map((entry) => {
     const scale = Math.max(0.25, mustFinite(entry.scale, PRIVATE_WORLD_BLOCK_UNIT));
+    const initialPosition = vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 });
     const canonicalId = authoredPlayerIds.length > 0
       ? (resolveEntityIdAlias("player", entry.id, authoredPlayerIds) ?? entry.id)
       : entry.id;
@@ -1127,13 +1197,14 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       jump_enabled: entry.jump_enabled !== false,
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
-      initialPosition: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
+      initialPosition,
       initialRotation: vec3(entry.rotation),
-      position: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
+      position: vec3(entry.position, initialPosition),
       rotation: vec3(entry.rotation),
       velocity: { x: 0, y: 0, z: 0 },
       angular_velocity: { x: 0, y: 0, z: 0 },
-      onGround: false,
+      groundPositionY: initialPosition.y,
+      onGround: entry.body_mode === "ghost",
       sleeping: false,
       occupied_by_profile_id: null,
       occupied_by_username: null,
@@ -1310,10 +1381,12 @@ function preserveRebuiltOccupiedPlayerState(nextRuntime, previousRuntime = null)
     player.rotation = vec3(previousPlayer.rotation, player.rotation);
     player.velocity = vec3(previousPlayer.velocity, player.velocity);
     player.angular_velocity = vec3(previousPlayer.angular_velocity, player.angular_velocity);
+    player.groundPositionY = mustFinite(previousPlayer.groundPositionY, player.groundPositionY);
     player.onGround = previousPlayer.onGround === true;
     player.sleeping = previousPlayer.sleeping === true;
     player.usesLookHeading = previousPlayer.usesLookHeading === true;
     player.last_client_motion_seq = Math.max(0, Number(previousPlayer.last_client_motion_seq ?? 0) || 0);
+    player.jumpBufferedUntilMs = Math.max(0, Number(previousPlayer.jumpBufferedUntilMs ?? 0) || 0);
     player.pressedKeys = previousPlayer.pressedKeys instanceof Set
       ? new Set(previousPlayer.pressedKeys)
       : new Set();
@@ -1650,7 +1723,9 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
 
     for (const player of simulation.players) {
       syncEntryFromRapierBody(player, simulation.physics.playerBodies.get(player.id));
-      player.onGround = player.body_mode === "ghost" ? false : raycastPlayerGround(simulation, player);
+      player.onGround = player.body_mode === "ghost"
+        ? isGhostPlayerGrounded(player)
+        : raycastPlayerGround(simulation, player);
     }
 
     for (const object of simulation.dynamicObjects) {
@@ -2011,6 +2086,8 @@ export class PrivateWorldRuntime {
     occupiedPlayer.position = nextPosition;
     occupiedPlayer.rotation = nextRotation;
     occupiedPlayer.velocity = { x: 0, y: 0, z: 0 };
+    occupiedPlayer.groundPositionY = nextPosition.y;
+    occupiedPlayer.onGround = occupiedPlayer.body_mode === "ghost";
     occupiedPlayer.pressedKeys.clear();
     occupiedPlayer.usesLookHeading = Number.isFinite(Number(nextRotation.y));
 
