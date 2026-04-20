@@ -103,6 +103,8 @@ const PRIVATE_PLAYER_CAMERA = {
   thirdPersonHeight: 2.2,
   topDownHeight: 8,
   fixedTopDownPadding: 18,
+  fixedTopDownPerspectiveLift: 2.4,
+  fixedTopDownPerspectiveTilt: 0.55,
 };
 const PRIVATE_POSSESSION_DEBUG = {
   enabled: false,
@@ -17492,6 +17494,7 @@ function activatePerspectivePreviewCamera(preview = state.preview) {
     return null;
   }
   camera.aspect = Math.max(1, Number(preview?.viewportWidth) || 1) / Math.max(1, Number(preview?.viewportHeight) || 1);
+  camera.up.set(0, 1, 0);
   camera.updateProjectionMatrix();
   setPreviewViewport(preview);
   return camera;
@@ -17521,14 +17524,14 @@ function applyFixedTopDownPerspectivePreviewCamera(preview, player = {}, world =
     new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, -halfWidth).addScaledVector(orientation.upVector, halfHeight),
     new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, halfWidth).addScaledVector(orientation.upVector, halfHeight),
   ];
-  const offsetDirection = orientation.upVector.clone().multiplyScalar(-1);
-  offsetDirection.y = 1.35;
+  const offsetDirection = orientation.upVector.clone().multiplyScalar(-PRIVATE_PLAYER_CAMERA.fixedTopDownPerspectiveTilt);
+  offsetDirection.y = PRIVATE_PLAYER_CAMERA.fixedTopDownPerspectiveLift;
   offsetDirection.normalize();
   let minDistance = PRIVATE_WORLD_BLOCK_UNIT * 2;
   let maxDistance = Math.max(rig.width, rig.length, rig.height, windowSize.width, windowSize.height) * 16;
   camera.aspect = aspect;
   camera.near = 0.1;
-  camera.up.set(0, 1, 0);
+  camera.up.copy(orientation.upVector);
   for (let index = 0; index < 18; index += 1) {
     const distance = (minDistance + maxDistance) / 2;
     camera.position.copy(target).addScaledVector(offsetDirection, distance);
