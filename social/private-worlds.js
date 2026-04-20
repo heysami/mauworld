@@ -13229,17 +13229,22 @@ function findProjectedPlayerHit(pointerSource) {
     if (object.visible === false) {
       continue;
     }
-    const worldPosition = object.getWorldPosition(new THREE.Vector3());
+    const bounds = new THREE.Box3().setFromObject(object);
+    const worldPosition = bounds.isEmpty()
+      ? object.getWorldPosition(new THREE.Vector3())
+      : bounds.getCenter(new THREE.Vector3());
     const projected = projectWorldPointToPreviewScreen(worldPosition, preview, rect);
     if (!projected) {
       continue;
     }
-    const worldScale = object.getWorldScale(new THREE.Vector3());
+    const boundsSize = bounds.isEmpty()
+      ? object.getWorldScale(new THREE.Vector3())
+      : bounds.getSize(new THREE.Vector3());
     const dominantScale = Math.max(
       0.01,
-      Number(worldScale.x ?? 0) || 0,
-      Number(worldScale.y ?? 0) || 0,
-      Number(worldScale.z ?? 0) || 0,
+      Number(boundsSize.x ?? 0) || 0,
+      Number(boundsSize.y ?? 0) || 0,
+      Number(boundsSize.z ?? 0) || 0,
     );
     const unitsPerPixel = getPreviewWorldUnitsPerPixel(
       preview.camera.position.distanceTo(worldPosition),
@@ -13272,14 +13277,19 @@ function inspectProjectedPlayerHit(pointerSource) {
     if (String(object?.userData?.privateWorldEntityKind ?? "").trim() !== "player") {
       continue;
     }
-    const worldPosition = object.getWorldPosition(new THREE.Vector3());
+    const bounds = new THREE.Box3().setFromObject(object);
+    const worldPosition = bounds.isEmpty()
+      ? object.getWorldPosition(new THREE.Vector3())
+      : bounds.getCenter(new THREE.Vector3());
     const projected = projectWorldPointToPreviewScreen(worldPosition, preview, rect);
-    const worldScale = object.getWorldScale(new THREE.Vector3());
+    const boundsSize = bounds.isEmpty()
+      ? object.getWorldScale(new THREE.Vector3())
+      : bounds.getSize(new THREE.Vector3());
     const dominantScale = Math.max(
       0.01,
-      Number(worldScale.x ?? 0) || 0,
-      Number(worldScale.y ?? 0) || 0,
-      Number(worldScale.z ?? 0) || 0,
+      Number(boundsSize.x ?? 0) || 0,
+      Number(boundsSize.y ?? 0) || 0,
+      Number(boundsSize.z ?? 0) || 0,
     );
     const unitsPerPixel = getPreviewWorldUnitsPerPixel(
       preview.camera.position.distanceTo(worldPosition),
