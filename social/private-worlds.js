@@ -3706,11 +3706,32 @@ function setLauncherTab(tab) {
   renderLauncherWorldTabs();
 }
 
+function getPrimaryViewerSpawnPlayer(world = state.selectedWorld) {
+  const activeSceneId = String(world?.active_instance?.active_scene_id ?? "").trim();
+  const activeScene = world?.scenes?.find((entry) => String(entry?.id ?? "").trim() === activeSceneId)
+    ?? getDefaultScene(world)
+    ?? world?.scenes?.[0]
+    ?? null;
+  const sceneDoc = activeScene?.compiled_doc?.runtime?.resolved_scene_doc
+    ?? activeScene?.scene_doc
+    ?? null;
+  const players = Array.isArray(sceneDoc?.players) ? sceneDoc.players : [];
+  return players.find((entry) => entry?.occupiable !== false) ?? players[0] ?? null;
+}
+
 function getViewerSpawnPosition(world = state.selectedWorld) {
   if (!world) {
     return new THREE.Vector3(0, PRIVATE_CAMERA.minY, 0);
   }
   const rig = getPrivateViewerRigConfig(world);
+  const primaryPlayer = getPrimaryViewerSpawnPlayer(world);
+  if (primaryPlayer?.position) {
+    return new THREE.Vector3(
+      Number(primaryPlayer.position.x ?? 0) || 0,
+      Number(primaryPlayer.position.y ?? rig.spawnHeight) || rig.spawnHeight,
+      Number(primaryPlayer.position.z ?? 0) || 0,
+    );
+  }
   const width = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world?.width ?? PRIVATE_WORLD_DEFAULT_SIZE.width) || PRIVATE_WORLD_DEFAULT_SIZE.width);
   const length = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Number(world?.length ?? PRIVATE_WORLD_DEFAULT_SIZE.length) || PRIVATE_WORLD_DEFAULT_SIZE.length);
   return new THREE.Vector3(
