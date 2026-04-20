@@ -9695,6 +9695,7 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     jumpVisualVelocityY: 0,
     localCarryPlatformId: "",
     localCarryPlatformPosition: null,
+    localCarryPlatformOffset: null,
     motionState: null,
   };
   return prediction;
@@ -10272,28 +10273,45 @@ function applyLocalCarryPlatformDelta(prediction = null) {
   if (!platformState) {
     prediction.localCarryPlatformId = "";
     prediction.localCarryPlatformPosition = null;
+    prediction.localCarryPlatformOffset = null;
     return null;
   }
-  const previousPosition = prediction.localCarryPlatformPosition;
+  const carryOffset = prediction.localCarryPlatformOffset;
   if (
-    previousPosition
-    && Number.isFinite(Number(previousPosition.x))
-    && Number.isFinite(Number(previousPosition.y))
-    && Number.isFinite(Number(previousPosition.z))
+    carryOffset
+    && Number.isFinite(Number(carryOffset.x))
+    && Number.isFinite(Number(carryOffset.y))
+    && Number.isFinite(Number(carryOffset.z))
   ) {
-    const deltaX = platformState.position.x - Number(previousPosition.x);
-    const deltaY = platformState.position.y - Number(previousPosition.y);
-    const deltaZ = platformState.position.z - Number(previousPosition.z);
+    const targetX = platformState.position.x + Number(carryOffset.x);
+    const targetY = platformState.position.y + Number(carryOffset.y);
+    const targetZ = platformState.position.z + Number(carryOffset.z);
+    prediction.position.x = targetX;
+    prediction.position.y = targetY;
+    prediction.position.z = targetZ;
+    prediction.groundY = targetY;
+  } else {
+    const previousPosition = prediction.localCarryPlatformPosition;
     if (
-      Math.abs(deltaX) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
-      || Math.abs(deltaY) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
-      || Math.abs(deltaZ) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
+      previousPosition
+      && Number.isFinite(Number(previousPosition.x))
+      && Number.isFinite(Number(previousPosition.y))
+      && Number.isFinite(Number(previousPosition.z))
     ) {
-      prediction.position.x += deltaX;
-      prediction.position.y += deltaY;
-      prediction.position.z += deltaZ;
-      if (Number.isFinite(Number(prediction.groundY))) {
-        prediction.groundY = Number(prediction.groundY) + deltaY;
+      const deltaX = platformState.position.x - Number(previousPosition.x);
+      const deltaY = platformState.position.y - Number(previousPosition.y);
+      const deltaZ = platformState.position.z - Number(previousPosition.z);
+      if (
+        Math.abs(deltaX) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
+        || Math.abs(deltaY) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
+        || Math.abs(deltaZ) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON
+      ) {
+        prediction.position.x += deltaX;
+        prediction.position.y += deltaY;
+        prediction.position.z += deltaZ;
+        if (Number.isFinite(Number(prediction.groundY))) {
+          prediction.groundY = Number(prediction.groundY) + deltaY;
+        }
       }
     }
   }
@@ -10802,9 +10820,15 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
       y: Number(resolvedGroundSupport.carrySupport.position?.y ?? prediction.position.y) || 0,
       z: Number(resolvedGroundSupport.carrySupport.position?.z ?? prediction.position.z) || 0,
     };
+    prediction.localCarryPlatformOffset = {
+      x: prediction.position.x - (Number(resolvedGroundSupport.carrySupport.position?.x ?? 0) || 0),
+      y: prediction.position.y - (Number(resolvedGroundSupport.carrySupport.position?.y ?? 0) || 0),
+      z: prediction.position.z - (Number(resolvedGroundSupport.carrySupport.position?.z ?? 0) || 0),
+    };
   } else if (currentJumpActive || !resolvedGroundSupport?.carrySupport) {
     prediction.localCarryPlatformId = "";
     prediction.localCarryPlatformPosition = null;
+    prediction.localCarryPlatformOffset = null;
   }
   if (intent.active) {
     prediction.rotation.y = intent.headingY;
@@ -13464,7 +13488,7 @@ function renderRuntimeStatus() {
       <strong>Controls</strong>
       <span>${localParticipant?.join_role === "player"
         ? "You are inside a player. Ready Up marks this player as prepared, and Leave Player returns to viewer mode."
-        : "Viewers can walk around immediately. In local play preview, Space jumps the local avatar. Click a player capsule to inhabit it, then Ready Up appears for that player."}</span>
+        : "Viewers can walk around immediately. Click a player capsule to inhabit it, then that player's enabled controls apply."}</span>
     </div>
     ${PRIVATE_POSSESSION_DEBUG.enabled === true && possessionDrift ? `
       <div class="pw-world-meta__row">
