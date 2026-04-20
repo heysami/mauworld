@@ -2762,6 +2762,7 @@ export function installPrivateWorldStore(MauworldStore) {
       velocity_x: input.velocity_x,
       velocity_y: input.velocity_y,
       velocity_z: input.velocity_z,
+      motion_seq: input.motion_seq,
     });
     return result;
   };
@@ -2783,6 +2784,7 @@ export function installPrivateWorldStore(MauworldStore) {
       velocity_x: input.velocity_x,
       velocity_y: input.velocity_y,
       velocity_z: input.velocity_z,
+      motion_seq: input.motion_seq,
       headingY: input.heading_y ?? input.headingY,
     });
   };

@@ -684,6 +684,7 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       velocity_x: req.body?.velocity_x,
       velocity_y: req.body?.velocity_y,
       velocity_z: req.body?.velocity_z,
+      motion_seq: req.body?.motion_seq,
     });
     jsonOk(res, payload);
   }));

@@ -330,6 +330,18 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
   if (!runtime || !player) {
     return null;
   }
+  const motionSeq = Number(input.motionSeq ?? input.motion_seq);
+  const previousMotionSeq = Math.max(0, Number(player.last_client_motion_seq ?? 0) || 0);
+  if (Number.isFinite(motionSeq) && motionSeq < previousMotionSeq) {
+    return {
+      player_entity_id: player.id,
+      position: cloneJson(player.position),
+      velocity: cloneJson(player.velocity),
+      heading_y: mustFinite(player.rotation?.y, 0),
+      motion_seq: previousMotionSeq,
+      ignored: true,
+    };
+  }
   const rawPosition = input.position && typeof input.position === "object" ? input.position : {};
   const rawVelocity = input.velocity && typeof input.velocity === "object" ? input.velocity : {};
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
@@ -358,6 +370,9 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
     setPlayerLookHeading(player, resolvedHeadingY);
     player.usesLookHeading = true;
   }
+  if (Number.isFinite(motionSeq)) {
+    player.last_client_motion_seq = Math.max(previousMotionSeq, motionSeq);
+  }
 
   if (body) {
     if (player.body_mode === "ghost" && typeof body.setNextKinematicTranslation === "function") {
@@ -376,6 +391,7 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
     heading_y: Number.isFinite(resolvedHeadingY)
       ? Number(normalizeAngle(resolvedHeadingY).toFixed(6))
       : mustFinite(player.rotation?.y, 0),
+    motion_seq: Number.isFinite(motionSeq) ? Math.max(previousMotionSeq, motionSeq) : previousMotionSeq,
   };
 }
 
@@ -596,6 +612,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       pressedKeys: new Set(),
       visibility: true,
       material_override: null,
+      last_client_motion_seq: 0,
     };
   });
   const dynamicObjects = (sceneDoc.primitives ?? []).map((entry) => ({
@@ -1373,6 +1390,7 @@ export class PrivateWorldRuntime {
     velocity_z = null,
     headingY = null,
     heading_y = null,
+    motion_seq = null,
   } = {}) {
     const keyRef = this.getWorldRefKey(worldId, creatorUsername);
     let instanceId = this.keysByWorldRef.get(keyRef);
@@ -1401,6 +1419,7 @@ export class PrivateWorldRuntime {
       velocity_x,
       velocity_y,
       velocity_z,
+      motion_seq,
       headingY,
       heading_y,
     });
@@ -1426,6 +1445,7 @@ export class PrivateWorldRuntime {
     velocity_x = null,
     velocity_y = null,
     velocity_z = null,
+    motion_seq = null,
   } = {}) {
     const keyRef = this.getWorldRefKey(worldId, creatorUsername);
     let instanceId = this.keysByWorldRef.get(keyRef);
@@ -1471,11 +1491,22 @@ export class PrivateWorldRuntime {
         velocity_x,
         velocity_y,
         velocity_z,
+        motion_seq,
         headingY: Number.isFinite(resolvedHeadingY) ? resolvedHeadingY : null,
       });
     }
     if (!normalizedKey && !Number.isFinite(resolvedHeadingY)) {
       throw new HttpError(400, "Runtime input key or heading is required");
+    }
+    if (!normalizedKey) {
+      if (Number.isFinite(resolvedHeadingY)) {
+        setPlayerLookHeading(occupiedPlayer, resolvedHeadingY);
+        occupiedPlayer.usesLookHeading = true;
+      }
+      return {
+        accepted: true,
+        player_entity_id: occupiedPlayer.id,
+      };
     }
     simulation.pendingInputs.push({
       playerId: occupiedPlayer.id,

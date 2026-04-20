@@ -1022,6 +1022,7 @@ const state = {
   cameraRadius: PRIVATE_PLAYER_VIEW.defaultRadius,
   liveShareQuery: "",
   trailAccumulator: 0,
+  lastPrivateMotionSeq: 0,
   lastPresenceSentAt: 0,
   lastRuntimeLookSentAt: 0,
   lastRuntimeLookHeadingY: null,
@@ -5561,6 +5562,7 @@ function sendPrivatePresence(force = false) {
   };
   const possessedPose = getLocalPossessedPlayerPosePayload();
   if (possessedPose) {
+    payload.motion_seq = nextPrivateMotionSequence();
     payload.velocity_x = possessedPose.velocity_x;
     payload.velocity_y = possessedPose.velocity_y;
     payload.velocity_z = possessedPose.velocity_z;
@@ -18755,15 +18757,24 @@ function getRuntimeInputHeadingY() {
   return Number(normalizeAngle(privateInputState.yaw).toFixed(6));
 }
 
-function appendRuntimePosePayload(payload = {}) {
+function nextPrivateMotionSequence() {
+  state.lastPrivateMotionSeq = Math.max(0, Number(state.lastPrivateMotionSeq ?? 0) || 0) + 1;
+  return state.lastPrivateMotionSeq;
+}
+
+function appendRuntimePosePayload(payload = {}, options = {}) {
   const pose = getLocalPossessedPlayerPosePayload();
   if (!pose) {
     return payload;
   }
+  const motionSeq = Number.isFinite(Number(options.motionSeq))
+    ? Number(options.motionSeq)
+    : nextPrivateMotionSequence();
   payload.position_x = pose.position_x;
   payload.position_z = pose.position_z;
   payload.velocity_x = pose.velocity_x;
   payload.velocity_z = pose.velocity_z;
+  payload.motion_seq = motionSeq;
   if (pose.position_y !== undefined) {
     payload.position_y = pose.position_y;
   }
@@ -18793,7 +18804,10 @@ async function sendRuntimeInput(key, runtimeState = "down", options = {}) {
   if (hasHeadingY) {
     payload.heading_y = Number(normalizeAngle(headingY).toFixed(6));
   }
-  appendRuntimePosePayload(payload);
+  const motionSeq = normalizedKey ? nextPrivateMotionSequence() : null;
+  if (normalizedKey) {
+    appendRuntimePosePayload(payload, { motionSeq });
+  }
   if (sendWorldSocketMessage(payload)) {
     return true;
   }
@@ -18805,7 +18819,7 @@ async function sendRuntimeInput(key, runtimeState = "down", options = {}) {
     key: normalizedKey,
     state: runtimeState,
     heading_y: hasHeadingY ? Number(normalizeAngle(headingY).toFixed(6)) : undefined,
-  });
+  }, { motionSeq });
   await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/input`, {
     method: "POST",
     body,
@@ -18830,11 +18844,11 @@ function syncRuntimeLookHeading(force = false) {
   ) {
     return false;
   }
-  const sent = sendWorldSocketMessage(appendRuntimePosePayload({
+  const sent = sendWorldSocketMessage({
     type: "runtime:input",
     state: "look",
     heading_y: headingY,
-  }));
+  });
   if (sent) {
     state.lastRuntimeLookSentAt = now;
     state.lastRuntimeLookHeadingY = headingY;

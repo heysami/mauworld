@@ -475,6 +475,28 @@ test("runtime input queues directly against a live simulation without forcing a 
   assert.equal(simulation.pendingInputs[0].headingY, 1.25);
 });
 
+test("runtime look-only input updates heading without queuing a stale movement trail", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation();
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const profileId = simulation.runtime.players[0].occupied_by_profile_id;
+  const result = await manager.queueInputByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId },
+    headingY: 0.9,
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(simulation.pendingInputs.length, 0);
+  assert.ok(Math.abs(simulation.runtime.players[0].rotation.y - 0.9) < 0.0001);
+});
+
 test("runtime resets an occupied player back to the authored spawn before release", async () => {
   const manager = new PrivateWorldRuntime({
     store: {},
@@ -554,6 +576,44 @@ test("runtime syncs the occupied server body to a client-authored pose", async (
   assert.ok(Math.abs(velocity.x - 7) < 0.0001);
   assert.ok(Math.abs(velocity.y - beforeVelocityY) < 0.0001);
   assert.ok(Math.abs(velocity.z + 3) < 0.0001);
+});
+
+test("runtime ignores out-of-order motion sequences and keeps the newest client pose", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation();
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const profileId = simulation.runtime.players[0].occupied_by_profile_id;
+  await manager.syncOccupiedPlayerPoseByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId },
+    position_x: 8,
+    position_z: -4,
+    velocity_x: 5,
+    velocity_z: -2,
+    motion_seq: 12,
+  });
+  await manager.syncOccupiedPlayerPoseByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId },
+    position_x: 2,
+    position_z: -1,
+    velocity_x: 1,
+    velocity_z: -0.5,
+    motion_seq: 11,
+  });
+
+  const player = simulation.runtime.players[0];
+  assert.ok(Math.abs(player.position.x - 8) < 0.0001);
+  assert.ok(Math.abs(player.position.z + 4) < 0.0001);
+  assert.ok(Math.abs(player.velocity.x - 5) < 0.0001);
+  assert.ok(Math.abs(player.velocity.z + 2) < 0.0001);
 });
 
 test("runtime syncs full vertical pose for ghost occupied players", async () => {

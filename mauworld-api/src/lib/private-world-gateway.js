@@ -45,6 +45,16 @@ function clipText(value, maxLength) {
     .slice(0, maxLength);
 }
 
+function isLookOnlyRuntimeInputMessage(message) {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if (String(message.type ?? "").trim() !== "runtime:input") {
+    return false;
+  }
+  return !String(message.key ?? "").trim();
+}
+
 function buildPrivateViewerSessionId(profile, guestSessionId = "", requestedViewerSessionId = "") {
   const requested = String(requestedViewerSessionId ?? "").trim();
   const guestId = String(guestSessionId ?? "").trim();
@@ -184,6 +194,8 @@ export class PrivateWorldGateway {
         chatRateLimitState: {},
         browserModes: new Map(),
         messageQueue: Promise.resolve(),
+        pendingLookInput: null,
+        lookInputQueued: false,
         lastParticipantHeartbeatAt: 0,
       };
       this.clients.add(client);
@@ -212,6 +224,27 @@ export class PrivateWorldGateway {
   }
 
   queueClientMessage(client, message) {
+    if (isLookOnlyRuntimeInputMessage(message)) {
+      client.pendingLookInput = message;
+      if (client.lookInputQueued) {
+        return;
+      }
+      client.lookInputQueued = true;
+      const runLatestLook = async () => {
+        const latestMessage = client.pendingLookInput;
+        client.pendingLookInput = null;
+        try {
+          await this.handleRuntimeInput(client, latestMessage);
+        } finally {
+          client.lookInputQueued = false;
+          if (client.pendingLookInput) {
+            this.queueClientMessage(client, client.pendingLookInput);
+          }
+        }
+      };
+      client.messageQueue = (client.messageQueue ?? Promise.resolve()).then(runLatestLook, runLatestLook);
+      return;
+    }
     const run = async () => {
       await this.handleMessage(client, message);
     };
@@ -1947,6 +1980,7 @@ export class PrivateWorldGateway {
     const velocityX = Number(message.velocity_x);
     const velocityY = Number(message.velocity_y);
     const velocityZ = Number(message.velocity_z);
+    const motionSeq = Number(message.motion_seq);
     if (!Number.isFinite(positionX) || !Number.isFinite(positionY) || !Number.isFinite(positionZ)) {
       return;
     }
@@ -1984,6 +2018,7 @@ export class PrivateWorldGateway {
             velocity_y: Number.isFinite(velocityY) ? velocityY : 0,
             velocity_z: Number.isFinite(velocityZ) ? velocityZ : 0,
             heading_y: Number.isFinite(headingY) ? headingY : 0,
+            motion_seq: Number.isFinite(motionSeq) ? motionSeq : undefined,
           });
         } catch (_error) {
           // Presence should keep flowing even if runtime pose sync misses a frame.
@@ -2159,6 +2194,7 @@ export class PrivateWorldGateway {
         velocity_x: message.velocity_x,
         velocity_y: message.velocity_y,
         velocity_z: message.velocity_z,
+        motion_seq: message.motion_seq,
       });
     } catch (error) {
       sendJson(client, {

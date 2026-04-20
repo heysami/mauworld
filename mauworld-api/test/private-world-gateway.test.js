@@ -251,6 +251,51 @@ test("private world runtime input is routed through the socket gateway", async (
   assert.equal(queued[0].payload.velocity_x, 5);
 });
 
+test("private world look-only inputs keep only the latest queued motion sample", async () => {
+  const queued = [];
+  const gateway = createGateway({
+    async queuePrivateWorldInput(profile, payload) {
+      queued.push({ profile, payload });
+      return { accepted: true };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:runner",
+    displayName: "runner",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  gateway.queueClientMessage(client, {
+    type: "runtime:input",
+    state: "look",
+    heading_y: 0.1,
+    position_x: 1,
+    position_z: -1,
+  });
+  gateway.queueClientMessage(client, {
+    type: "runtime:input",
+    state: "look",
+    heading_y: 0.2,
+    position_x: 2,
+    position_z: -2,
+  });
+  gateway.queueClientMessage(client, {
+    type: "runtime:input",
+    state: "look",
+    heading_y: 0.3,
+    position_x: 3,
+    position_z: -3,
+  });
+
+  await client.messageQueue;
+
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].payload.heading_y, 0.3);
+  assert.equal(queued[0].payload.position_x, 3);
+  assert.equal(queued[0].payload.position_z, -3);
+});
+
 test("private world connection preserves a per-client viewer session id for authenticated users", async () => {
   const gateway = createGateway({
     async verifyUserAccessToken() {
