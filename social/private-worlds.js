@@ -13193,6 +13193,52 @@ function getPreviewWorldUnitsPerPixel(distance, preview = state.preview, rect = 
   ) / Math.max(1, activeRect.height);
 }
 
+function findProjectedPlayerHit(pointerSource) {
+  const metrics = getPreviewPointerMetrics(pointerSource);
+  if (!metrics) {
+    return "";
+  }
+  const { preview, rect, canvasX, canvasY } = metrics;
+  let matchedPlayerId = "";
+  let matchedDistance = Number.POSITIVE_INFINITY;
+  for (const [entityId, object] of preview.entityMeshes.entries()) {
+    if (String(object?.userData?.privateWorldEntityKind ?? "").trim() !== "player") {
+      continue;
+    }
+    if (object.visible === false) {
+      continue;
+    }
+    const worldPosition = object.getWorldPosition(new THREE.Vector3());
+    const projected = projectWorldPointToPreviewScreen(worldPosition, preview, rect);
+    if (!projected) {
+      continue;
+    }
+    const worldScale = object.getWorldScale(new THREE.Vector3());
+    const dominantScale = Math.max(
+      0.01,
+      Number(worldScale.x ?? 0) || 0,
+      Number(worldScale.y ?? 0) || 0,
+      Number(worldScale.z ?? 0) || 0,
+    );
+    const unitsPerPixel = getPreviewWorldUnitsPerPixel(
+      preview.camera.position.distanceTo(worldPosition),
+      preview,
+      rect,
+    );
+    const radiusPx = Math.max(
+      28,
+      ((PRIVATE_PLAYER_METRICS.height * dominantScale) / Math.max(0.0001, unitsPerPixel)) * 0.42,
+    );
+    const distance = Math.hypot(canvasX - projected.x, canvasY - projected.y);
+    if (distance > radiusPx || distance >= matchedDistance) {
+      continue;
+    }
+    matchedPlayerId = String(object.userData?.privateWorldPlayerId || entityId || "").trim();
+    matchedDistance = distance;
+  }
+  return matchedPlayerId;
+}
+
 function syncPreviewCanvasCursor() {
   if (!elements.previewCanvas) {
     return;
@@ -16037,6 +16083,7 @@ function ensurePreview() {
     const playerEntityId = String(
       hit?.object?.userData?.privateWorldPlayerId
       || (entityRef?.kind === "player" ? entityRef.id : ""),
+      || findProjectedPlayerHit(event),
     ).trim();
     if (playerEntityId) {
       void attemptOccupyPlayer(playerEntityId);
