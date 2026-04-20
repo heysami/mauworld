@@ -20,6 +20,9 @@ const PLAYER_LINEAR_DAMPING = 6.5;
 const PLAYER_ANGULAR_DAMPING = 10;
 const DYNAMIC_LINEAR_DAMPING = 1.8;
 const DYNAMIC_ANGULAR_DAMPING = 3.6;
+const DYNAMIC_INTERACTION_LEASE_MS = 220;
+const DYNAMIC_INTERACTION_MAX_STATES = 12;
+const DYNAMIC_INTERACTION_DISTANCE_BUFFER = PRIVATE_WORLD_BLOCK_UNIT * 1.35;
 const MAX_DELTA_SECONDS = 0.08;
 const FLOOR_HALF_EXTENT = 4096;
 
@@ -114,6 +117,71 @@ function pushRuntimeEvent(simulation, event = {}) {
     ...cloneJson(event),
   });
   simulation.recentEvents = simulation.recentEvents.slice(0, 24);
+}
+
+function clearDynamicObjectAuthority(entry) {
+  if (!entry) {
+    return;
+  }
+  entry.authority_owner_profile_id = null;
+  entry.authority_owner_username = null;
+  entry.authority_lease_until_ms = 0;
+}
+
+function isDynamicObjectAuthorityActive(entry, nowMs = Date.now()) {
+  return Boolean(
+    entry?.authority_owner_profile_id
+    && Number(entry.authority_lease_until_ms ?? 0) > Number(nowMs ?? Date.now()),
+  );
+}
+
+function releaseExpiredDynamicAuthorities(runtime, nowMs = Date.now()) {
+  for (const entry of runtime?.dynamicObjects ?? []) {
+    if (isDynamicObjectAuthorityActive(entry, nowMs)) {
+      continue;
+    }
+    clearDynamicObjectAuthority(entry);
+  }
+}
+
+function applyDynamicObjectPose(runtime, entry, {
+  position = null,
+  velocity = null,
+  rotation = null,
+  angularVelocity = null,
+} = {}) {
+  if (!runtime || !entry) {
+    return null;
+  }
+  const body = runtime.physics?.objectBodies?.get(entry.id) ?? null;
+  const currentPosition = body ? vec3(body.translation(), entry.position) : vec3(entry.position);
+  const currentVelocity = body ? vec3(body.linvel(), entry.velocity) : vec3(entry.velocity);
+  const currentRotation = body ? quaternionToEuler(body.rotation()) : vec3(entry.rotation);
+  const currentAngularVelocity = body ? vec3(body.angvel(), entry.angular_velocity) : vec3(entry.angular_velocity);
+  const nextPosition = vec3(position, currentPosition);
+  const nextVelocity = vec3(velocity, currentVelocity);
+  const nextRotation = vec3(rotation, currentRotation);
+  const nextAngularVelocity = vec3(angularVelocity, currentAngularVelocity);
+  entry.position = nextPosition;
+  entry.velocity = nextVelocity;
+  entry.rotation = nextRotation;
+  entry.angular_velocity = nextAngularVelocity;
+  entry.sleeping = false;
+  if (body) {
+    body.setTranslation(nextPosition, true);
+    body.setLinvel(nextVelocity, true);
+    body.setRotation(toRapierRotation(nextRotation), true);
+    if (typeof body.setAngvel === "function") {
+      body.setAngvel(nextAngularVelocity, true);
+    }
+    body.wakeUp?.();
+  }
+  return {
+    position: cloneJson(nextPosition),
+    velocity: cloneJson(nextVelocity),
+    rotation: cloneJson(nextRotation),
+    angular_velocity: cloneJson(nextAngularVelocity),
+  };
 }
 
 function parseRuleSceneTarget(rule = {}) {
@@ -399,6 +467,113 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
   };
 }
 
+function canPlayerInteractWithDynamicObject(player, entry) {
+  if (!player || !entry) {
+    return false;
+  }
+  const playerHalf = getBodyHalfExtents({
+    kind: "player",
+    scale: player.scale,
+  });
+  const objectHalf = getBodyHalfExtents(entry);
+  const limitX = playerHalf.x + objectHalf.x + DYNAMIC_INTERACTION_DISTANCE_BUFFER;
+  const limitY = playerHalf.y + objectHalf.y + DYNAMIC_INTERACTION_DISTANCE_BUFFER;
+  const limitZ = playerHalf.z + objectHalf.z + DYNAMIC_INTERACTION_DISTANCE_BUFFER;
+  return (
+    Math.abs(mustFinite(player.position?.x, 0) - mustFinite(entry.position?.x, 0)) <= limitX
+    && Math.abs(mustFinite(player.position?.y, 0) - mustFinite(entry.position?.y, 0)) <= limitY
+    && Math.abs(mustFinite(player.position?.z, 0) - mustFinite(entry.position?.z, 0)) <= limitZ
+  );
+}
+
+function resolveDynamicInteractionObjectId(runtime, value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  const knownIds = (runtime?.dynamicObjects ?? []).map((entry) => entry.id).filter(Boolean);
+  if (knownIds.includes(raw)) {
+    return raw;
+  }
+  return resolveEntityIdAlias("primitive", raw, knownIds)
+    ?? resolveEntityIdAlias("model", raw, knownIds)
+    ?? raw;
+}
+
+function applyDynamicInteractionStates(runtime, occupiedPlayer, profile, interactionStates = []) {
+  if (!runtime || !occupiedPlayer || !profile?.id) {
+    return {
+      accepted_object_ids: [],
+      rejected_object_ids: [],
+    };
+  }
+  const nowMs = Date.now();
+  const accepted = [];
+  const rejected = [];
+  const limitedStates = Array.isArray(interactionStates)
+    ? interactionStates.slice(0, DYNAMIC_INTERACTION_MAX_STATES)
+    : [];
+  for (const state of limitedStates) {
+    const objectId = resolveDynamicInteractionObjectId(runtime, state?.object_id ?? state?.id ?? "");
+    if (!objectId) {
+      continue;
+    }
+    const entry = runtime.dynamicObjects.find((candidate) => candidate.id === objectId) ?? null;
+    if (!entry || entry.rigid_mode === "ghost") {
+      rejected.push(objectId);
+      continue;
+    }
+    const previousSeq = Math.max(0, Number(entry.last_client_interaction_seq ?? 0) || 0);
+    const interactionSeq = Number(state?.interaction_seq ?? state?.motion_seq ?? 0);
+    if (Number.isFinite(interactionSeq) && interactionSeq < previousSeq) {
+      rejected.push(objectId);
+      continue;
+    }
+    const activeOwner = String(entry.authority_owner_profile_id ?? "").trim();
+    if (activeOwner && activeOwner !== String(profile.id).trim() && isDynamicObjectAuthorityActive(entry, nowMs)) {
+      rejected.push(objectId);
+      continue;
+    }
+    if (!canPlayerInteractWithDynamicObject(occupiedPlayer, entry) && activeOwner !== String(profile.id).trim()) {
+      rejected.push(objectId);
+      continue;
+    }
+    entry.authority_owner_profile_id = String(profile.id).trim();
+    entry.authority_owner_username = String(profile.username ?? profile.display_name ?? "").trim() || null;
+    entry.authority_lease_until_ms = nowMs + DYNAMIC_INTERACTION_LEASE_MS;
+    if (Number.isFinite(interactionSeq)) {
+      entry.last_client_interaction_seq = Math.max(previousSeq, interactionSeq);
+    }
+    applyDynamicObjectPose(runtime, entry, {
+      position: {
+        x: state?.position?.x ?? state?.position_x,
+        y: state?.position?.y ?? state?.position_y,
+        z: state?.position?.z ?? state?.position_z,
+      },
+      velocity: {
+        x: state?.velocity?.x ?? state?.velocity_x,
+        y: state?.velocity?.y ?? state?.velocity_y,
+        z: state?.velocity?.z ?? state?.velocity_z,
+      },
+      rotation: {
+        x: state?.rotation?.x ?? state?.rotation_x,
+        y: state?.rotation?.y ?? state?.rotation_y,
+        z: state?.rotation?.z ?? state?.rotation_z,
+      },
+      angularVelocity: {
+        x: state?.angular_velocity?.x ?? state?.angular_velocity_x,
+        y: state?.angular_velocity?.y ?? state?.angular_velocity_y,
+        z: state?.angular_velocity?.z ?? state?.angular_velocity_z,
+      },
+    });
+    accepted.push(objectId);
+  }
+  return {
+    accepted_object_ids: accepted,
+    rejected_object_ids: rejected,
+  };
+}
+
 function syncRapierOccupancy(simulation) {
   const physics = simulation.physics;
   if (!physics) {
@@ -634,6 +809,10 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     velocity: { x: 0, y: 0, z: 0 },
     angular_velocity: { x: 0, y: 0, z: 0 },
     sleeping: false,
+    authority_owner_profile_id: null,
+    authority_owner_username: null,
+    authority_lease_until_ms: 0,
+    last_client_interaction_seq: 0,
     rigid_mode: entry.rigid_mode,
     physics: cloneJson(entry.physics ?? {}),
     visibility: true,
@@ -658,6 +837,10 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     velocity: { x: 0, y: 0, z: 0 },
     angular_velocity: { x: 0, y: 0, z: 0 },
     sleeping: false,
+    authority_owner_profile_id: null,
+    authority_owner_username: null,
+    authority_lease_until_ms: 0,
+    last_client_interaction_seq: 0,
     rigid_mode: entry.rigid_mode,
     physics: cloneJson(entry.physics ?? {}),
     visibility: true,
@@ -728,6 +911,11 @@ function syncParticipantOccupancy(simulation, participants = []) {
       })
       .filter(Boolean),
   );
+  const occupiedProfileIds = new Set(
+    participants
+      .map((entry) => String(entry?.profile_id ?? "").trim())
+      .filter(Boolean),
+  );
 
   for (const player of simulation.players) {
     const participant = occupiedByEntityId.get(player.id) ?? null;
@@ -738,6 +926,13 @@ function syncParticipantOccupancy(simulation, participants = []) {
     if (!player.occupied_by_profile_id) {
       player.pressedKeys.clear();
       player.ready = false;
+    }
+  }
+
+  for (const entry of simulation.dynamicObjects ?? []) {
+    const ownerProfileId = String(entry.authority_owner_profile_id ?? "").trim();
+    if (ownerProfileId && !occupiedProfileIds.has(ownerProfileId)) {
+      clearDynamicObjectAuthority(entry);
     }
   }
 
@@ -954,6 +1149,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
   const deltaSeconds = clampNumber(mustFinite(options.deltaMs, DEFAULT_TICK_MS) / 1000, 0.001, MAX_DELTA_SECONDS);
   const inputEdgesByPlayerId = new Map();
   const pendingInputs = Array.isArray(options.pendingInputs) ? options.pendingInputs : [];
+  releaseExpiredDynamicAuthorities(simulation);
   for (const input of pendingInputs) {
     const player = simulation.players.find((entry) => entry.id === input.playerId);
     if (!player || !player.occupied_by_profile_id) {
@@ -1107,6 +1303,9 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       velocity: cloneJson(entry.velocity),
       angular_velocity: cloneJson(entry.angular_velocity),
       sleeping: entry.sleeping === true,
+      authority_owner_profile_id: entry.authority_owner_profile_id,
+      authority_owner_username: entry.authority_owner_username,
+      authority_lease_until_ms: Number(entry.authority_lease_until_ms ?? 0) || 0,
       rigid_mode: entry.rigid_mode,
       visible: entry.visibility !== false,
       material: cloneJson(entry.material),
@@ -1441,6 +1640,45 @@ export class PrivateWorldRuntime {
     };
   }
 
+  async syncDynamicInteractionsByReference({
+    worldId,
+    creatorUsername,
+    profile,
+    interactionStates = [],
+  } = {}) {
+    const keyRef = this.getWorldRefKey(worldId, creatorUsername);
+    let instanceId = this.keysByWorldRef.get(keyRef);
+    let simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    if (!simulation) {
+      const snapshot = await this.syncWorldByReference({ worldId, creatorUsername });
+      if (!snapshot) {
+        return {
+          synced: false,
+          accepted_object_ids: [],
+          rejected_object_ids: [],
+        };
+      }
+      instanceId = this.keysByWorldRef.get(keyRef);
+      simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    }
+    if (!simulation) {
+      return {
+        synced: false,
+        accepted_object_ids: [],
+        rejected_object_ids: [],
+      };
+    }
+    const occupiedPlayer = simulation.runtime.players.find((entry) => entry.occupied_by_profile_id === profile?.id) ?? null;
+    if (!occupiedPlayer) {
+      throw new HttpError(403, "Only occupied player slots can drive dynamic interactions");
+    }
+    const result = applyDynamicInteractionStates(simulation.runtime, occupiedPlayer, profile, interactionStates);
+    return {
+      synced: true,
+      ...result,
+    };
+  }
+
   async queueInputByReference({
     worldId,
     creatorUsername,
@@ -1545,7 +1783,9 @@ export class PrivateWorldRuntime {
         pendingInputs,
       });
       await this.drainCommands(simulation);
-      if (now - simulation.lastBroadcastAt >= this.broadcastMs) {
+      const activeDynamicAuthority = runtime.dynamicObjects.some((entry) => isDynamicObjectAuthorityActive(entry, now));
+      const nextBroadcastMs = activeDynamicAuthority ? this.tickMs : this.broadcastMs;
+      if (now - simulation.lastBroadcastAt >= nextBroadcastMs) {
         simulation.lastBroadcastAt = now;
         this.store.publishPrivateWorldEvent?.({
           type: "runtime:snapshot",

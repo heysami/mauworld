@@ -1038,6 +1038,7 @@ const state = {
   lastPresenceSentAt: 0,
   lastRuntimeLookSentAt: 0,
   lastRuntimeLookHeadingY: null,
+  lastRuntimeInteractionSentAt: 0,
   lastRuntimeStatusRenderedAt: 0,
   viewerSuppressClickAt: 0,
   buildSuppressedClick: null,
@@ -5580,6 +5581,69 @@ function sendPrivatePresence(force = false) {
     payload.velocity_z = possessedPose.velocity_z;
   }
   return sendWorldSocketMessage(payload);
+}
+
+function buildRuntimeDynamicInteractionPayloads() {
+  if (!state.joined || getLocalParticipant()?.join_role !== "player") {
+    return [];
+  }
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  const dynamicObjects = Array.isArray(runtime?.dynamic_objects) ? runtime.dynamic_objects : [];
+  if (!dynamicObjects.length) {
+    return [];
+  }
+  const nowMs = performance.now();
+  const payloads = [];
+  for (const entry of dynamicObjects) {
+    const objectId = String(entry?.id ?? "").trim();
+    if (!objectId) {
+      continue;
+    }
+    const mesh = state.preview?.entityMeshes?.get(objectId) ?? null;
+    const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+    if (!motionState?.initialized) {
+      continue;
+    }
+    if (Number(motionState.localInteractionUntilMs ?? 0) <= nowMs) {
+      continue;
+    }
+    payloads.push({
+      object_id: objectId,
+      interaction_seq: nextPrivateMotionSequence(),
+      position_x: Number((Number(motionState.renderPosition?.x ?? mesh.position.x ?? 0) || 0).toFixed(4)),
+      position_y: Number((Number(motionState.renderPosition?.y ?? mesh.position.y ?? 0) || 0).toFixed(4)),
+      position_z: Number((Number(motionState.renderPosition?.z ?? mesh.position.z ?? 0) || 0).toFixed(4)),
+      velocity_x: Number((Number(motionState.renderVelocity?.x ?? 0) || 0).toFixed(4)),
+      velocity_y: Number((Number(motionState.renderVelocity?.y ?? 0) || 0).toFixed(4)),
+      velocity_z: Number((Number(motionState.renderVelocity?.z ?? 0) || 0).toFixed(4)),
+      rotation_x: Number((Number(entry?.rotation?.x ?? mesh.rotation.x ?? 0) || 0).toFixed(4)),
+      rotation_y: Number((Number(entry?.rotation?.y ?? mesh.rotation.y ?? 0) || 0).toFixed(4)),
+      rotation_z: Number((Number(entry?.rotation?.z ?? mesh.rotation.z ?? 0) || 0).toFixed(4)),
+      angular_velocity_x: Number((Number(entry?.angular_velocity?.x ?? 0) || 0).toFixed(4)),
+      angular_velocity_y: Number((Number(entry?.angular_velocity?.y ?? 0) || 0).toFixed(4)),
+      angular_velocity_z: Number((Number(entry?.angular_velocity?.z ?? 0) || 0).toFixed(4)),
+    });
+  }
+  return payloads;
+}
+
+function sendRuntimeDynamicInteractions(force = false) {
+  if (!state.selectedWorld || !state.session || getLocalParticipant()?.join_role !== "player") {
+    return false;
+  }
+  const interactions = buildRuntimeDynamicInteractionPayloads();
+  if (!interactions.length) {
+    return false;
+  }
+  const now = performance.now();
+  if (!force && now - Number(state.lastRuntimeInteractionSentAt ?? 0) < PRIVATE_POSSESSED_PRESENCE_INTERVAL_MS) {
+    return false;
+  }
+  state.lastRuntimeInteractionSentAt = now;
+  return sendWorldSocketMessage({
+    type: "runtime:interactions",
+    interactions,
+  });
 }
 
 function pushPrivateChatEntry(payload = {}) {
@@ -15747,6 +15811,7 @@ function ensurePreview() {
     setPreviewRendererSize(state.preview, elements.previewCanvas.clientWidth || 640, elements.previewCanvas.clientHeight || 360);
     refreshPrivatePreviewEnvironment(state.preview);
     advanceRuntimeVisuals(state.preview, deltaSeconds);
+    sendRuntimeDynamicInteractions();
     const possessed = state.mode === "play" && updatePossessedCamera(state.preview, deltaSeconds);
     if (possessed) {
       if (state.preview.viewerAvatar) {
@@ -16718,6 +16783,8 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
       scale: cloneJson(runtimeEntry.scale ?? null),
       collider_scale: cloneJson(runtimeEntry.collider_scale ?? null),
       sleeping: runtimeEntry.sleeping === true,
+      authorityOwnerProfileId: String(runtimeEntry.authority_owner_profile_id ?? "").trim(),
+      authorityLeaseUntilMs: Math.max(0, Number(runtimeEntry.authority_lease_until_ms ?? 0) || 0),
     };
     mesh.userData.privateWorldRuntimeMotionState = applyAuthoritativeMotionSample(
       mesh.userData.privateWorldRuntimeMotionState ?? null,
@@ -16819,6 +16886,7 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
     return;
   }
   const localPlayerId = getLocallyControlledPlayerEntityId();
+  const localProfileId = getPrivateProfileId();
   const nowMs = performance.now();
   const localPrediction = getLocalPossessedPlayerPrediction();
   const localPlayerHalfExtents = localPrediction
@@ -16835,6 +16903,11 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
     const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
     if (motionMode === "dynamic_continuous" && motionState) {
       const dynamicMeta = mesh.userData.privateWorldRuntimeDynamicMeta ?? {};
+      const localAuthorityActive = Boolean(
+        localProfileId
+        && dynamicMeta.authorityOwnerProfileId === localProfileId
+        && Number(dynamicMeta.authorityLeaseUntilMs ?? 0) > Date.now(),
+      );
       let interactionVelocity = null;
       if (
         localPrediction
@@ -16868,6 +16941,7 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
       stepContinuousMotionState(motionState, {
         deltaSeconds,
         nowMs,
+        correctionRate: localAuthorityActive ? 0.5 : 8.5,
         interactionVelocity: motionState.localInteractionVelocity,
         sleeping: dynamicMeta.sleeping === true,
       });

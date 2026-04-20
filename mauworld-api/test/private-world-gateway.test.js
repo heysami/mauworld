@@ -296,6 +296,79 @@ test("private world look-only inputs keep only the latest queued motion sample",
   assert.equal(queued[0].payload.position_z, -3);
 });
 
+test("private world runtime interaction states are routed through the socket gateway", async () => {
+  const synced = [];
+  const gateway = createGateway({
+    async syncPrivateWorldDynamicInteractions(profile, payload) {
+      synced.push({ profile, payload });
+      return { synced: true, accepted_object_ids: ["crate_one"] };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:runner",
+    displayName: "runner",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  await gateway.handleMessage(client, {
+    type: "runtime:interactions",
+    interactions: [
+      {
+        object_id: "crate_one",
+        interaction_seq: 18,
+        position_x: 4,
+        position_y: 1,
+        position_z: -3,
+        velocity_x: 5,
+        velocity_y: 0,
+        velocity_z: -2,
+      },
+    ],
+  });
+
+  assert.equal(synced.length, 1);
+  assert.equal(synced[0].profile.id, client.profile.id);
+  assert.equal(synced[0].payload.worldId, client.worldId);
+  assert.equal(synced[0].payload.creatorUsername, client.creatorUsername);
+  assert.equal(synced[0].payload.interactions[0].object_id, "crate_one");
+});
+
+test("private world interaction sync keeps only the latest queued object state sample", async () => {
+  const synced = [];
+  const gateway = createGateway({
+    async syncPrivateWorldDynamicInteractions(profile, payload) {
+      synced.push({ profile, payload });
+      return { synced: true };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:runner",
+    displayName: "runner",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  gateway.queueClientMessage(client, {
+    type: "runtime:interactions",
+    interactions: [{ object_id: "crate_one", interaction_seq: 1, position_x: 1 }],
+  });
+  gateway.queueClientMessage(client, {
+    type: "runtime:interactions",
+    interactions: [{ object_id: "crate_one", interaction_seq: 2, position_x: 2 }],
+  });
+  gateway.queueClientMessage(client, {
+    type: "runtime:interactions",
+    interactions: [{ object_id: "crate_one", interaction_seq: 3, position_x: 3 }],
+  });
+
+  await client.messageQueue;
+
+  assert.equal(synced.length, 1);
+  assert.equal(synced[0].payload.interactions[0].interaction_seq, 3);
+  assert.equal(synced[0].payload.interactions[0].position_x, 3);
+});
+
 test("private world connection preserves a per-client viewer session id for authenticated users", async () => {
   const gateway = createGateway({
     async verifyUserAccessToken() {

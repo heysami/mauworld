@@ -55,6 +55,16 @@ function isLookOnlyRuntimeInputMessage(message) {
   return !String(message.key ?? "").trim();
 }
 
+function isRuntimeInteractionSyncMessage(message) {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if (String(message.type ?? "").trim() !== "runtime:interactions") {
+    return false;
+  }
+  return Array.isArray(message.interactions);
+}
+
 function buildPrivateViewerSessionId(profile, guestSessionId = "", requestedViewerSessionId = "") {
   const requested = String(requestedViewerSessionId ?? "").trim();
   const guestId = String(guestSessionId ?? "").trim();
@@ -196,6 +206,8 @@ export class PrivateWorldGateway {
         messageQueue: Promise.resolve(),
         pendingLookInput: null,
         lookInputQueued: false,
+        pendingInteractionInput: null,
+        interactionInputQueued: false,
         lastParticipantHeartbeatAt: 0,
       };
       this.clients.add(client);
@@ -245,6 +257,27 @@ export class PrivateWorldGateway {
       client.messageQueue = (client.messageQueue ?? Promise.resolve()).then(runLatestLook, runLatestLook);
       return;
     }
+    if (isRuntimeInteractionSyncMessage(message)) {
+      client.pendingInteractionInput = message;
+      if (client.interactionInputQueued) {
+        return;
+      }
+      client.interactionInputQueued = true;
+      const runLatestInteraction = async () => {
+        const latestMessage = client.pendingInteractionInput;
+        client.pendingInteractionInput = null;
+        try {
+          await this.handleRuntimeInteractions(client, latestMessage);
+        } finally {
+          client.interactionInputQueued = false;
+          if (client.pendingInteractionInput) {
+            this.queueClientMessage(client, client.pendingInteractionInput);
+          }
+        }
+      };
+      client.messageQueue = (client.messageQueue ?? Promise.resolve()).then(runLatestInteraction, runLatestInteraction);
+      return;
+    }
     const run = async () => {
       await this.handleMessage(client, message);
     };
@@ -277,6 +310,10 @@ export class PrivateWorldGateway {
     }
     if (type === "runtime:input") {
       await this.handleRuntimeInput(client, message);
+      return;
+    }
+    if (type === "runtime:interactions") {
+      await this.handleRuntimeInteractions(client, message);
       return;
     }
     if (type === "browser:start") {
@@ -2200,6 +2237,28 @@ export class PrivateWorldGateway {
       sendJson(client, {
         type: "world:error",
         message: error.message || "Could not send runtime input.",
+      });
+    }
+  }
+
+  async handleRuntimeInteractions(client, message) {
+    if (!client.profile) {
+      sendJson(client, {
+        type: "world:error",
+        message: "Sign in to drive private-world object interactions.",
+      });
+      return;
+    }
+    try {
+      await this.store.syncPrivateWorldDynamicInteractions(client.profile, {
+        worldId: client.worldId,
+        creatorUsername: client.creatorUsername,
+        interactions: Array.isArray(message.interactions) ? message.interactions : [],
+      });
+    } catch (error) {
+      sendJson(client, {
+        type: "world:error",
+        message: error.message || "Could not sync runtime interactions.",
       });
     }
   }

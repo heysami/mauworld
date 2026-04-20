@@ -2789,6 +2789,23 @@ export function installPrivateWorldStore(MauworldStore) {
     });
   };
 
+  MauworldStore.prototype.syncPrivateWorldDynamicInteractions = async function syncPrivateWorldDynamicInteractions(profile, input = {}) {
+    const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
+    if (!this.privateWorldRuntime?.syncDynamicInteractionsByReference) {
+      return {
+        synced: false,
+        accepted_object_ids: [],
+        rejected_object_ids: [],
+      };
+    }
+    return await this.privateWorldRuntime.syncDynamicInteractionsByReference({
+      worldId: world.world_id,
+      creatorUsername: creator.username,
+      profile,
+      interactionStates: Array.isArray(input.interactions) ? input.interactions : [],
+    });
+  };
+
   MauworldStore.prototype.acquirePrivateWorldEntityLock = async function acquirePrivateWorldEntityLock(profile, input = {}) {
     const { world, creator } = await requireWorldEditor(this, profile, input.worldId, input.creatorUsername);
     const sceneId = String(input.sceneId ?? "").trim();

@@ -618,6 +618,145 @@ test("runtime syncs the occupied server body to a client-authored pose", async (
   assert.ok(Math.abs(velocity.z + 3) < 0.0001);
 });
 
+test("runtime leases nearby dynamic objects to the interacting player and applies their state", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: {
+        gravity: { x: 0, y: -9.8, z: 0 },
+        camera_mode: "third_person",
+      },
+      voxels: [],
+      primitives: [
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 0, y: 1, z: -4 },
+          scale: { x: 2, y: 2, z: 2 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#88aadd", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: { gravity_scale: 1, restitution: 0, friction: 0.4, mass: 1 },
+        },
+      ],
+      screens: [],
+      players: [{ id: "player_one", label: "Player One", position: { x: 0, y: 1, z: 0 }, scale: 1, body_mode: "rigid", camera_mode: "third_person" }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const profileId = simulation.runtime.players[0].occupied_by_profile_id;
+  const result = await manager.syncDynamicInteractionsByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId, username: "maker" },
+    interactionStates: [
+      {
+        object_id: "crate_one",
+        interaction_seq: 7,
+        position_x: 0.5,
+        position_y: 1.1,
+        position_z: -5.5,
+        velocity_x: 0,
+        velocity_y: 0,
+        velocity_z: -8,
+      },
+    ],
+  });
+
+  const entry = simulation.runtime.dynamicObjects[0];
+  assert.equal(result.synced, true);
+  assert.deepEqual(result.accepted_object_ids, ["primitive_crate-one"]);
+  assert.equal(entry.authority_owner_profile_id, profileId);
+  assert.equal(entry.authority_owner_username, "maker");
+  assert.ok(entry.authority_lease_until_ms > Date.now());
+  assert.ok(Math.abs(entry.position.z + 5.5) < 0.0001);
+  assert.ok(Math.abs(entry.velocity.z + 8) < 0.0001);
+});
+
+test("runtime rejects dynamic interaction claims from another player while a lease is active", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: {
+        gravity: { x: 0, y: -9.8, z: 0 },
+        camera_mode: "third_person",
+      },
+      voxels: [],
+      primitives: [
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 0, y: 1, z: -4 },
+          scale: { x: 2, y: 2, z: 2 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#88aadd", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: { gravity_scale: 1, restitution: 0, friction: 0.4, mass: 1 },
+        },
+      ],
+      screens: [],
+      players: [
+        { id: "player_one", label: "Player One", position: { x: 0, y: 1, z: 0 }, scale: 1, body_mode: "rigid", camera_mode: "third_person" },
+        { id: "player_two", label: "Player Two", position: { x: 1, y: 1, z: 0 }, scale: 1, body_mode: "rigid", camera_mode: "third_person" },
+      ],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+    participants: [
+      {
+        profile_id: "profile_one",
+        profile: { username: "maker", display_name: "Maker" },
+        join_role: "player",
+        player_entity_id: "player_player-one",
+        ready_state: { ready: true },
+      },
+      {
+        profile_id: "profile_two",
+        profile: { username: "guest2", display_name: "Guest 2" },
+        join_role: "player",
+        player_entity_id: "player_player-two",
+        ready_state: { ready: true },
+      },
+    ],
+  });
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  await manager.syncDynamicInteractionsByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: "profile_one", username: "maker" },
+    interactionStates: [{ object_id: "crate_one", interaction_seq: 2, position_z: -5 }],
+  });
+
+  const result = await manager.syncDynamicInteractionsByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: "profile_two", username: "guest2" },
+    interactionStates: [{ object_id: "crate_one", interaction_seq: 3, position_z: -6 }],
+  });
+
+  assert.deepEqual(result.accepted_object_ids, []);
+  assert.deepEqual(result.rejected_object_ids, ["primitive_crate-one"]);
+  assert.equal(simulation.runtime.dynamicObjects[0].authority_owner_profile_id, "profile_one");
+});
+
 test("runtime ignores out-of-order motion sequences and keeps the newest client pose", async () => {
   const manager = new PrivateWorldRuntime({
     store: {},
