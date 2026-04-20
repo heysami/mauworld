@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolvePlayerMovementAgainstBlockers } from "./private-player-collision.mjs";
+import {
+  resolvePlayerGroundSupport,
+  resolvePlayerMovementAgainstBlockers,
+} from "./private-player-collision.mjs";
 
 test("blocks forward movement into a nearby wall", () => {
   const result = resolvePlayerMovementAgainstBlockers({
@@ -105,4 +108,40 @@ test("keeps the body on its original side when moving while slightly embedded", 
 
   assert.equal(result.blockedAxes.x, true);
   assert.ok(result.position.x < 1.6);
+});
+
+test("finds ground support directly beneath the player", () => {
+  const result = resolvePlayerGroundSupport({
+    startPosition: { x: 0, y: 2, z: 0 },
+    desiredPosition: { x: 0, y: 2, z: 0 },
+    playerSize: { x: 1, y: 2, z: 1 },
+    blockers: [
+      {
+        position: { x: 0, y: 0.5, z: 0 },
+        size: { x: 4, y: 1, z: 4 },
+      },
+    ],
+  });
+
+  assert.equal(result.hasSupport, true);
+  assert.equal(result.surfaceY, 1);
+  assert.equal(result.groundY, 2);
+});
+
+test("finds swept ground support when a platform rises into the player", () => {
+  const result = resolvePlayerGroundSupport({
+    startPosition: { x: 0, y: 2, z: 0 },
+    desiredPosition: { x: 0, y: 2.18, z: 0 },
+    playerSize: { x: 1, y: 2, z: 1 },
+    blockers: [
+      {
+        position: { x: 0, y: 0.59, z: 0 },
+        size: { x: 4, y: 1.18, z: 4 },
+      },
+    ],
+    verticalTolerance: 0.24,
+  });
+
+  assert.equal(result.hasSupport, true);
+  assert.ok(Math.abs(result.groundY - 2.18) < 0.0001);
 });

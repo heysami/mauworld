@@ -145,3 +145,84 @@ export function resolvePlayerMovementAgainstBlockers(input = {}) {
     blockedAxes,
   };
 }
+
+export function resolvePlayerGroundSupport(input = {}) {
+  const epsilon = Math.max(0.0001, finite(input.epsilon, 0.0001));
+  const verticalTolerance = Math.max(epsilon, finite(input.verticalTolerance, 0.24));
+  const startPosition = {
+    x: finite(input.startPosition?.x, 0),
+    y: finite(input.startPosition?.y, 0),
+    z: finite(input.startPosition?.z, 0),
+  };
+  const desiredPosition = {
+    x: finite(input.desiredPosition?.x, startPosition.x),
+    y: finite(input.desiredPosition?.y, startPosition.y),
+    z: finite(input.desiredPosition?.z, startPosition.z),
+  };
+  const playerHalf = halfExtents(input.playerSize);
+  const startBottom = startPosition.y - playerHalf.y;
+  const desiredBottom = desiredPosition.y - playerHalf.y;
+  const minBottom = Math.min(startBottom, desiredBottom) - verticalTolerance;
+  const maxBottom = Math.max(startBottom, desiredBottom) + verticalTolerance;
+  const blockers = (Array.isArray(input.blockers) ? input.blockers : [])
+    .map((blocker) => ({
+      raw: blocker ?? null,
+      position: {
+        x: finite(blocker?.position?.x, 0),
+        y: finite(blocker?.position?.y, 0),
+        z: finite(blocker?.position?.z, 0),
+      },
+      half: rotatedHalfExtents(blocker?.size ?? {}, blocker?.rotation ?? {}),
+    }));
+
+  let bestSupport = null;
+  for (const blocker of blockers) {
+    const combinedHalfX = playerHalf.x + blocker.half.x;
+    const combinedHalfZ = playerHalf.z + blocker.half.z;
+    if (
+      Math.abs(desiredPosition.x - blocker.position.x) > combinedHalfX + epsilon
+      || Math.abs(desiredPosition.z - blocker.position.z) > combinedHalfZ + epsilon
+    ) {
+      continue;
+    }
+    const topY = blocker.position.y + blocker.half.y;
+    if (topY < minBottom || topY > maxBottom) {
+      continue;
+    }
+    const verticalGap = desiredBottom - topY;
+    const absoluteGap = Math.abs(verticalGap);
+    if (
+      !bestSupport
+      || topY > bestSupport.surfaceY + epsilon
+      || (Math.abs(topY - bestSupport.surfaceY) <= epsilon && absoluteGap < bestSupport.absoluteGap)
+    ) {
+      bestSupport = {
+        blocker: blocker.raw,
+        surfaceY: topY,
+        groundY: topY + playerHalf.y,
+        verticalGap,
+        absoluteGap,
+      };
+    }
+  }
+
+  if (!bestSupport) {
+    return {
+      hasSupport: false,
+      blocker: null,
+      surfaceY: Number.NaN,
+      groundY: Number.NaN,
+      verticalGap: Number.NaN,
+      absoluteGap: Number.POSITIVE_INFINITY,
+    };
+  }
+
+  return {
+    hasSupport: true,
+    blocker: bestSupport.blocker,
+    surfaceY: bestSupport.surfaceY,
+    groundY: bestSupport.groundY,
+    verticalGap: bestSupport.verticalGap,
+    absoluteGap: bestSupport.absoluteGap,
+  };
+}

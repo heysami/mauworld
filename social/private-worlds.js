@@ -40,7 +40,10 @@ import {
   buildPrivateWorldBrowserResultsMarkup,
   getPrivateWorldBrowserKey,
 } from "./private-world-browser.js";
-import { resolvePlayerMovementAgainstBlockers } from "./private-player-collision.mjs?v=20260420c";
+import {
+  resolvePlayerGroundSupport,
+  resolvePlayerMovementAgainstBlockers,
+} from "./private-player-collision.mjs?v=20260421a";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 import {
   createWorldGamesApi,
@@ -10146,6 +10149,144 @@ function addPrivateCollisionBlocker(blockers, blocker = {}, probe = null) {
   });
 }
 
+function addPrivateSupportSurface(surfaces, surface = {}, probe = null) {
+  const position = {
+    x: Number(surface.position?.x ?? 0) || 0,
+    y: Number(surface.position?.y ?? 0) || 0,
+    z: Number(surface.position?.z ?? 0) || 0,
+  };
+  const size = toPlainCollisionScale(surface.size, { x: 1, y: 1, z: 1 });
+  const half = getHalfExtentsFromScale(size);
+  if (probe) {
+    if (
+      position.x + half.x < probe.minX
+      || position.x - half.x > probe.maxX
+      || position.y + half.y < probe.minY
+      || position.y - half.y > probe.maxY
+      || position.z + half.z < probe.minZ
+      || position.z - half.z > probe.maxZ
+    ) {
+      return;
+    }
+  }
+  surfaces.push({
+    position,
+    size,
+    rotation: {
+      x: Number(surface.rotation?.x ?? 0) || 0,
+      y: Number(surface.rotation?.y ?? 0) || 0,
+      z: Number(surface.rotation?.z ?? 0) || 0,
+    },
+    carry_riders: surface.carry_riders === true,
+    velocity: {
+      x: Number(surface.velocity?.x ?? 0) || 0,
+      y: Number(surface.velocity?.y ?? 0) || 0,
+      z: Number(surface.velocity?.z ?? 0) || 0,
+    },
+    entryId: String(surface.entryId ?? "").trim(),
+    entry: surface.entry ?? null,
+  });
+}
+
+function getPrivatePossessedSupportSurfaces(prediction, desiredPosition = prediction?.position) {
+  if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    return [];
+  }
+  const playerSize = getPrivatePlayerCollisionSize(prediction.scale);
+  const probe = buildPrivateCollisionProbe(prediction.position, desiredPosition, playerSize);
+  const surfaces = [];
+  let sceneDoc = null;
+  try {
+    sceneDoc = getRenderableSceneDoc();
+  } catch (_error) {
+    sceneDoc = null;
+  }
+
+  for (const voxel of sceneDoc?.voxels ?? []) {
+    addPrivateSupportSurface(surfaces, {
+      position: voxel.position,
+      size: getPrivateCollisionEntrySize("voxel", voxel),
+      rotation: voxel.rotation,
+    }, probe);
+  }
+
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  const runtimeSceneId = String(runtime?.active_scene_id ?? "").trim();
+  const selectedSceneId = String(state.selectedSceneId ?? "").trim();
+  const runtimeMatchesSelectedScene = Boolean(runtime && runtimeSceneId && runtimeSceneId === selectedSceneId);
+  const runtimeDynamicIds = new Set();
+
+  if (runtimeMatchesSelectedScene) {
+    for (const entry of runtime.dynamic_objects ?? []) {
+      const entryId = String(entry?.id ?? "").trim();
+      if (entryId) {
+        runtimeDynamicIds.add(entryId);
+      }
+      if (entry?.carry_riders !== true && !isPrivateCollisionModeRigid(entry?.rigid_mode)) {
+        continue;
+      }
+      const kind = entry?.entity_kind === "model" ? "model" : "primitive";
+      const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
+      const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+      addPrivateSupportSurface(surfaces, {
+        position: {
+          x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
+          y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
+          z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
+        },
+        size: getPrivateCollisionEntrySize(kind, entry),
+        rotation: entry.rotation,
+        carry_riders: entry?.carry_riders === true,
+        velocity: {
+          x: Number(motionState?.renderVelocity?.x ?? entry.velocity?.x ?? 0) || 0,
+          y: Number(motionState?.renderVelocity?.y ?? entry.velocity?.y ?? 0) || 0,
+          z: Number(motionState?.renderVelocity?.z ?? entry.velocity?.z ?? 0) || 0,
+        },
+        entryId,
+        entry,
+      }, probe);
+    }
+  }
+
+  for (const primitive of sceneDoc?.primitives ?? []) {
+    const primitiveId = String(primitive?.id ?? "").trim();
+    if (runtimeDynamicIds.has(primitiveId)) {
+      continue;
+    }
+    if (primitive?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(primitive?.rigid_mode)) {
+      continue;
+    }
+    addPrivateSupportSurface(surfaces, {
+      position: primitive.position,
+      size: getPrivateCollisionEntrySize("primitive", primitive),
+      rotation: primitive.rotation,
+      carry_riders: primitive?.physics?.carry_riders === true,
+      entryId: primitiveId,
+      entry: primitive,
+    }, probe);
+  }
+
+  for (const model of sceneDoc?.models ?? []) {
+    const modelId = String(model?.id ?? "").trim();
+    if (runtimeDynamicIds.has(modelId)) {
+      continue;
+    }
+    if (model?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(model?.rigid_mode)) {
+      continue;
+    }
+    addPrivateSupportSurface(surfaces, {
+      position: model.position,
+      size: getPrivateCollisionEntrySize("model", model),
+      rotation: model.rotation,
+      carry_riders: model?.physics?.carry_riders === true,
+      entryId: modelId,
+      entry: model,
+    }, probe);
+  }
+
+  return surfaces;
+}
+
 function getLocalCarryPlatformSupport(playerLike = null) {
   if (!playerLike?.position) {
     return null;
@@ -10359,7 +10500,7 @@ function applyLocalCarryPlatformDelta(prediction = null) {
   return platformState;
 }
 
-function getLocalPossessedGroundSupport(prediction = null) {
+function getLocalPossessedGroundSupport(prediction = null, options = {}) {
   if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
     return {
       hasSupport: false,
@@ -10369,30 +10510,58 @@ function getLocalPossessedGroundSupport(prediction = null) {
     };
   }
   const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
-  const carrySupport = getLocalCarryPlatformSupport(prediction)
-    ?? getRememberedCarryPlatformSupport(prediction);
-  const projectedSurface = getPrivatePlayerProjectedShadowSurface({
-    ...prediction,
-    onGround: false,
+  const startPosition = options.startPosition ?? prediction.position;
+  const desiredPosition = options.desiredPosition ?? prediction.position;
+  const supportResult = resolvePlayerGroundSupport({
+    startPosition,
+    desiredPosition,
+    playerSize: getPrivatePlayerCollisionSize(prediction.scale),
+    blockers: getPrivatePossessedSupportSurfaces(prediction, desiredPosition),
+    verticalTolerance: PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE,
   });
-  const hasCarrySupport = Number.isFinite(Number(carrySupport?.supportedPlayerY));
-  const surfaceY = Number(
-    carrySupport?.surfaceY
-      ?? projectedSurface?.surfaceY,
-  );
-  const hasProjectedSurface = Number.isFinite(surfaceY);
-  const hasSupport = hasCarrySupport || hasProjectedSurface;
-  let groundY = hasCarrySupport
-    ? Number(carrySupport.supportedPlayerY)
-    : (
-      hasProjectedSurface
-        ? surfaceY + playerHalf.y
-        : Number.NaN
-    );
-  let resolvedHasSupport = hasSupport;
+  let carrySupport = null;
+  let groundY = Number.NaN;
+  let resolvedHasSupport = false;
+  let velocityY = 0;
+  if (supportResult?.hasSupport) {
+    groundY = Number(supportResult.groundY);
+    resolvedHasSupport = Number.isFinite(groundY);
+    if (supportResult.blocker?.carry_riders === true) {
+      carrySupport = {
+        entry: supportResult.blocker.entry ?? null,
+        entryId: String(supportResult.blocker.entryId ?? "").trim(),
+        position: supportResult.blocker.position ?? null,
+        velocity: supportResult.blocker.velocity ?? null,
+        surfaceY: Number(supportResult.surfaceY),
+        supportedPlayerY: groundY,
+        verticalGap: Number(supportResult.verticalGap),
+        absoluteGap: Number(supportResult.absoluteGap),
+      };
+      velocityY = Number(carrySupport?.velocity?.y ?? 0) || 0;
+    }
+  } else {
+    carrySupport = getRememberedCarryPlatformSupport(prediction);
+    if (Number.isFinite(Number(carrySupport?.supportedPlayerY))) {
+      groundY = Number(carrySupport.supportedPlayerY);
+      resolvedHasSupport = true;
+      velocityY = Number(carrySupport?.velocity?.y ?? 0) || 0;
+    }
+  }
+  if (!resolvedHasSupport) {
+    const projectedSurface = getPrivatePlayerProjectedShadowSurface({
+      ...prediction,
+      position: desiredPosition,
+      onGround: false,
+    });
+    const surfaceY = Number(projectedSurface?.surfaceY);
+    if (Number.isFinite(surfaceY)) {
+      groundY = surfaceY + playerHalf.y;
+      resolvedHasSupport = true;
+    }
+  }
   if (!resolvedHasSupport) {
     const storedGroundY = Number(prediction.groundY);
-    const playerY = Number(prediction.position?.y);
+    const playerY = Number(desiredPosition?.y ?? prediction.position?.y);
     const fallbackTolerance = Math.max(0.08, PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE * 0.5);
     if (
       Number.isFinite(storedGroundY)
@@ -10406,7 +10575,7 @@ function getLocalPossessedGroundSupport(prediction = null) {
   return {
     hasSupport: resolvedHasSupport,
     groundY,
-    velocityY: Number(carrySupport?.velocity?.y),
+    velocityY,
     carrySupport,
   };
 }
@@ -10705,6 +10874,11 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   if (dt <= 0) {
     return prediction;
   }
+  const frameStartPosition = {
+    x: prediction.position.x,
+    y: prediction.position.y,
+    z: prediction.position.z,
+  };
   const intent = buildRuntimeMovementIntent();
   const now = performance.now();
   const rigidBodyMode = isPrivateCollisionModeRigid(prediction.bodyMode);
@@ -10725,7 +10899,10 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     applyLocalCarryPlatformDelta(prediction);
   }
   const preJumpGroundSupport = rigidBodyMode && !preJumpLocalJumpActive
-    ? getLocalPossessedGroundSupport(prediction)
+    ? getLocalPossessedGroundSupport(prediction, {
+      startPosition: frameStartPosition,
+      desiredPosition: prediction.position,
+    })
     : null;
   if (
     rigidBodyMode
@@ -10833,7 +11010,10 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     || prediction.jumpVisualOffsetY > 0.0001
     || prediction.jumpVisualVelocityY > 0.0001;
   const resolvedGroundSupport = !currentJumpActive
-    ? getLocalPossessedGroundSupport(prediction)
+    ? getLocalPossessedGroundSupport(prediction, {
+      startPosition: frameStartPosition,
+      desiredPosition: prediction.position,
+    })
     : null;
   const hasLocalSupport = resolvedGroundSupport?.hasSupport === true;
   const supportGroundY = Number(resolvedGroundSupport?.groundY);
