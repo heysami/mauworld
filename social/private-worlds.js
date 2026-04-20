@@ -9327,6 +9327,29 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
   };
 }
 
+function normalizePlayerCameraMode(value = "third_person") {
+  const normalized = String(value ?? "third_person").trim().toLowerCase();
+  return PLAYER_CAMERA_MODES.includes(normalized) ? normalized : "third_person";
+}
+
+function applyPossessedCameraModeRig(cameraMode = "third_person", runtimePlayer = null, options = {}) {
+  const resolvedMode = normalizePlayerCameraMode(cameraMode);
+  const headingY = Number(runtimePlayer?.rotation?.y);
+  if (Number.isFinite(headingY)) {
+    privateInputState.yaw = normalizeAngle(headingY);
+  }
+  if (resolvedMode === "first_person") {
+    privateInputState.pitch = 0;
+  } else if (resolvedMode === "third_person") {
+    privateInputState.pitch = -0.34;
+    state.cameraRadius = PRIVATE_PLAYER_VIEW.defaultRadius;
+  }
+  if (options.resetLookSync !== false) {
+    resetRuntimeLookSync();
+  }
+  return resolvedMode;
+}
+
 function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlayer()) {
   if (!runtimePlayer || getLocalParticipant()?.join_role !== "player") {
     clearPossessedPlayerPrediction();
@@ -9339,23 +9362,25 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   }
   let prediction = state.predictedPossessedPlayer;
   if (!prediction || prediction.playerId !== playerId) {
-    const nextYaw = Number(runtimePlayer.rotation?.y);
-    if (Number.isFinite(nextYaw)) {
-      privateInputState.yaw = normalizeAngle(nextYaw);
-    }
+    const nextCameraMode = applyPossessedCameraModeRig(runtimePlayer.camera_mode, runtimePlayer);
     state.cameraRadius = clampNumber(
       state.cameraRadius,
       PRIVATE_PLAYER_VIEW.defaultRadius,
       PRIVATE_PLAYER_VIEW.minRadius,
       PRIVATE_PLAYER_VIEW.maxRadius,
     );
-    resetRuntimeLookSync();
     prediction = createPossessedPlayerPrediction(runtimePlayer);
+    prediction.cameraMode = nextCameraMode;
     state.predictedPossessedPlayer = prediction;
     return prediction;
   }
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
-  prediction.cameraMode = String(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person").trim() || "third_person";
+  const nextCameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
+  if (nextCameraMode !== prediction.cameraMode) {
+    prediction.cameraMode = applyPossessedCameraModeRig(nextCameraMode, runtimePlayer);
+  } else {
+    prediction.cameraMode = nextCameraMode;
+  }
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
   return prediction;
 }
@@ -9394,7 +9419,7 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   prediction.rotation.y = intent.headingY;
   prediction.onGround = runtimePlayer.on_ground === true;
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
-  prediction.cameraMode = String(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person").trim() || "third_person";
+  prediction.cameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
   return prediction;
 }
