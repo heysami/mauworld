@@ -1018,7 +1018,7 @@ function isPlayerMovementEnabled(player = {}) {
 }
 
 function isPlayerJumpEnabled(player = {}) {
-  return player?.jump_enabled !== false;
+  return player?.jump_enabled === true;
 }
 
 function getGhostPlayerGroundY(player = {}) {
@@ -1257,7 +1257,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
       fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
       movement_enabled: entry.movement_enabled !== false,
-      jump_enabled: entry.jump_enabled !== false,
+      jump_enabled: entry.jump_enabled === true,
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
       initialPosition,
@@ -1857,7 +1857,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
       fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
       movement_enabled: entry.movement_enabled !== false,
-      jump_enabled: entry.jump_enabled !== false,
+      jump_enabled: entry.jump_enabled === true,
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
       occupied_by_profile_id: entry.occupied_by_profile_id,

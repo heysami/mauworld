@@ -64,7 +64,7 @@ test("normalizeSceneDoc gives player spawns a character-scale default", () => {
   assert.equal(scene.players[0].scale, 5);
   assert.deepEqual(scene.players[0].position, { x: 0, y: 4.5, z: 0 });
   assert.equal(scene.players[0].movement_enabled, true);
-  assert.equal(scene.players[0].jump_enabled, true);
+  assert.equal(scene.players[0].jump_enabled, false);
 });
 
 test("normalizeSceneDoc keeps fixed orthogonal player framing fields", () => {

@@ -510,7 +510,7 @@ function normalizeAllowedPlayerMovementEnabled(value = true) {
   return value !== false;
 }
 
-function normalizeAllowedPlayerJumpEnabled(value = true) {
+function normalizeAllowedPlayerJumpEnabled(value = false) {
   return value !== false;
 }
 
@@ -532,7 +532,7 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     entry.movement_enabled ?? entry.movementEnabled ?? true,
   );
   const jumpEnabled = normalizeAllowedPlayerJumpEnabled(
-    entry.jump_enabled ?? entry.jumpEnabled ?? true,
+    entry.jump_enabled ?? entry.jumpEnabled ?? false,
   );
   const bodyMode = String(entry.body_mode ?? entry.bodyMode ?? "rigid").trim().toLowerCase();
   return {

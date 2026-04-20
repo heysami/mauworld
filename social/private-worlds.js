@@ -384,7 +384,7 @@ const TOOL_PRESET_BUILTINS = {
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
         movement_enabled: true,
-        jump_enabled: true,
+        jump_enabled: false,
         body_mode: "rigid",
         occupiable: true,
       },
@@ -404,7 +404,7 @@ const TOOL_PRESET_BUILTINS = {
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
         movement_enabled: true,
-        jump_enabled: true,
+        jump_enabled: false,
         body_mode: "ghost",
         occupiable: true,
       },
@@ -841,7 +841,7 @@ function createBaseToolPresetEntry(kind) {
       fixed_top_down_width: 0,
       fixed_top_down_height: 0,
       movement_enabled: true,
-      jump_enabled: true,
+      jump_enabled: false,
       body_mode: "rigid",
       occupiable: true,
     };
@@ -9568,7 +9568,7 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     fixedTopDownWidth: Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? 0) || 0),
     fixedTopDownHeight: Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? 0) || 0),
     movementEnabled: normalizePlayerMovementEnabled(runtimePlayer.movement_enabled ?? true),
-    jumpEnabled: normalizePlayerJumpEnabled(runtimePlayer.jump_enabled ?? true),
+    jumpEnabled: normalizePlayerJumpEnabled(runtimePlayer.jump_enabled ?? false),
     bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
     groundY: Number.isFinite(positionY) ? positionY : 0,
     onGround: runtimePlayer.on_ground === true || String(runtimePlayer.body_mode ?? "rigid").trim().toLowerCase() === "ghost",
@@ -9717,7 +9717,7 @@ function normalizePlayerMovementEnabled(value = true) {
   return value !== false;
 }
 
-function normalizePlayerJumpEnabled(value = true) {
+function normalizePlayerJumpEnabled(value = false) {
   return value !== false;
 }
 
@@ -10010,7 +10010,7 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
     runtimePlayer.movement_enabled ?? prediction.movementEnabled ?? true,
   );
   prediction.jumpEnabled = normalizePlayerJumpEnabled(
-    runtimePlayer.jump_enabled ?? prediction.jumpEnabled ?? true,
+    runtimePlayer.jump_enabled ?? prediction.jumpEnabled ?? false,
   );
   prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
     runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
@@ -10130,7 +10130,7 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
     runtimePlayer.movement_enabled ?? prediction.movementEnabled ?? true,
   );
   prediction.jumpEnabled = normalizePlayerJumpEnabled(
-    runtimePlayer.jump_enabled ?? prediction.jumpEnabled ?? true,
+    runtimePlayer.jump_enabled ?? prediction.jumpEnabled ?? false,
   );
   prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
     runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
@@ -12189,7 +12189,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const orthogonalMode = isOrthogonalCameraMode(cameraMode);
     const movementToggleMode = isPlayerMovementToggleCameraMode(cameraMode);
     const movementEnabled = normalizePlayerMovementEnabled(entry.movement_enabled ?? true);
-    const jumpEnabled = normalizePlayerJumpEnabled(entry.jump_enabled ?? true);
+  const jumpEnabled = normalizePlayerJumpEnabled(entry.jump_enabled ?? false);
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownDirection = normalizePlayerFixedTopDownDirection(entry.fixed_top_down_direction ?? "north");
     const fixedTopDownAngle = normalizePlayerFixedTopDownAngle(entry.fixed_top_down_angle ?? 90);
