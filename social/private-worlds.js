@@ -10238,15 +10238,29 @@ function getLocalPossessedGroundSupport(prediction = null) {
   );
   const hasProjectedSurface = Number.isFinite(surfaceY);
   const hasSupport = hasCarrySupport || hasProjectedSurface;
-  const groundY = hasCarrySupport
+  let groundY = hasCarrySupport
     ? Number(carrySupport.supportedPlayerY)
     : (
       hasProjectedSurface
         ? surfaceY + playerHalf.y
         : Number.NaN
     );
+  let resolvedHasSupport = hasSupport;
+  if (!resolvedHasSupport) {
+    const storedGroundY = Number(prediction.groundY);
+    const playerY = Number(prediction.position?.y);
+    const fallbackTolerance = Math.max(0.08, PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE * 0.5);
+    if (
+      Number.isFinite(storedGroundY)
+      && Number.isFinite(playerY)
+      && Math.abs(playerY - storedGroundY) <= fallbackTolerance
+    ) {
+      groundY = storedGroundY;
+      resolvedHasSupport = true;
+    }
+  }
   return {
-    hasSupport,
+    hasSupport: resolvedHasSupport,
     groundY,
     velocityY: Number(carrySupport?.velocity?.y),
     carrySupport,
