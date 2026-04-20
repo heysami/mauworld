@@ -2378,6 +2378,7 @@ function syncPrivatePlayerJumpShadow(mesh, playerLike = {}) {
     playerLike?.jumpEnabled ?? playerLike?.jump_enabled ?? mesh.userData.privateWorldJumpEnabled ?? false,
   );
   mesh.userData.privateWorldJumpEnabled = jumpEnabled;
+  mesh.userData.privateWorldPlayerOnGround = playerLike?.onGround === true || playerLike?.on_ground === true;
   const shadow = jumpEnabled ? ensurePrivatePlayerJumpShadow(mesh) : (mesh.userData.privateWorldJumpShadow ?? null);
   if (!shadow) {
     return;
@@ -2387,9 +2388,25 @@ function syncPrivatePlayerJumpShadow(mesh, playerLike = {}) {
     return;
   }
   const resolvedScale = Math.max(0.25, Number(playerLike?.scale ?? mesh.scale.x ?? 1) || 1);
-  const jumpOffset = Math.max(0, Number(playerLike?.jumpVisualOffsetY ?? 0) || 0);
-  const heightRatio = Math.min(1, jumpOffset / Math.max(0.0001, PRIVATE_WORLD_BLOCK_UNIT * 2.5));
-  shadow.position.y = -(PRIVATE_PLAYER_METRICS.height / 2) - (jumpOffset / resolvedScale) + (0.03 / resolvedScale);
+  const playerPosition = {
+    x: Number(playerLike?.position?.x ?? mesh.position.x ?? 0) || 0,
+    y: Number(playerLike?.position?.y ?? mesh.position.y ?? 0) || 0,
+    z: Number(playerLike?.position?.z ?? mesh.position.z ?? 0) || 0,
+  };
+  const surface = getPrivatePlayerProjectedShadowSurface({
+    ...playerLike,
+    position: playerPosition,
+    scale: resolvedScale,
+  });
+  if (!surface || !Number.isFinite(Number(surface.surfaceY))) {
+    shadow.visible = false;
+    return;
+  }
+  const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(resolvedScale));
+  const playerBottom = playerPosition.y - playerHalf.y;
+  const shadowDistance = Math.max(0, playerBottom - Number(surface.surfaceY));
+  const heightRatio = Math.min(1, shadowDistance / Math.max(0.0001, PRIVATE_WORLD_BLOCK_UNIT * 2.5));
+  shadow.position.y = (Number(surface.surfaceY) - playerPosition.y) / resolvedScale + (0.03 / resolvedScale);
   shadow.scale.set(1.36 + heightRatio * 0.08, 0.9 + heightRatio * 0.05, 1);
   if (shadow.material) {
     shadow.material.opacity = PRIVATE_PLAYER_JUMP_SHADOW.opacity * (1 - heightRatio * 0.32);
@@ -10372,6 +10389,114 @@ function getLocalCarryPlatformSupport(playerLike = null) {
     }
   }
   return bestSupport;
+}
+
+function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
+  if (!playerLike?.position) {
+    return null;
+  }
+  const playerScale = Math.max(
+    0.25,
+    Number(playerLike.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE,
+  );
+  const playerSize = getPrivatePlayerCollisionSize(playerScale);
+  const playerHalf = getHalfExtentsFromScale(playerSize);
+  const playerPosition = {
+    x: Number(playerLike.position?.x ?? 0) || 0,
+    y: Number(playerLike.position?.y ?? 0) || 0,
+    z: Number(playerLike.position?.z ?? 0) || 0,
+  };
+  const playerBottom = playerPosition.y - playerHalf.y;
+  let bestSurface = null;
+  const considerSurface = (position = {}, size = {}) => {
+    const half = getHalfExtentsFromScale(size);
+    const topY = (Number(position.y ?? 0) || 0) + half.y;
+    if (topY > playerBottom + PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE) {
+      return;
+    }
+    const limitX = half.x + playerHalf.x;
+    const limitZ = half.z + playerHalf.z;
+    if (
+      Math.abs(playerPosition.x - (Number(position.x ?? 0) || 0)) > limitX
+      || Math.abs(playerPosition.z - (Number(position.z ?? 0) || 0)) > limitZ
+    ) {
+      return;
+    }
+    if (!bestSurface || topY > bestSurface.surfaceY) {
+      bestSurface = {
+        surfaceY: topY,
+      };
+    }
+  };
+
+  let sceneDoc = null;
+  try {
+    sceneDoc = getRenderableSceneDoc();
+  } catch (_error) {
+    sceneDoc = null;
+  }
+
+  for (const voxel of sceneDoc?.voxels ?? []) {
+    considerSurface(voxel.position, getPrivateCollisionEntrySize("voxel", voxel));
+  }
+
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  const runtimeSceneId = String(runtime?.active_scene_id ?? "").trim();
+  const selectedSceneId = String(state.selectedSceneId ?? "").trim();
+  const runtimeMatchesSelectedScene = Boolean(runtime && runtimeSceneId && runtimeSceneId === selectedSceneId);
+  const runtimeDynamicIds = new Set();
+
+  if (runtimeMatchesSelectedScene) {
+    for (const entry of runtime.dynamic_objects ?? []) {
+      const entryId = String(entry?.id ?? "").trim();
+      if (entryId) {
+        runtimeDynamicIds.add(entryId);
+      }
+      if (entry?.carry_riders !== true && !isPrivateCollisionModeRigid(entry?.rigid_mode)) {
+        continue;
+      }
+      const kind = entry?.entity_kind === "model" ? "model" : "primitive";
+      const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
+      const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+      considerSurface(
+        {
+          x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
+          y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
+          z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
+        },
+        getPrivateCollisionEntrySize(kind, entry),
+      );
+    }
+  }
+
+  for (const primitive of sceneDoc?.primitives ?? []) {
+    const primitiveId = String(primitive?.id ?? "").trim();
+    if (runtimeDynamicIds.has(primitiveId)) {
+      continue;
+    }
+    if (primitive?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(primitive?.rigid_mode)) {
+      continue;
+    }
+    considerSurface(primitive.position, getPrivateCollisionEntrySize("primitive", primitive));
+  }
+
+  for (const model of sceneDoc?.models ?? []) {
+    const modelId = String(model?.id ?? "").trim();
+    if (runtimeDynamicIds.has(modelId)) {
+      continue;
+    }
+    if (model?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(model?.rigid_mode)) {
+      continue;
+    }
+    considerSurface(model.position, getPrivateCollisionEntrySize("model", model));
+  }
+
+  if (!bestSurface && playerLike?.onGround === true) {
+    bestSurface = {
+      surfaceY: playerBottom,
+    };
+  }
+  return bestSurface;
 }
 
 function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = prediction?.position) {
@@ -18574,6 +18699,14 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
           mesh.scale.lerp(targetScale, scaleAlpha);
         }
       }
+      if (mesh.userData.privateWorldEntityKind === "player") {
+        syncPrivatePlayerJumpShadow(mesh, {
+          position: mesh.position,
+          scale: mesh.scale.x,
+          onGround: mesh.userData.privateWorldPlayerOnGround === true,
+          jump_enabled: mesh.userData.privateWorldJumpEnabled,
+        });
+      }
       continue;
     }
     const targetPosition = mesh?.userData?.privateWorldRuntimeTargetPosition;
@@ -18599,6 +18732,14 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
       } else {
         mesh.scale.lerp(targetScale, scaleAlpha);
       }
+    }
+    if (mesh.userData.privateWorldEntityKind === "player") {
+      syncPrivatePlayerJumpShadow(mesh, {
+        position: mesh.position,
+        scale: mesh.scale.x,
+        onGround: mesh.userData.privateWorldPlayerOnGround === true,
+        jump_enabled: mesh.userData.privateWorldJumpEnabled,
+      });
     }
   }
 }
