@@ -8861,6 +8861,13 @@ function getPossessedRuntimePlayer() {
   return state.runtimeSnapshot?.players?.find((entry) => entry.id === localParticipant.player_entity_id) ?? null;
 }
 
+function getLocallyControlledPlayerEntityId() {
+  const localParticipant = getLocalParticipant();
+  return localParticipant?.join_role === "player"
+    ? String(localParticipant.player_entity_id ?? "").trim()
+    : "";
+}
+
 function clearPossessedPlayerPrediction() {
   state.predictedPossessedPlayer = null;
 }
@@ -8950,9 +8957,6 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
     return null;
   }
   const intent = buildRuntimeMovementIntent();
-  const correctionAlpha = intent.active
-    ? PRIVATE_PLAYER_RUNTIME.activeCorrectionAlpha
-    : PRIVATE_PLAYER_RUNTIME.idleCorrectionAlpha;
   const nextPositionX = Number(runtimePlayer.position?.x);
   const nextPositionY = Number(runtimePlayer.position?.y);
   const nextPositionZ = Number(runtimePlayer.position?.z);
@@ -8972,7 +8976,8 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   if (prediction.position.distanceTo(serverPosition) >= PRIVATE_PLAYER_RUNTIME.snapDistance) {
     prediction.position.copy(serverPosition);
     prediction.velocity.copy(serverVelocity);
-  } else {
+  } else if (!intent.active) {
+    const correctionAlpha = PRIVATE_PLAYER_RUNTIME.idleCorrectionAlpha;
     prediction.position.x += (serverPosition.x - prediction.position.x) * correctionAlpha;
     prediction.position.z += (serverPosition.z - prediction.position.z) * correctionAlpha;
     prediction.velocity.x += (serverVelocity.x - prediction.velocity.x) * Math.min(0.4, correctionAlpha + 0.14);
@@ -16101,10 +16106,14 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
   if (!preview?.entityMeshes?.size) {
     return;
   }
-  const positionAlpha = 1 - Math.exp(-deltaSeconds * 18);
-  const rotationAlpha = 1 - Math.exp(-deltaSeconds * 20);
-  const scaleAlpha = 1 - Math.exp(-deltaSeconds * 16);
-  for (const mesh of preview.entityMeshes.values()) {
+  const localPlayerId = getLocallyControlledPlayerEntityId();
+  const positionAlpha = 1 - Math.exp(-deltaSeconds * 30);
+  const rotationAlpha = 1 - Math.exp(-deltaSeconds * 32);
+  const scaleAlpha = 1 - Math.exp(-deltaSeconds * 28);
+  for (const [entityId, mesh] of preview.entityMeshes.entries()) {
+    if (localPlayerId && entityId === localPlayerId) {
+      continue;
+    }
     const targetPosition = mesh?.userData?.privateWorldRuntimeTargetPosition;
     const targetQuaternion = mesh?.userData?.privateWorldRuntimeTargetQuaternion;
     const targetScale = mesh?.userData?.privateWorldRuntimeTargetScale;
@@ -16143,6 +16152,7 @@ function syncPreviewRuntimeSnapshot(snapshot) {
   }
   const dynamicObjects = Array.isArray(snapshot.dynamic_objects) ? snapshot.dynamic_objects : [];
   const players = Array.isArray(snapshot.players) ? snapshot.players : [];
+  const localPlayerId = getLocallyControlledPlayerEntityId();
   for (const entry of [...dynamicObjects, ...players]) {
     if (!preview.entityMeshes.has(entry.id)) {
       return false;
@@ -16154,6 +16164,9 @@ function syncPreviewRuntimeSnapshot(snapshot) {
     });
   }
   for (const runtimePlayer of players) {
+    if (localPlayerId && runtimePlayer.id === localPlayerId) {
+      continue;
+    }
     applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePlayer.id), runtimePlayer, {
       leadSeconds: 1 / 24,
       fallbackScale: runtimePlayer?.scale
