@@ -105,6 +105,7 @@ const PRIVATE_PLAYER_CAMERA = {
   fixedTopDownPadding: 18,
 };
 const PRIVATE_POSSESSION_DEBUG = {
+  enabled: false,
   serverColor: "#4be7ff",
   tetherColor: "#ffe15a",
 };
@@ -12589,7 +12590,7 @@ function renderRuntimeStatus() {
         ? "You are inside a player. Ready Up marks this player as prepared, and Leave Player returns to viewer mode."
         : "Viewers can walk around immediately. Click a player capsule to inhabit it, then Ready Up appears for that player."}</span>
     </div>
-    ${possessionDrift ? `
+    ${PRIVATE_POSSESSION_DEBUG.enabled === true && possessionDrift ? `
       <div class="pw-world-meta__row">
         <strong>Possession Debug</strong>
         <span>cyan wireframe = server body · yellow tether = drift · total ${possessionDrift.totalDistance.toFixed(2)} · planar ${possessionDrift.planarDistance.toFixed(2)} · dY ${possessionDrift.deltaY.toFixed(2)}</span>
@@ -15901,6 +15902,9 @@ function getPossessionDriftMetrics(localPlayer = null, authoritativePlayer = nul
 }
 
 function ensurePossessionDebugVisual(preview = state.preview) {
+  if (PRIVATE_POSSESSION_DEBUG.enabled !== true) {
+    return null;
+  }
   if (!preview) {
     return null;
   }
