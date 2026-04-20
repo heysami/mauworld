@@ -42,10 +42,20 @@ const ALLOWED_PRIMITIVE_SHAPES = new Set(["box", "sphere", "capsule", "cylinder"
 const ALLOWED_PLAYER_CAMERA_MODES = new Set([
   "first_person",
   "third_person",
-  "top_down",
-  "fixed_top_down",
+  "orthogonal",
+  "fixed_orthogonal",
 ]);
-const ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS = new Set(["north", "east", "south", "west"]);
+const ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS = new Set([
+  "north",
+  "north_east",
+  "east",
+  "south_east",
+  "south",
+  "south_west",
+  "west",
+  "north_west",
+]);
+const ALLOWED_PLAYER_FIXED_TOP_DOWN_ANGLES = new Set([0, 45, 90]);
 const ALLOWED_PLAYER_BODY_MODES = new Set(["rigid", "ghost"]);
 const ALLOWED_FACING_MODES = new Set(["fixed", "billboard", "upright_billboard"]);
 const ALLOWED_SCENE_SKYBOXES = new Set(["blank", "day", "sunset", "night"]);
@@ -457,18 +467,49 @@ function sanitizeScreenEntry(entry = {}, index = 0, options = {}) {
 }
 
 function normalizeAllowedPlayerCameraMode(value = "third_person") {
-  const normalized = String(value ?? "third_person").trim().toLowerCase();
-  if (normalized === "fixed_top_down_first_person") {
-    return "fixed_top_down";
+  const normalized = String(value ?? "third_person").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "top_down") {
+    return "orthogonal";
+  }
+  if (normalized === "fixed_top_down" || normalized === "fixed_top_down_first_person" || normalized === "orthogonal_fixed") {
+    return "fixed_orthogonal";
   }
   return ALLOWED_PLAYER_CAMERA_MODES.has(normalized) ? normalized : "third_person";
 }
 
+function normalizeAllowedPlayerFixedTopDownDirection(value = "north") {
+  const normalized = String(value ?? "north").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "northeast") {
+    return "north_east";
+  }
+  if (normalized === "southeast") {
+    return "south_east";
+  }
+  if (normalized === "southwest") {
+    return "south_west";
+  }
+  if (normalized === "northwest") {
+    return "north_west";
+  }
+  return ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS.has(normalized) ? normalized : "north";
+}
+
+function normalizeAllowedPlayerFixedTopDownAngle(value = 90) {
+  const numericValue = Number(value);
+  if (ALLOWED_PLAYER_FIXED_TOP_DOWN_ANGLES.has(numericValue)) {
+    return numericValue;
+  }
+  return 90;
+}
+
 function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
   const cameraMode = normalizeAllowedPlayerCameraMode(entry.camera_mode ?? entry.cameraMode ?? "third_person");
-  const fixedTopDownDirection = String(
+  const fixedTopDownDirection = normalizeAllowedPlayerFixedTopDownDirection(
     entry.fixed_top_down_direction ?? entry.fixedTopDownDirection ?? "north",
-  ).trim().toLowerCase();
+  );
+  const fixedTopDownAngle = normalizeAllowedPlayerFixedTopDownAngle(
+    entry.fixed_top_down_angle ?? entry.fixedTopDownAngle ?? 90,
+  );
   const bodyMode = String(entry.body_mode ?? entry.bodyMode ?? "rigid").trim().toLowerCase();
   return {
     id: ensureEntityId("player", entry.id || `player-${index + 1}`, options),
@@ -477,9 +518,8 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     rotation: sanitizeEuler3(entry.rotation),
     scale: Number(clampNumber(entry.scale, PRIVATE_PLAYER_DEFAULT_SCALE, 0.25, 12).toFixed(4)),
     camera_mode: cameraMode,
-    fixed_top_down_direction: ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS.has(fixedTopDownDirection)
-      ? fixedTopDownDirection
-      : "north",
+    fixed_top_down_direction: fixedTopDownDirection,
+    fixed_top_down_angle: fixedTopDownAngle,
     fixed_top_down_width: Number(clampNumber(
       entry.fixed_top_down_width ?? entry.fixedTopDownWidth ?? 0,
       0,
@@ -1193,6 +1233,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         scale: entry.scale,
         camera_mode: entry.camera_mode,
         fixed_top_down_direction: entry.fixed_top_down_direction,
+        fixed_top_down_angle: entry.fixed_top_down_angle,
         fixed_top_down_width: entry.fixed_top_down_width,
         fixed_top_down_height: entry.fixed_top_down_height,
         body_mode: entry.body_mode,

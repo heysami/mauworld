@@ -343,6 +343,7 @@ const TOOL_PRESET_BUILTINS = {
         rotation: { x: 0, y: 0, z: 0 },
         camera_mode: "third_person",
         fixed_top_down_direction: "north",
+        fixed_top_down_angle: 90,
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
         body_mode: "rigid",
@@ -359,6 +360,7 @@ const TOOL_PRESET_BUILTINS = {
         rotation: { x: 0, y: 0, z: 0 },
         camera_mode: "third_person",
         fixed_top_down_direction: "north",
+        fixed_top_down_angle: 90,
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
         body_mode: "ghost",
@@ -792,6 +794,7 @@ function createBaseToolPresetEntry(kind) {
       rotation: { x: 0, y: 0, z: 0 },
       camera_mode: "third_person",
       fixed_top_down_direction: "north",
+      fixed_top_down_angle: 90,
       fixed_top_down_width: 0,
       fixed_top_down_height: 0,
       body_mode: "rigid",
@@ -4013,15 +4016,24 @@ const PRIMITIVE_SHAPES = ["box", "sphere", "capsule", "cylinder", "cone", "plane
 const PLAYER_CAMERA_MODE_OPTIONS = [
   { value: "third_person", label: "third person" },
   { value: "first_person", label: "first person" },
-  { value: "top_down", label: "top down" },
-  { value: "fixed_top_down", label: "fixed top down" },
+  { value: "orthogonal", label: "orthogonal" },
+  { value: "fixed_orthogonal", label: "orthogonal fixed" },
 ];
 const PLAYER_CAMERA_MODES = PLAYER_CAMERA_MODE_OPTIONS.map((option) => option.value);
 const PLAYER_FIXED_TOP_DOWN_DIRECTION_OPTIONS = [
   { value: "north", label: "north" },
+  { value: "north_east", label: "north east" },
   { value: "east", label: "east" },
+  { value: "south_east", label: "south east" },
   { value: "south", label: "south" },
+  { value: "south_west", label: "south west" },
   { value: "west", label: "west" },
+  { value: "north_west", label: "north west" },
+];
+const PLAYER_FIXED_TOP_DOWN_ANGLE_OPTIONS = [
+  { value: 90, label: "fully top down (90deg)" },
+  { value: 45, label: "angled (45deg)" },
+  { value: 0, label: "side scroller (0deg)" },
 ];
 const PLAYER_BODY_MODES = ["rigid", "ghost"];
 const EFFECT_OPTIONS = ["", "sparkles", "smoke", "glow", "embers", "mist"];
@@ -9333,20 +9345,20 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
   const forward = pressedKeys.has("w") || pressedKeys.has("arrowup");
   const backward = pressedKeys.has("s") || pressedKeys.has("arrowdown");
   const cameraMode = getActivePossessedCameraMode();
-  const fixedTopDown = isFixedTopDownCameraMode(cameraMode);
-  const fixedTopDownOrientation = fixedTopDown
+  const orthogonalCamera = isOrthogonalCameraMode(cameraMode);
+  const orthogonalOrientation = orthogonalCamera
     ? getPlayerFixedTopDownOrientation(getActivePossessedFixedTopDownDirection())
     : null;
-  const headingY = fixedTopDown
-    ? fixedTopDownOrientation.headingY
+  const headingY = orthogonalCamera
+    ? orthogonalOrientation.headingY
     : normalizeAngle(privateInputState.yaw);
   const forwardAmount = Number(forward) - Number(backward);
   const strafeAmount = Number(right) - Number(left);
-  const forwardVector = fixedTopDown
-    ? fixedTopDownOrientation.upVector
+  const forwardVector = orthogonalCamera
+    ? orthogonalOrientation.planarForwardVector
     : getPrivateFlatForwardVector(headingY);
-  const rightVector = fixedTopDown
-    ? fixedTopDownOrientation.rightVector
+  const rightVector = orthogonalCamera
+    ? orthogonalOrientation.rightVector
     : new THREE.Vector3(Math.cos(headingY), 0, -Math.sin(headingY));
   let x = forwardVector.x * forwardAmount + rightVector.x * strafeAmount;
   let z = forwardVector.z * forwardAmount + rightVector.z * strafeAmount;
@@ -9397,6 +9409,7 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     scale: Math.max(0.25, Number(runtimePlayer.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE),
     cameraMode: normalizePlayerCameraMode(runtimePlayer.camera_mode ?? "third_person"),
     fixedTopDownDirection: normalizePlayerFixedTopDownDirection(runtimePlayer.fixed_top_down_direction ?? "north"),
+    fixedTopDownAngle: normalizePlayerFixedTopDownAngle(runtimePlayer.fixed_top_down_angle ?? 90),
     fixedTopDownWidth: Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? 0) || 0),
     fixedTopDownHeight: Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? 0) || 0),
     bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
@@ -9405,43 +9418,118 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
 }
 
 function normalizePlayerCameraMode(value = "third_person") {
-  const normalized = String(value ?? "third_person").trim().toLowerCase();
-  if (normalized === "fixed_top_down_first_person") {
-    return "fixed_top_down";
+  const normalized = String(value ?? "third_person")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (normalized === "top_down") {
+    return "orthogonal";
+  }
+  if (normalized === "fixed_top_down" || normalized === "fixed_top_down_first_person" || normalized === "orthogonal_fixed") {
+    return "fixed_orthogonal";
   }
   return PLAYER_CAMERA_MODES.includes(normalized) ? normalized : "third_person";
 }
 
+function isOrthogonalCameraMode(value = "third_person") {
+  const normalized = normalizePlayerCameraMode(value);
+  return normalized === "orthogonal" || normalized === "fixed_orthogonal";
+}
+
 function isFixedTopDownCameraMode(value = "third_person") {
   const normalized = normalizePlayerCameraMode(value);
-  return normalized === "fixed_top_down";
+  return normalized === "fixed_orthogonal";
 }
 
 function normalizePlayerFixedTopDownDirection(value = "north") {
-  const normalized = String(value ?? "north").trim().toLowerCase();
-  return PLAYER_FIXED_TOP_DOWN_DIRECTION_OPTIONS.some((option) => option.value === normalized)
-    ? normalized
+  const normalized = String(value ?? "north")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  const resolved = ({
+    northeast: "north_east",
+    southeast: "south_east",
+    southwest: "south_west",
+    northwest: "north_west",
+  })[normalized] ?? normalized;
+  return PLAYER_FIXED_TOP_DOWN_DIRECTION_OPTIONS.some((option) => option.value === resolved)
+    ? resolved
     : "north";
 }
 
-function getPlayerFixedTopDownOrientation(direction = "north") {
+function normalizePlayerFixedTopDownAngle(value = 90) {
+  const normalized = Math.round(Number(value));
+  return PLAYER_FIXED_TOP_DOWN_ANGLE_OPTIONS.some((option) => Number(option.value) === normalized)
+    ? normalized
+    : 90;
+}
+
+function getPlayerFixedTopDownDirectionVector(direction = "north") {
   const resolvedDirection = normalizePlayerFixedTopDownDirection(direction);
-  let upVector = new THREE.Vector3(0, 0, -1);
-  if (resolvedDirection === "east") {
-    upVector = new THREE.Vector3(1, 0, 0);
-  } else if (resolvedDirection === "south") {
-    upVector = new THREE.Vector3(0, 0, 1);
-  } else if (resolvedDirection === "west") {
-    upVector = new THREE.Vector3(-1, 0, 0);
+  const diagonal = Math.SQRT1_2;
+  if (resolvedDirection === "north_east") {
+    return new THREE.Vector3(diagonal, 0, -diagonal);
   }
+  if (resolvedDirection === "east") {
+    return new THREE.Vector3(1, 0, 0);
+  }
+  if (resolvedDirection === "south_east") {
+    return new THREE.Vector3(diagonal, 0, diagonal);
+  }
+  if (resolvedDirection === "south") {
+    return new THREE.Vector3(0, 0, 1);
+  }
+  if (resolvedDirection === "south_west") {
+    return new THREE.Vector3(-diagonal, 0, diagonal);
+  }
+  if (resolvedDirection === "west") {
+    return new THREE.Vector3(-1, 0, 0);
+  }
+  if (resolvedDirection === "north_west") {
+    return new THREE.Vector3(-diagonal, 0, -diagonal);
+  }
+  return new THREE.Vector3(0, 0, -1);
+}
+
+function getPlayerFixedTopDownOrientation(direction = "north", angle = 90) {
+  const resolvedDirection = normalizePlayerFixedTopDownDirection(direction);
+  const resolvedAngle = normalizePlayerFixedTopDownAngle(angle);
+  const planarForwardVector = getPlayerFixedTopDownDirectionVector(resolvedDirection);
   const downVector = new THREE.Vector3(0, -1, 0);
-  const rightVector = new THREE.Vector3().crossVectors(downVector, upVector).normalize();
-  const headingY = normalizeAngle(Math.atan2(-upVector.x, -upVector.z));
+  const worldUpVector = new THREE.Vector3(0, 1, 0);
+  const rightVector = new THREE.Vector3().crossVectors(downVector, planarForwardVector).normalize();
+  const headingY = normalizeAngle(Math.atan2(-planarForwardVector.x, -planarForwardVector.z));
+  const angleRadians = THREE.MathUtils.degToRad(resolvedAngle);
+  const viewDirection = new THREE.Vector3(
+    planarForwardVector.x * Math.cos(angleRadians),
+    -Math.sin(angleRadians),
+    planarForwardVector.z * Math.cos(angleRadians),
+  ).normalize();
+  const upHint = resolvedAngle >= 89.999
+    ? planarForwardVector.clone()
+    : worldUpVector.clone();
+  const cameraRightVector = new THREE.Vector3().crossVectors(viewDirection, upHint);
+  if (cameraRightVector.lengthSq() <= 0.000001) {
+    cameraRightVector.copy(rightVector);
+  } else {
+    cameraRightVector.normalize();
+  }
+  const cameraUpVector = new THREE.Vector3().crossVectors(cameraRightVector, viewDirection);
+  if (cameraUpVector.lengthSq() <= 0.000001) {
+    cameraUpVector.copy(planarForwardVector);
+  } else {
+    cameraUpVector.normalize();
+  }
   return {
     direction: resolvedDirection,
-    upVector,
+    angle: resolvedAngle,
+    planarForwardVector,
     rightVector,
     headingY,
+    viewDirection,
+    cameraRightVector,
+    cameraUpVector,
+    cameraOffsetDirection: viewDirection.clone().multiplyScalar(-1),
   };
 }
 
@@ -9462,10 +9550,19 @@ function getActivePossessedFixedTopDownDirection() {
 }
 
 function getPlayerFixedTopDownWindow(player = {}, world = state.selectedWorld) {
-  const rig = getPrivateViewerRigConfig(world);
   const direction = normalizePlayerFixedTopDownDirection(player?.fixed_top_down_direction ?? "north");
-  const defaultWidth = direction === "east" || direction === "west" ? rig.length : rig.width;
-  const defaultHeight = direction === "east" || direction === "west" ? rig.width : rig.length;
+  const angle = normalizePlayerFixedTopDownAngle(player?.fixed_top_down_angle ?? 90);
+  const orientation = getPlayerFixedTopDownOrientation(direction, angle);
+  const worldWidth = getProjectedWorldAxisSpan(world, orientation.cameraRightVector);
+  const worldHeight = getProjectedWorldAxisSpan(world, orientation.cameraUpVector);
+  const followWidth = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 6, Math.min(worldWidth, PRIVATE_PLAYER_VIEW.defaultRadius * 1.6));
+  const followHeight = Math.max(PRIVATE_WORLD_BLOCK_UNIT * 4, Math.min(worldHeight, PRIVATE_PLAYER_VIEW.defaultRadius));
+  const defaultWidth = isFixedTopDownCameraMode(player?.camera_mode ?? "")
+    ? worldWidth
+    : followWidth;
+  const defaultHeight = isFixedTopDownCameraMode(player?.camera_mode ?? "")
+    ? worldHeight
+    : followHeight;
   const width = Number(player?.fixed_top_down_width ?? 0);
   const height = Number(player?.fixed_top_down_height ?? 0);
   return {
@@ -9474,20 +9571,60 @@ function getPlayerFixedTopDownWindow(player = {}, world = state.selectedWorld) {
   };
 }
 
+function getProjectedWorldAxisSpan(world = state.selectedWorld, axis = null) {
+  const axisVector = axis instanceof THREE.Vector3
+    ? axis.clone()
+    : new THREE.Vector3(
+      Number(axis?.x ?? 0) || 0,
+      Number(axis?.y ?? 0) || 0,
+      Number(axis?.z ?? 0) || 0,
+    );
+  if (axisVector.lengthSq() <= 0.000001) {
+    return PRIVATE_WORLD_BLOCK_UNIT * 2;
+  }
+  axisVector.normalize();
+  const bounds = getPrivateWorldBounds(world);
+  const rig = getPrivateViewerRigConfig(world);
+  const xs = [bounds.minX, bounds.maxX];
+  const ys = [0, rig.height];
+  const zs = [bounds.minZ, bounds.maxZ];
+  let minProjection = Infinity;
+  let maxProjection = -Infinity;
+  for (const x of xs) {
+    for (const y of ys) {
+      for (const z of zs) {
+        const projection = x * axisVector.x + y * axisVector.y + z * axisVector.z;
+        minProjection = Math.min(minProjection, projection);
+        maxProjection = Math.max(maxProjection, projection);
+      }
+    }
+  }
+  if (!Number.isFinite(minProjection) || !Number.isFinite(maxProjection)) {
+    return PRIVATE_WORLD_BLOCK_UNIT * 2;
+  }
+  return Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, maxProjection - minProjection);
+}
+
 function applyPossessedCameraModeRig(cameraMode = "third_person", runtimePlayer = null, options = {}) {
   const resolvedMode = normalizePlayerCameraMode(cameraMode);
   const previousMode = normalizePlayerCameraMode(options.previousCameraMode ?? "");
   const headingY = Number(runtimePlayer?.rotation?.y);
   if (resolvedMode !== previousMode) {
-    const nextHeadingY = isFixedTopDownCameraMode(resolvedMode)
-      ? getPlayerFixedTopDownOrientation(runtimePlayer?.fixed_top_down_direction ?? "north").headingY
+    const nextHeadingY = isOrthogonalCameraMode(resolvedMode)
+      ? getPlayerFixedTopDownOrientation(
+        runtimePlayer?.fixed_top_down_direction ?? "north",
+        runtimePlayer?.fixed_top_down_angle ?? 90,
+      ).headingY
       : (Number.isFinite(headingY) ? headingY : getRuntimeInputHeadingY());
     releaseHeldRuntimeKeys({ headingY: nextHeadingY });
     privateInputState.keys.clear();
     privateInputState.sprintHoldSeconds = 0;
   }
-  if (isFixedTopDownCameraMode(resolvedMode)) {
-    privateInputState.yaw = getPlayerFixedTopDownOrientation(runtimePlayer?.fixed_top_down_direction ?? "north").headingY;
+  if (isOrthogonalCameraMode(resolvedMode)) {
+    privateInputState.yaw = getPlayerFixedTopDownOrientation(
+      runtimePlayer?.fixed_top_down_direction ?? "north",
+      runtimePlayer?.fixed_top_down_angle ?? 90,
+    ).headingY;
     privateInputState.pitch = -1.05;
   } else if (Number.isFinite(headingY)) {
     privateInputState.yaw = normalizeAngle(headingY);
@@ -9542,6 +9679,9 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
     runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
   );
+  prediction.fixedTopDownAngle = normalizePlayerFixedTopDownAngle(
+    runtimePlayer.fixed_top_down_angle ?? prediction.fixedTopDownAngle ?? 90,
+  );
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
@@ -9590,6 +9730,9 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   prediction.cameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
   prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
     runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
+  );
+  prediction.fixedTopDownAngle = normalizePlayerFixedTopDownAngle(
+    runtimePlayer.fixed_top_down_angle ?? prediction.fixedTopDownAngle ?? 90,
   );
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
@@ -11497,8 +11640,13 @@ function renderEntityInspector(sceneDoc, selected = null) {
 
   if (kind === "player") {
     const cameraMode = normalizePlayerCameraMode(entry.camera_mode ?? "third_person");
+    const orthogonalMode = isOrthogonalCameraMode(cameraMode);
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
-    const fixedTopDownNote = "Fixed top down locks the camera over the world center. Direction rotates the framed map. Set width and height to 0 to include the full private world.";
+    const fixedTopDownDirection = normalizePlayerFixedTopDownDirection(entry.fixed_top_down_direction ?? "north");
+    const fixedTopDownAngle = normalizePlayerFixedTopDownAngle(entry.fixed_top_down_angle ?? 90);
+    const fixedTopDownNote = fixedTopDownMode
+      ? "Orthogonal fixed locks the camera over the world center. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and width and height at 0 frame the full private world."
+      : "Orthogonal follows the occupied player. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and width and height at 0 use the default follow framing.";
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Everyone enters as a floating viewer. Possession happens by clicking a player in Play mode.</p>
       <label>
@@ -11533,13 +11681,19 @@ function renderEntityInspector(sceneDoc, selected = null) {
           <span>Can be occupied</span>
         </div>
       </div>
-      ${fixedTopDownMode ? `
+      ${orthogonalMode ? `
         <p class="pw-inspector-note">${fixedTopDownNote}</p>
         <div class="pw-inspector-grid pw-inspector-grid--2">
           <div>
             <label>
-              <span>Facing</span>
-              <select data-entity-field="fixed_top_down_direction" data-value-type="text">${buildLabeledOptions(PLAYER_FIXED_TOP_DOWN_DIRECTION_OPTIONS, entry.fixed_top_down_direction || "north")}</select>
+              <span>Direction</span>
+              <select data-entity-field="fixed_top_down_direction" data-value-type="text">${buildLabeledOptions(PLAYER_FIXED_TOP_DOWN_DIRECTION_OPTIONS, fixedTopDownDirection)}</select>
+            </label>
+          </div>
+          <div>
+            <label>
+              <span>Angle</span>
+              <select data-entity-field="fixed_top_down_angle" data-value-type="number">${buildLabeledOptions(PLAYER_FIXED_TOP_DOWN_ANGLE_OPTIONS, fixedTopDownAngle)}</select>
             </label>
           </div>
         </div>
@@ -15743,18 +15897,18 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     state.viewerCameraPosition.copy(camera.position);
     return true;
   }
-  if (player.camera_mode === "top_down") {
-    const camera = activatePerspectivePreviewCamera(preview);
-    camera.position.set(
-      player.position.x,
-      player.position.y + PRIVATE_PLAYER_CAMERA.topDownHeight * scale,
-      player.position.z + 0.01,
-    );
-    camera.lookAt(lookTarget);
+  if (player.camera_mode === "orthogonal") {
+    const camera = applyFixedTopDownPreviewCamera(preview, player, state.selectedWorld, {
+      center: {
+        x: player.position.x,
+        y: lookTarget.y,
+        z: player.position.z,
+      },
+    });
     state.viewerCameraPosition.copy(camera.position);
     return true;
   }
-  if (player.camera_mode === "fixed_top_down") {
+  if (player.camera_mode === "fixed_orthogonal") {
     const camera = applyFixedTopDownPreviewCamera(preview, player);
     state.viewerCameraPosition.copy(camera.position);
     return true;
@@ -16643,6 +16797,7 @@ function buildPreviewRevisionSceneDoc(sceneDoc = {}) {
       }
       delete player.camera_mode;
       delete player.fixed_top_down_direction;
+      delete player.fixed_top_down_angle;
       delete player.fixed_top_down_width;
       delete player.fixed_top_down_height;
     }
@@ -17392,22 +17547,30 @@ function applyFixedTopDownPreviewCamera(preview, player = {}, world = state.sele
   }
   const rig = getPrivateViewerRigConfig(world);
   const windowSize = getPlayerFixedTopDownWindow(player, world);
-  const orientation = getPlayerFixedTopDownOrientation(player?.fixed_top_down_direction ?? "north");
+  const orientation = getPlayerFixedTopDownOrientation(
+    player?.fixed_top_down_direction ?? "north",
+    player?.fixed_top_down_angle ?? 90,
+  );
   const centerX = Number(options?.center?.x);
   const centerY = Number(options?.center?.y);
   const centerZ = Number(options?.center?.z);
   const targetX = Number.isFinite(centerX) ? centerX : 0;
-  const targetY = Number.isFinite(centerY) ? centerY : 0;
+  const targetY = Number.isFinite(centerY)
+    ? centerY
+    : (orientation.angle >= 89.999 ? 0 : rig.height / 2);
   const targetZ = Number.isFinite(centerZ) ? centerZ : 0;
   camera.left = -windowSize.width / 2;
   camera.right = windowSize.width / 2;
   camera.top = windowSize.height / 2;
   camera.bottom = -windowSize.height / 2;
+  const target = new THREE.Vector3(targetX, targetY, targetZ);
+  const maxSpan = Math.max(windowSize.width, windowSize.height, rig.width, rig.length, rig.height);
+  const distance = Math.max(rig.height, maxSpan * 2.5) + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding;
   camera.near = 0.1;
-  camera.far = Math.max(240, rig.height + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding * 2 + 40);
-  camera.position.set(targetX, rig.height + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding, targetZ);
-  camera.up.copy(orientation.upVector);
-  camera.lookAt(targetX, targetY, targetZ);
+  camera.far = Math.max(240, distance + maxSpan * 4 + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding);
+  camera.position.copy(target).addScaledVector(orientation.cameraOffsetDirection, distance);
+  camera.up.copy(orientation.cameraUpVector);
+  camera.lookAt(target);
   camera.updateProjectionMatrix();
   computeContainedPreviewViewport(preview, windowSize.width, windowSize.height);
   return camera;
@@ -17760,6 +17923,7 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
       scale: prediction.scale,
       camera_mode: prediction.cameraMode,
       fixed_top_down_direction: prediction.fixedTopDownDirection,
+      fixed_top_down_angle: prediction.fixedTopDownAngle,
       fixed_top_down_width: prediction.fixedTopDownWidth,
       fixed_top_down_height: prediction.fixedTopDownHeight,
       body_mode: prediction.bodyMode,

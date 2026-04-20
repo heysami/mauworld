@@ -311,7 +311,8 @@ test("runtime snapshots preserve authored player and object scale", () => {
         scale: 5,
         body_mode: "rigid",
         camera_mode: "fixed_top_down_first_person",
-        fixed_top_down_direction: "west",
+        fixed_top_down_direction: "south west",
+        fixed_top_down_angle: 45,
         fixed_top_down_width: 80,
         fixed_top_down_height: 48,
       }],
@@ -325,8 +326,9 @@ test("runtime snapshots preserve authored player and object scale", () => {
 
   const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
   assert.equal(snapshot.players[0].scale, 5);
-  assert.equal(snapshot.players[0].camera_mode, "fixed_top_down");
-  assert.equal(snapshot.players[0].fixed_top_down_direction, "west");
+  assert.equal(snapshot.players[0].camera_mode, "fixed_orthogonal");
+  assert.equal(snapshot.players[0].fixed_top_down_direction, "south_west");
+  assert.equal(snapshot.players[0].fixed_top_down_angle, 45);
   assert.equal(snapshot.players[0].fixed_top_down_width, 80);
   assert.equal(snapshot.players[0].fixed_top_down_height, 48);
   assert.deepEqual(snapshot.dynamic_objects[0].scale, { x: 6, y: 4, z: 3 });
@@ -655,7 +657,8 @@ test("runtime rebuild preserves occupied player pose for same-scene camera edits
               scale: 1,
               body_mode: "rigid",
               camera_mode: "fixed_top_down_first_person",
-              fixed_top_down_direction: "east",
+              fixed_top_down_direction: "north east",
+              fixed_top_down_angle: 0,
             }],
             texts: [],
             trigger_zones: [],
@@ -702,8 +705,9 @@ test("runtime rebuild preserves occupied player pose for same-scene camera edits
   const rebuiltPlayer = simulation.runtime.players[0];
   const rebuiltBody = simulation.runtime.physics.playerBodies.get(rebuiltPlayer.id);
   const translation = rebuiltBody.translation();
-  assert.equal(snapshot.players[0].camera_mode, "fixed_top_down");
-  assert.equal(snapshot.players[0].fixed_top_down_direction, "east");
+  assert.equal(snapshot.players[0].camera_mode, "fixed_orthogonal");
+  assert.equal(snapshot.players[0].fixed_top_down_direction, "north_east");
+  assert.equal(snapshot.players[0].fixed_top_down_angle, 0);
   assert.ok(Math.abs(rebuiltPlayer.position.x - 7.25) < 0.0001);
   assert.ok(Math.abs(rebuiltPlayer.position.z + 4.5) < 0.0001);
   assert.ok(Math.abs(rebuiltPlayer.rotation.y - 0.62) < 0.0001);
