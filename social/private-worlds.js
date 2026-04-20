@@ -120,6 +120,7 @@ const PRIVATE_PLAYER_RUNTIME = {
   gravity: 9.8,
   jumpVelocity: Math.sqrt(Math.abs(-9.8) * 2 * (1.25 * PRIVATE_WORLD_BLOCK_UNIT)),
   localJumpHoldMs: 220,
+  jumpPulseMs: 220,
 };
 const PRIVATE_DYNAMIC_RUNTIME = {
   interactionHoldMs: 140,
@@ -1045,6 +1046,8 @@ const state = {
   runtimeSnapshotSourcePriority: 0,
   runtimeSnapshotWorldKey: "",
   pressedRuntimeKeys: new Set(),
+  runtimeJumpPulseSeq: 0,
+  runtimeJumpPulseAt: 0,
   predictedPossessedPlayer: null,
   launcherTab: "access",
   launcherWorldTab: "mine",
@@ -9565,6 +9568,7 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
     onGround: runtimePlayer.on_ground === true,
     jumpHeld: false,
+    lastConsumedJumpPulseSeq: 0,
     localJumpUntilMs: 0,
     jumpVisualOffsetY: 0,
     jumpVisualVelocityY: 0,
@@ -10342,30 +10346,31 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const runtimeVelocityY = Number(runtimePlayer.velocity?.y);
   const runtimeAirborne = runtimePlayer.on_ground !== true
     || (Number.isFinite(runtimeVelocityY) && Math.abs(runtimeVelocityY) >= 0.05);
+  const jumpPulseSeq = Math.max(0, Number(state.runtimeJumpPulseSeq ?? 0) || 0);
+  const jumpPulseAt = Math.max(0, Number(state.runtimeJumpPulseAt ?? 0) || 0);
+  const jumpPulsePending = jumpPulseSeq > Math.max(0, Number(prediction.lastConsumedJumpPulseSeq ?? 0) || 0);
+  const jumpPulseFresh = jumpPulsePending && (now - jumpPulseAt) <= PRIVATE_PLAYER_RUNTIME.jumpPulseMs;
   const speed = intent.sprint
     ? PRIVATE_PLAYER_RUNTIME.sprintSpeed
     : PRIVATE_PLAYER_RUNTIME.moveSpeed;
   const blend = clampNumber(PRIVATE_PLAYER_RUNTIME.acceleration * dt, 1, 0, 1);
   prediction.velocity.x += (intent.x * speed - prediction.velocity.x) * blend;
   prediction.velocity.z += (intent.z * speed - prediction.velocity.z) * blend;
-  const jumpPressed = state.pressedRuntimeKeys.has("space");
-  if (!jumpPressed) {
-    prediction.jumpHeld = false;
-  }
   if (
-    jumpPressed
-    && !prediction.jumpHeld
+    jumpPulseFresh
     && prediction.jumpEnabled
-    && prediction.onGround
+    && (prediction.onGround || runtimePlayer.on_ground === true)
     && isPrivateCollisionModeRigid(prediction.bodyMode)
   ) {
     prediction.onGround = false;
-    prediction.jumpHeld = true;
+    prediction.lastConsumedJumpPulseSeq = jumpPulseSeq;
     prediction.localJumpUntilMs = now + PRIVATE_PLAYER_RUNTIME.localJumpHoldMs;
     prediction.jumpVisualVelocityY = PRIVATE_PLAYER_RUNTIME.jumpVelocity;
     if (prediction.jumpVisualOffsetY <= 0.0001) {
       prediction.jumpVisualOffsetY = 0;
     }
+  } else if (jumpPulsePending && !jumpPulseFresh) {
+    prediction.lastConsumedJumpPulseSeq = jumpPulseSeq;
   }
   const desiredPosition = {
     x: prediction.position.x + prediction.velocity.x * dt,
@@ -20333,6 +20338,21 @@ function nextPrivateMotionSequence() {
   return state.lastPrivateMotionSeq;
 }
 
+function triggerRuntimeJumpPulse(options = {}) {
+  if (!shouldDrivePrivateRuntimeInput()) {
+    return false;
+  }
+  state.pressedRuntimeKeys.delete("space");
+  state.runtimeJumpPulseSeq = Math.max(0, Number(state.runtimeJumpPulseSeq ?? 0) || 0) + 1;
+  state.runtimeJumpPulseAt = performance.now();
+  void sendRuntimeInput("space", "down", {
+    headingY: Number.isFinite(Number(options.headingY))
+      ? Number(options.headingY)
+      : getRuntimeInputHeadingY(),
+  });
+  return true;
+}
+
 function appendRuntimePosePayload(payload = {}, options = {}) {
   const pose = getLocalPossessedPlayerPosePayload();
   if (!pose) {
@@ -21843,6 +21863,12 @@ function bindEvents() {
     }
     event.preventDefault();
     if (shouldDrivePrivateRuntimeInput()) {
+      if (key === "space") {
+        triggerRuntimeJumpPulse({
+          headingY: getRuntimeInputHeadingY(),
+        });
+        return;
+      }
       if (shouldBlockRuntimeMovementInputKey(key)) {
         if (state.pressedRuntimeKeys.has(key)) {
           state.pressedRuntimeKeys.delete(key);
@@ -21919,6 +21945,10 @@ function bindEvents() {
     }
     event.preventDefault();
     if (shouldDrivePrivateRuntimeInput()) {
+      if (key === "space") {
+        state.pressedRuntimeKeys.delete(key);
+        return;
+      }
       if (shouldBlockRuntimeMovementInputKey(key) && !state.pressedRuntimeKeys.has(key)) {
         return;
       }
