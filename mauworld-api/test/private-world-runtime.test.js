@@ -5,6 +5,7 @@ import {
   stepPrivateWorldSimulation,
   buildPrivateWorldRuntimeSnapshot,
   PrivateWorldRuntime,
+  shouldRebuildPrivateWorldRuntime,
 } from "../src/lib/private-world-runtime.js";
 
 function buildSimulation(input = {}) {
@@ -66,6 +67,58 @@ test("runtime step applies player input and moves occupied players", () => {
   assert.equal(snapshot.scene_started, true);
   assert.equal(snapshot.players[0].occupied_by_username, "maker");
   assert.ok(snapshot.players[0].position.z < before);
+});
+
+test("active worlds keep player movement and dynamic physics live before scene start", () => {
+  const simulation = buildSimulation({
+    sceneStarted: false,
+    status: "active",
+    participants: [{
+      profile_id: "profile_one",
+      profile: { username: "maker", display_name: "Maker" },
+      join_role: "player",
+      player_entity_id: "player_player-one",
+      ready_state: { ready: false },
+    }],
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 0, y: 12, z: 0 },
+          scale: { x: 2, y: 2, z: 2 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#88aadd", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: { gravity_scale: 1, restitution: 0, friction: 0.4, mass: 1 },
+        },
+      ],
+      screens: [],
+      players: [{ id: "player_one", label: "Player One", position: { x: 0, y: 4.5, z: 0 }, scale: 5, body_mode: "rigid", camera_mode: "third_person" }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const playerId = simulation.runtime.players[0].id;
+  const beforePlayerZ = simulation.runtime.players[0].position.z;
+  const beforeObjectY = simulation.runtime.dynamicObjects[0].position.y;
+
+  for (let index = 0; index < 8; index += 1) {
+    stepPrivateWorldSimulation(simulation.runtime, {
+      deltaMs: 50,
+      pendingInputs: index === 0 ? [{ playerId, key: "w", state: "down" }] : [],
+    });
+  }
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.equal(snapshot.scene_started, false);
+  assert.ok(snapshot.players[0].position.z < beforePlayerZ);
+  assert.ok(snapshot.dynamic_objects[0].position.y < beforeObjectY);
 });
 
 test("timer rules enqueue a scene switch once after their delay", () => {
@@ -327,6 +380,66 @@ test("runtime repairs compiled player id drift back onto authored player slots",
   const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
   assert.equal(snapshot.players[0].id, "player_player-1");
   assert.equal(snapshot.players[0].occupied_by_username, "maker");
+});
+
+test("runtime sync does not rebuild unchanged active scenes until a real reset happens", () => {
+  assert.equal(
+    shouldRebuildPrivateWorldRuntime(
+      {
+        sceneRowId: "scene_runtime",
+        sceneUpdatedAt: "2026-04-20T00:00:00.000Z",
+        status: "active",
+        sceneStarted: false,
+      },
+      {
+        id: "scene_runtime",
+        updated_at: "2026-04-20T00:00:00.000Z",
+      },
+      {
+        nextStatus: "active",
+        nextSceneStarted: false,
+      },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldRebuildPrivateWorldRuntime(
+      {
+        sceneRowId: "scene_runtime",
+        sceneUpdatedAt: "2026-04-20T00:00:00.000Z",
+        status: "active",
+        sceneStarted: false,
+      },
+      {
+        id: "scene_runtime",
+        updated_at: "2026-04-20T00:00:00.000Z",
+      },
+      {
+        nextStatus: "started",
+        nextSceneStarted: true,
+      },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldRebuildPrivateWorldRuntime(
+      {
+        sceneRowId: "scene_runtime",
+        sceneUpdatedAt: "2026-04-20T00:00:00.000Z",
+        status: "started",
+        sceneStarted: true,
+      },
+      {
+        id: "scene_runtime",
+        updated_at: "2026-04-20T00:00:00.000Z",
+      },
+      {
+        nextStatus: "active",
+        nextSceneStarted: false,
+      },
+    ),
+    true,
+  );
 });
 
 test("runtime input queues directly against a live simulation without forcing a world resync", async () => {

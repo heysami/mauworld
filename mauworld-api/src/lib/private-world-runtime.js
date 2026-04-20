@@ -647,6 +647,22 @@ export function createPrivateWorldSimulationState(input = {}) {
   return simulation;
 }
 
+export function shouldRebuildPrivateWorldRuntime(runtime, activeScene, {
+  nextStatus = runtime?.status ?? "active",
+  nextSceneStarted = runtime?.sceneStarted === true,
+} = {}) {
+  if (!runtime || !activeScene?.id) {
+    return true;
+  }
+  const activeSceneUpdatedAt = activeScene.updated_at ?? activeScene.created_at ?? null;
+  return (
+    runtime.sceneRowId !== activeScene.id
+    || runtime.sceneUpdatedAt !== activeSceneUpdatedAt
+    || (runtime.status === "started" && nextStatus !== "started")
+    || (runtime.sceneStarted === true && nextSceneStarted !== true)
+  );
+}
+
 function executeRuleAction(simulation, rule, context = {}) {
   const markRuleFired = () => {
     if (context.oneShot === true) {
@@ -849,22 +865,8 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
       sourceRuleId: "auto:start_on_ready",
     });
   }
-
-  if (!simulation.sceneStarted) {
-    if (allPlayersReady) {
-      executeMatchingRules(
-        simulation,
-        "all_players_ready",
-        (rule) => !simulation.ruleState.firedRuleIds.has(rule.id),
-        { oneShot: true },
-      );
-    }
-    simulation.tick += 1;
-    return simulation;
-  }
-
-  simulation.elapsedMs += deltaSeconds * 1000;
   simulation.tick += 1;
+  simulation.elapsedMs += deltaSeconds * 1000;
 
   syncRapierOccupancy(simulation);
 
@@ -1171,11 +1173,10 @@ export class PrivateWorldRuntime {
       simulation.activeSceneId = activeScene.id;
       simulation.scenesById = new Map(context.scenes.map((entry) => [entry.id, entry]));
       const nextSceneStarted = context.instance.status === "started" || runtimeState.scene_started === true;
-      if (
-        simulation.runtime.sceneRowId !== activeScene.id
-        || simulation.runtime.sceneUpdatedAt !== (activeScene.updated_at ?? activeScene.created_at ?? null)
-        || nextSceneStarted !== true
-      ) {
+      if (shouldRebuildPrivateWorldRuntime(simulation.runtime, activeScene, {
+        nextStatus: context.instance.status,
+        nextSceneStarted,
+      })) {
         destroyPhysicsState(simulation.runtime.physics);
         simulation.runtime = seedSceneRuntime(activeScene, {
           sceneStarted: nextSceneStarted,
