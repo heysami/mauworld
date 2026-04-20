@@ -994,6 +994,9 @@ function buildPrivateWorldLauncherUrl(options = {}) {
   if (state.meta?.worldSnapshotId) {
     url.searchParams.set("publicWorldSnapshotId", state.meta.worldSnapshotId);
   }
+  if (state.viewerSessionId) {
+    url.searchParams.set("publicViewerSessionId", state.viewerSessionId);
+  }
   url.searchParams.set("anchorX", position.x.toFixed(3));
   url.searchParams.set("anchorY", position.y.toFixed(3));
   url.searchParams.set("anchorZ", position.z.toFixed(3));

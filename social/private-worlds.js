@@ -54,6 +54,7 @@ const AI_IMAGE_STORAGE_KEY = "mauworldPrivateWorldAiImage";
 const AI_MODEL_STORAGE_KEY = "mauworldPrivateWorldAiModel";
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
 const PRIVATE_VIEWER_INSTANCE_KEY = "mauworldPrivateWorldViewerInstance";
+const PUBLIC_VIEWER_SESSION_KEY = "mauworldViewerSessionId";
 const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
 const TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY = "mauworldPrivateWorldToolPresetPanelCollapsed";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
@@ -1047,6 +1048,18 @@ function getPrivateViewerInstanceId() {
   const next = `viewer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   window.sessionStorage.setItem(PRIVATE_VIEWER_INSTANCE_KEY, next);
   return next;
+}
+
+function getPublicViewerSessionIdForPrivateJoin(params = new URLSearchParams(window.location.search)) {
+  const explicit = String(params.get("publicViewerSessionId") ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  try {
+    return String(window.sessionStorage.getItem(PUBLIC_VIEWER_SESSION_KEY) ?? "").trim() || undefined;
+  } catch (_error) {
+    return undefined;
+  }
 }
 
 function parsePrivateViewerSessionId(viewerSessionId = "") {
@@ -5211,6 +5224,7 @@ function getJoinAnchorPayload() {
   };
   return {
     publicWorldSnapshotId: params.get("publicWorldSnapshotId") || undefined,
+    publicViewerSessionId: getPublicViewerSessionIdForPrivateJoin(params),
     position_x: asNumber("anchorX") ?? 0,
     position_y: asNumber("anchorY") ?? 0,
     position_z: asNumber("anchorZ") ?? 0,
@@ -17353,6 +17367,7 @@ async function joinWorld(options = {}) {
         displayName: getPrivateDisplayName(),
         joinRole: "viewer",
         publicWorldSnapshotId: anchor.publicWorldSnapshotId,
+        publicViewerSessionId: anchor.publicViewerSessionId,
         position_x: anchor.position_x,
         position_y: anchor.position_y,
         position_z: anchor.position_z,

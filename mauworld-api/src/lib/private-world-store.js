@@ -2345,6 +2345,9 @@ export function installPrivateWorldStore(MauworldStore) {
         .eq("id", instance.id),
       "Could not update private world instance activity",
     );
+    await this.clearViewerPresence({
+      viewerSessionId: input.publicViewerSessionId,
+    });
 
     emitPrivateWorldEvent(this, {
       type: "participant:joined",

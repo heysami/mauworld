@@ -297,6 +297,18 @@ function createStubStore() {
         released: true,
       };
     },
+    async joinPrivateWorld(payload) {
+      return {
+        guest_session_id: payload.guestSessionId ?? null,
+        participant_id: "participant_123",
+        world: {
+          world_id: payload.worldId,
+          creator: {
+            username: payload.creatorUsername,
+          },
+        },
+      };
+    },
     async heartbeatPrivateWorldEntityLock() {
       return {
         lock: {
@@ -518,9 +530,23 @@ test("public world stream forwards viewerSessionId for server-side miniature rou
 });
 
 test("public world presence endpoint upserts viewer sessions", async () => {
+  let capturedInput = null;
+  const store = createStubStore();
+  store.upsertViewerPresence = async (input) => {
+    capturedInput = input;
+    return {
+      worldSnapshotId: "world_123",
+      organizationVersionId: "org_123",
+      session: {
+        id: "presence_123",
+        actor_type: "viewer",
+        viewer_session_id: input.viewerSessionId,
+      },
+    };
+  };
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
-    store: createStubStore(),
+    store,
   });
 
   const response = await request(app)
@@ -538,6 +564,7 @@ test("public world presence endpoint upserts viewer sessions", async () => {
   assert.equal(response.body.ok, true);
   assert.equal(response.body.worldSnapshotId, "world_123");
   assert.equal(response.body.session.id, "presence_123");
+  assert.equal(capturedInput?.profile?.id, "profile_123");
 });
 
 test("public private world browse endpoint returns searchable world metadata", async () => {
@@ -808,6 +835,46 @@ test("private world occupy endpoint claims a player slot explicitly", async () =
   assert.equal(response.body.ok, true);
   assert.equal(response.body.occupied, true);
   assert.equal(response.body.player_entity_id, "player_one");
+});
+
+test("private world join endpoint forwards public viewer session ids for public presence hiding", async () => {
+  let capturedInput = null;
+  const store = createStubStore();
+  store.joinPrivateWorld = async (input) => {
+    capturedInput = input;
+    return {
+      guest_session_id: null,
+      participant_id: "participant_123",
+      world: {
+        world_id: input.worldId,
+        creator: {
+          username: input.creatorUsername,
+        },
+      },
+    };
+  };
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store,
+  });
+
+  const response = await request(app)
+    .post("/api/private/worlds/mw_origin123/join")
+    .set("Authorization", "Bearer token")
+    .send({
+      creatorUsername: "maker",
+      displayName: "Maker",
+      joinRole: "viewer",
+      publicWorldSnapshotId: "world_123",
+      publicViewerSessionId: "viewer_123",
+      position_x: 12,
+      position_y: 4,
+      position_z: -8,
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(capturedInput?.publicViewerSessionId, "viewer_123");
 });
 
 test("private world release endpoint returns the user to viewer mode", async () => {

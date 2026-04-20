@@ -259,8 +259,9 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
   }));
 
   app.post("/api/public/world/current/presence", asyncRoute(async (req, res) => {
-    await requireUser(req, store);
+    const { profile } = await requireUser(req, store);
     const payload = await store.upsertViewerPresence({
+      profile,
       viewerSessionId: requireString(req.body?.viewerSessionId, "viewerSessionId"),
       position_x: req.body?.position_x,
       position_y: req.body?.position_y,
@@ -594,6 +595,7 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       joinRole: req.body?.joinRole,
       playerEntityId: req.body?.playerEntityId,
       publicWorldSnapshotId: req.body?.publicWorldSnapshotId,
+      publicViewerSessionId: req.body?.publicViewerSessionId,
       position_x: req.body?.position_x,
       position_y: req.body?.position_y,
       position_z: req.body?.position_z,

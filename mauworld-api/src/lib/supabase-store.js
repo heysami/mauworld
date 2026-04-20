@@ -36,6 +36,8 @@ const NEXT_ORGANIZATION_SLOT = "next";
 const EXTERNAL_CONTENT_PURGE_PHRASES = ["moltbook", "curated import", "openclaw", "open claw"];
 const EXTERNAL_CONTENT_PURGE_WHOLE_WORDS = ["claw"];
 const EXTERNAL_INSTALLATION_PURGE_PHRASES = ["moltbook", "openclaw", "open claw"];
+const PRIVATE_WORLD_PARTICIPANT_STALE_MS = 30_000;
+const PUBLIC_PRIVATE_WORLD_VISIBLE_STATUSES = ["active", "started"];
 
 function nowIso() {
   return new Date().toISOString();
@@ -60,6 +62,41 @@ function sanitizeViewerDisplayName(input, fallback = "visitor") {
     .trim()
     .slice(0, 40);
   return normalized || String(fallback ?? "").trim() || "visitor";
+}
+
+async function hasFreshLivePrivateWorldParticipant(store, profileId = "") {
+  const normalizedProfileId = String(profileId ?? "").trim();
+  if (!normalizedProfileId) {
+    return false;
+  }
+  const staleCutoffIso = new Date(Date.now() - PRIVATE_WORLD_PARTICIPANT_STALE_MS).toISOString();
+  const participants = await must(
+    store.serviceClient
+      .from("private_world_participants")
+      .select("instance_id")
+      .eq("profile_id", normalizedProfileId)
+      .gt("last_seen_at", staleCutoffIso),
+    "Could not load private world participants for public presence suppression",
+  );
+  const instanceIds = Array.from(
+    new Set(
+      participants
+        .map((row) => String(row.instance_id ?? "").trim())
+        .filter(Boolean),
+    ),
+  );
+  if (instanceIds.length === 0) {
+    return false;
+  }
+  const instances = await must(
+    store.serviceClient
+      .from("private_world_active_instances")
+      .select("id")
+      .in("id", instanceIds)
+      .in("status", PUBLIC_PRIVATE_WORLD_VISIBLE_STATUSES),
+    "Could not load private world instances for public presence suppression",
+  );
+  return instances.length > 0;
 }
 
 function buildViewerPresenceActor(row = {}) {
@@ -3585,6 +3622,16 @@ export class MauworldStore {
       expires_at: new Date(Date.now() + settings.world_presence_ttl_seconds * 1000).toISOString(),
     };
 
+    if (await hasFreshLivePrivateWorldParticipant(this, input.profile?.id)) {
+      await this.clearViewerPresence({ viewerSessionId });
+      return {
+        worldSnapshotId: worldSnapshot.id,
+        organizationVersionId: currentVersion.id,
+        session: null,
+        suppressed: true,
+      };
+    }
+
     const existing = await maybeSingle(
       this.serviceClient
         .from("live_presence_sessions")
@@ -3617,6 +3664,27 @@ export class MauworldStore {
       worldSnapshotId: worldSnapshot.id,
       organizationVersionId: currentVersion.id,
       session: row,
+    };
+  }
+
+  async clearViewerPresence(input = {}) {
+    const viewerSessionId = String(input.viewerSessionId ?? "").trim();
+    if (!viewerSessionId) {
+      return {
+        cleared: false,
+      };
+    }
+
+    await must(
+      this.serviceClient
+        .from("live_presence_sessions")
+        .delete()
+        .eq("viewer_session_id", viewerSessionId),
+      "Could not clear viewer presence session",
+    );
+
+    return {
+      cleared: true,
     };
   }
 

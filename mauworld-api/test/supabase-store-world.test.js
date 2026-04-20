@@ -906,6 +906,78 @@ test("listPrivateWorldMiniaturesForSnapshot exposes started worlds with guest-on
   assert.equal(result[0].viewer_count, 1);
 });
 
+test("upsertViewerPresence suppresses public presence while the profile is fresh inside a live private world", async () => {
+  const freshIso = new Date(Date.now() - 5_000).toISOString();
+  const state = {
+    tables: {
+      live_presence_sessions: [
+        {
+          id: "presence_123",
+          viewer_session_id: "viewer_123",
+          world_snapshot_id: "snapshot_public",
+          position_x: 0,
+          position_y: 0,
+          position_z: 0,
+          heading_y: 0,
+          movement_state: {},
+          last_seen_at: freshIso,
+          expires_at: freshIso,
+        },
+      ],
+      private_world_participants: [
+        {
+          id: "participant_123",
+          instance_id: "instance_live",
+          profile_id: "profile_private",
+          guest_session_id: null,
+          last_seen_at: freshIso,
+        },
+      ],
+      private_world_active_instances: [
+        {
+          id: "instance_live",
+          status: "started",
+        },
+      ],
+    },
+    queryLog: [],
+  };
+
+  const fakeStore = {
+    serviceClient: createFakeServiceClient(state),
+    clearViewerPresence: MauworldStore.prototype.clearViewerPresence,
+    async ensureCurrentWorldContext() {
+      return {
+        settings: {
+          world_presence_ttl_seconds: 30,
+        },
+        currentVersion: {
+          id: "org_current",
+        },
+        worldSnapshot: {
+          id: "snapshot_public",
+        },
+      };
+    },
+  };
+
+  const result = await MauworldStore.prototype.upsertViewerPresence.call(fakeStore, {
+    profile: {
+      id: "profile_private",
+    },
+    viewerSessionId: "viewer_123",
+    position_x: 12,
+    position_y: 4,
+    position_z: -8,
+  });
+
+  assert.equal(result.worldSnapshotId, "snapshot_public");
+  assert.equal(result.organizationVersionId, "org_current");
+  assert.equal(result.session, null);
+  assert.equal(result.suppressed, true);
+  assert.equal(state.tables.live_presence_sessions.length, 0);
+});
+
 test("findNearestPrivateWorldAnchor skips blocked pillar anchors", async () => {
   const state = {
     tables: {
