@@ -2762,6 +2762,7 @@ export function installPrivateWorldStore(MauworldStore) {
       velocity_y: input.velocity_y,
       velocity_z: input.velocity_z,
       motion_seq: input.motion_seq,
+      force_client_pose: input.force_client_pose ?? input.forceRuntimePose ?? input.force_runtime_pose,
     });
     return result;
   };

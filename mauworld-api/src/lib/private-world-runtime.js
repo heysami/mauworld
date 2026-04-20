@@ -702,6 +702,9 @@ function carryPlatformRiders(simulation, preStepState, deltaSeconds = 0) {
     if (!rider) {
       continue;
     }
+    if (riderState.kind === "player" && isClientAuthoritativeRigidPlayer(rider)) {
+      continue;
+    }
     const currentPosition = vec3(rider.position);
     const baseTargetPosition = {
       x: mustFinite(riderState.position?.x, 0) + mustFinite(assignment.platformDelta?.x, 0),
@@ -807,6 +810,14 @@ function getFreshClientReplicatedPose(player, nowMs = Date.now()) {
   return pose;
 }
 
+function isClientAuthoritativeRigidPlayer(player, nowMs = Date.now()) {
+  return Boolean(
+    player?.occupied_by_profile_id
+    && player?.body_mode !== "ghost"
+    && getFreshClientReplicatedPose(player, nowMs),
+  );
+}
+
 function applyOccupiedPlayerPose(runtime, player, input = {}) {
   if (!runtime || !player) {
     return null;
@@ -815,6 +826,7 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
   const rawPosition = input.position && typeof input.position === "object" ? input.position : {};
   const rawVelocity = input.velocity && typeof input.velocity === "object" ? input.velocity : {};
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
+  const collider = runtime.physics?.playerColliders?.get(player.id) ?? null;
   const currentBodyPosition = body ? vec3(body.translation(), player.position) : vec3(player.position);
   const currentBodyVelocity = body ? vec3(body.linvel(), player.velocity) : vec3(player.velocity);
   const forceClientPose = input.force_client_pose === true
@@ -855,6 +867,23 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
     if (Number.isFinite(resolvedHeadingY)) {
       mirroredRotation.y = Number(normalizeAngle(resolvedHeadingY).toFixed(6));
     }
+    player.position = mirroredPosition;
+    player.velocity = mirroredVelocity;
+    player.rotation = mirroredRotation;
+    player.sleeping = false;
+    if (player.body_mode === "ghost" && Math.abs(mirroredVelocity.y) < 0.05) {
+      player.groundPositionY = mirroredPosition.y;
+    }
+    if (player.body_mode === "ghost") {
+      player.onGround = isGhostPlayerGrounded({
+        ...player,
+        position: mirroredPosition,
+        velocity: mirroredVelocity,
+      });
+    }
+    if (Number.isFinite(resolvedHeadingY)) {
+      player.usesLookHeading = true;
+    }
     player.client_replication_pose = {
       position: mirroredPosition,
       velocity: mirroredVelocity,
@@ -863,6 +892,20 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
     player.client_replication_updated_at_ms = Date.now();
     if (Number.isFinite(motionSeq)) {
       player.last_client_replication_seq = Math.max(previousReplicationSeq, motionSeq);
+    }
+    if (body) {
+      if (player.body_mode !== "ghost") {
+        body.setBodyType?.(RAPIER.RigidBodyType.KinematicPositionBased, true);
+        body.setGravityScale?.(0, true);
+        collider?.setSensor?.(true);
+      }
+      if (typeof body.setNextKinematicTranslation === "function") {
+        body.setNextKinematicTranslation(mirroredPosition);
+      }
+      body.setTranslation(mirroredPosition, true);
+      body.setLinvel(mirroredVelocity, true);
+      body.setRotation(toRapierRotation(player.rotation), true);
+      body.wakeUp?.();
     }
     return {
       player_entity_id: player.id,
@@ -1067,6 +1110,7 @@ function syncRapierOccupancy(simulation) {
   }
   for (const player of simulation.players) {
     const body = physics.playerBodies.get(player.id);
+    const collider = physics.playerColliders.get(player.id);
     if (!body) {
       continue;
     }
@@ -1074,15 +1118,28 @@ function syncRapierOccupancy(simulation) {
       body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
       body.setGravityScale(0, true);
       body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      collider?.setSensor?.(true);
       continue;
     }
-    const nextType = player.occupied_by_profile_id ? RAPIER.RigidBodyType.Dynamic : RAPIER.RigidBodyType.Fixed;
+    const clientAuthoritative = isClientAuthoritativeRigidPlayer(player);
+    const nextType = clientAuthoritative
+      ? RAPIER.RigidBodyType.KinematicPositionBased
+      : (player.occupied_by_profile_id ? RAPIER.RigidBodyType.Dynamic : RAPIER.RigidBodyType.Fixed);
     body.setBodyType(nextType, true);
-    body.setGravityScale(1, true);
+    body.setGravityScale(clientAuthoritative ? 0 : 1, true);
     body.setEnabledRotations(false, true, false, true);
+    collider?.setSensor?.(clientAuthoritative);
     if (!player.occupied_by_profile_id) {
       body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       body.sleep();
+    } else if (clientAuthoritative) {
+      if (typeof body.setNextKinematicTranslation === "function") {
+        body.setNextKinematicTranslation(player.position);
+      }
+      body.setTranslation(player.position, true);
+      body.setLinvel(player.velocity, true);
+      body.setRotation(toRapierRotation(player.rotation), true);
+      body.wakeUp();
     } else {
       body.wakeUp();
     }
@@ -1228,6 +1285,10 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   const physics = runtime.physics;
   const body = physics?.playerBodies?.get(player.id) ?? null;
   if (!body) {
+    return;
+  }
+  if (isClientAuthoritativeRigidPlayer(player)) {
+    body.setRotation(toRapierRotation(player.rotation), true);
     return;
   }
 
@@ -2428,6 +2489,7 @@ export class PrivateWorldRuntime {
     velocity_y = null,
     velocity_z = null,
     motion_seq = null,
+    force_client_pose = false,
   } = {}) {
     const keyRef = this.getWorldRefKey(worldId, creatorUsername);
     let instanceId = this.keysByWorldRef.get(keyRef);
@@ -2449,6 +2511,7 @@ export class PrivateWorldRuntime {
     }
     const normalizedKey = String(key ?? "").trim().toLowerCase();
     const resolvedHeadingY = Number(headingY ?? heading_y);
+    const useClientAuthoritativePose = force_client_pose === true || isClientAuthoritativeRigidPlayer(occupiedPlayer);
     const hasClientPose = [
       position_x,
       position_y,
@@ -2475,6 +2538,7 @@ export class PrivateWorldRuntime {
         velocity_z,
         motion_seq,
         headingY: Number.isFinite(resolvedHeadingY) ? resolvedHeadingY : null,
+        force_client_pose: useClientAuthoritativePose,
       });
     }
     if (!normalizedKey && !Number.isFinite(resolvedHeadingY)) {
@@ -2490,7 +2554,12 @@ export class PrivateWorldRuntime {
         player_entity_id: occupiedPlayer.id,
       };
     }
-    if (normalizedKey === "space" && state !== "up" && !occupiedPlayer.pressedKeys.has("space")) {
+    if (
+      normalizedKey === "space"
+      && state !== "up"
+      && !occupiedPlayer.pressedKeys.has("space")
+      && useClientAuthoritativePose !== true
+    ) {
       primeQueuedPlayerJump(simulation.runtime, occupiedPlayer);
     }
     simulation.pendingInputs.push({

@@ -1409,7 +1409,7 @@ test("runtime ignores client planar pose updates while a player is standing on a
   assert.ok(Math.abs(velocity.z - beforeVelocity.z) < 0.0001);
 });
 
-test("runtime mirrors forced client pose for snapshots without moving the server body", async () => {
+test("runtime applies forced client pose to occupied rigid players in client-authoritative mode", async () => {
   const manager = new PrivateWorldRuntime({
     store: {},
   });
@@ -1456,8 +1456,6 @@ test("runtime mirrors forced client pose for snapshots without moving the server
   const player = simulation.runtime.players[0];
   const profileId = player.occupied_by_profile_id;
   const body = simulation.runtime.physics.playerBodies.get(player.id);
-  const beforePosition = { ...player.position };
-  const beforeVelocity = { ...player.velocity };
 
   const result = await manager.syncOccupiedPlayerPoseByReference({
     worldId: simulation.worldId,
@@ -1478,18 +1476,15 @@ test("runtime mirrors forced client pose for snapshots without moving the server
   const translation = body.translation();
   const velocity = body.linvel();
   assert.equal(result.synced, true);
-  assert.ok(Math.abs(player.position.x - beforePosition.x) < 0.0001);
-  assert.ok(Math.abs(player.position.y - beforePosition.y) < 0.0001);
-  assert.ok(Math.abs(player.position.z - beforePosition.z) < 0.0001);
-  assert.ok(Math.abs(player.velocity.x - beforeVelocity.x) < 0.0001);
-  assert.ok(Math.abs(player.velocity.y - beforeVelocity.y) < 0.0001);
-  assert.ok(Math.abs(player.velocity.z - beforeVelocity.z) < 0.0001);
-  assert.ok(Math.abs(translation.x - beforePosition.x) < 0.0001);
-  assert.ok(Math.abs(translation.y - beforePosition.y) < 0.0001);
-  assert.ok(Math.abs(translation.z - beforePosition.z) < 0.0001);
-  assert.ok(Math.abs(velocity.x - beforeVelocity.x) < 0.0001);
-  assert.ok(Math.abs(velocity.y - beforeVelocity.y) < 0.0001);
-  assert.ok(Math.abs(velocity.z - beforeVelocity.z) < 0.0001);
+  assert.ok(Math.abs(player.position.x - 1.3) < 0.0001);
+  assert.ok(Math.abs(player.position.y - 2.1) < 0.0001);
+  assert.ok(Math.abs(player.position.z + 0.3) < 0.0001);
+  assert.ok(Math.abs(player.velocity.x + 7) < 0.0001);
+  assert.ok(Math.abs(player.velocity.y - 0.5) < 0.0001);
+  assert.ok(Math.abs(player.velocity.z - 6) < 0.0001);
+  assert.ok(Math.abs(translation.x - 1.3) < 0.0001);
+  assert.ok(Math.abs(translation.y - 2.1) < 0.0001);
+  assert.ok(Math.abs(translation.z + 0.3) < 0.0001);
   assert.ok(Math.abs(mirroredPlayer.position.x - 1.3) < 0.0001);
   assert.ok(Math.abs(mirroredPlayer.position.y - 2.1) < 0.0001);
   assert.ok(Math.abs(mirroredPlayer.position.z + 0.3) < 0.0001);

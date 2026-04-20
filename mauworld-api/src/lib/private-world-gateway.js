@@ -2290,6 +2290,7 @@ export class PrivateWorldGateway {
         velocity_y: message.velocity_y,
         velocity_z: message.velocity_z,
         motion_seq: message.motion_seq,
+        force_client_pose: message.force_client_pose === true || message.force_runtime_pose === true,
       });
     } catch (error) {
       sendJson(client, {
