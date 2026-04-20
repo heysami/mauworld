@@ -210,6 +210,7 @@ test("private world queued presence updates keep only the latest sample", async 
     position_y: 0,
     position_z: -1,
     heading_y: 0.1,
+    motion_seq: 1,
   });
   gateway.queueClientMessage(client, {
     type: "presence:update",
@@ -217,6 +218,7 @@ test("private world queued presence updates keep only the latest sample", async 
     position_y: 0,
     position_z: -2,
     heading_y: 0.2,
+    motion_seq: 2,
   });
   gateway.queueClientMessage(client, {
     type: "presence:update",
@@ -224,6 +226,7 @@ test("private world queued presence updates keep only the latest sample", async 
     position_y: 0,
     position_z: -3,
     heading_y: 0.3,
+    motion_seq: 3,
   });
 
   await client.presenceQueue;
@@ -232,6 +235,31 @@ test("private world queued presence updates keep only the latest sample", async 
   assert.equal(poses[0].payload.position_x, 3);
   assert.equal(poses[0].payload.position_z, -3);
   assert.equal(poses[0].payload.heading_y, 0.3);
+});
+
+test("private world plain presence updates do not sync occupied player pose", async () => {
+  const poses = [];
+  const gateway = createGateway({
+    async syncPrivateWorldPlayerPose(profile, payload) {
+      poses.push({ profile, payload });
+      return { synced: true };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:runner",
+    displayName: "runner",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  await gateway.handlePresenceUpdate(client, {
+    position_x: 5,
+    position_y: 0,
+    position_z: -4,
+    heading_y: 0.25,
+  });
+
+  assert.equal(poses.length, 0);
 });
 
 test("private world runtime input is not blocked behind pending presence sync", async () => {
@@ -263,6 +291,7 @@ test("private world runtime input is not blocked behind pending presence sync", 
     position_y: 1,
     position_z: -2,
     heading_y: 0.4,
+    motion_seq: 1,
   });
   await Promise.resolve();
 

@@ -98,6 +98,11 @@ const PRIVATE_PLAYER_METRICS = {
   height: 1.8,
   eyeHeight: 1.62,
 };
+const PRIVATE_PLAYER_JUMP_SHADOW = {
+  radius: PRIVATE_PLAYER_METRICS.width * 0.82,
+  color: "#101722",
+  opacity: 0.28,
+};
 const PRIVATE_PLAYER_DEFAULT_SCALE = PRIVATE_WORLD_BLOCK_UNIT;
 const PRIVATE_PLAYER_CAMERA = {
   firstPersonLookDistance: 3.8,
@@ -2337,6 +2342,58 @@ function createViewerAvatarFigure(options = {}) {
     orb,
     shadow,
   };
+}
+
+function ensurePrivatePlayerJumpShadow(mesh) {
+  if (!mesh) {
+    return null;
+  }
+  const existing = mesh.userData.privateWorldJumpShadow;
+  if (existing?.parent === mesh) {
+    return existing;
+  }
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(PRIVATE_PLAYER_JUMP_SHADOW.radius, 36),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(PRIVATE_PLAYER_JUMP_SHADOW.color),
+      transparent: true,
+      opacity: PRIVATE_PLAYER_JUMP_SHADOW.opacity,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.renderOrder = 1;
+  shadow.scale.set(1.36, 0.9, 1);
+  mesh.add(shadow);
+  mesh.userData.privateWorldJumpShadow = shadow;
+  return shadow;
+}
+
+function syncPrivatePlayerJumpShadow(mesh, playerLike = {}) {
+  if (!mesh) {
+    return;
+  }
+  const jumpEnabled = normalizePlayerJumpEnabled(
+    playerLike?.jumpEnabled ?? playerLike?.jump_enabled ?? mesh.userData.privateWorldJumpEnabled ?? false,
+  );
+  mesh.userData.privateWorldJumpEnabled = jumpEnabled;
+  const shadow = jumpEnabled ? ensurePrivatePlayerJumpShadow(mesh) : (mesh.userData.privateWorldJumpShadow ?? null);
+  if (!shadow) {
+    return;
+  }
+  shadow.visible = jumpEnabled && mesh.visible !== false;
+  if (!jumpEnabled) {
+    return;
+  }
+  const resolvedScale = Math.max(0.25, Number(playerLike?.scale ?? mesh.scale.x ?? 1) || 1);
+  const jumpOffset = Math.max(0, Number(playerLike?.jumpVisualOffsetY ?? 0) || 0);
+  const heightRatio = Math.min(1, jumpOffset / Math.max(0.0001, PRIVATE_WORLD_BLOCK_UNIT * 2.5));
+  shadow.position.y = -(PRIVATE_PLAYER_METRICS.height / 2) - (jumpOffset / resolvedScale) + (0.03 / resolvedScale);
+  shadow.scale.set(1.36 + heightRatio * 0.08, 0.9 + heightRatio * 0.05, 1);
+  if (shadow.material) {
+    shadow.material.opacity = PRIVATE_PLAYER_JUMP_SHADOW.opacity * (1 - heightRatio * 0.32);
+  }
 }
 
 function isEmojiOnlyPrivateChatText(value) {
@@ -5669,18 +5726,16 @@ function getLocalPossessedPlayerPosePayload() {
   const velocityY = Number(source.velocity?.y);
   const velocityZ = Number(source.velocity?.z);
   const bodyMode = String(source.bodyMode ?? source.body_mode ?? runtimePlayer?.body_mode ?? "rigid").trim().toLowerCase();
-  const includeVerticalPose = bodyMode === "ghost";
+  if (bodyMode !== "ghost") {
+    return null;
+  }
   return {
     position_x: Number((Number.isFinite(positionX) ? positionX : 0).toFixed(4)),
     position_z: Number((Number.isFinite(positionZ) ? positionZ : 0).toFixed(4)),
     velocity_x: Number((Number.isFinite(velocityX) ? velocityX : 0).toFixed(4)),
     velocity_z: Number((Number.isFinite(velocityZ) ? velocityZ : 0).toFixed(4)),
-    position_y: includeVerticalPose
-      ? Number((Number.isFinite(positionY) ? positionY : PRIVATE_CAMERA.minY).toFixed(4))
-      : undefined,
-    velocity_y: includeVerticalPose
-      ? Number((Number.isFinite(velocityY) ? velocityY : 0).toFixed(4))
-      : undefined,
+    position_y: Number((Number.isFinite(positionY) ? positionY : PRIVATE_CAMERA.minY).toFixed(4)),
+    velocity_y: Number((Number.isFinite(velocityY) ? velocityY : 0).toFixed(4)),
   };
 }
 
@@ -18403,6 +18458,9 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
     }
     mesh.userData.privateWorldRuntimePlayerColorKey = playerColorKey;
   }
+  if (mesh.userData.privateWorldEntityKind === "player") {
+    syncPrivatePlayerJumpShadow(mesh, runtimeEntry);
+  }
 }
 
 function advanceRuntimeVisuals(preview, deltaSeconds) {
@@ -18593,6 +18651,7 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
       applyRenderableVisibility(mesh, {
         runtimeVisible: player.visible !== false,
       });
+      syncPrivatePlayerJumpShadow(mesh, prediction);
       if (mesh.userData.privateWorldRuntimeTargetPosition) {
         mesh.userData.privateWorldRuntimeTargetPosition.copy(mesh.position);
       }
@@ -19294,6 +19353,7 @@ function updatePreviewFromSelection(options = {}) {
       runtimeVisible: runtimePlayer?.visible !== false,
     });
     mesh.userData.privateWorldPlayerId = resolvedPlayerId || player.id;
+    syncPrivatePlayerJumpShadow(mesh, localPrediction ?? runtimePlayer ?? player);
     attachPlayerHitTarget(mesh, resolvedPlayerId || player.id);
   }
 
@@ -19348,6 +19408,7 @@ function updatePreviewFromSelection(options = {}) {
       runtimeVisible: runtimePlayer?.visible !== false,
     });
     mesh.userData.privateWorldPlayerId = playerId;
+    syncPrivatePlayerJumpShadow(mesh, localPrediction ?? runtimePlayer);
     attachPlayerHitTarget(mesh, playerId);
   }
 

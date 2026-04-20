@@ -2049,6 +2049,10 @@ export class PrivateWorldGateway {
     const velocityY = Number(message.velocity_y);
     const velocityZ = Number(message.velocity_z);
     const motionSeq = Number(message.motion_seq);
+    const hasRuntimePose = Number.isFinite(motionSeq)
+      || Number.isFinite(velocityX)
+      || Number.isFinite(velocityY)
+      || Number.isFinite(velocityZ);
     if (!Number.isFinite(positionX) || !Number.isFinite(positionY) || !Number.isFinite(positionZ)) {
       return;
     }
@@ -2074,7 +2078,7 @@ export class PrivateWorldGateway {
           presence,
         });
       }
-      if (typeof this.store?.syncPrivateWorldPlayerPose === "function") {
+      if (hasRuntimePose && typeof this.store?.syncPrivateWorldPlayerPose === "function") {
         try {
           await this.store.syncPrivateWorldPlayerPose(client.profile, {
             worldId: client.worldId,
