@@ -9186,6 +9186,21 @@ function clearRuntimeSnapshot() {
   state.runtimeSnapshotWorldKey = "";
 }
 
+function hasRuntimeSnapshotIdentityChange(currentRuntime, nextRuntime) {
+  if (!currentRuntime || !nextRuntime) {
+    return false;
+  }
+  return (
+    String(currentRuntime.instance_id ?? "") !== String(nextRuntime.instance_id ?? "")
+    || String(currentRuntime.active_scene_id ?? "") !== String(nextRuntime.active_scene_id ?? "")
+    || String(currentRuntime.scene_updated_at ?? "") !== String(nextRuntime.scene_updated_at ?? "")
+    || Number(currentRuntime.scene_version ?? 0) !== Number(nextRuntime.scene_version ?? 0)
+    || String(currentRuntime.started_at ?? "") !== String(nextRuntime.started_at ?? "")
+    || String(currentRuntime.status ?? "") !== String(nextRuntime.status ?? "")
+    || Boolean(currentRuntime.scene_started) !== Boolean(nextRuntime.scene_started)
+  );
+}
+
 function setRuntimeSnapshot(nextRuntime, options = {}) {
   const sourcePriority = Math.max(0, Number(options.sourcePriority ?? 0) || 0);
   const worldKey = String(options.worldKey ?? getRuntimeSnapshotWorldKey()).trim();
@@ -9205,15 +9220,16 @@ function setRuntimeSnapshot(nextRuntime, options = {}) {
   const currentTick = Number.isFinite(Number(previousRuntime?.tick)) ? Number(previousRuntime.tick) : -1;
   const currentPriority = Math.max(0, Number(state.runtimeSnapshotSourcePriority ?? 0) || 0);
   const sameWorld = !previousWorldKey || !worldKey || previousWorldKey === worldKey;
+  const identityChanged = hasRuntimeSnapshotIdentityChange(previousRuntime, nextRuntime);
   if (sameWorld && previousRuntime) {
-    if (nextTick < currentTick) {
+    if (nextTick < currentTick && !identityChanged) {
       return {
         accepted: false,
         previousRuntime,
         snapshot: previousRuntime,
       };
     }
-    if (nextTick === currentTick && sourcePriority < currentPriority) {
+    if (nextTick === currentTick && sourcePriority < currentPriority && !identityChanged) {
       return {
         accepted: false,
         previousRuntime,

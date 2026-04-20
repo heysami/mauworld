@@ -872,6 +872,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   const runtime = {
     sceneRowId: sceneRow?.id ?? null,
     sceneName: sceneRow?.name ?? "Scene",
+    sceneVersion: mustFinite(sceneRow?.version, 0),
     sceneUpdatedAt: sceneRow?.updated_at ?? sceneRow?.created_at ?? null,
     sceneDoc,
     rules: buildSceneRules(sceneRow, sceneDoc),
@@ -975,8 +976,11 @@ export function shouldRebuildPrivateWorldRuntime(runtime, activeScene, {
     return true;
   }
   const activeSceneUpdatedAt = activeScene.updated_at ?? activeScene.created_at ?? null;
+  const activeSceneVersion = activeScene?.version == null ? null : mustFinite(activeScene.version, 0);
+  const runtimeSceneVersion = runtime?.sceneVersion == null ? null : mustFinite(runtime.sceneVersion, 0);
   return (
     runtime.sceneRowId !== activeScene.id
+    || (runtimeSceneVersion != null && activeSceneVersion != null && runtimeSceneVersion !== activeSceneVersion)
     || runtime.sceneUpdatedAt !== activeSceneUpdatedAt
     || (runtime.status === "started" && nextStatus !== "started")
     || (runtime.sceneStarted === true && nextSceneStarted !== true)
@@ -1265,6 +1269,8 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     instance_id: simulation.instanceId ?? null,
     active_scene_id: simulation.activeSceneId ?? null,
     scene_name: runtime.sceneName ?? null,
+    scene_version: runtime.sceneVersion,
+    scene_updated_at: runtime.sceneUpdatedAt ?? null,
     status: runtime.status,
     scene_started: runtime.sceneStarted === true,
     tick: runtime.tick,
