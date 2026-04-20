@@ -3900,6 +3900,38 @@ function getPrivateCameraPlanarBasis(preview = state.preview) {
   return { forward, right };
 }
 
+function releaseHeldRuntimeKeys(options = {}) {
+  const keys = [...state.pressedRuntimeKeys];
+  if (!keys.length) {
+    return [];
+  }
+  state.pressedRuntimeKeys.clear();
+  const headingY = Number(options.headingY);
+  const resolvedHeadingY = Number.isFinite(headingY) ? headingY : getRuntimeInputHeadingY();
+  for (const key of keys) {
+    void sendRuntimeInput(key, "up", {
+      headingY: resolvedHeadingY,
+    });
+  }
+  return keys;
+}
+
+function syncCameraOnlyPossessedAnchor(runtimePlayer = getPossessedRuntimePlayer()) {
+  const nextX = Number(runtimePlayer?.position?.x);
+  const nextY = Number(runtimePlayer?.position?.y);
+  const nextZ = Number(runtimePlayer?.position?.z);
+  if (Number.isFinite(nextX)) {
+    state.viewerPosition.x = nextX;
+  }
+  if (Number.isFinite(nextY)) {
+    state.viewerPosition.y = nextY;
+  }
+  if (Number.isFinite(nextZ)) {
+    state.viewerPosition.z = nextZ;
+  }
+  clampViewerPositionToWorldBounds(state.viewerPosition);
+}
+
 function getPrivateCameraMovementBasis(preview = state.preview) {
   const planarBasis = getPrivateCameraPlanarBasis(preview);
   if (!preview?.camera) {
@@ -5485,6 +5517,14 @@ function sendWorldSocketMessage(payload) {
 }
 
 function getPrivatePresencePosition() {
+  if (isCameraOnlyPossessedCameraMode(getActivePossessedCameraMode())) {
+    return {
+      x: state.viewerPosition.x,
+      y: state.viewerPosition.y,
+      z: state.viewerPosition.z,
+      heading: privateInputState.yaw,
+    };
+  }
   const possessed = getPossessedRuntimePlayer();
   const prediction = state.predictedPossessedPlayer;
   if (prediction?.playerId && possessed?.id === prediction.playerId) {
@@ -5512,6 +5552,9 @@ function getPrivatePresencePosition() {
 }
 
 function getLocalPossessedPlayerPosePayload() {
+  if (isCameraOnlyPossessedCameraMode(getActivePossessedCameraMode())) {
+    return null;
+  }
   const runtimePlayer = getPossessedRuntimePlayer();
   const prediction = getLocalPossessedPlayerPrediction();
   const source = prediction ?? runtimePlayer;
@@ -9393,6 +9436,10 @@ function normalizePlayerCameraMode(value = "third_person") {
   return PLAYER_CAMERA_MODES.includes(normalized) ? normalized : "third_person";
 }
 
+function isCameraOnlyPossessedCameraMode(value = "third_person") {
+  return normalizePlayerCameraMode(value) === "fixed_top_down_first_person";
+}
+
 function isFixedTopDownCameraMode(value = "third_person") {
   const normalized = normalizePlayerCameraMode(value);
   return normalized === "fixed_top_down" || normalized === "fixed_top_down_first_person";
@@ -9457,7 +9504,21 @@ function getPlayerFixedTopDownWindow(player = {}, world = state.selectedWorld) {
 
 function applyPossessedCameraModeRig(cameraMode = "third_person", runtimePlayer = null, options = {}) {
   const resolvedMode = normalizePlayerCameraMode(cameraMode);
+  const previousMode = normalizePlayerCameraMode(options.previousCameraMode ?? "");
   const headingY = Number(runtimePlayer?.rotation?.y);
+  if (isCameraOnlyPossessedCameraMode(resolvedMode) && !isCameraOnlyPossessedCameraMode(previousMode)) {
+    const fixedHeadingY = getPlayerFixedTopDownOrientation(runtimePlayer?.fixed_top_down_direction ?? "north").headingY;
+    const heldRuntimeKeys = releaseHeldRuntimeKeys({ headingY: fixedHeadingY });
+    privateInputState.keys.clear();
+    for (const key of heldRuntimeKeys) {
+      privateInputState.keys.add(key);
+    }
+    privateInputState.sprintHoldSeconds = 0;
+    syncCameraOnlyPossessedAnchor(runtimePlayer);
+  } else if (!isCameraOnlyPossessedCameraMode(resolvedMode) && isCameraOnlyPossessedCameraMode(previousMode)) {
+    privateInputState.keys.clear();
+    privateInputState.sprintHoldSeconds = 0;
+  }
   if (isFixedTopDownCameraMode(resolvedMode)) {
     privateInputState.yaw = getPlayerFixedTopDownOrientation(runtimePlayer?.fixed_top_down_direction ?? "north").headingY;
     privateInputState.pitch = -1.05;
@@ -9488,7 +9549,9 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   }
   let prediction = state.predictedPossessedPlayer;
   if (!prediction || prediction.playerId !== playerId) {
-    const nextCameraMode = applyPossessedCameraModeRig(runtimePlayer.camera_mode, runtimePlayer);
+    const nextCameraMode = applyPossessedCameraModeRig(runtimePlayer.camera_mode, runtimePlayer, {
+      previousCameraMode: prediction?.cameraMode ?? "",
+    });
     state.cameraRadius = clampNumber(
       state.cameraRadius,
       PRIVATE_PLAYER_VIEW.defaultRadius,
@@ -9503,7 +9566,9 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
   const nextCameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
   if (nextCameraMode !== prediction.cameraMode) {
-    prediction.cameraMode = applyPossessedCameraModeRig(nextCameraMode, runtimePlayer);
+    prediction.cameraMode = applyPossessedCameraModeRig(nextCameraMode, runtimePlayer, {
+      previousCameraMode: prediction.cameraMode,
+    });
   } else {
     prediction.cameraMode = nextCameraMode;
   }
@@ -9820,6 +9885,24 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   if (!prediction || !runtimePlayer) {
     return null;
   }
+  if (isCameraOnlyPossessedCameraMode(prediction.cameraMode)) {
+    const nextPositionX = Number(runtimePlayer.position?.x);
+    const nextPositionY = Number(runtimePlayer.position?.y);
+    const nextPositionZ = Number(runtimePlayer.position?.z);
+    if (Number.isFinite(nextPositionX)) {
+      prediction.position.x = nextPositionX;
+    }
+    if (Number.isFinite(nextPositionY)) {
+      prediction.position.y = nextPositionY;
+    }
+    if (Number.isFinite(nextPositionZ)) {
+      prediction.position.z = nextPositionZ;
+    }
+    prediction.velocity.x = 0;
+    prediction.velocity.z = 0;
+    prediction.rotation.y = getPlayerFixedTopDownOrientation(prediction.fixedTopDownDirection).headingY;
+    return prediction;
+  }
   const dt = clampNumber(deltaSeconds, 1 / 60, 0, 0.05);
   if (dt <= 0) {
     return prediction;
@@ -9857,6 +9940,25 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   prediction.position.y = desiredPosition.y;
   prediction.rotation.y = intent.headingY;
   return prediction;
+}
+
+function updateCameraOnlyPossessedMovement(deltaSeconds = 0) {
+  const dt = clampNumber(deltaSeconds, 1 / 60, 0, 0.05);
+  const intent = buildRuntimeMovementIntent(privateInputState.keys);
+  privateInputState.sprintHoldSeconds = intent.sprint
+    ? Math.min(PRIVATE_SPRINT.rampSeconds, privateInputState.sprintHoldSeconds + dt)
+    : Math.max(
+      0,
+      privateInputState.sprintHoldSeconds - (dt * PRIVATE_SPRINT.rampSeconds) / PRIVATE_SPRINT.decaySeconds,
+    );
+  if (!intent.active || dt <= 0 || isPrivateOriginShareLocked()) {
+    return false;
+  }
+  const speedMultiplier = intent.sprint ? getPrivateSprintSpeedMultiplier() : 1;
+  state.viewerPosition.x += intent.x * dt * PRIVATE_CAMERA.movementSpeed * speedMultiplier;
+  state.viewerPosition.z += intent.z * dt * PRIVATE_CAMERA.movementSpeed * speedMultiplier;
+  clampViewerPositionToWorldBounds(state.viewerPosition);
+  return true;
 }
 
 function renderRuntimeStatusThrottled() {
@@ -11460,7 +11562,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const cameraMode = normalizePlayerCameraMode(entry.camera_mode ?? "third_person");
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownNote = cameraMode === "fixed_top_down_first_person"
-      ? "Fixed top down first person follows the occupied player with a framed top-down view. Direction rotates the window. Set width and height to 0 to include the full private world."
+      ? "Fixed top down first person turns the occupied player into a camera-only top-down view. You move the camera, not a body on the ground. Direction rotates the window. Set width and height to 0 to include the full private world."
       : "Fixed top down locks the camera over the world center. Direction rotates the framed map. Set width and height to 0 to include the full private world.";
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Everyone enters as a floating viewer. Possession happens by clicking a player in Play mode.</p>
@@ -15723,11 +15825,12 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     return true;
   }
   if (player.camera_mode === "fixed_top_down_first_person") {
+    updateCameraOnlyPossessedMovement(deltaSeconds);
     const camera = applyFixedTopDownPreviewCamera(preview, player, state.selectedWorld, {
       center: {
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z,
+        x: state.viewerPosition.x,
+        y: state.viewerPosition.y,
+        z: state.viewerPosition.z,
       },
     });
     state.viewerCameraPosition.copy(camera.position);
@@ -19421,6 +19524,14 @@ async function releasePlayer() {
   }
   const localParticipant = getLocalParticipant();
   const playerEntityId = String(localParticipant?.player_entity_id ?? "").trim();
+  const cameraOnlyReleaseSpawn = isCameraOnlyPossessedCameraMode(getActivePossessedCameraMode())
+    ? {
+      position_x: state.viewerPosition.x,
+      position_y: state.viewerPosition.y,
+      position_z: state.viewerPosition.z,
+      heading_y: privateInputState.yaw,
+    }
+    : null;
   const fallbackReleaseSpawn = getPrivatePlayerReleaseSpawn(playerEntityId, state.selectedWorld);
   state.pressedRuntimeKeys.clear();
   const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/release`, {
@@ -19434,7 +19545,7 @@ async function releasePlayer() {
     localParticipant.player_entity_id = null;
   }
   clearPossessedPlayerPrediction();
-  applyPrivateViewerReleaseSpawn(payload.release_spawn ?? fallbackReleaseSpawn);
+  applyPrivateViewerReleaseSpawn(cameraOnlyReleaseSpawn ?? payload.release_spawn ?? fallbackReleaseSpawn);
   pushEvent("player:released", state.selectedWorld.name);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
   syncPrivateCameraToFollowTarget(state.preview);
@@ -19659,7 +19770,9 @@ function getRuntimeInputHeadingY() {
 }
 
 function shouldDrivePrivateRuntimeInput() {
-  return state.mode === "play" && getLocalParticipant()?.join_role === "player";
+  return state.mode === "play"
+    && getLocalParticipant()?.join_role === "player"
+    && !isCameraOnlyPossessedCameraMode(getActivePossessedCameraMode());
 }
 
 function nextPrivateMotionSequence() {
