@@ -9609,10 +9609,15 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   if (Number.isFinite(nextRotationX)) {
     prediction.rotation.x = nextRotationX;
   }
+  if (Number.isFinite(nextRotationY) && !intent.active) {
+    prediction.rotation.y = nextRotationY;
+  }
   if (Number.isFinite(nextRotationZ)) {
     prediction.rotation.z = nextRotationZ;
   }
-  prediction.rotation.y = intent.headingY;
+  if (intent.active) {
+    prediction.rotation.y = intent.headingY;
+  }
   prediction.onGround = runtimePlayer.on_ground === true;
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
   prediction.cameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
@@ -9938,7 +9943,9 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     prediction.position.z = desiredPosition.z;
   }
   prediction.position.y = desiredPosition.y;
-  prediction.rotation.y = intent.headingY;
+  if (intent.active) {
+    prediction.rotation.y = intent.headingY;
+  }
   return prediction;
 }
 
@@ -16736,6 +16743,25 @@ function resetPreviewRenderState(preview = state.preview) {
   preview.renderSceneDocRef = null;
 }
 
+function buildPreviewRevisionSceneDoc(sceneDoc = {}) {
+  const revisionDoc = deepClone(sceneDoc) ?? {};
+  if (revisionDoc.settings && typeof revisionDoc.settings === "object") {
+    delete revisionDoc.settings.camera_mode;
+  }
+  if (Array.isArray(revisionDoc.players)) {
+    for (const player of revisionDoc.players) {
+      if (!player || typeof player !== "object") {
+        continue;
+      }
+      delete player.camera_mode;
+      delete player.fixed_top_down_direction;
+      delete player.fixed_top_down_width;
+      delete player.fixed_top_down_height;
+    }
+  }
+  return revisionDoc;
+}
+
 function getPreviewSelectionStateKey() {
   if (state.mode !== "build") {
     return "";
@@ -16757,20 +16783,9 @@ function getPreviewRenderSource(sceneDoc) {
       ? "runtime-scene"
       : "play-scene";
   } else {
-    let sceneDocText = "";
-    let scriptDslText = "";
-    if (isEditor() && state.sceneEditorSceneId === sceneId) {
-      sceneDocText = String(elements.sceneForm?.elements.sceneDoc?.value ?? "");
-      scriptDslText = String(elements.sceneForm?.elements.scriptDsl?.value ?? "");
-    } else {
-      const draft = getSceneDraft(sceneId);
-      sceneDocText = String(draft?.sceneDocText ?? JSON.stringify(scene?.scene_doc ?? {}, null, 2));
-      scriptDslText = String(draft?.scriptDslText ?? scene?.scene_doc?.script_dsl ?? "");
-    }
     revisionKey = String(hashPrivateString([
       sceneId,
-      sceneDocText,
-      scriptDslText,
+      JSON.stringify(buildPreviewRevisionSceneDoc(sceneDoc)),
       getPreviewSelectionStateKey(),
     ].join("\u241f")));
   }
