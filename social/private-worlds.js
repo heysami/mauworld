@@ -19189,7 +19189,10 @@ async function ensurePlayRuntimeStarted(options = {}) {
   const activeSceneId = String(runtime?.active_scene_id || state.selectedWorld.active_instance?.active_scene_id || "").trim();
   const targetSceneSeed = options.sceneId ?? activeSceneId ?? getDefaultScene(state.selectedWorld)?.id ?? state.selectedSceneId ?? "";
   const targetSceneId = String(targetSceneSeed).trim();
-  const sceneAlreadyRunning = runtime?.scene_started === true && (!targetSceneId || activeSceneId === targetSceneId);
+  const sceneAlreadyRunning =
+    options.forceRestart !== true
+    && runtime?.scene_started === true
+    && (!targetSceneId || activeSceneId === targetSceneId);
   if (sceneAlreadyRunning) {
     return false;
   }
@@ -19233,11 +19236,13 @@ async function enterPlayMode() {
   try {
     const keepPanelTab = "chat";
     const previousBuildSceneId = state.selectedSceneId;
+    let savedScene = false;
     if (isEditor() && getSelectedScene()) {
       await saveCurrentScene({
         pushEvent: false,
         keepPanelTab: state.privatePanelTab,
       });
+      savedScene = true;
     }
     const defaultScene = getDefaultScene(state.selectedWorld);
     if (previousBuildSceneId) {
@@ -19253,6 +19258,7 @@ async function enterPlayMode() {
     if (state.session) {
       await ensurePlayRuntimeStarted({
         sceneId: targetSceneId,
+        forceRestart: savedScene,
         keepPanelTab,
         pushEvent: false,
       });
