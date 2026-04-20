@@ -20793,7 +20793,9 @@ function triggerRuntimeJumpPulse(options = {}) {
 }
 
 function appendRuntimePosePayload(payload = {}, options = {}) {
-  const pose = getLocalPossessedPlayerPosePayload();
+  const pose = getLocalPossessedPlayerPosePayload({
+    includePlanarForRigid: options.includePlanarForRigid !== false,
+  });
   if (!pose) {
     return payload;
   }
@@ -20836,7 +20838,10 @@ async function sendRuntimeInput(key, runtimeState = "down", options = {}) {
   }
   const motionSeq = normalizedKey ? nextPrivateMotionSequence() : null;
   if (normalizedKey) {
-    appendRuntimePosePayload(payload, { motionSeq });
+    appendRuntimePosePayload(payload, {
+      motionSeq,
+      includePlanarForRigid: runtimeState !== "up",
+    });
   }
   if (sendWorldSocketMessage(payload)) {
     return true;
@@ -20849,7 +20854,10 @@ async function sendRuntimeInput(key, runtimeState = "down", options = {}) {
     key: normalizedKey,
     state: runtimeState,
     heading_y: hasHeadingY ? Number(normalizeAngle(headingY).toFixed(6)) : undefined,
-  }, { motionSeq });
+  }, {
+    motionSeq,
+    includePlanarForRigid: runtimeState !== "up",
+  });
   await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/input`, {
     method: "POST",
     body,
