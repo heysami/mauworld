@@ -1122,6 +1122,9 @@ const state = {
 const privateInputState = {
   keys: new Set(),
   sprintHoldSeconds: 0,
+  jumpHeld: false,
+  jumpVelocityY: 0,
+  jumpGroundY: PRIVATE_CAMERA.minY,
   pointerDown: false,
   dragDistance: 0,
   lastPointerX: 0,
@@ -5733,6 +5736,9 @@ function applyPrivateViewerReleaseSpawn(spawn = null) {
     state.viewerPosition.z = nextZ;
   }
   clampViewerPositionToWorldBounds(state.viewerPosition);
+  privateInputState.jumpGroundY = state.viewerPosition.y;
+  privateInputState.jumpVelocityY = 0;
+  privateInputState.jumpHeld = false;
   const headingY = Number(spawn.heading_y);
   if (Number.isFinite(headingY)) {
     privateInputState.yaw = normalizeAngle(headingY);
@@ -13162,7 +13168,7 @@ function renderRuntimeStatus() {
       <strong>Controls</strong>
       <span>${localParticipant?.join_role === "player"
         ? "You are inside a player. Ready Up marks this player as prepared, and Leave Player returns to viewer mode."
-        : "Viewers can walk around immediately. Click a player capsule to inhabit it, then Ready Up appears for that player."}</span>
+        : "Viewers can walk around immediately. In local play preview, Space jumps the local avatar. Click a player capsule to inhabit it, then Ready Up appears for that player."}</span>
     </div>
     ${PRIVATE_POSSESSION_DEBUG.enabled === true && possessionDrift ? `
       <div class="pw-world-meta__row">
@@ -16255,6 +16261,10 @@ function getPrivateSprintSpeedMultiplier() {
   return 1 + (PRIVATE_SPRINT.maxMultiplier - 1) * easedProgress;
 }
 
+function isLocalViewerJumpMode() {
+  return state.mode === "play" && !shouldDrivePrivateRuntimeInput();
+}
+
 function ensureViewerAvatar(preview) {
   if (preview.viewerAvatar) {
     return preview.viewerAvatar;
@@ -16301,6 +16311,10 @@ function ensureViewerAvatar(preview) {
 function updatePrivateMovement(preview, deltaSeconds) {
   const activeKeys = new Set(privateInputState.keys);
   const sprintIntentActive = hasPrivateSprintIntent(activeKeys);
+  const viewerJumpMode = isLocalViewerJumpMode();
+  const jumpPressed = activeKeys.has("space");
+  const viewerJumpVelocityY = Number(privateInputState.jumpVelocityY ?? 0) || 0;
+  const viewerJumpAirborne = viewerJumpMode && Math.abs(viewerJumpVelocityY) >= 0.05;
   privateInputState.sprintHoldSeconds = sprintIntentActive
     ? Math.min(PRIVATE_SPRINT.rampSeconds, privateInputState.sprintHoldSeconds + deltaSeconds)
     : Math.max(
@@ -16308,7 +16322,16 @@ function updatePrivateMovement(preview, deltaSeconds) {
       privateInputState.sprintHoldSeconds - (deltaSeconds * PRIVATE_SPRINT.rampSeconds) / PRIVATE_SPRINT.decaySeconds,
     );
 
-  if (!hasPrivateMovementIntent(activeKeys)) {
+  if (viewerJumpMode && !viewerJumpAirborne) {
+    privateInputState.jumpGroundY = state.viewerPosition.y;
+  }
+  if (viewerJumpMode && jumpPressed && !privateInputState.jumpHeld && !viewerJumpAirborne) {
+    privateInputState.jumpGroundY = state.viewerPosition.y;
+    privateInputState.jumpVelocityY = PRIVATE_PLAYER_RUNTIME.jumpVelocity;
+  }
+  privateInputState.jumpHeld = jumpPressed;
+
+  if (!hasPrivateMovementIntent(activeKeys) && !viewerJumpAirborne && !(viewerJumpMode && jumpPressed)) {
     return;
   }
 
@@ -16333,14 +16356,14 @@ function updatePrivateMovement(preview, deltaSeconds) {
   if (activeKeys.has("d") || activeKeys.has("right") || activeKeys.has("arrowright")) {
     velocity.add(right);
   }
-  if (activeKeys.has("q") || activeKeys.has("down")) {
+  if (!viewerJumpMode && (activeKeys.has("q") || activeKeys.has("down"))) {
     vertical -= 1;
   }
-  if (activeKeys.has("e") || activeKeys.has("up")) {
+  if (!viewerJumpMode && (activeKeys.has("e") || activeKeys.has("up"))) {
     vertical += 1;
   }
 
-  if (velocity.lengthSq() === 0 && vertical === 0) {
+  if (velocity.lengthSq() === 0 && vertical === 0 && !viewerJumpAirborne && !(viewerJumpMode && jumpPressed)) {
     return;
   }
 
@@ -16352,12 +16375,23 @@ function updatePrivateMovement(preview, deltaSeconds) {
       deltaSeconds * PRIVATE_CAMERA.movementSpeed * speedMultiplier,
     );
   }
-  state.viewerPosition.y = clampNumber(
-    state.viewerPosition.y + vertical * deltaSeconds * PRIVATE_CAMERA.verticalSpeed * speedMultiplier,
-    state.viewerPosition.y,
-    PRIVATE_CAMERA.minY,
-    PRIVATE_CAMERA.maxY,
-  );
+  if (viewerJumpMode) {
+    privateInputState.jumpVelocityY -= PRIVATE_PLAYER_RUNTIME.gravity * deltaSeconds;
+    state.viewerPosition.y += privateInputState.jumpVelocityY * deltaSeconds;
+    const groundY = Number(privateInputState.jumpGroundY ?? PRIVATE_CAMERA.minY);
+    if (state.viewerPosition.y <= groundY) {
+      state.viewerPosition.y = groundY;
+      privateInputState.jumpGroundY = groundY;
+      privateInputState.jumpVelocityY = 0;
+    }
+  } else {
+    state.viewerPosition.y = clampNumber(
+      state.viewerPosition.y + vertical * deltaSeconds * PRIVATE_CAMERA.verticalSpeed * speedMultiplier,
+      state.viewerPosition.y,
+      PRIVATE_CAMERA.minY,
+      PRIVATE_CAMERA.maxY,
+    );
+  }
   clampViewerPositionToWorldBounds(state.viewerPosition);
   syncPrivateCameraToFollowTarget(preview);
   leaveViewerMovementTrail(preview, previousPosition, state.viewerPosition, deltaSeconds);
@@ -22027,6 +22061,7 @@ function bindEvents() {
     state.pressedRuntimeKeys.clear();
     state.buildModifierKeys.clear();
     privateInputState.keys.clear();
+    privateInputState.jumpHeld = false;
     privateInputState.sprintHoldSeconds = 0;
     privateInputState.pointerDown = false;
     privateInputState.pointerId = 0;
