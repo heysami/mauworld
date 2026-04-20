@@ -72,3 +72,37 @@ test("uses a rotated blocker's broader axis-aligned footprint", () => {
   assert.equal(result.blockedAxes.x, true);
   assert.ok(result.position.x < 2.2);
 });
+
+test("pushes a body back out when it starts slightly embedded in a wall", () => {
+  const result = resolvePlayerMovementAgainstBlockers({
+    startPosition: { x: 1.7, y: 1, z: 0 },
+    desiredPosition: { x: 1.7, y: 1, z: 0 },
+    playerSize: { x: 1, y: 2, z: 1 },
+    blockers: [
+      {
+        position: { x: 3, y: 1, z: 0 },
+        size: { x: 2, y: 2, z: 4 },
+      },
+    ],
+  });
+
+  assert.equal(result.blockedAxes.x, true);
+  assert.ok(result.position.x < 1.6);
+});
+
+test("keeps the body on its original side when moving while slightly embedded", () => {
+  const result = resolvePlayerMovementAgainstBlockers({
+    startPosition: { x: 1.7, y: 1, z: 0 },
+    desiredPosition: { x: 2.4, y: 1, z: 0 },
+    playerSize: { x: 1, y: 2, z: 1 },
+    blockers: [
+      {
+        position: { x: 3, y: 1, z: 0 },
+        size: { x: 2, y: 2, z: 4 },
+      },
+    ],
+  });
+
+  assert.equal(result.blockedAxes.x, true);
+  assert.ok(result.position.x < 1.6);
+});

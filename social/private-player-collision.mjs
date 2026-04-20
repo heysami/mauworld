@@ -51,6 +51,28 @@ function overlapsOnAxes(position, half, blocker, axes, epsilon) {
   ));
 }
 
+function chooseBoundaryForOverlap(startValue, targetValue, blockerCenter, minBoundary, maxBoundary, epsilon) {
+  const safeStart = finite(startValue, 0);
+  const safeTarget = finite(targetValue, safeStart);
+  const safeCenter = finite(blockerCenter, 0);
+  const delta = safeTarget - safeStart;
+  if (safeStart <= safeCenter - epsilon) {
+    return minBoundary;
+  }
+  if (safeStart >= safeCenter + epsilon) {
+    return maxBoundary;
+  }
+  if (delta > epsilon) {
+    return maxBoundary;
+  }
+  if (delta < -epsilon) {
+    return minBoundary;
+  }
+  return Math.abs(safeStart - minBoundary) <= Math.abs(safeStart - maxBoundary)
+    ? minBoundary
+    : maxBoundary;
+}
+
 export function resolvePlayerMovementAgainstBlockers(input = {}) {
   const epsilon = Math.max(0.0001, finite(input.epsilon, 0.0001));
   const startPosition = {
@@ -84,11 +106,6 @@ export function resolvePlayerMovementAgainstBlockers(input = {}) {
     const otherAxis = axis === "x" ? "z" : "x";
     const target = desiredPosition[axis];
     const startValue = resolved[axis];
-    const delta = target - startValue;
-    if (Math.abs(delta) <= epsilon) {
-      continue;
-    }
-
     let nextValue = target;
     for (const blocker of blockers) {
       const candidatePosition = {
@@ -100,21 +117,24 @@ export function resolvePlayerMovementAgainstBlockers(input = {}) {
         continue;
       }
       const combinedHalf = playerHalf[axis] + blocker.half[axis];
-      if (delta > 0) {
-        const boundary = blocker.position[axis] - combinedHalf - epsilon;
-        if (startValue >= boundary || target <= boundary) {
-          continue;
-        }
-        blockedAxes[axis] = true;
-        nextValue = Math.min(nextValue, boundary);
-      } else {
-        const boundary = blocker.position[axis] + combinedHalf + epsilon;
-        if (startValue <= boundary || target >= boundary) {
-          continue;
-        }
-        blockedAxes[axis] = true;
-        nextValue = Math.max(nextValue, boundary);
+      const minBoundary = blocker.position[axis] - combinedHalf - epsilon;
+      const maxBoundary = blocker.position[axis] + combinedHalf + epsilon;
+      const segmentMin = Math.min(startValue, nextValue);
+      const segmentMax = Math.max(startValue, nextValue);
+      const overlapsOrCrossesAxis = segmentMax > minBoundary && segmentMin < maxBoundary;
+      if (!overlapsOrCrossesAxis) {
+        continue;
       }
+      const boundary = chooseBoundaryForOverlap(
+        startValue,
+        nextValue,
+        blocker.position[axis],
+        minBoundary,
+        maxBoundary,
+        epsilon,
+      );
+      blockedAxes[axis] = true;
+      nextValue = boundary;
     }
 
     resolved[axis] = nextValue;
