@@ -117,6 +117,9 @@ const PRIVATE_PLAYER_RUNTIME = {
   snapDistance: PRIVATE_WORLD_BLOCK_UNIT * 4,
   idleCorrectionAlpha: 0.28,
   verticalSnapDistance: PRIVATE_WORLD_BLOCK_UNIT * 0.5,
+  gravity: 9.8,
+  jumpVelocity: Math.sqrt(Math.abs(-9.8) * 2 * (1.25 * PRIVATE_WORLD_BLOCK_UNIT)),
+  localJumpHoldMs: 220,
 };
 const PRIVATE_DYNAMIC_RUNTIME = {
   interactionHoldMs: 140,
@@ -9532,6 +9535,8 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     jumpEnabled: normalizePlayerJumpEnabled(runtimePlayer.jump_enabled ?? true),
     bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
     onGround: runtimePlayer.on_ground === true,
+    jumpHeld: false,
+    localJumpUntilMs: 0,
   };
 }
 
@@ -9890,18 +9895,27 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   if (!prediction || !runtimePlayer) {
     return null;
   }
+  const now = performance.now();
   const intent = buildRuntimeMovementIntent();
   const nextPositionY = Number(runtimePlayer.position?.y);
   const nextVelocityY = Number(runtimePlayer.velocity?.y);
-  if (Number.isFinite(nextPositionY)) {
-    if (Math.abs(nextPositionY - prediction.position.y) >= PRIVATE_PLAYER_RUNTIME.verticalSnapDistance) {
-      prediction.position.y = nextPositionY;
-    } else {
-      prediction.position.y += (nextPositionY - prediction.position.y) * 0.35;
+  const holdLocalJump = prediction.localJumpUntilMs > now
+    && runtimePlayer.on_ground === true
+    && (!Number.isFinite(nextVelocityY) || Math.abs(nextVelocityY) < 0.05);
+  if (!holdLocalJump) {
+    if (Number.isFinite(nextPositionY)) {
+      if (Math.abs(nextPositionY - prediction.position.y) >= PRIVATE_PLAYER_RUNTIME.verticalSnapDistance) {
+        prediction.position.y = nextPositionY;
+      } else {
+        prediction.position.y += (nextPositionY - prediction.position.y) * 0.35;
+      }
     }
-  }
-  if (Number.isFinite(nextVelocityY)) {
-    prediction.velocity.y = nextVelocityY;
+    if (Number.isFinite(nextVelocityY)) {
+      prediction.velocity.y = nextVelocityY;
+    }
+    if (runtimePlayer.on_ground !== true || (Number.isFinite(nextVelocityY) && Math.abs(nextVelocityY) >= 0.05)) {
+      prediction.localJumpUntilMs = 0;
+    }
   }
   if (!intent.active) {
     prediction.velocity.x += (0 - prediction.velocity.x) * 0.18;
@@ -9922,7 +9936,7 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   if (intent.active) {
     prediction.rotation.y = intent.headingY;
   }
-  prediction.onGround = runtimePlayer.on_ground === true;
+  prediction.onGround = holdLocalJump ? false : runtimePlayer.on_ground === true;
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
   prediction.cameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
   prediction.movementEnabled = normalizePlayerMovementEnabled(
@@ -10224,10 +10238,28 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const blend = clampNumber(PRIVATE_PLAYER_RUNTIME.acceleration * dt, 1, 0, 1);
   prediction.velocity.x += (intent.x * speed - prediction.velocity.x) * blend;
   prediction.velocity.z += (intent.z * speed - prediction.velocity.z) * blend;
-  const nextPositionY = Number(runtimePlayer.position?.y);
+  const jumpPressed = state.pressedRuntimeKeys.has("space");
+  if (!jumpPressed) {
+    prediction.jumpHeld = false;
+  }
+  if (
+    jumpPressed
+    && !prediction.jumpHeld
+    && prediction.jumpEnabled
+    && prediction.onGround
+    && isPrivateCollisionModeRigid(prediction.bodyMode)
+  ) {
+    prediction.velocity.y = PRIVATE_PLAYER_RUNTIME.jumpVelocity;
+    prediction.onGround = false;
+    prediction.jumpHeld = true;
+    prediction.localJumpUntilMs = performance.now() + PRIVATE_PLAYER_RUNTIME.localJumpHoldMs;
+  }
+  if (!prediction.onGround && isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    prediction.velocity.y -= PRIVATE_PLAYER_RUNTIME.gravity * dt;
+  }
   const desiredPosition = {
     x: prediction.position.x + prediction.velocity.x * dt,
-    y: Number.isFinite(nextPositionY) ? nextPositionY : prediction.position.y,
+    y: prediction.position.y + prediction.velocity.y * dt,
     z: prediction.position.z + prediction.velocity.z * dt,
   };
   if (isPrivateCollisionModeRigid(prediction.bodyMode)) {
