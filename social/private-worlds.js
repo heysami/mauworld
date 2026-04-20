@@ -11612,7 +11612,6 @@ function renderSelectedWorld() {
 
   setMode(state.mode, { syncPanelTab: false });
   updateShellState();
-  updatePreviewFromSelection();
   renderPrivateChat();
   updatePrivateBrowserPanel();
 }
@@ -15111,30 +15110,156 @@ function clearPreviewRoot() {
   disposePreviewEffects(preview);
   for (const child of [...preview.root.children]) {
     preview.root.remove(child);
-    child.traverse((node) => {
-      node.geometry?.dispose?.();
-      if (Array.isArray(node.material)) {
-        node.material.forEach((material) => material?.dispose?.());
-      } else {
-        node.material?.dispose?.();
-      }
-    });
+    disposePreviewObject3D(child);
   }
+  resetPreviewRenderState(preview);
 }
 
 function disposePreviewEffects(preview) {
   for (const effect of preview.effectSystems ?? []) {
-    effect.object?.traverse?.((node) => {
-      node.geometry?.dispose?.();
-      if (Array.isArray(node.material)) {
-        node.material.forEach((material) => material?.dispose?.());
-      } else {
-        node.material?.dispose?.();
-      }
-    });
+    disposePreviewObject3D(effect.object);
     effect.object?.removeFromParent?.();
   }
   preview.effectSystems = [];
+}
+
+function disposeOwnedPreviewTexture(texture) {
+  if (texture?.userData?.privateWorldOwnedPreviewTexture === true) {
+    texture.dispose?.();
+  }
+}
+
+function disposePreviewMaterial(material) {
+  if (!material) {
+    return;
+  }
+  for (const key of [
+    "map",
+    "alphaMap",
+    "aoMap",
+    "bumpMap",
+    "displacementMap",
+    "emissiveMap",
+    "metalnessMap",
+    "normalMap",
+    "roughnessMap",
+  ]) {
+    disposeOwnedPreviewTexture(material[key]);
+  }
+  material.dispose?.();
+}
+
+function disposePreviewObject3D(object) {
+  object?.traverse?.((node) => {
+    node.geometry?.dispose?.();
+    if (Array.isArray(node.material)) {
+      node.material.forEach((material) => disposePreviewMaterial(material));
+    } else {
+      disposePreviewMaterial(node.material);
+    }
+  });
+}
+
+function resetPreviewRenderState(preview = state.preview) {
+  if (!preview) {
+    return;
+  }
+  preview.renderWorldId = "";
+  preview.renderSceneId = "";
+  preview.renderMode = "";
+  preview.renderEditorKey = "";
+  preview.renderRevisionKey = "";
+  preview.renderSceneDocRef = null;
+}
+
+function getPreviewSelectionStateKey() {
+  if (state.mode !== "build") {
+    return "";
+  }
+  return getBuilderSelectionRefs()
+    .map((ref) => `${ref.kind}:${ref.id}`)
+    .join("|");
+}
+
+function getPreviewRenderSource(sceneDoc) {
+  const scene = getSelectedScene();
+  const worldId = String(state.selectedWorld?.world_id ?? "").trim();
+  const sceneId = String(state.selectedSceneId ?? scene?.id ?? "").trim();
+  const mode = state.mode;
+  const editorKey = isEditor() ? "1" : "0";
+  let revisionKey = "";
+  if (mode === "play") {
+    revisionKey = sceneDoc === (scene?.compiled_doc?.runtime?.resolved_scene_doc ?? scene?.scene_doc ?? null)
+      ? "runtime-scene"
+      : "play-scene";
+  } else {
+    let sceneDocText = "";
+    let scriptDslText = "";
+    if (isEditor() && state.sceneEditorSceneId === sceneId) {
+      sceneDocText = String(elements.sceneForm?.elements.sceneDoc?.value ?? "");
+      scriptDslText = String(elements.sceneForm?.elements.scriptDsl?.value ?? "");
+    } else {
+      const draft = getSceneDraft(sceneId);
+      sceneDocText = String(draft?.sceneDocText ?? JSON.stringify(scene?.scene_doc ?? {}, null, 2));
+      scriptDslText = String(draft?.scriptDslText ?? scene?.scene_doc?.script_dsl ?? "");
+    }
+    revisionKey = String(hashPrivateString([
+      sceneId,
+      sceneDocText,
+      scriptDslText,
+      getPreviewSelectionStateKey(),
+    ].join("\u241f")));
+  }
+  return {
+    worldId,
+    sceneId,
+    mode,
+    editorKey,
+    revisionKey,
+    sceneDocRef: sceneDoc,
+  };
+}
+
+function canReusePreviewRender(preview, source, options = {}) {
+  if (!preview || options.forceRebuild === true) {
+    return false;
+  }
+  if (
+    preview.renderWorldId !== source.worldId
+    || preview.renderSceneId !== source.sceneId
+    || preview.renderMode !== source.mode
+    || preview.renderEditorKey !== source.editorKey
+  ) {
+    return false;
+  }
+  if (source.mode === "play") {
+    return preview.renderSceneDocRef === source.sceneDocRef;
+  }
+  return preview.renderRevisionKey === source.revisionKey;
+}
+
+function rememberPreviewRenderSource(preview, source) {
+  if (!preview || !source) {
+    return;
+  }
+  preview.renderWorldId = source.worldId;
+  preview.renderSceneId = source.sceneId;
+  preview.renderMode = source.mode;
+  preview.renderEditorKey = source.editorKey;
+  preview.renderRevisionKey = source.revisionKey;
+  preview.renderSceneDocRef = source.sceneDocRef;
+}
+
+function hasPreviewPlacedGeometry(sceneDoc = {}) {
+  return Boolean(
+    (sceneDoc.voxels?.length ?? 0)
+    || (sceneDoc.primitives?.length ?? 0)
+    || (sceneDoc.panels?.length ?? 0)
+    || (sceneDoc.models?.length ?? 0)
+    || (sceneDoc.screens?.length ?? 0)
+    || (sceneDoc.texts?.length ?? 0)
+    || (sceneDoc.prefab_instances?.length ?? 0),
+  );
 }
 
 function cloneMaterialForPreview(material) {
@@ -15220,6 +15345,7 @@ async function applyTextureAssetMapsToMaterial(material, textureAssetId, scale =
   const repeat = getTextureAssetRepeat(scale);
   if (textures.base_color) {
     textures.base_color.repeat.set(repeat.x, repeat.y);
+    disposeOwnedPreviewTexture(material.map);
     material.map = textures.base_color;
     material.color?.set?.("#ffffff");
   }
@@ -15271,6 +15397,10 @@ function makeMaterial(material = {}, scale = { x: 1, y: 1, z: 1 }, { selected = 
     repeatX: Math.max(1, Number(scale?.x ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
     repeatY: Math.max(1, Number(scale?.z ?? scale?.y ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
   });
+  if (built.map) {
+    built.map.userData = built.map.userData || {};
+    built.map.userData.privateWorldOwnedPreviewTexture = true;
+  }
   if (material?.texture_asset_id) {
     void applyTextureAssetMapsToMaterial(built, material.texture_asset_id, scale);
   }
@@ -15856,9 +15986,8 @@ function getPossessedPreviewPlayer(preview = state.preview) {
   };
 }
 
-function updatePreviewFromSelection() {
+function updatePreviewFromSelection(options = {}) {
   const preview = ensurePreview();
-  clearPreviewRoot();
   if (!preview) {
     return;
   }
@@ -15868,13 +15997,24 @@ function updatePreviewFromSelection() {
     sceneDoc = getRenderableSceneDoc();
   } catch (_error) {
     preview.root.visible = false;
+    resetPreviewRenderState(preview);
     return;
   }
   if (!sceneDoc) {
     preview.root.visible = false;
+    resetPreviewRenderState(preview);
     return;
   }
   preview.root.visible = true;
+  const renderSource = getPreviewRenderSource(sceneDoc);
+  preview.showGridHint = !hasPreviewPlacedGeometry(sceneDoc);
+  if (canReusePreviewRender(preview, renderSource, options)) {
+    refreshPrivatePreviewEnvironment(preview, state.selectedWorld, sceneDoc);
+    syncPrivatePreviewEnvironmentState(preview);
+    syncBuildPlacementOverlay(preview);
+    return;
+  }
+  clearPreviewRoot();
 
   const addMesh = (geometry, material, position, rotation = { x: 0, y: 0, z: 0 }, scale = { x: 1, y: 1, z: 1 }, metadata = null) => {
     const mesh = new THREE.Mesh(geometry, material);
@@ -16345,16 +16485,6 @@ function updatePreviewFromSelection() {
     }
     return group;
   };
-  const hasPlacedGeometry = Boolean(
-    (sceneDoc.voxels?.length ?? 0)
-    || (sceneDoc.primitives?.length ?? 0)
-    || (sceneDoc.panels?.length ?? 0)
-    || (sceneDoc.models?.length ?? 0)
-    || (sceneDoc.screens?.length ?? 0)
-    || (sceneDoc.texts?.length ?? 0)
-    || (sceneDoc.prefab_instances?.length ?? 0),
-  );
-  preview.showGridHint = !hasPlacedGeometry;
   syncPrivatePreviewEnvironmentState(preview);
   const boundsPreview = state.mode === "build" && isEditor()
     ? buildWorldBoundsPreview(state.selectedWorld, environmentTheme)
@@ -16637,6 +16767,7 @@ function updatePreviewFromSelection() {
   }
 
   preview.effectSystems = particleEffects;
+  rememberPreviewRenderSource(preview, renderSource);
   syncBuildPlacementOverlay(preview);
 }
 
@@ -16695,7 +16826,7 @@ function connectWorldSocket() {
         renderRuntimeStatus();
         const activeSceneChanged = String(previousRuntime?.active_scene_id ?? "") !== String(payload.snapshot?.active_scene_id ?? "");
         if (activeSceneChanged || !syncPreviewRuntimeSnapshot(payload.snapshot)) {
-          updatePreviewFromSelection();
+          updatePreviewFromSelection({ forceRebuild: true });
         }
       } else if (payload.type === "world:error") {
         pushEvent("world:error", payload.message || "Unknown world socket error");
