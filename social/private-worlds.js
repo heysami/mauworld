@@ -111,6 +111,7 @@ const PRIVATE_POSSESSION_DEBUG = {
   serverColor: "#4be7ff",
   tetherColor: "#ffe15a",
 };
+const PRIVATE_PLAYER_JUMP_HEIGHT = 12.5 * PRIVATE_WORLD_BLOCK_UNIT;
 const PRIVATE_PLAYER_RUNTIME = {
   moveSpeed: 4.317 * PRIVATE_WORLD_BLOCK_UNIT,
   sprintSpeed: 5.612 * PRIVATE_WORLD_BLOCK_UNIT,
@@ -119,7 +120,7 @@ const PRIVATE_PLAYER_RUNTIME = {
   idleCorrectionAlpha: 0.28,
   verticalSnapDistance: PRIVATE_WORLD_BLOCK_UNIT * 0.5,
   gravity: 9.8,
-  jumpVelocity: Math.sqrt(Math.abs(-9.8) * 2 * (1.25 * PRIVATE_WORLD_BLOCK_UNIT)),
+  jumpVelocity: Math.sqrt(Math.abs(-9.8) * 2 * PRIVATE_PLAYER_JUMP_HEIGHT),
   localJumpHoldMs: 220,
   jumpPulseMs: 220,
 };

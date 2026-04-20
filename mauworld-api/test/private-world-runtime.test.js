@@ -164,7 +164,7 @@ test("runtime buffers an initial jump press until a grounded occupied player set
   });
 
   assert.equal(player.onGround, false);
-  assert.ok(player.velocity.y > 0);
+  assert.ok(player.velocity.y > 30);
   assert.ok(player.position.y > 4.5);
 });
 
@@ -199,7 +199,7 @@ test("runtime lets occupied ghost players jump with space", () => {
   });
 
   assert.equal(player.onGround, false);
-  assert.ok(player.velocity.y > 0);
+  assert.ok(player.velocity.y > 30);
   assert.ok(player.position.y > 4.5);
 });
 
