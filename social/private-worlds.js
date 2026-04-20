@@ -9961,6 +9961,32 @@ function updateCameraOnlyPossessedMovement(deltaSeconds = 0) {
   return true;
 }
 
+function panCameraOnlyPossessedByScreenDelta(deltaX = 0, deltaY = 0, preview = state.preview) {
+  if (!isCameraOnlyPossessedCameraMode(getActivePossessedCameraMode())) {
+    return false;
+  }
+  const runtimePlayer = getPossessedRuntimePlayer();
+  if (!runtimePlayer) {
+    return false;
+  }
+  const viewport = getPreviewViewport(preview);
+  const viewportWidth = Math.max(1, Number(viewport?.width) || 1);
+  const viewportHeight = Math.max(1, Number(viewport?.height) || 1);
+  const windowSize = getPlayerFixedTopDownWindow({
+    ...runtimePlayer,
+    fixed_top_down_direction: getActivePossessedFixedTopDownDirection(),
+    fixed_top_down_width: state.predictedPossessedPlayer?.fixedTopDownWidth ?? runtimePlayer.fixed_top_down_width,
+    fixed_top_down_height: state.predictedPossessedPlayer?.fixedTopDownHeight ?? runtimePlayer.fixed_top_down_height,
+  }, state.selectedWorld);
+  const orientation = getPlayerFixedTopDownOrientation(getActivePossessedFixedTopDownDirection());
+  const worldDeltaX = -deltaX * (windowSize.width / viewportWidth);
+  const worldDeltaY = deltaY * (windowSize.height / viewportHeight);
+  state.viewerPosition.addScaledVector(orientation.rightVector, worldDeltaX);
+  state.viewerPosition.addScaledVector(orientation.upVector, worldDeltaY);
+  clampViewerPositionToWorldBounds(state.viewerPosition);
+  return true;
+}
+
 function renderRuntimeStatusThrottled() {
   const now = performance.now();
   if (now - state.lastRuntimeStatusRenderedAt < PRIVATE_RUNTIME_STATUS_THROTTLE_MS) {
@@ -16487,6 +16513,11 @@ function ensurePreview() {
     privateInputState.pointerMoved = privateInputState.dragDistance > 4;
     privateInputState.lastPointerX = event.clientX;
     privateInputState.lastPointerY = event.clientY;
+    if (isCameraOnlyPossessedCameraMode(getActivePossessedCameraMode())) {
+      event.preventDefault();
+      panCameraOnlyPossessedByScreenDelta(deltaX, deltaY, state.preview);
+      return;
+    }
     if (isFixedTopDownCameraMode(getActivePossessedCameraMode())) {
       return;
     }
