@@ -16778,18 +16778,14 @@ function getPreviewRenderSource(sceneDoc) {
   const sceneId = String(state.selectedSceneId ?? scene?.id ?? "").trim();
   const mode = state.mode;
   const editorKey = isEditor() ? "1" : "0";
-  let revisionKey = "";
-  if (mode === "play") {
-    revisionKey = sceneDoc === (scene?.compiled_doc?.runtime?.resolved_scene_doc ?? scene?.scene_doc ?? null)
-      ? "runtime-scene"
-      : "play-scene";
-  } else {
-    revisionKey = String(hashPrivateString([
-      sceneId,
-      JSON.stringify(buildPreviewRevisionSceneDoc(sceneDoc)),
-      getPreviewSelectionStateKey(),
-    ].join("\u241f")));
+  const revisionParts = [
+    sceneId,
+    JSON.stringify(buildPreviewRevisionSceneDoc(sceneDoc)),
+  ];
+  if (mode !== "play") {
+    revisionParts.push(getPreviewSelectionStateKey());
   }
+  const revisionKey = String(hashPrivateString(revisionParts.join("\u241f")));
   return {
     worldId,
     sceneId,
@@ -16807,13 +16803,10 @@ function canReusePreviewRender(preview, source, options = {}) {
   if (
     preview.renderWorldId !== source.worldId
     || preview.renderSceneId !== source.sceneId
-    || preview.renderMode !== source.mode
-    || preview.renderEditorKey !== source.editorKey
+      || preview.renderMode !== source.mode
+      || preview.renderEditorKey !== source.editorKey
   ) {
     return false;
-  }
-  if (source.mode === "play") {
-    return preview.renderSceneDocRef === source.sceneDocRef;
   }
   return preview.renderRevisionKey === source.revisionKey;
 }
