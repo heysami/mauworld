@@ -456,8 +456,11 @@ function refreshTriggerOccupancy(runtime) {
 }
 
 function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", runtimeState = {}, tick = 0, elapsedMs = 0 } = {}) {
-  const resolvedSceneDoc = sceneRow?.compiled_doc?.runtime?.resolved_scene_doc ?? sceneRow?.scene_doc ?? {};
-  const sceneDoc = normalizeSceneDoc(resolvedSceneDoc);
+  const compiledResolvedSceneDoc = sceneRow?.compiled_doc?.runtime?.resolved_scene_doc ?? null;
+  const resolvedSceneDoc = compiledResolvedSceneDoc ?? sceneRow?.scene_doc ?? {};
+  const sceneDoc = normalizeSceneDoc(resolvedSceneDoc, {
+    preserveNormalizedIds: compiledResolvedSceneDoc != null,
+  });
   const staticSolids = (sceneDoc.voxels ?? []).map((entry) => ({
     id: entry.id,
     position: vec3(entry.position),

@@ -155,7 +155,15 @@ function sanitizeEuler3(input = {}) {
   };
 }
 
-function ensureEntityId(prefix, value) {
+function ensureEntityId(prefix, value, options = {}) {
+  const preserveNormalizedIds = options?.preserveNormalizedIds === true;
+  const raw = String(value ?? "").trim();
+  if (preserveNormalizedIds && raw.toLowerCase().startsWith(`${prefix}_`)) {
+    const suffix = slugToken(raw.slice(prefix.length + 1));
+    if (suffix) {
+      return `${prefix}_${suffix}`;
+    }
+  }
   const cleaned = slugToken(value);
   if (cleaned) {
     return `${prefix}_${cleaned}`;
@@ -269,9 +277,9 @@ function sanitizeMaterial(input = {}, fallbackColor = "#c8d0d8") {
   };
 }
 
-function sanitizeVoxelEntry(entry = {}, index = 0) {
+function sanitizeVoxelEntry(entry = {}, index = 0, options = {}) {
   return {
-    id: ensureEntityId("voxel", entry.id || `voxel-${index + 1}`),
+    id: ensureEntityId("voxel", entry.id || `voxel-${index + 1}`, options),
     position: sanitizeVector3(entry.position, { x: 0, y: 0, z: 0 }),
     scale: sanitizeScale3(entry.scale, { x: 1, y: 1, z: 1 }),
     material: sanitizeMaterial(entry.material, "#c0c4ca"),
@@ -282,10 +290,10 @@ function sanitizeVoxelEntry(entry = {}, index = 0) {
   };
 }
 
-function sanitizePrimitiveEntry(entry = {}, index = 0) {
+function sanitizePrimitiveEntry(entry = {}, index = 0, options = {}) {
   const shape = String(entry.shape ?? "box").trim().toLowerCase();
   return {
-    id: ensureEntityId("primitive", entry.id || `primitive-${index + 1}`),
+    id: ensureEntityId("primitive", entry.id || `primitive-${index + 1}`, options),
     shape: ALLOWED_PRIMITIVE_SHAPES.has(shape) ? shape : "box",
     position: sanitizeVector3(entry.position, { x: 0, y: 1, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
@@ -303,9 +311,9 @@ function sanitizePrimitiveEntry(entry = {}, index = 0) {
   };
 }
 
-function sanitizePanelEntry(entry = {}, index = 0) {
+function sanitizePanelEntry(entry = {}, index = 0, options = {}) {
   return {
-    id: ensureEntityId("panel", entry.id || `panel-${index + 1}`),
+    id: ensureEntityId("panel", entry.id || `panel-${index + 1}`, options),
     label: String(entry.label ?? `Panel ${index + 1}`).trim().slice(0, 80) || `Panel ${index + 1}`,
     position: sanitizeVector3(entry.position, { x: 0, y: 2, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
@@ -317,9 +325,9 @@ function sanitizePanelEntry(entry = {}, index = 0) {
   };
 }
 
-function sanitizeModelEntry(entry = {}, index = 0) {
+function sanitizeModelEntry(entry = {}, index = 0, options = {}) {
   return {
-    id: ensureEntityId("model", entry.id || `model-${index + 1}`),
+    id: ensureEntityId("model", entry.id || `model-${index + 1}`, options),
     asset_id: String(entry.asset_id ?? entry.assetId ?? entry.model_asset_id ?? entry.modelAssetId ?? "").trim() || null,
     label: String(entry.label ?? `Model ${index + 1}`).trim().slice(0, 80) || `Model ${index + 1}`,
     position: sanitizeVector3(entry.position, { x: 0, y: 1, z: 0 }),
@@ -355,10 +363,10 @@ function sanitizeScreenHtml(input) {
   return html;
 }
 
-function sanitizeScreenEntry(entry = {}, index = 0) {
+function sanitizeScreenEntry(entry = {}, index = 0, options = {}) {
   const html = sanitizeScreenHtml(entry.html ?? entry.html_source ?? entry.htmlSource ?? "");
   return {
-    id: ensureEntityId("screen", entry.id || `screen-${index + 1}`),
+    id: ensureEntityId("screen", entry.id || `screen-${index + 1}`, options),
     position: sanitizeVector3(entry.position, { x: 0, y: 2, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
     scale: sanitizeScale3(entry.scale, { x: 4, y: 2.25, z: 0.2 }),
@@ -370,11 +378,11 @@ function sanitizeScreenEntry(entry = {}, index = 0) {
   };
 }
 
-function sanitizePlayerEntry(entry = {}, index = 0) {
+function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
   const cameraMode = String(entry.camera_mode ?? entry.cameraMode ?? "third_person").trim().toLowerCase();
   const bodyMode = String(entry.body_mode ?? entry.bodyMode ?? "rigid").trim().toLowerCase();
   return {
-    id: ensureEntityId("player", entry.id || `player-${index + 1}`),
+    id: ensureEntityId("player", entry.id || `player-${index + 1}`, options),
     label: String(entry.label ?? `Player ${index + 1}`).trim().slice(0, 48) || `Player ${index + 1}`,
     position: sanitizeVector3(entry.position, { x: 0, y: PRIVATE_PLAYER_STANDING_CENTER_Y, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
@@ -385,10 +393,10 @@ function sanitizePlayerEntry(entry = {}, index = 0) {
   };
 }
 
-function sanitizeText3Entry(entry = {}, index = 0) {
+function sanitizeText3Entry(entry = {}, index = 0, options = {}) {
   const value = sanitizeWorldText(entry.value ?? entry.text ?? `Text ${index + 1}`, "3d text", 160);
   return {
-    id: ensureEntityId("text3d", entry.id || `text-${index + 1}`),
+    id: ensureEntityId("text3d", entry.id || `text-${index + 1}`, options),
     value,
     position: sanitizeVector3(entry.position, { x: 0, y: 2, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
@@ -399,9 +407,9 @@ function sanitizeText3Entry(entry = {}, index = 0) {
   };
 }
 
-function sanitizeTriggerZoneEntry(entry = {}, index = 0) {
+function sanitizeTriggerZoneEntry(entry = {}, index = 0, options = {}) {
   return {
-    id: ensureEntityId("trigger", entry.id || `trigger-${index + 1}`),
+    id: ensureEntityId("trigger", entry.id || `trigger-${index + 1}`, options),
     position: sanitizeVector3(entry.position, { x: 0, y: 0.5, z: 0 }),
     scale: sanitizeScale3(entry.scale, { x: 2, y: 2, z: 2 }),
     label: String(entry.label ?? `Trigger ${index + 1}`).trim().slice(0, 48) || `Trigger ${index + 1}`,
@@ -409,19 +417,19 @@ function sanitizeTriggerZoneEntry(entry = {}, index = 0) {
   };
 }
 
-function sanitizePrefabEntry(entry = {}, index = 0) {
+function sanitizePrefabEntry(entry = {}, index = 0, options = {}) {
   return {
-    id: ensureEntityId("prefab", entry.id || `prefab-${index + 1}`),
+    id: ensureEntityId("prefab", entry.id || `prefab-${index + 1}`, options),
     name: sanitizeWorldText(entry.name ?? `Prefab ${index + 1}`, "prefab name", 80),
     entity_ids: Array.from(new Set((Array.isArray(entry.entity_ids) ? entry.entity_ids : []).map((value) => String(value ?? "").trim()).filter(Boolean))),
     instance_count: clampInteger(entry.instance_count, 0, 0, 256),
   };
 }
 
-function sanitizePrefabInstanceEntry(entry = {}, index = 0) {
+function sanitizePrefabInstanceEntry(entry = {}, index = 0, options = {}) {
   const overrides = typeof entry.overrides === "object" && entry.overrides ? entry.overrides : {};
   return {
-    id: ensureEntityId("prefabinst", entry.id || `prefab-instance-${index + 1}`),
+    id: ensureEntityId("prefabinst", entry.id || `prefab-instance-${index + 1}`, options),
     prefab_id: String(entry.prefab_id ?? entry.prefabId ?? "").trim() || null,
     label: String(entry.label ?? `Prefab Instance ${index + 1}`).trim().slice(0, 80) || `Prefab Instance ${index + 1}`,
     position: sanitizeVector3(entry.position, { x: 0, y: 0, z: 0 }),
@@ -434,9 +442,9 @@ function sanitizePrefabInstanceEntry(entry = {}, index = 0) {
   };
 }
 
-function sanitizeParticleEntry(entry = {}, index = 0) {
+function sanitizeParticleEntry(entry = {}, index = 0, options = {}) {
   return {
-    id: ensureEntityId("particle", entry.id || `particle-${index + 1}`),
+    id: ensureEntityId("particle", entry.id || `particle-${index + 1}`, options),
     effect: String(entry.effect ?? "sparkles").trim().toLowerCase().slice(0, 40) || "sparkles",
     target_id: String(entry.target_id ?? entry.targetId ?? "").trim() || null,
     enabled: entry.enabled !== false,
@@ -444,7 +452,7 @@ function sanitizeParticleEntry(entry = {}, index = 0) {
   };
 }
 
-function sanitizeRuleEntry(entry = {}, index = 0) {
+function sanitizeRuleEntry(entry = {}, index = 0, options = {}) {
   const trigger = String(entry.trigger ?? "").trim().toLowerCase();
   const action = String(entry.action ?? "").trim().toLowerCase();
   if (!ALLOWED_RULE_TRIGGERS.has(trigger)) {
@@ -454,7 +462,7 @@ function sanitizeRuleEntry(entry = {}, index = 0) {
     throw new HttpError(400, `Invalid rule action at index ${index + 1}`);
   }
   return {
-    id: ensureEntityId("rule", entry.id || `rule-${index + 1}`),
+    id: ensureEntityId("rule", entry.id || `rule-${index + 1}`, options),
     trigger,
     action,
     source_id: String(entry.source_id ?? entry.sourceId ?? "").trim() || null,
@@ -714,8 +722,10 @@ function transformPrefabEntity(entity = {}, instance = {}) {
   };
 }
 
-function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}) {
-  const doc = normalizeSceneDoc(prefabDoc);
+function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}, options = {}) {
+  const doc = normalizeSceneDoc(prefabDoc, {
+    preserveNormalizedIds: options.prefabDocAlreadyNormalized === true,
+  });
   const aliasMap = new Map();
   const prefix = `${instance.id}__`;
   const remapId = (id) => `${prefix}${id}`;
@@ -814,8 +824,10 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}) {
   };
 }
 
-function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = []) {
-  const doc = normalizeSceneDoc(sceneDoc);
+function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = [], options = {}) {
+  const doc = normalizeSceneDoc(sceneDoc, {
+    preserveNormalizedIds: options.sceneDocAlreadyNormalized === true,
+  });
   const prefabsById = new Map(
     (Array.isArray(prefabs) ? prefabs : [])
       .filter((entry) => entry?.id)
@@ -846,7 +858,9 @@ function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = []) {
     if (!prefab?.prefab_doc) {
       continue;
     }
-    const instanced = instantiatePrefabSceneDoc(prefab.prefab_doc, instance);
+    const instanced = instantiatePrefabSceneDoc(prefab.prefab_doc, instance, {
+      prefabDocAlreadyNormalized: options.prefabsAlreadyNormalized === true,
+    });
     flattened.voxels.push(...instanced.voxels);
     flattened.primitives.push(...instanced.primitives);
     flattened.panels.push(...instanced.panels);
@@ -886,8 +900,11 @@ export function createDefaultSceneDoc() {
   };
 }
 
-export function normalizeSceneDoc(input = {}) {
+export function normalizeSceneDoc(input = {}, options = {}) {
   const source = typeof input === "object" && input ? input : {};
+  const normalizationOptions = {
+    preserveNormalizedIds: options.preserveNormalizedIds === true,
+  };
   const settingsCameraMode = String(source.settings?.camera_mode ?? source.settings?.cameraMode ?? "third_person")
     .trim()
     .toLowerCase();
@@ -899,47 +916,47 @@ export function normalizeSceneDoc(input = {}) {
     .toLowerCase();
   const entityAliases = new Map();
   const voxels = (Array.isArray(source.voxels) ? source.voxels : []).slice(0, 4096).map((entry, index) => {
-    const value = sanitizeVoxelEntry(entry, index);
+    const value = sanitizeVoxelEntry(entry, index, normalizationOptions);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
   const primitives = (Array.isArray(source.primitives) ? source.primitives : []).slice(0, 512).map((entry, index) => {
-    const value = sanitizePrimitiveEntry(entry, index);
+    const value = sanitizePrimitiveEntry(entry, index, normalizationOptions);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
   const panels = (Array.isArray(source.panels) ? source.panels : []).slice(0, 256).map((entry, index) => {
-    const value = sanitizePanelEntry(entry, index);
+    const value = sanitizePanelEntry(entry, index, normalizationOptions);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
   const models = (Array.isArray(source.models) ? source.models : []).slice(0, 256).map((entry, index) => {
-    const value = sanitizeModelEntry(entry, index);
+    const value = sanitizeModelEntry(entry, index, normalizationOptions);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
   const screens = (Array.isArray(source.screens) ? source.screens : []).slice(0, 64).map((entry, index) => {
-    const value = sanitizeScreenEntry(entry, index);
+    const value = sanitizeScreenEntry(entry, index, normalizationOptions);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
   const players = (Array.isArray(source.players) ? source.players : []).slice(0, PRIVATE_WORLD_LIMITS.maxPlayers).map((entry, index) => {
-    const value = sanitizePlayerEntry(entry, index);
+    const value = sanitizePlayerEntry(entry, index, normalizationOptions);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
   const texts = (Array.isArray(source.texts) ? source.texts : []).slice(0, 256).map((entry, index) => {
-    const value = sanitizeText3Entry(entry, index);
+    const value = sanitizeText3Entry(entry, index, normalizationOptions);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
   const triggerZones = (Array.isArray(source.trigger_zones ?? source.triggerZones) ? (source.trigger_zones ?? source.triggerZones) : []).slice(0, 128).map((entry, index) => {
-    const value = sanitizeTriggerZoneEntry(entry, index);
+    const value = sanitizeTriggerZoneEntry(entry, index, normalizationOptions);
     rememberEntityAlias(entityAliases, entry?.id, value.id);
     return value;
   });
   const prefabs = (Array.isArray(source.prefabs) ? source.prefabs : []).slice(0, 256).map((entry, index) => {
-    const value = sanitizePrefabEntry(entry, index);
+    const value = sanitizePrefabEntry(entry, index, normalizationOptions);
     return {
       ...value,
       entity_ids: Array.from(new Set((value.entity_ids ?? []).map((entityId) => resolveEntityAlias(entityAliases, entityId)).filter(Boolean))),
@@ -947,16 +964,16 @@ export function normalizeSceneDoc(input = {}) {
   });
   const prefabInstances = (Array.isArray(source.prefab_instances ?? source.prefabInstances) ? (source.prefab_instances ?? source.prefabInstances) : [])
     .slice(0, 256)
-    .map((entry, index) => sanitizePrefabInstanceEntry(entry, index));
+    .map((entry, index) => sanitizePrefabInstanceEntry(entry, index, normalizationOptions));
   const particles = (Array.isArray(source.particles) ? source.particles : []).slice(0, 256).map((entry, index) => {
-    const value = sanitizeParticleEntry(entry, index);
+    const value = sanitizeParticleEntry(entry, index, normalizationOptions);
     return {
       ...value,
       target_id: resolveEntityAlias(entityAliases, value.target_id),
     };
   });
   const rules = (Array.isArray(source.rules) ? source.rules : []).slice(0, 256).map((entry, index) => {
-    const value = sanitizeRuleEntry(entry, index);
+    const value = sanitizeRuleEntry(entry, index, normalizationOptions);
     const payload = cloneJson(value.payload ?? {});
     if (payload.target_id || payload.targetId) {
       const mappedTargetId = resolveEntityAlias(entityAliases, payload.target_id ?? payload.targetId);
@@ -1008,8 +1025,13 @@ export function normalizeSceneDoc(input = {}) {
 }
 
 export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
-  const doc = normalizeSceneDoc(sceneDoc);
-  const resolvedDoc = flattenSceneWithPrefabInstances(doc, options.prefabs ?? []);
+  const doc = normalizeSceneDoc(sceneDoc, {
+    preserveNormalizedIds: options.sceneDocAlreadyNormalized === true,
+  });
+  const resolvedDoc = flattenSceneWithPrefabInstances(doc, options.prefabs ?? [], {
+    sceneDocAlreadyNormalized: true,
+    prefabsAlreadyNormalized: options.prefabsAlreadyNormalized === true,
+  });
   const structuredRules = cloneJson(resolvedDoc.rules);
   const dsl = compilePrivateWorldScriptDsl(doc.script_dsl, {
     entityAliases: new Map(

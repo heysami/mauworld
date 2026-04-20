@@ -244,6 +244,22 @@ test("normalizeSceneDoc remaps raw entity references onto normalized ids", () =>
   assert.equal(scene.rules[0].payload.text_id, "text3d_score-text");
 });
 
+test("normalizeSceneDoc can preserve already-normalized ids for internal scene reuse", () => {
+  const scene = normalizeSceneDoc({
+    primitives: [
+      { id: "primitive_crate-one", shape: "box" },
+    ],
+    players: [
+      { id: "player_player-1", label: "Player 1" },
+    ],
+  }, {
+    preserveNormalizedIds: true,
+  });
+
+  assert.equal(scene.primitives[0].id, "primitive_crate-one");
+  assert.equal(scene.players[0].id, "player_player-1");
+});
+
 test("export validation preserves prefab docs and locked lineage credits", () => {
   const exported = buildPrivateWorldExportPackage({
     world: {
@@ -420,6 +436,31 @@ test("compileSceneDoc flattens linked prefab instances into runtime scene data",
   assert.equal(compiled.runtime.resolved_scene_doc.primitives[0].position.x, 6);
   assert.equal(compiled.runtime.resolved_scene_doc.screens[0].position.y, 3);
   assert.equal(compiled.stats.prefab_instance_count, 1);
+});
+
+test("compileSceneDoc keeps already-normalized player ids stable when scene docs are reused", () => {
+  const compiled = compileSceneDoc({
+    players: [
+      {
+        id: "player_player-1",
+        label: "Player 1",
+        position: { x: 0, y: 4.5, z: 0 },
+        scale: 5,
+        body_mode: "rigid",
+        camera_mode: "third_person",
+      },
+    ],
+  }, {
+    world_type: "room",
+    width: 40,
+    length: 20,
+    height: 10,
+  }, {
+    sceneDocAlreadyNormalized: true,
+  });
+
+  assert.equal(compiled.runtime.players[0].id, "player_player-1");
+  assert.equal(compiled.runtime.resolved_scene_doc.players[0].id, "player_player-1");
 });
 
 test("compileSceneDoc keeps model entities with bounds metadata and runtime colliders", () => {

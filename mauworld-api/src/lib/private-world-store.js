@@ -491,7 +491,11 @@ async function importPrivateWorldPackageData(store, profile, parsed, { assetIdMa
           world_id: world.id,
           name: sceneEntry.name,
           scene_doc: sceneDoc,
-          compiled_doc: compileSceneDoc(sceneDoc, world, { prefabs: importedPrefabs }),
+          compiled_doc: compileSceneDoc(sceneDoc, world, {
+            prefabs: importedPrefabs,
+            sceneDocAlreadyNormalized: true,
+            prefabsAlreadyNormalized: true,
+          }),
           version: 1,
           is_default: sceneEntry.name === parsed.world.default_scene_name || index === 0,
         })
@@ -937,7 +941,11 @@ async function recompileWorldScenes(store, world) {
       store.serviceClient
         .from("private_world_scenes")
         .update({
-          compiled_doc: compileSceneDoc(scene.scene_doc, world, { prefabs }),
+          compiled_doc: compileSceneDoc(scene.scene_doc, world, {
+            prefabs,
+            sceneDocAlreadyNormalized: true,
+            prefabsAlreadyNormalized: true,
+          }),
           updated_at: nowIso(),
         })
         .eq("id", scene.id),
@@ -1580,7 +1588,9 @@ export function installPrivateWorldStore(MauworldStore) {
           world_id: world.id,
           name: sanitizeWorldText(input.defaultSceneName ?? "Main Scene", "scene name", 80),
           scene_doc: defaultSceneDoc,
-          compiled_doc: compileSceneDoc(defaultSceneDoc, world),
+          compiled_doc: compileSceneDoc(defaultSceneDoc, world, {
+            sceneDocAlreadyNormalized: true,
+          }),
           version: 1,
           is_default: true,
         })
@@ -1719,7 +1729,11 @@ export function installPrivateWorldStore(MauworldStore) {
     const payload = {
       name: sanitizeWorldText(input.name ?? existing?.name ?? "Scene", "scene name", 80),
       scene_doc: sceneDoc,
-      compiled_doc: compileSceneDoc(sceneDoc, world, { prefabs }),
+      compiled_doc: compileSceneDoc(sceneDoc, world, {
+        prefabs,
+        sceneDocAlreadyNormalized: true,
+        prefabsAlreadyNormalized: true,
+      }),
       version: (existing?.version ?? 0) + 1,
       is_default: input.isDefault === true || existing?.is_default === true,
       updated_at: nowIso(),
@@ -1858,7 +1872,9 @@ export function installPrivateWorldStore(MauworldStore) {
     const scenes = await loadWorldScenes(this, world.id);
     const remainingPrefabs = (await loadWorldPrefabs(this, world.id)).filter((entry) => entry.id !== prefab.id);
     for (const scene of scenes) {
-      const sceneDoc = normalizeSceneDoc(scene.scene_doc ?? {});
+      const sceneDoc = normalizeSceneDoc(scene.scene_doc ?? {}, {
+        preserveNormalizedIds: true,
+      });
       const nextInstances = (sceneDoc.prefab_instances ?? []).filter((entry) => entry.prefab_id !== prefab.id);
       if (nextInstances.length === (sceneDoc.prefab_instances ?? []).length) {
         continue;
@@ -1869,7 +1885,11 @@ export function installPrivateWorldStore(MauworldStore) {
           .from("private_world_scenes")
           .update({
             scene_doc: sceneDoc,
-            compiled_doc: compileSceneDoc(sceneDoc, world, { prefabs: remainingPrefabs }),
+            compiled_doc: compileSceneDoc(sceneDoc, world, {
+              prefabs: remainingPrefabs,
+              sceneDocAlreadyNormalized: true,
+              prefabsAlreadyNormalized: true,
+            }),
             updated_at: nowIso(),
           })
           .eq("id", scene.id),
