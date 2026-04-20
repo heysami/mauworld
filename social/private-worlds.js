@@ -101,8 +101,8 @@ const PRIVATE_PLAYER_RUNTIME = {
   sprintSpeed: 5.612 * PRIVATE_WORLD_BLOCK_UNIT,
   acceleration: 26,
   snapDistance: PRIVATE_WORLD_BLOCK_UNIT * 4,
-  activeCorrectionAlpha: 0.12,
   idleCorrectionAlpha: 0.28,
+  verticalSnapDistance: PRIVATE_WORLD_BLOCK_UNIT * 0.5,
 };
 const PRIVATE_RUNTIME_STATUS_THROTTLE_MS = 240;
 const PRIVATE_MOVEMENT_INTENT_KEYS = [
@@ -8982,9 +8982,12 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
     prediction.position.z += (serverPosition.z - prediction.position.z) * correctionAlpha;
     prediction.velocity.x += (serverVelocity.x - prediction.velocity.x) * Math.min(0.4, correctionAlpha + 0.14);
     prediction.velocity.z += (serverVelocity.z - prediction.velocity.z) * Math.min(0.4, correctionAlpha + 0.14);
+    prediction.position.y = serverPosition.y;
+    prediction.velocity.y = serverVelocity.y;
+  } else if (Math.abs(serverPosition.y - prediction.position.y) >= PRIVATE_PLAYER_RUNTIME.verticalSnapDistance) {
+    prediction.position.y = serverPosition.y;
+    prediction.velocity.y = serverVelocity.y;
   }
-  prediction.position.y = serverPosition.y;
-  prediction.velocity.y = serverVelocity.y;
   const nextRotationX = Number(runtimePlayer.rotation?.x);
   const nextRotationY = Number(runtimePlayer.rotation?.y);
   const nextRotationZ = Number(runtimePlayer.rotation?.z);
@@ -11630,7 +11633,7 @@ function renderSelectedWorld() {
   const canEdit = isEditor();
   const localParticipant = getLocalParticipant(world);
   if (localParticipant?.join_role === "player") {
-    reconcilePossessedPlayerPrediction();
+    ensurePossessedPlayerPrediction();
   } else {
     clearPossessedPlayerPrediction();
   }
@@ -16079,9 +16082,18 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
   const runtimeMaterial = runtimeEntry.material_override
     ? { ...(runtimeEntry.material ?? {}), ...runtimeEntry.material_override }
     : runtimeEntry.material ?? null;
-  if (runtimeMaterial?.color) {
+  const runtimeMaterialSignature = runtimeMaterial
+    ? [
+      String(runtimeMaterial.color ?? ""),
+      String(runtimeMaterial.texture_asset_id ?? ""),
+      Number(runtimeMaterial.emissive_intensity ?? runtimeMaterial.emissiveIntensity ?? 0).toFixed(4),
+    ].join("|")
+    : "";
+  if (runtimeMaterial && mesh.userData.privateWorldRuntimeMaterialSignature !== runtimeMaterialSignature) {
     for (const material of getObjectMaterials(mesh)) {
-      material.color?.set?.(runtimeMaterial.color);
+      if (runtimeMaterial.color) {
+        material.color?.set?.(runtimeMaterial.color);
+      }
       if (runtimeMaterial.texture_asset_id) {
         void applyTextureAssetMapsToMaterial(material, runtimeMaterial.texture_asset_id, runtimeEntry.scale ?? options.fallbackScale ?? { x: 1, y: 1, z: 1 });
       }
@@ -16093,12 +16105,15 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
       }
       material.needsUpdate = true;
     }
+    mesh.userData.privateWorldRuntimeMaterialSignature = runtimeMaterialSignature;
   }
-  if (options.playerColor) {
+  const playerColorKey = String(options.playerColor ?? "").trim();
+  if (playerColorKey && mesh.userData.privateWorldRuntimePlayerColorKey !== playerColorKey) {
     for (const material of getObjectMaterials(mesh)) {
-      material.color?.set?.(options.playerColor);
+      material.color?.set?.(playerColorKey);
       material.needsUpdate = true;
     }
+    mesh.userData.privateWorldRuntimePlayerColorKey = playerColorKey;
   }
 }
 
@@ -16107,9 +16122,9 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
     return;
   }
   const localPlayerId = getLocallyControlledPlayerEntityId();
-  const positionAlpha = 1 - Math.exp(-deltaSeconds * 30);
-  const rotationAlpha = 1 - Math.exp(-deltaSeconds * 32);
-  const scaleAlpha = 1 - Math.exp(-deltaSeconds * 28);
+  const positionAlpha = 1 - Math.exp(-deltaSeconds * 18);
+  const rotationAlpha = 1 - Math.exp(-deltaSeconds * 20);
+  const scaleAlpha = 1 - Math.exp(-deltaSeconds * 16);
   for (const [entityId, mesh] of preview.entityMeshes.entries()) {
     if (localPlayerId && entityId === localPlayerId) {
       continue;
@@ -16160,7 +16175,7 @@ function syncPreviewRuntimeSnapshot(snapshot) {
   }
   for (const runtimePrimitive of dynamicObjects) {
     applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePrimitive.id), runtimePrimitive, {
-      leadSeconds: 1 / 20,
+      leadSeconds: 0,
     });
   }
   for (const runtimePlayer of players) {
@@ -16168,7 +16183,7 @@ function syncPreviewRuntimeSnapshot(snapshot) {
       continue;
     }
     applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePlayer.id), runtimePlayer, {
-      leadSeconds: 1 / 24,
+      leadSeconds: 0,
       fallbackScale: runtimePlayer?.scale
         ? { x: runtimePlayer.scale, y: runtimePlayer.scale, z: runtimePlayer.scale }
         : null,
@@ -18019,6 +18034,13 @@ async function enterPlayMode() {
 
 async function sendRuntimeInput(key, runtimeState = "down") {
   if (!state.selectedWorld || !state.session || getLocalParticipant()?.join_role !== "player") {
+    return;
+  }
+  if (sendWorldSocketMessage({
+    type: "runtime:input",
+    key,
+    state: runtimeState,
+  })) {
     return;
   }
   await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/input`, {

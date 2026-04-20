@@ -200,6 +200,35 @@ test("private world disconnect cleans up the participant in the store", async ()
   assert.equal(leaves[0].profile.id, client.profile.id);
 });
 
+test("private world runtime input is routed through the socket gateway", async () => {
+  const queued = [];
+  const gateway = createGateway({
+    async queuePrivateWorldInput(profile, payload) {
+      queued.push({ profile, payload });
+      return { accepted: true };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:runner",
+    displayName: "runner",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  await gateway.handleMessage(client, {
+    type: "runtime:input",
+    key: "w",
+    state: "down",
+  });
+
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].profile.id, client.profile.id);
+  assert.equal(queued[0].payload.worldId, client.worldId);
+  assert.equal(queued[0].payload.creatorUsername, client.creatorUsername);
+  assert.equal(queued[0].payload.key, "w");
+  assert.equal(queued[0].payload.state, "down");
+});
+
 test("private world connection preserves a per-client viewer session id for authenticated users", async () => {
   const gateway = createGateway({
     async verifyUserAccessToken() {

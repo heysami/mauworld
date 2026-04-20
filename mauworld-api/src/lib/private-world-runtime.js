@@ -5,7 +5,7 @@ import { normalizeSceneDoc } from "./private-worlds.js";
 await RAPIER.init({});
 
 const DEFAULT_TICK_MS = 16;
-const DEFAULT_BROADCAST_MS = 16;
+const DEFAULT_BROADCAST_MS = 33;
 const PRIVATE_WORLD_BLOCK_UNIT = 5;
 const PLAYER_DIMENSIONS = {
   width: 0.6,
@@ -1187,13 +1187,17 @@ export class PrivateWorldRuntime {
   }
 
   async queueInputByReference({ worldId, creatorUsername, profile, key, state } = {}) {
-    const snapshot = await this.syncWorldByReference({ worldId, creatorUsername });
-    if (!snapshot) {
-      throw new HttpError(404, "Private world runtime is not active");
-    }
     const keyRef = this.getWorldRefKey(worldId, creatorUsername);
-    const instanceId = this.keysByWorldRef.get(keyRef);
-    const simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    let instanceId = this.keysByWorldRef.get(keyRef);
+    let simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    if (!simulation) {
+      const snapshot = await this.syncWorldByReference({ worldId, creatorUsername });
+      if (!snapshot) {
+        throw new HttpError(404, "Private world runtime is not active");
+      }
+      instanceId = this.keysByWorldRef.get(keyRef);
+      simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    }
     if (!simulation) {
       throw new HttpError(404, "Private world runtime is not active");
     }

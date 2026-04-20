@@ -242,6 +242,10 @@ export class PrivateWorldGateway {
       this.handlePresenceUpdate(client, message);
       return;
     }
+    if (type === "runtime:input") {
+      await this.handleRuntimeInput(client, message);
+      return;
+    }
     if (type === "browser:start") {
       await this.handleBrowserStart(client, message);
       return;
@@ -2107,6 +2111,29 @@ export class PrivateWorldGateway {
       sendJson(client, {
         type: "browser:error",
         message: error.message || "Could not send browser input.",
+      });
+    }
+  }
+
+  async handleRuntimeInput(client, message) {
+    if (!client.profile) {
+      sendJson(client, {
+        type: "world:error",
+        message: "Sign in to control a private-world player.",
+      });
+      return;
+    }
+    try {
+      await this.store.queuePrivateWorldInput(client.profile, {
+        worldId: client.worldId,
+        creatorUsername: client.creatorUsername,
+        key: String(message.key ?? "").trim(),
+        state: message.state === "up" ? "up" : "down",
+      });
+    } catch (error) {
+      sendJson(client, {
+        type: "world:error",
+        message: error.message || "Could not send runtime input.",
       });
     }
   }

@@ -4,6 +4,7 @@ import {
   createPrivateWorldSimulationState,
   stepPrivateWorldSimulation,
   buildPrivateWorldRuntimeSnapshot,
+  PrivateWorldRuntime,
 } from "../src/lib/private-world-runtime.js";
 
 function buildSimulation(input = {}) {
@@ -254,4 +255,35 @@ test("runtime keeps resolved-scene player ids stable for participant occupancy l
   const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
   assert.equal(snapshot.players[0].id, "player_player-1");
   assert.equal(snapshot.players[0].occupied_by_username, "maker");
+});
+
+test("runtime input queues directly against a live simulation without forcing a world resync", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation();
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  let syncCalls = 0;
+  manager.syncWorldByReference = async () => {
+    syncCalls += 1;
+    return buildPrivateWorldRuntimeSnapshot(simulation);
+  };
+
+  const profileId = simulation.runtime.players[0].occupied_by_profile_id;
+  const result = await manager.queueInputByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId },
+    key: "w",
+    state: "down",
+  });
+
+  assert.equal(syncCalls, 0);
+  assert.equal(result.accepted, true);
+  assert.equal(simulation.pendingInputs.length, 1);
+  assert.equal(simulation.pendingInputs[0].key, "w");
+  assert.equal(simulation.pendingInputs[0].state, "down");
 });
