@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   applyAuthoritativeMotionSample,
   computeLocalInteractionVelocity,
+  resolveContinuousMotionStateAgainstBlockers,
   stepContinuousMotionState,
 } from "./private-runtime-motion.mjs";
 
@@ -70,4 +71,32 @@ test("local interaction velocity nudges contacted objects along the player path"
 
   assert.ok(interactionVelocity);
   assert.ok(interactionVelocity.z < -1);
+});
+
+test("continuous motion collision clamps locally pushed objects against blockers", () => {
+  const state = applyAuthoritativeMotionSample(null, {
+    renderPosition: { x: 0, y: 1, z: 0 },
+    renderVelocity: { x: 7, y: 0, z: 0 },
+    position: { x: 0, y: 1, z: 0 },
+    velocity: { x: 0, y: 0, z: 0 },
+    receivedAtMs: 0,
+  });
+  state.renderPosition = { x: 5, y: 1, z: 0 };
+  state.localInteractionVelocity = { x: 6, y: 0, z: 0 };
+
+  const collision = resolveContinuousMotionStateAgainstBlockers(state, {
+    startPosition: { x: 0, y: 1, z: 0 },
+    collisionSize: { x: 1, y: 2, z: 1 },
+    blockers: [
+      {
+        position: { x: 3, y: 1, z: 0 },
+        size: { x: 2, y: 2, z: 4 },
+      },
+    ],
+  });
+
+  assert.equal(collision?.blockedAxes?.x, true);
+  assert.ok(state.renderPosition.x < 1.6);
+  assert.equal(state.renderVelocity.x, 0);
+  assert.equal(state.localInteractionVelocity.x, 0);
 });

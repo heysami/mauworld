@@ -50,8 +50,9 @@ import {
 import {
   applyAuthoritativeMotionSample,
   computeLocalInteractionVelocity,
+  resolveContinuousMotionStateAgainstBlockers,
   stepContinuousMotionState,
-} from "./private-runtime-motion.mjs?v=20260420a";
+} from "./private-runtime-motion.mjs?v=20260420b";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -9565,6 +9566,93 @@ function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = pred
   return blockers;
 }
 
+function getPrivateDynamicObjectCollisionBlockers(objectId = "", objectSize = { x: 1, y: 1, z: 1 }, startPosition = {}, desiredPosition = startPosition) {
+  const resolvedObjectId = String(objectId ?? "").trim();
+  const probe = buildPrivateCollisionProbe(startPosition, desiredPosition, objectSize);
+  const blockers = [];
+  let sceneDoc = null;
+  try {
+    sceneDoc = getRenderableSceneDoc();
+  } catch (_error) {
+    sceneDoc = null;
+  }
+
+  for (const voxel of sceneDoc?.voxels ?? []) {
+    addPrivateCollisionBlocker(blockers, {
+      position: voxel.position,
+      size: getPrivateCollisionEntrySize("voxel", voxel),
+      rotation: voxel.rotation,
+    }, probe);
+  }
+
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  const runtimeSceneId = String(runtime?.active_scene_id ?? "").trim();
+  const selectedSceneId = String(state.selectedSceneId ?? "").trim();
+  const runtimeMatchesSelectedScene = Boolean(runtime && runtimeSceneId && runtimeSceneId === selectedSceneId);
+  const localPlayerId = String(getLocallyControlledPlayerEntityId() ?? "").trim();
+
+  if (runtimeMatchesSelectedScene) {
+    for (const entry of runtime.dynamic_objects ?? []) {
+      const entryId = String(entry?.id ?? "").trim();
+      if (!entryId || entryId === resolvedObjectId || !isPrivateCollisionModeRigid(entry?.rigid_mode)) {
+        continue;
+      }
+      const kind = entry?.entity_kind === "model" ? "model" : "primitive";
+      addPrivateCollisionBlocker(blockers, {
+        position: entry.position,
+        size: getPrivateCollisionEntrySize(kind, entry),
+        rotation: entry.rotation,
+      }, probe);
+    }
+    for (const entry of runtime.players ?? []) {
+      const playerId = String(entry?.id ?? "").trim();
+      if (!playerId || playerId === localPlayerId || !isPrivateCollisionModeRigid(entry?.body_mode)) {
+        continue;
+      }
+      addPrivateCollisionBlocker(blockers, {
+        position: entry.position,
+        size: getPrivatePlayerCollisionSize(entry.scale),
+        rotation: entry.rotation,
+      }, probe);
+    }
+    return blockers;
+  }
+
+  for (const primitive of sceneDoc?.primitives ?? []) {
+    if (!isPrivateCollisionModeRigid(primitive?.rigid_mode)) {
+      continue;
+    }
+    addPrivateCollisionBlocker(blockers, {
+      position: primitive.position,
+      size: getPrivateCollisionEntrySize("primitive", primitive),
+      rotation: primitive.rotation,
+    }, probe);
+  }
+  for (const model of sceneDoc?.models ?? []) {
+    if (!isPrivateCollisionModeRigid(model?.rigid_mode)) {
+      continue;
+    }
+    addPrivateCollisionBlocker(blockers, {
+      position: model.position,
+      size: getPrivateCollisionEntrySize("model", model),
+      rotation: model.rotation,
+    }, probe);
+  }
+  const runtimePlayerIds = getRuntimePlayerIds();
+  for (const player of sceneDoc?.players ?? []) {
+    const playerId = resolvePrivatePlayerEntityId(player?.id, runtimePlayerIds) ?? String(player?.id ?? "").trim();
+    if (!playerId || playerId === localPlayerId || !isPrivateCollisionModeRigid(player?.body_mode)) {
+      continue;
+    }
+    addPrivateCollisionBlocker(blockers, {
+      position: player.position,
+      size: getPrivatePlayerCollisionSize(player.scale),
+      rotation: player.rotation,
+    }, probe);
+  }
+  return blockers;
+}
+
 function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const runtimePlayer = getPossessedRuntimePlayer();
   const prediction = ensurePossessedPlayerPrediction(runtimePlayer);
@@ -17050,6 +17138,10 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
     const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
     if (motionMode === "dynamic_continuous" && motionState) {
       const dynamicMeta = mesh.userData.privateWorldRuntimeDynamicMeta ?? {};
+      const objectScale = toPlainCollisionScale(
+        dynamicMeta.collider_scale ?? dynamicMeta.scale ?? { x: 1, y: 1, z: 1 },
+        dynamicMeta.scale ?? { x: 1, y: 1, z: 1 },
+      );
       const localAuthorityActive = Boolean(
         localProfileId
         && dynamicMeta.authorityOwnerProfileId === localProfileId
@@ -17061,10 +17153,6 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
         && localPlayerHalfExtents
         && String(dynamicMeta.rigid_mode ?? "rigid").trim().toLowerCase() !== "ghost"
       ) {
-        const objectScale = toPlainCollisionScale(
-          dynamicMeta.collider_scale ?? dynamicMeta.scale ?? { x: 1, y: 1, z: 1 },
-          dynamicMeta.scale ?? { x: 1, y: 1, z: 1 },
-        );
         interactionVelocity = computeLocalInteractionVelocity({
           playerPosition: localPrediction.position,
           playerVelocity: localPrediction.velocity,
@@ -17085,6 +17173,11 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
       if (motionState.localInteractionUntilMs <= nowMs) {
         motionState.localInteractionVelocity = null;
       }
+      const previousRenderPosition = {
+        x: Number(motionState.renderPosition?.x ?? mesh.position.x ?? 0) || 0,
+        y: Number(motionState.renderPosition?.y ?? mesh.position.y ?? 0) || 0,
+        z: Number(motionState.renderPosition?.z ?? mesh.position.z ?? 0) || 0,
+      };
       stepContinuousMotionState(motionState, {
         deltaSeconds,
         nowMs,
@@ -17092,6 +17185,18 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
         interactionVelocity: motionState.localInteractionVelocity,
         sleeping: dynamicMeta.sleeping === true,
       });
+      if (String(dynamicMeta.rigid_mode ?? "rigid").trim().toLowerCase() !== "ghost") {
+        resolveContinuousMotionStateAgainstBlockers(motionState, {
+          startPosition: previousRenderPosition,
+          collisionSize: objectScale,
+          blockers: getPrivateDynamicObjectCollisionBlockers(
+            entityId,
+            objectScale,
+            previousRenderPosition,
+            motionState.renderPosition,
+          ),
+        });
+      }
       mesh.position.set(
         motionState.renderPosition.x,
         motionState.renderPosition.y,

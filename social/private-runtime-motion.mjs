@@ -1,3 +1,5 @@
+import { resolvePlayerMovementAgainstBlockers } from "./private-player-collision.mjs";
+
 function finiteNumber(value, fallback = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
@@ -175,6 +177,36 @@ export function stepContinuousMotionState(state, {
     scaleVec3(state.renderVelocity, dt),
   );
   return state;
+}
+
+export function resolveContinuousMotionStateAgainstBlockers(state, {
+  startPosition = null,
+  collisionSize = null,
+  blockers = [],
+} = {}) {
+  if (!state?.initialized || !startPosition || !collisionSize || !Array.isArray(blockers) || blockers.length === 0) {
+    return null;
+  }
+  const collision = resolvePlayerMovementAgainstBlockers({
+    startPosition: cloneVec3(startPosition),
+    desiredPosition: cloneVec3(state.renderPosition),
+    playerSize: cloneVec3(collisionSize),
+    blockers,
+  });
+  state.renderPosition = cloneVec3(collision.position, state.renderPosition);
+  if (collision.blockedAxes?.x) {
+    state.renderVelocity.x = 0;
+    if (state.localInteractionVelocity) {
+      state.localInteractionVelocity.x = 0;
+    }
+  }
+  if (collision.blockedAxes?.z) {
+    state.renderVelocity.z = 0;
+    if (state.localInteractionVelocity) {
+      state.localInteractionVelocity.z = 0;
+    }
+  }
+  return collision;
 }
 
 export function computeLocalInteractionVelocity({
