@@ -10139,6 +10139,20 @@ function getPrivatePlatformCarryVerticalTolerance(playerHalf = {}, platformHalf 
   );
 }
 
+function getPrivatePlatformCarryRecoveryTolerance(playerHalf = {}, platformHalf = null) {
+  const playerHalfY = Math.max(0, Number(playerHalf?.y ?? 0) || 0);
+  const platformHalfY = Math.max(0, Number(platformHalf?.y ?? 0) || 0);
+  const scaledRecovery = Math.max(
+    getPrivatePlatformCarryVerticalTolerance(playerHalf, platformHalf),
+    playerHalfY * 0.75,
+    platformHalfY,
+  );
+  return Math.max(
+    PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE,
+    Math.min(PRIVATE_WORLD_BLOCK_UNIT * 0.5, scaledRecovery),
+  );
+}
+
 function buildPrivateCollisionProbe(startPosition = {}, desiredPosition = {}, playerSize = {}) {
   const probePadding = PRIVATE_WORLD_BLOCK_UNIT * 2;
   const playerHalf = getHalfExtentsFromScale(playerSize);
@@ -10586,7 +10600,7 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     const projectedSurface = getPrivatePlayerProjectedShadowSurface({
       ...prediction,
       position: desiredPosition,
-      onGround: false,
+      onGround: prediction.onGround === true,
     });
     const surfaceY = Number(projectedSurface?.surfaceY);
     if (Number.isFinite(surfaceY)) {
@@ -10631,11 +10645,14 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
     z: Number(playerLike.position?.z ?? 0) || 0,
   };
   const playerBottom = playerPosition.y - playerHalf.y;
+  const overlapRecovery = playerLike?.onGround === true;
   let bestSurface = null;
   const considerSurface = (position = {}, size = {}) => {
     const half = getHalfExtentsFromScale(size);
     const topY = (Number(position.y ?? 0) || 0) + half.y;
-    const verticalTolerance = getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
+    const verticalTolerance = overlapRecovery
+      ? getPrivatePlatformCarryRecoveryTolerance(playerHalf, half)
+      : getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
     if (topY > playerBottom + verticalTolerance) {
       return;
     }
@@ -10722,6 +10739,52 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
     };
   }
   return bestSurface;
+}
+
+function clampRenderablePlayerToSupportSurface(mesh, playerLike = {}) {
+  if (!mesh) {
+    return null;
+  }
+  const onGround = playerLike?.onGround === true || playerLike?.on_ground === true || mesh.userData.privateWorldPlayerOnGround === true;
+  if (!onGround) {
+    return null;
+  }
+  const resolvedScale = Math.max(0.25, Number(playerLike?.scale ?? mesh.scale?.x ?? 1) || 1);
+  const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(resolvedScale));
+  const playerPosition = {
+    x: Number(playerLike?.position?.x ?? mesh.position?.x ?? 0) || 0,
+    y: Number(playerLike?.position?.y ?? mesh.position?.y ?? 0) || 0,
+    z: Number(playerLike?.position?.z ?? mesh.position?.z ?? 0) || 0,
+  };
+  const supportSurface = getPrivatePlayerProjectedShadowSurface({
+    ...playerLike,
+    position: playerPosition,
+    scale: resolvedScale,
+    onGround: true,
+  });
+  const surfaceY = Number(supportSurface?.surfaceY);
+  if (!Number.isFinite(surfaceY)) {
+    return null;
+  }
+  const supportedY = surfaceY + playerHalf.y;
+  if (playerPosition.y + 0.0001 >= supportedY) {
+    return null;
+  }
+  mesh.position.y = supportedY;
+  if (mesh.userData.privateWorldRuntimeTargetPosition) {
+    mesh.userData.privateWorldRuntimeTargetPosition.y = Math.max(
+      Number(mesh.userData.privateWorldRuntimeTargetPosition.y ?? supportedY) || supportedY,
+      supportedY,
+    );
+  }
+  const motionState = mesh.userData.privateWorldRuntimeMotionState;
+  if (motionState?.renderPosition) {
+    motionState.renderPosition.y = Math.max(Number(motionState.renderPosition.y ?? supportedY) || supportedY, supportedY);
+    if (motionState.renderVelocity) {
+      motionState.renderVelocity.y = Math.max(0, Number(motionState.renderVelocity.y ?? 0) || 0);
+    }
+  }
+  return supportedY;
 }
 
 function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = prediction?.position) {
@@ -18954,6 +19017,11 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
         }
       }
       if (mesh.userData.privateWorldEntityKind === "player") {
+        clampRenderablePlayerToSupportSurface(mesh, {
+          position: mesh.position,
+          scale: mesh.scale.x,
+          onGround: mesh.userData.privateWorldPlayerOnGround === true,
+        });
         syncPrivatePlayerJumpShadow(mesh, {
           position: mesh.position,
           scale: mesh.scale.x,
@@ -18988,6 +19056,11 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
       }
     }
     if (mesh.userData.privateWorldEntityKind === "player") {
+      clampRenderablePlayerToSupportSurface(mesh, {
+        position: mesh.position,
+        scale: mesh.scale.x,
+        onGround: mesh.userData.privateWorldPlayerOnGround === true,
+      });
       syncPrivatePlayerJumpShadow(mesh, {
         position: mesh.position,
         scale: mesh.scale.x,
@@ -19054,6 +19127,15 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
       applyRenderableVisibility(mesh, {
         runtimeVisible: player.visible !== false,
       });
+      const clampedY = clampRenderablePlayerToSupportSurface(mesh, prediction);
+      if (Number.isFinite(clampedY)) {
+        prediction.position.y = clampedY;
+        if (Number.isFinite(Number(prediction.groundY))) {
+          prediction.groundY = Math.max(Number(prediction.groundY), clampedY);
+        } else {
+          prediction.groundY = clampedY;
+        }
+      }
       syncPrivatePlayerJumpShadow(mesh, prediction);
       if (mesh.userData.privateWorldRuntimeTargetPosition) {
         mesh.userData.privateWorldRuntimeTargetPosition.copy(mesh.position);
