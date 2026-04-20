@@ -16082,7 +16082,7 @@ function ensurePreview() {
     }
     const playerEntityId = String(
       hit?.object?.userData?.privateWorldPlayerId
-      || (entityRef?.kind === "player" ? entityRef.id : ""),
+      || (entityRef?.kind === "player" ? entityRef.id : "")
       || findProjectedPlayerHit(event),
     ).trim();
     if (playerEntityId) {
