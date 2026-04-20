@@ -5570,6 +5570,35 @@ function normalizeRuntimeKey(event) {
   return key;
 }
 
+function focusPrivateWorldCanvas(options = {}) {
+  const canvas = elements.previewCanvas;
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    return false;
+  }
+  if (options.blurActiveElement !== false) {
+    const activeElement = document.activeElement;
+    if (
+      activeElement
+      && activeElement !== canvas
+      && activeElement instanceof HTMLElement
+      && (
+        activeElement instanceof HTMLInputElement
+        || activeElement instanceof HTMLTextAreaElement
+        || activeElement instanceof HTMLSelectElement
+        || activeElement instanceof HTMLButtonElement
+        || activeElement.isContentEditable
+      )
+    ) {
+      activeElement.blur();
+    }
+  }
+  if (document.activeElement === canvas) {
+    return true;
+  }
+  canvas.focus({ preventScroll: true });
+  return document.activeElement === canvas;
+}
+
 function buildSocketUrl(worldId, creatorUsername) {
   const url = new URL(
     mauworldApiUrl("/ws/private/worlds", {
@@ -12045,6 +12074,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const movementToggleMode = isPlayerMovementToggleCameraMode(cameraMode);
     const movementEnabled = normalizePlayerMovementEnabled(entry.movement_enabled ?? true);
     const jumpEnabled = normalizePlayerJumpEnabled(entry.jump_enabled ?? true);
+    const rigidBodyMode = isPrivateCollisionModeRigid(entry.body_mode ?? "rigid");
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownDirection = normalizePlayerFixedTopDownDirection(entry.fixed_top_down_direction ?? "north");
     const fixedTopDownAngle = normalizePlayerFixedTopDownAngle(entry.fixed_top_down_angle ?? 90);
@@ -12095,8 +12125,8 @@ function renderEntityInspector(sceneDoc, selected = null) {
         </div>
       ` : ""}
       <div class="pw-checkbox">
-        <input type="checkbox" data-entity-field="jump_enabled" data-value-type="checkbox" ${jumpEnabled ? "checked" : ""} />
-        <span>Allow jump with Space</span>
+        <input type="checkbox" data-entity-field="jump_enabled" data-value-type="checkbox" ${jumpEnabled ? "checked" : ""} ${rigidBodyMode ? "" : "disabled"} />
+        <span>${rigidBodyMode ? "Allow jump with Space" : "Jump only works on rigid bodies"}</span>
       </div>
       ${orthogonalMode ? `
         <p class="pw-inspector-note">${fixedTopDownNote}</p>
@@ -16925,6 +16955,9 @@ function ensurePreview() {
 
   window.addEventListener("resize", render);
   elements.previewCanvas.addEventListener("pointerdown", (event) => {
+    if (state.mode === "play") {
+      focusPrivateWorldCanvas();
+    }
     state.previewPointer.clientX = event.clientX;
     state.previewPointer.clientY = event.clientY;
     state.previewPointer.pointerId = event.pointerId;
@@ -20016,6 +20049,7 @@ async function occupyPlayer(playerEntityId) {
   });
   pushEvent("player:occupied", playerEntityId);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  focusPrivateWorldCanvas();
   syncRuntimeLookHeading(true);
 }
 
@@ -20266,6 +20300,7 @@ async function enterPlayMode() {
     setMode("play");
     renderSelectedWorld();
     await waitForUiPaint();
+    focusPrivateWorldCanvas();
   } finally {
     if (showPlayLoading) {
       setEntryLoading(false);
