@@ -19830,13 +19830,11 @@ async function enterPlayMode() {
   try {
     const keepPanelTab = "chat";
     const previousBuildSceneId = state.selectedSceneId;
-    let savedScene = false;
     if (isEditor() && getSelectedScene()) {
       await saveCurrentScene({
         pushEvent: false,
         keepPanelTab: state.privatePanelTab,
       });
-      savedScene = true;
     }
     const defaultScene = getDefaultScene(state.selectedWorld);
     if (previousBuildSceneId) {
@@ -19852,7 +19850,6 @@ async function enterPlayMode() {
     if (state.session) {
       await ensurePlayRuntimeStarted({
         sceneId: targetSceneId,
-        forceRestart: savedScene,
         keepPanelTab,
         pushEvent: false,
       });

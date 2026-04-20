@@ -1144,8 +1144,8 @@ async function buildWorldDetail(store, {
     : [];
   const runtimeSnapshot = activeInstance
     ? (
-        store.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
-        ?? await syncRuntimeForWorld(store, world, creator)
+        await syncRuntimeForWorld(store, world, creator)
+        ?? store.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
       )
     : null;
   const isImported = Boolean(
