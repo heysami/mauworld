@@ -2391,20 +2391,53 @@ function syncPrivatePlayerJumpShadow(mesh, playerLike = {}) {
     y: Number(playerLike?.position?.y ?? mesh.position.y ?? 0) || 0,
     z: Number(playerLike?.position?.z ?? mesh.position.z ?? 0) || 0,
   };
+  const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(resolvedScale));
   const surface = getPrivatePlayerProjectedShadowSurface({
     ...playerLike,
     position: playerPosition,
     scale: resolvedScale,
   });
-  if (!surface || !Number.isFinite(Number(surface.surfaceY))) {
+  let surfaceY = Number(surface?.surfaceY);
+  if (Number.isFinite(surfaceY)) {
+    mesh.userData.privateWorldJumpShadowSurfaceY = surfaceY;
+    mesh.userData.privateWorldJumpShadowSurfaceX = playerPosition.x;
+    mesh.userData.privateWorldJumpShadowSurfaceZ = playerPosition.z;
+  } else {
+    const cachedSurfaceY = Number(mesh.userData.privateWorldJumpShadowSurfaceY);
+    const cachedSurfaceX = Number(mesh.userData.privateWorldJumpShadowSurfaceX);
+    const cachedSurfaceZ = Number(mesh.userData.privateWorldJumpShadowSurfaceZ);
+    const cachedHorizontalDistance = Number.isFinite(cachedSurfaceX) && Number.isFinite(cachedSurfaceZ)
+      ? Math.hypot(playerPosition.x - cachedSurfaceX, playerPosition.z - cachedSurfaceZ)
+      : Number.POSITIVE_INFINITY;
+    const cachedReuseDistance = Math.max(
+      PRIVATE_WORLD_BLOCK_UNIT * 1.5,
+      playerHalf.x * 2,
+      playerHalf.z * 2,
+    );
+    if (
+      mesh.userData.privateWorldPlayerOnGround !== true
+      && Number.isFinite(cachedSurfaceY)
+      && cachedHorizontalDistance <= cachedReuseDistance
+    ) {
+      surfaceY = cachedSurfaceY;
+    } else {
+      const groundCenterY = Number(playerLike?.groundY);
+      const fallbackGroundSurfaceY = Number.isFinite(groundCenterY)
+        ? groundCenterY - playerHalf.y
+        : Number.NaN;
+      if (mesh.userData.privateWorldPlayerOnGround !== true && Number.isFinite(fallbackGroundSurfaceY)) {
+        surfaceY = fallbackGroundSurfaceY;
+      }
+    }
+  }
+  if (!Number.isFinite(surfaceY)) {
     shadow.visible = false;
     return;
   }
-  const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(resolvedScale));
   const playerBottom = playerPosition.y - playerHalf.y;
-  const shadowDistance = Math.max(0, playerBottom - Number(surface.surfaceY));
+  const shadowDistance = Math.max(0, playerBottom - surfaceY);
   const heightRatio = Math.min(1, shadowDistance / Math.max(0.0001, PRIVATE_WORLD_BLOCK_UNIT * 2.5));
-  shadow.position.y = (Number(surface.surfaceY) - playerPosition.y) / resolvedScale + (0.03 / resolvedScale);
+  shadow.position.y = (surfaceY - playerPosition.y) / resolvedScale + (0.03 / resolvedScale);
   shadow.scale.set(1.36 + heightRatio * 0.08, 0.9 + heightRatio * 0.05, 1);
   if (shadow.material) {
     shadow.material.opacity = PRIVATE_PLAYER_JUMP_SHADOW.opacity * (1 - heightRatio * 0.32);
