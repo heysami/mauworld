@@ -65,6 +65,7 @@ const PUBLIC_VIEWER_SESSION_KEY = "mauworldViewerSessionId";
 const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
 const TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY = "mauworldPrivateWorldToolPresetPanelCollapsed";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
+const RUNTIME_MOVEMENT_INPUT_KEYS = new Set(["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
 const LAUNCHER_TABS = new Set(["worlds", "access"]);
 const LAUNCHER_WORLD_BROWSER_TABS = new Set(["mine", "all"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "world"]);
@@ -3943,19 +3944,26 @@ function getPrivateCameraPlanarBasis(preview = state.preview) {
 }
 
 function releaseHeldRuntimeKeys(options = {}) {
-  const keys = [...state.pressedRuntimeKeys];
+  const shouldReleaseKey = typeof options.shouldReleaseKey === "function"
+    ? options.shouldReleaseKey
+    : () => true;
+  const keys = [...state.pressedRuntimeKeys].filter((key) => shouldReleaseKey(key));
   if (!keys.length) {
     return [];
   }
-  state.pressedRuntimeKeys.clear();
   const headingY = Number(options.headingY);
   const resolvedHeadingY = Number.isFinite(headingY) ? headingY : getRuntimeInputHeadingY();
   for (const key of keys) {
+    state.pressedRuntimeKeys.delete(key);
     void sendRuntimeInput(key, "up", {
       headingY: resolvedHeadingY,
     });
   }
   return keys;
+}
+
+function isRuntimeMovementInputKey(key = "") {
+  return RUNTIME_MOVEMENT_INPUT_KEYS.has(String(key ?? "").trim().toLowerCase());
 }
 
 function getPrivateCameraMovementBasis(preview = state.preview) {
@@ -9834,6 +9842,7 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
     if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
       releaseHeldRuntimeKeys({
         headingY: getRuntimeInputHeadingY(),
+        shouldReleaseKey: isRuntimeMovementInputKey,
       });
       privateInputState.sprintHoldSeconds = 0;
     }
@@ -9869,6 +9878,7 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
     releaseHeldRuntimeKeys({
       headingY: getRuntimeInputHeadingY(),
+      shouldReleaseKey: isRuntimeMovementInputKey,
     });
     privateInputState.sprintHoldSeconds = 0;
   }
@@ -9936,6 +9946,7 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
     releaseHeldRuntimeKeys({
       headingY: getRuntimeInputHeadingY(),
+      shouldReleaseKey: isRuntimeMovementInputKey,
     });
     privateInputState.sprintHoldSeconds = 0;
   }
@@ -20120,7 +20131,7 @@ function shouldDrivePrivateRuntimeInput() {
 function shouldBlockRuntimeMovementInputKey(key = "") {
   return shouldDrivePrivateRuntimeInput()
     && !isActivePossessedPlayerMovementEnabled()
-    && RUNTIME_INPUT_KEYS.has(String(key ?? "").trim().toLowerCase());
+    && isRuntimeMovementInputKey(key);
 }
 
 function nextPrivateMotionSequence() {
