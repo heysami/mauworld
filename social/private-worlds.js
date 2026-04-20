@@ -10142,6 +10142,12 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   const carryPlatformSupport = rigidBodyMode && (prediction.onGround || runtimePlayer.on_ground === true)
     ? getLocalCarryPlatformSupport(prediction)
     : null;
+  const locallyCarriedByPlatform = Boolean(
+    carryPlatformSupport
+    && !runtimeAirborne
+    && prediction.localJumpUntilMs <= now
+    && Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0) <= 0.0001,
+  );
   if (rigidBodyMode) {
     syncPossessedPlayerMotionState(prediction, runtimePlayer, {
       renderPosition: prediction.motionState?.renderPosition ?? {
@@ -10170,6 +10176,16 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
     const reconciledRenderVelocityY = Number(prediction.motionState?.renderVelocity?.y);
     if (Number.isFinite(reconciledRenderVelocityY)) {
       prediction.velocity.y = reconciledRenderVelocityY;
+    }
+    if (locallyCarriedByPlatform && Number.isFinite(Number(carryPlatformSupport?.supportedPlayerY))) {
+      prediction.position.y = Number(carryPlatformSupport.supportedPlayerY);
+      if (prediction.motionState?.renderPosition) {
+        prediction.motionState.renderPosition.y = Number(carryPlatformSupport.supportedPlayerY);
+      }
+      if (prediction.motionState?.renderVelocity) {
+        prediction.motionState.renderVelocity.y = Number(carryPlatformSupport?.velocity?.y ?? 0) || 0;
+      }
+      prediction.velocity.y = Number(carryPlatformSupport?.velocity?.y ?? 0) || 0;
     }
   } else {
     const runtimePositionY = Number(runtimePlayer.position?.y);
@@ -10383,6 +10399,8 @@ function getLocalCarryPlatformSupport(playerLike = null) {
         entry,
         position,
         velocity,
+        surfaceY: platformTop,
+        supportedPlayerY: platformTop + playerHalf.y,
         verticalGap,
         absoluteGap,
       };
@@ -10695,6 +10713,12 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const carryPlatformSupport = rigidBodyMode && (prediction.onGround || runtimePlayer.on_ground === true)
     ? getLocalCarryPlatformSupport(prediction)
     : null;
+  const locallyCarriedByPlatform = Boolean(
+    carryPlatformSupport
+    && !runtimeAirborne
+    && prediction.localJumpUntilMs <= now
+    && Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0) <= 0.0001,
+  );
   const jumpPulseSeq = Math.max(0, Number(state.runtimeJumpPulseSeq ?? 0) || 0);
   const jumpPulseAt = Math.max(0, Number(state.runtimeJumpPulseAt ?? 0) || 0);
   const jumpPulsePending = jumpPulseSeq > Math.max(0, Number(prediction.lastConsumedJumpPulseSeq ?? 0) || 0);
@@ -10726,6 +10750,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     prediction.lastConsumedJumpPulseSeq = jumpPulseSeq;
   }
   const supportVelocityX = Number(carryPlatformSupport?.velocity?.x ?? 0) || 0;
+  const supportVelocityY = Number(carryPlatformSupport?.velocity?.y ?? 0) || 0;
   const supportVelocityZ = Number(carryPlatformSupport?.velocity?.z ?? 0) || 0;
   const desiredPosition = {
     x: prediction.position.x
@@ -10752,6 +10777,10 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   } else {
     prediction.position.x = desiredPosition.x;
     prediction.position.z = desiredPosition.z;
+  }
+  if (locallyCarriedByPlatform && Number.isFinite(Number(carryPlatformSupport?.supportedPlayerY))) {
+    prediction.position.y = Number(carryPlatformSupport.supportedPlayerY);
+    prediction.velocity.y = supportVelocityY;
   }
   if (!rigidBodyMode) {
     if (!prediction.onGround || Math.abs(Number(prediction.velocity.y ?? 0) || 0) >= 0.05) {
@@ -10795,6 +10824,10 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
       intentActive: intent.active,
       force: Boolean(carryPlatformSupport),
     });
+    if (locallyCarriedByPlatform && Number.isFinite(Number(carryPlatformSupport?.supportedPlayerY))) {
+      motionState.renderPosition.y = Number(carryPlatformSupport.supportedPlayerY);
+      motionState.renderVelocity.y = supportVelocityY;
+    }
   }
   if (runtimeAirborne) {
     resetPossessedPlayerJumpBridge(prediction);
@@ -10823,6 +10856,16 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   prediction.velocity.y = Number.isFinite(authoritativeVelocityY)
     ? authoritativeVelocityY
     : (Number.isFinite(runtimeVelocityY) ? runtimeVelocityY : 0);
+  if (locallyCarriedByPlatform && Number.isFinite(Number(carryPlatformSupport?.supportedPlayerY))) {
+    prediction.position.y = Number(carryPlatformSupport.supportedPlayerY);
+    prediction.velocity.y = supportVelocityY;
+    if (motionState?.renderPosition) {
+      motionState.renderPosition.y = Number(carryPlatformSupport.supportedPlayerY);
+    }
+    if (motionState?.renderVelocity) {
+      motionState.renderVelocity.y = supportVelocityY;
+    }
+  }
   if (!runtimeAirborne && (prediction.jumpVisualOffsetY > 0.0001 || prediction.localJumpUntilMs > now)) {
     prediction.velocity.y = prediction.jumpVisualVelocityY;
   }
