@@ -15092,7 +15092,7 @@ function ensurePreview() {
     }
     const playerEntityId = hit?.object?.userData?.privateWorldPlayerId;
     if (playerEntityId) {
-      void occupyPlayer(playerEntityId);
+      void attemptOccupyPlayer(playerEntityId);
     }
   });
   window.requestAnimationFrame(render);
@@ -17401,6 +17401,29 @@ async function occupyPlayer(playerEntityId) {
   });
   pushEvent("player:occupied", playerEntityId);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+}
+
+async function attemptOccupyPlayer(playerEntityId) {
+  const targetPlayerId = String(playerEntityId ?? "").trim();
+  if (!targetPlayerId || !state.selectedWorld) {
+    return;
+  }
+  if (!state.session) {
+    setLauncherTab("access");
+    setLauncherOpen(true);
+    setStatus("Sign in to possess a player.");
+    return;
+  }
+  try {
+    if (!getLocalParticipant(state.selectedWorld)) {
+      await joinWorld({ switchPanelTab: false });
+    }
+    await occupyPlayer(targetPlayerId);
+  } catch (error) {
+    const message = error?.message || "Could not possess that player.";
+    setStatus(message);
+    pushEvent("player:error", message);
+  }
 }
 
 async function releasePlayer() {
