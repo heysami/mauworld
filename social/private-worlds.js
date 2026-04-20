@@ -137,7 +137,9 @@ const PRIVATE_DYNAMIC_RUNTIME = {
   interactionTransfer: 0.84,
 };
 const PRIVATE_RUNTIME_STATUS_THROTTLE_MS = 240;
+const PRIVATE_PLATFORM_CARRY_DELTA_EPSILON = 0.0001;
 const PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE = 0.24;
+const PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER = 0.14;
 const PRIVATE_RUNTIME_SNAPSHOT_PRIORITY = {
   worldDetail: 1,
   worldSnapshot: 1,
@@ -9693,18 +9695,6 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     jumpVisualVelocityY: 0,
     motionState: null,
   };
-  syncPossessedPlayerMotionState(prediction, runtimePlayer, {
-    renderPosition: {
-      x: prediction.position.x,
-      y: prediction.position.y,
-      z: prediction.position.z,
-    },
-    renderVelocity: {
-      x: prediction.velocity.x,
-      y: prediction.velocity.y,
-      z: prediction.velocity.z,
-    },
-  });
   return prediction;
 }
 
@@ -9715,87 +9705,6 @@ function resetPossessedPlayerJumpBridge(prediction = null) {
   prediction.localJumpUntilMs = 0;
   prediction.jumpVisualOffsetY = 0;
   prediction.jumpVisualVelocityY = 0;
-}
-
-function syncPossessedPlayerMotionState(prediction = null, runtimePlayer = null, options = {}) {
-  if (!prediction || !runtimePlayer) {
-    return null;
-  }
-  const renderPosition = options.renderPosition ?? prediction.motionState?.renderPosition ?? {
-    x: prediction.position.x,
-    y: prediction.position.y - Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0),
-    z: prediction.position.z,
-  };
-  const renderVelocity = options.renderVelocity ?? prediction.motionState?.renderVelocity ?? {
-    x: prediction.velocity.x,
-    y: prediction.velocity.y,
-    z: prediction.velocity.z,
-  };
-  const authoritativeY = Number(runtimePlayer.position?.y);
-  const authoritativeVelocityY = Number(runtimePlayer.velocity?.y);
-  prediction.motionState = applyAuthoritativeMotionSample(
-    prediction.motionState ?? null,
-    {
-      renderPosition,
-      renderVelocity,
-      position: {
-        x: Number(runtimePlayer.position?.x ?? renderPosition.x ?? prediction.position.x ?? 0) || 0,
-        y: Number.isFinite(authoritativeY)
-          ? authoritativeY
-          : (Number(renderPosition.y ?? prediction.position.y ?? 0) || 0),
-        z: Number(runtimePlayer.position?.z ?? renderPosition.z ?? prediction.position.z ?? 0) || 0,
-      },
-      velocity: {
-        x: Number(runtimePlayer.velocity?.x ?? renderVelocity.x ?? prediction.velocity.x ?? 0) || 0,
-        y: Number.isFinite(authoritativeVelocityY)
-          ? authoritativeVelocityY
-          : (Number(renderVelocity.y ?? prediction.velocity.y ?? 0) || 0),
-        z: Number(runtimePlayer.velocity?.z ?? renderVelocity.z ?? prediction.velocity.z ?? 0) || 0,
-      },
-      receivedAtMs: Number.isFinite(Number(options.receivedAtMs))
-        ? Number(options.receivedAtMs)
-        : performance.now(),
-    },
-  );
-  return prediction.motionState;
-}
-
-function applyPossessedPlanarAuthorityFollow(prediction = null, motionState = null, options = {}) {
-  if (!prediction || !motionState) {
-    return false;
-  }
-  const intentActive = options.intentActive === true;
-  const authoritativeX = Number(motionState.authoritativePosition?.x);
-  const authoritativeZ = Number(motionState.authoritativePosition?.z);
-  const authoritativeError = Number.isFinite(authoritativeX) && Number.isFinite(authoritativeZ)
-    ? Math.hypot(authoritativeX - prediction.position.x, authoritativeZ - prediction.position.z)
-    : 0;
-  if (intentActive && authoritativeError <= PRIVATE_PLAYER_RUNTIME.snapDistance) {
-    return false;
-  }
-  const nextX = Number(motionState.renderPosition?.x);
-  const nextZ = Number(motionState.renderPosition?.z);
-  let updated = false;
-  if (Number.isFinite(nextX)) {
-    prediction.position.x = nextX;
-    updated = true;
-  }
-  if (Number.isFinite(nextZ)) {
-    prediction.position.z = nextZ;
-    updated = true;
-  }
-  if (!updated) {
-    return false;
-  }
-  const nextVelocityX = Number(motionState.renderVelocity?.x);
-  const nextVelocityZ = Number(motionState.renderVelocity?.z);
-  if (Number.isFinite(nextVelocityX)) {
-    prediction.velocity.x = nextVelocityX;
-  }
-  if (Number.isFinite(nextVelocityZ)) {
-    prediction.velocity.z = nextVelocityZ;
-  }
-  return true;
 }
 
 function normalizePlayerCameraMode(value = "third_person") {
@@ -10138,15 +10047,6 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
-  if (!isPrivateCollisionModeRigid(prediction.bodyMode)) {
-    const runtimePositionY = Number(runtimePlayer.position?.y);
-    if (Number.isFinite(runtimePositionY)) {
-      prediction.groundY = runtimePositionY;
-      if (Math.abs(Number(prediction.velocity.y ?? 0) || 0) < 0.05 && prediction.localJumpUntilMs <= performance.now()) {
-        prediction.position.y = runtimePositionY;
-      }
-    }
-  }
   if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
     releaseHeldRuntimeKeys({
       headingY: getRuntimeInputHeadingY(),
@@ -10161,109 +10061,6 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   const prediction = ensurePossessedPlayerPrediction(runtimePlayer);
   if (!prediction || !runtimePlayer) {
     return null;
-  }
-  const now = performance.now();
-  const intent = buildRuntimeMovementIntent();
-  const nextVelocityY = Number(runtimePlayer.velocity?.y);
-  const rigidBodyMode = isPrivateCollisionModeRigid(prediction.bodyMode);
-  const runtimeAirborne = rigidBodyMode
-    ? (runtimePlayer.on_ground !== true || (Number.isFinite(nextVelocityY) && Math.abs(nextVelocityY) >= 0.05))
-    : (Number.isFinite(nextVelocityY) && Math.abs(nextVelocityY) >= 0.05);
-  if (rigidBodyMode) {
-    syncPossessedPlayerMotionState(prediction, runtimePlayer, {
-      renderPosition: prediction.motionState?.renderPosition ?? {
-        x: prediction.position.x,
-        y: prediction.position.y - Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0),
-        z: prediction.position.z,
-      },
-      renderVelocity: prediction.motionState?.renderVelocity ?? {
-        x: prediction.velocity.x,
-        y: prediction.velocity.y,
-        z: prediction.velocity.z,
-      },
-      receivedAtMs: now,
-    });
-    if (runtimeAirborne) {
-      resetPossessedPlayerJumpBridge(prediction);
-    }
-    applyPossessedPlanarAuthorityFollow(prediction, prediction.motionState, {
-      intentActive: intent.active,
-    });
-    const reconciledRenderY = Number(prediction.motionState?.renderPosition?.y);
-    if (Number.isFinite(reconciledRenderY)) {
-      prediction.position.y = reconciledRenderY + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
-    }
-    const reconciledRenderVelocityY = Number(prediction.motionState?.renderVelocity?.y);
-    if (Number.isFinite(reconciledRenderVelocityY)) {
-      prediction.velocity.y = reconciledRenderVelocityY;
-    }
-  } else {
-    const runtimePositionY = Number(runtimePlayer.position?.y);
-    const localJumpActive = prediction.localJumpUntilMs > now || Math.abs(Number(prediction.velocity.y ?? 0) || 0) >= 0.05;
-    if (!localJumpActive && Number.isFinite(runtimePositionY)) {
-      prediction.groundY = runtimePositionY;
-      prediction.position.y = runtimePositionY;
-    }
-    if (!localJumpActive && Number.isFinite(nextVelocityY)) {
-      prediction.velocity.y = nextVelocityY;
-    }
-  }
-  if (!intent.active) {
-    prediction.velocity.x += (0 - prediction.velocity.x) * 0.18;
-    prediction.velocity.z += (0 - prediction.velocity.z) * 0.18;
-  }
-  const nextRotationX = Number(runtimePlayer.rotation?.x);
-  const nextRotationY = Number(runtimePlayer.rotation?.y);
-  const nextRotationZ = Number(runtimePlayer.rotation?.z);
-  if (Number.isFinite(nextRotationX)) {
-    prediction.rotation.x = nextRotationX;
-  }
-  if (Number.isFinite(nextRotationY) && !intent.active) {
-    prediction.rotation.y = nextRotationY;
-  }
-  if (Number.isFinite(nextRotationZ)) {
-    prediction.rotation.z = nextRotationZ;
-  }
-  if (intent.active) {
-    prediction.rotation.y = intent.headingY;
-  }
-  prediction.onGround = rigidBodyMode
-    ? (
-      runtimePlayer.on_ground === true
-      && prediction.localJumpUntilMs <= now
-      && prediction.jumpVisualOffsetY <= 0.0001
-    )
-    : (
-      prediction.localJumpUntilMs <= now
-      && Math.abs(Number(prediction.velocity.y ?? 0) || 0) < 0.05
-      && Math.abs(prediction.position.y - Number(prediction.groundY ?? prediction.position.y ?? 0)) <= 0.05
-    );
-  prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
-  prediction.cameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
-  prediction.movementEnabled = normalizePlayerMovementEnabled(
-    runtimePlayer.movement_enabled ?? prediction.movementEnabled ?? true,
-  );
-  prediction.jumpEnabled = normalizePlayerJumpEnabled(
-    runtimePlayer.jump_enabled ?? prediction.jumpEnabled ?? false,
-  );
-  prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
-    runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
-  );
-  prediction.fixedTopDownAngle = normalizePlayerFixedTopDownAngle(
-    runtimePlayer.fixed_top_down_angle ?? prediction.fixedTopDownAngle ?? 90,
-  );
-  prediction.fixedTopDownDistance = normalizePlayerFixedTopDownDistance(
-    runtimePlayer.fixed_top_down_distance ?? prediction.fixedTopDownDistance ?? PRIVATE_PLAYER_VIEW.defaultRadius,
-  );
-  prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
-  prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
-  prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
-  if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
-    releaseHeldRuntimeKeys({
-      headingY: getRuntimeInputHeadingY(),
-      shouldReleaseKey: isRuntimeMovementInputKey,
-    });
-    privateInputState.sprintHoldSeconds = 0;
   }
   return prediction;
 }
@@ -10344,6 +10141,79 @@ function addPrivateCollisionBlocker(blockers, blocker = {}, probe = null) {
       z: Number(blocker.rotation?.z ?? 0) || 0,
     },
   });
+}
+
+function getLocalCarryPlatformSupport(playerLike = null) {
+  if (!playerLike?.position) {
+    return null;
+  }
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  if (!runtime) {
+    return null;
+  }
+  const playerScale = Math.max(
+    0.25,
+    Number(playerLike.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE,
+  );
+  const playerSize = getPrivatePlayerCollisionSize(playerScale);
+  const playerHalf = getHalfExtentsFromScale(playerSize);
+  const playerPosition = {
+    x: Number(playerLike.position?.x ?? 0) || 0,
+    y: Number(playerLike.position?.y ?? 0) || 0,
+    z: Number(playerLike.position?.z ?? 0) || 0,
+  };
+  const playerBottom = playerPosition.y - playerHalf.y;
+  let bestSupport = null;
+  for (const entry of runtime.dynamic_objects ?? []) {
+    if (entry?.carry_riders !== true) {
+      continue;
+    }
+    const entryId = String(entry?.id ?? "").trim();
+    const kind = entry?.entity_kind === "model" ? "model" : "primitive";
+    const size = getPrivateCollisionEntrySize(kind, entry);
+    const half = getHalfExtentsFromScale(size);
+    const mesh = entryId ? (state.preview?.entityMeshes?.get(entryId) ?? null) : null;
+    const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+    const position = {
+      x: Number(motionState?.renderPosition?.x ?? mesh?.position?.x ?? entry.position?.x ?? 0) || 0,
+      y: Number(motionState?.renderPosition?.y ?? mesh?.position?.y ?? entry.position?.y ?? 0) || 0,
+      z: Number(motionState?.renderPosition?.z ?? mesh?.position?.z ?? entry.position?.z ?? 0) || 0,
+    };
+    const velocity = {
+      x: Number(motionState?.renderVelocity?.x ?? entry.velocity?.x ?? 0) || 0,
+      y: Number(motionState?.renderVelocity?.y ?? entry.velocity?.y ?? 0) || 0,
+      z: Number(motionState?.renderVelocity?.z ?? entry.velocity?.z ?? 0) || 0,
+    };
+    const platformTop = position.y + half.y;
+    const verticalGap = playerBottom - platformTop;
+    if (
+      verticalGap < -PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE
+      || verticalGap > PRIVATE_PLATFORM_CARRY_VERTICAL_TOLERANCE
+    ) {
+      continue;
+    }
+    const limitX = half.x + playerHalf.x + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER;
+    const limitZ = half.z + playerHalf.z + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER;
+    if (
+      Math.abs(playerPosition.x - position.x) > limitX
+      || Math.abs(playerPosition.z - position.z) > limitZ
+    ) {
+      continue;
+    }
+    const absoluteGap = Math.abs(verticalGap);
+    if (!bestSupport || absoluteGap < bestSupport.absoluteGap) {
+      bestSupport = {
+        entry,
+        position,
+        velocity,
+        surfaceY: platformTop,
+        supportedPlayerY: platformTop + playerHalf.y,
+        verticalGap,
+        absoluteGap,
+      };
+    }
+  }
+  return bestSupport;
 }
 
 function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
@@ -10642,11 +10512,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   }
   const intent = buildRuntimeMovementIntent();
   const now = performance.now();
-  const runtimeVelocityY = Number(runtimePlayer.velocity?.y);
   const rigidBodyMode = isPrivateCollisionModeRigid(prediction.bodyMode);
-  const runtimeAirborne = rigidBodyMode
-    ? (runtimePlayer.on_ground !== true || (Number.isFinite(runtimeVelocityY) && Math.abs(runtimeVelocityY) >= 0.05))
-    : (Number.isFinite(runtimeVelocityY) && Math.abs(runtimeVelocityY) >= 0.05);
   const jumpPulseSeq = Math.max(0, Number(state.runtimeJumpPulseSeq ?? 0) || 0);
   const jumpPulseAt = Math.max(0, Number(state.runtimeJumpPulseAt ?? 0) || 0);
   const jumpPulsePending = jumpPulseSeq > Math.max(0, Number(prediction.lastConsumedJumpPulseSeq ?? 0) || 0);
@@ -10660,7 +10526,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   if (
     jumpPulseFresh
     && prediction.jumpEnabled
-    && (prediction.onGround || (rigidBodyMode && runtimePlayer.on_ground === true))
+    && prediction.onGround
   ) {
     prediction.onGround = false;
     prediction.lastConsumedJumpPulseSeq = jumpPulseSeq;
@@ -10677,10 +10543,22 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   } else if (jumpPulsePending && !jumpPulseFresh) {
     prediction.lastConsumedJumpPulseSeq = jumpPulseSeq;
   }
+  const localJumpActive = prediction.localJumpUntilMs > now
+    || prediction.jumpVisualOffsetY > 0.0001
+    || prediction.jumpVisualVelocityY > 0.0001;
+  const carryPlatformSupport = rigidBodyMode && !localJumpActive
+    ? getLocalCarryPlatformSupport(prediction)
+    : null;
+  const supportVelocityX = Number(carryPlatformSupport?.velocity?.x ?? 0) || 0;
+  const supportVelocityZ = Number(carryPlatformSupport?.velocity?.z ?? 0) || 0;
   const desiredPosition = {
-    x: prediction.position.x + prediction.velocity.x * dt,
+    x: prediction.position.x
+      + prediction.velocity.x * dt
+      + (Math.abs(supportVelocityX) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON ? supportVelocityX * dt : 0),
     y: prediction.position.y,
-    z: prediction.position.z + prediction.velocity.z * dt,
+    z: prediction.position.z
+      + prediction.velocity.z * dt
+      + (Math.abs(supportVelocityZ) > PRIVATE_PLATFORM_CARRY_DELTA_EPSILON ? supportVelocityZ * dt : 0),
   };
   if (isPrivateCollisionModeRigid(prediction.bodyMode)) {
     const collision = resolvePlayerMovementAgainstBlockers({
@@ -10703,7 +10581,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     if (!prediction.onGround || Math.abs(Number(prediction.velocity.y ?? 0) || 0) >= 0.05) {
       prediction.velocity.y -= PRIVATE_PLAYER_RUNTIME.gravity * dt;
       prediction.position.y += prediction.velocity.y * dt;
-      const groundY = Number(prediction.groundY ?? runtimePlayer.position?.y ?? prediction.position.y);
+      const groundY = Number(prediction.groundY ?? prediction.position.y);
       if (prediction.position.y <= groundY) {
         prediction.position.y = groundY;
         prediction.groundY = groundY;
@@ -10714,7 +10592,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
         prediction.onGround = false;
       }
     } else {
-      const groundY = Number(runtimePlayer.position?.y);
+      const groundY = Number(prediction.groundY);
       if (Number.isFinite(groundY)) {
         prediction.groundY = groundY;
         prediction.position.y = groundY;
@@ -10727,27 +10605,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     }
     return prediction;
   }
-  const motionState = prediction.motionState ?? syncPossessedPlayerMotionState(prediction, runtimePlayer);
-  if (motionState) {
-    stepContinuousMotionState(motionState, {
-      deltaSeconds: dt,
-      nowMs: now,
-      correctionRate: 11.5,
-      velocityBlendRate: 18,
-      maxCorrectionSpeed: PRIVATE_PLAYER_RUNTIME.jumpVelocity * 2,
-      maxPredictionSeconds: 0.18,
-    });
-    applyPossessedPlanarAuthorityFollow(prediction, motionState, {
-      intentActive: intent.active,
-    });
-  }
-  if (runtimeAirborne) {
-    resetPossessedPlayerJumpBridge(prediction);
-  } else if (
-    prediction.localJumpUntilMs > now
-    || prediction.jumpVisualOffsetY > 0.0001
-    || prediction.jumpVisualVelocityY > 0.0001
-  ) {
+  if (localJumpActive) {
     prediction.jumpVisualVelocityY -= PRIVATE_PLAYER_RUNTIME.gravity * dt;
     prediction.jumpVisualOffsetY = Math.max(
       0,
@@ -10761,19 +10619,46 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
       resetPossessedPlayerJumpBridge(prediction);
     }
   }
-  const authoritativeY = Number(motionState?.renderPosition?.y ?? runtimePlayer.position?.y);
-  const authoritativeVelocityY = Number(motionState?.renderVelocity?.y ?? runtimeVelocityY);
-  prediction.position.y = (Number.isFinite(authoritativeY) ? authoritativeY : prediction.position.y)
-    + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
-  prediction.velocity.y = Number.isFinite(authoritativeVelocityY)
-    ? authoritativeVelocityY
-    : (Number.isFinite(runtimeVelocityY) ? runtimeVelocityY : 0);
-  if (!runtimeAirborne && (prediction.jumpVisualOffsetY > 0.0001 || prediction.localJumpUntilMs > now)) {
-    prediction.velocity.y = prediction.jumpVisualVelocityY;
+  const currentJumpActive = prediction.localJumpUntilMs > now
+    || prediction.jumpVisualOffsetY > 0.0001
+    || prediction.jumpVisualVelocityY > 0.0001;
+  const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
+  const resolvedCarryPlatformSupport = !currentJumpActive
+    ? getLocalCarryPlatformSupport(prediction)
+    : null;
+  const projectedSurface = !currentJumpActive
+    ? getPrivatePlayerProjectedShadowSurface({
+      ...prediction,
+      onGround: false,
+    })
+    : null;
+  const hasCarrySupport = Number.isFinite(Number(resolvedCarryPlatformSupport?.supportedPlayerY));
+  const supportSurfaceY = Number(
+    resolvedCarryPlatformSupport?.surfaceY
+      ?? projectedSurface?.surfaceY,
+  );
+  const hasProjectedSurface = Number.isFinite(supportSurfaceY);
+  const hasLocalSupport = hasCarrySupport || hasProjectedSurface;
+  const supportGroundY = hasCarrySupport
+    ? Number(resolvedCarryPlatformSupport.supportedPlayerY)
+    : (
+      hasProjectedSurface
+        ? supportSurfaceY + playerHalf.y
+        : Number(prediction.groundY)
+    );
+  if (!currentJumpActive && hasLocalSupport && Number.isFinite(supportGroundY)) {
+    prediction.groundY = supportGroundY;
   }
-  prediction.onGround = !runtimeAirborne
-    && prediction.localJumpUntilMs <= now
-    && prediction.jumpVisualOffsetY <= 0.0001;
+  prediction.position.y = (Number.isFinite(Number(prediction.groundY)) ? Number(prediction.groundY) : prediction.position.y)
+    + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
+  if (currentJumpActive) {
+    prediction.velocity.y = prediction.jumpVisualVelocityY;
+  } else if (Number.isFinite(Number(resolvedCarryPlatformSupport?.velocity?.y))) {
+    prediction.velocity.y = Number(resolvedCarryPlatformSupport.velocity.y);
+  } else {
+    prediction.velocity.y = 0;
+  }
+  prediction.onGround = !currentJumpActive && hasLocalSupport;
   if (intent.active) {
     prediction.rotation.y = intent.headingY;
   }
@@ -19726,9 +19611,12 @@ function connectWorldSocket() {
             previousSelectedSceneId: state.selectedSceneId,
           });
         }
+        const activeSceneChanged = String(previousRuntime?.active_scene_id ?? "") !== String(result.snapshot?.active_scene_id ?? "");
+        if (activeSceneChanged) {
+          clearPossessedPlayerPrediction();
+        }
         reconcilePossessedPlayerPrediction();
         renderRuntimeStatusThrottled();
-        const activeSceneChanged = String(previousRuntime?.active_scene_id ?? "") !== String(result.snapshot?.active_scene_id ?? "");
         if (activeSceneChanged || !syncPreviewRuntimeSnapshot(result.snapshot)) {
           updatePreviewFromSelection({ forceRebuild: true });
         }
