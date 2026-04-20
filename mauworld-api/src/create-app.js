@@ -667,11 +667,17 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
 
   app.post("/api/private/worlds/:worldId/input", asyncRoute(async (req, res) => {
     const { profile } = await requireUser(req, store);
+    const rawKey = typeof req.body?.key === "string" ? req.body.key : "";
+    const headingY = Number(req.body?.heading_y);
+    if (!rawKey.trim() && !Number.isFinite(headingY)) {
+      throw new HttpError(400, "key or heading_y is required");
+    }
     const payload = await store.queuePrivateWorldInput(profile, {
       worldId: requireString(req.params.worldId, "worldId"),
       creatorUsername: requireString(req.body?.creatorUsername ?? req.query.creatorUsername, "creatorUsername"),
-      key: requireString(req.body?.key, "key"),
+      key: rawKey,
       state: req.body?.state === "up" ? "up" : "down",
+      heading_y: Number.isFinite(headingY) ? headingY : undefined,
     });
     jsonOk(res, payload);
   }));

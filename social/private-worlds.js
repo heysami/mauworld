@@ -110,6 +110,8 @@ const PRIVATE_RUNTIME_SNAPSHOT_PRIORITY = {
   worldSnapshot: 1,
   liveSocket: 2,
 };
+const PRIVATE_RUNTIME_LOOK_SYNC_MS = 45;
+const PRIVATE_RUNTIME_LOOK_SYNC_EPSILON = 0.0025;
 const PRIVATE_MOVEMENT_INTENT_KEYS = [
   "w",
   "a",
@@ -1015,6 +1017,8 @@ const state = {
   liveShareQuery: "",
   trailAccumulator: 0,
   lastPresenceSentAt: 0,
+  lastRuntimeLookSentAt: 0,
+  lastRuntimeLookHeadingY: null,
   lastRuntimeStatusRenderedAt: 0,
   viewerSuppressClickAt: 0,
   buildSuppressedClick: null,
@@ -9038,6 +9042,7 @@ function getLocallyControlledPlayerEntityId() {
 
 function clearPossessedPlayerPrediction() {
   state.predictedPossessedPlayer = null;
+  resetRuntimeLookSync();
 }
 
 function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
@@ -9045,8 +9050,13 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
   const right = pressedKeys.has("d") || pressedKeys.has("arrowright");
   const forward = pressedKeys.has("w") || pressedKeys.has("arrowup");
   const backward = pressedKeys.has("s") || pressedKeys.has("arrowdown");
-  let x = Number(right) - Number(left);
-  let z = Number(backward) - Number(forward);
+  const headingY = normalizeAngle(privateInputState.yaw);
+  const forwardAmount = Number(forward) - Number(backward);
+  const strafeAmount = Number(right) - Number(left);
+  const forwardVector = getPrivateFlatForwardVector(headingY);
+  const rightVector = new THREE.Vector3(Math.cos(headingY), 0, -Math.sin(headingY));
+  let x = forwardVector.x * forwardAmount + rightVector.x * strafeAmount;
+  let z = forwardVector.z * forwardAmount + rightVector.z * strafeAmount;
   const length = Math.hypot(x, z);
   if (length > 0.000001) {
     x /= length;
@@ -9055,6 +9065,7 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
   return {
     x,
     z,
+    headingY,
     active: length > 0.000001,
     sprint: pressedKeys.has("shift") && length > 0.000001,
   };
@@ -9109,6 +9120,17 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   }
   let prediction = state.predictedPossessedPlayer;
   if (!prediction || prediction.playerId !== playerId) {
+    const nextYaw = Number(runtimePlayer.rotation?.y);
+    if (Number.isFinite(nextYaw)) {
+      privateInputState.yaw = normalizeAngle(nextYaw);
+    }
+    state.cameraRadius = clampNumber(
+      state.cameraRadius,
+      PRIVATE_PLAYER_VIEW.defaultRadius,
+      PRIVATE_PLAYER_VIEW.minRadius,
+      PRIVATE_PLAYER_VIEW.maxRadius,
+    );
+    resetRuntimeLookSync();
     prediction = createPossessedPlayerPrediction(runtimePlayer);
     state.predictedPossessedPlayer = prediction;
     return prediction;
@@ -9165,11 +9187,7 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   if (Number.isFinite(nextRotationZ)) {
     prediction.rotation.z = nextRotationZ;
   }
-  if (!intent.active) {
-    if (Number.isFinite(nextRotationY)) {
-      prediction.rotation.y = nextRotationY;
-    }
-  }
+  prediction.rotation.y = intent.headingY;
   prediction.onGround = runtimePlayer.on_ground === true;
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
   prediction.cameraMode = String(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person").trim() || "third_person";
@@ -9200,9 +9218,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   if (Number.isFinite(nextPositionY)) {
     prediction.position.y = nextPositionY;
   }
-  if (intent.active) {
-    prediction.rotation.y = Number(Math.atan2(intent.x, intent.z).toFixed(6));
-  }
+  prediction.rotation.y = intent.headingY;
   return prediction;
 }
 
@@ -14833,16 +14849,28 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
   if (!player) {
     return false;
   }
-  const yaw = Number(player.rotation?.y ?? 0) || 0;
+  const yaw = normalizeAngle(privateInputState.yaw);
+  const pitch = clampNumber(
+    privateInputState.pitch,
+    -0.24,
+    PRIVATE_CAMERA.lookMin,
+    PRIVATE_CAMERA.lookMax,
+  );
   const scale = Math.max(0.25, Number(player.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
   const eyeOffset = (PRIVATE_PLAYER_METRICS.eyeHeight - PRIVATE_PLAYER_METRICS.height / 2) * scale;
+  const lookTarget = new THREE.Vector3(
+    player.position.x,
+    player.position.y + eyeOffset,
+    player.position.z,
+  );
   if (player.camera_mode === "first_person") {
-    preview.camera.position.set(player.position.x, player.position.y + eyeOffset, player.position.z);
-    preview.camera.lookAt(
-      player.position.x + Math.sin(yaw) * PRIVATE_PLAYER_CAMERA.firstPersonLookDistance * scale,
-      player.position.y + eyeOffset,
-      player.position.z - Math.cos(yaw) * PRIVATE_PLAYER_CAMERA.firstPersonLookDistance * scale,
-    );
+    const lookForward = getPrivateCameraForwardVector(yaw, pitch);
+    preview.camera.position.copy(lookTarget);
+    preview.camera.lookAt(lookTarget.clone().addScaledVector(
+      lookForward,
+      PRIVATE_PLAYER_CAMERA.firstPersonLookDistance * scale,
+    ));
+    state.viewerCameraPosition.copy(preview.camera.position);
     return true;
   }
   if (player.camera_mode === "top_down") {
@@ -14851,15 +14879,24 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
       player.position.y + PRIVATE_PLAYER_CAMERA.topDownHeight * scale,
       player.position.z + 0.01,
     );
-    preview.camera.lookAt(player.position.x, player.position.y + eyeOffset, player.position.z);
+    preview.camera.lookAt(lookTarget);
+    state.viewerCameraPosition.copy(preview.camera.position);
     return true;
   }
-  preview.camera.position.set(
-    player.position.x - Math.sin(yaw) * PRIVATE_PLAYER_CAMERA.thirdPersonDistance * scale,
-    player.position.y + PRIVATE_PLAYER_CAMERA.thirdPersonHeight * scale,
-    player.position.z + Math.cos(yaw) * PRIVATE_PLAYER_CAMERA.thirdPersonDistance * scale,
+  const radius = clampNumber(
+    state.cameraRadius,
+    PRIVATE_PLAYER_VIEW.defaultRadius,
+    PRIVATE_PLAYER_VIEW.minRadius,
+    PRIVATE_PLAYER_VIEW.maxRadius,
   );
-  preview.camera.lookAt(player.position.x, player.position.y + eyeOffset, player.position.z);
+  const cosPitch = Math.cos(pitch);
+  preview.camera.position.set(
+    lookTarget.x + Math.sin(yaw) * cosPitch * radius,
+    lookTarget.y - Math.sin(pitch) * radius,
+    lookTarget.z + Math.cos(yaw) * cosPitch * radius,
+  );
+  preview.camera.lookAt(lookTarget);
+  state.viewerCameraPosition.copy(preview.camera.position);
   return true;
 }
 
@@ -15359,6 +15396,9 @@ function ensurePreview() {
       PRIVATE_CAMERA.lookMin,
       PRIVATE_CAMERA.lookMax,
     );
+    if (getLocalParticipant()?.join_role === "player") {
+      syncRuntimeLookHeading();
+    }
     syncPrivateCameraToFollowTarget(state.preview);
   });
   elements.previewCanvas.addEventListener("pointerup", (event) => {
@@ -17997,6 +18037,7 @@ async function occupyPlayer(playerEntityId) {
   });
   pushEvent("player:occupied", playerEntityId);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  syncRuntimeLookHeading(true);
 }
 
 async function attemptOccupyPlayer(playerEntityId) {
@@ -18222,25 +18263,80 @@ async function enterPlayMode() {
   }
 }
 
-async function sendRuntimeInput(key, runtimeState = "down") {
+function resetRuntimeLookSync() {
+  state.lastRuntimeLookSentAt = 0;
+  state.lastRuntimeLookHeadingY = null;
+}
+
+function getRuntimeInputHeadingY() {
+  return Number(normalizeAngle(privateInputState.yaw).toFixed(6));
+}
+
+async function sendRuntimeInput(key, runtimeState = "down", options = {}) {
   if (!state.selectedWorld || !state.session || getLocalParticipant()?.join_role !== "player") {
-    return;
+    return false;
   }
-  if (sendWorldSocketMessage({
+  const normalizedKey = String(key ?? "").trim().toLowerCase();
+  const headingY = Number(options.headingY);
+  const hasHeadingY = Number.isFinite(headingY);
+  if (!normalizedKey && !hasHeadingY) {
+    return false;
+  }
+  const payload = {
     type: "runtime:input",
-    key,
     state: runtimeState,
-  })) {
-    return;
+  };
+  if (normalizedKey) {
+    payload.key = normalizedKey;
+  }
+  if (hasHeadingY) {
+    payload.heading_y = Number(normalizeAngle(headingY).toFixed(6));
+  }
+  if (sendWorldSocketMessage(payload)) {
+    return true;
+  }
+  if (options.socketOnly === true || !normalizedKey) {
+    return false;
   }
   await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/input`, {
     method: "POST",
     body: {
       creatorUsername: state.selectedWorld.creator.username,
-      key,
+      key: normalizedKey,
       state: runtimeState,
+      heading_y: hasHeadingY ? Number(normalizeAngle(headingY).toFixed(6)) : undefined,
     },
   });
+  return true;
+}
+
+function syncRuntimeLookHeading(force = false) {
+  if (!state.selectedWorld || !state.session || getLocalParticipant()?.join_role !== "player") {
+    return false;
+  }
+  const headingY = getRuntimeInputHeadingY();
+  const now = performance.now();
+  const previousHeading = Number(state.lastRuntimeLookHeadingY);
+  const headingDelta = Number.isFinite(previousHeading)
+    ? Math.abs(normalizeAngle(headingY - previousHeading))
+    : Infinity;
+  if (
+    !force
+    && headingDelta < PRIVATE_RUNTIME_LOOK_SYNC_EPSILON
+    && now - Number(state.lastRuntimeLookSentAt ?? 0) < PRIVATE_RUNTIME_LOOK_SYNC_MS
+  ) {
+    return false;
+  }
+  const sent = sendWorldSocketMessage({
+    type: "runtime:input",
+    state: "look",
+    heading_y: headingY,
+  });
+  if (sent) {
+    state.lastRuntimeLookSentAt = now;
+    state.lastRuntimeLookHeadingY = headingY;
+  }
+  return sent;
 }
 
 async function addCollaborator(event) {
@@ -19661,7 +19757,9 @@ function bindEvents() {
         return;
       }
       state.pressedRuntimeKeys.add(key);
-      void sendRuntimeInput(key, "down");
+      void sendRuntimeInput(key, "down", {
+        headingY: getRuntimeInputHeadingY(),
+      });
       return;
     }
     privateInputState.keys.add(key);
@@ -19723,7 +19821,9 @@ function bindEvents() {
     event.preventDefault();
     if (getLocalParticipant()?.join_role === "player") {
       state.pressedRuntimeKeys.delete(key);
-      void sendRuntimeInput(key, "up");
+      void sendRuntimeInput(key, "up", {
+        headingY: getRuntimeInputHeadingY(),
+      });
       return;
     }
     privateInputState.keys.delete(key);
@@ -19745,7 +19845,9 @@ function bindEvents() {
     endBuildDrag();
     clearPlacementTool({ temporaryOnly: true });
     for (const key of keys) {
-      void sendRuntimeInput(key, "up");
+      void sendRuntimeInput(key, "up", {
+        headingY: getRuntimeInputHeadingY(),
+      });
     }
   });
   window.addEventListener("keydown", (event) => {

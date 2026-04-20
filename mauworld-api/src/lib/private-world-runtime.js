@@ -39,6 +39,17 @@ function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizeAngle(angle) {
+  let next = mustFinite(angle, 0);
+  while (next > Math.PI) {
+    next -= Math.PI * 2;
+  }
+  while (next < -Math.PI) {
+    next += Math.PI * 2;
+  }
+  return next;
+}
+
 function vec3(input = {}, fallback = { x: 0, y: 0, z: 0 }) {
   return {
     x: mustFinite(input.x, fallback.x),
@@ -354,6 +365,37 @@ function updatePlayerLookDirection(player, desired, fallbackVelocity = null) {
   player.rotation.y = Number(Math.atan2(dirX, dirZ).toFixed(6));
 }
 
+function setPlayerLookHeading(player, headingY) {
+  if (!player?.rotation || !Number.isFinite(Number(headingY))) {
+    return false;
+  }
+  player.rotation.y = Number(normalizeAngle(headingY).toFixed(6));
+  return true;
+}
+
+function getRelativePlayerMovement(player, pressedKeys = player?.pressedKeys) {
+  const pressed = pressedKeys instanceof Set ? pressedKeys : new Set();
+  const left = pressed.has("a") || pressed.has("arrowleft");
+  const right = pressed.has("d") || pressed.has("arrowright");
+  const forward = pressed.has("w") || pressed.has("arrowup");
+  const backward = pressed.has("s") || pressed.has("arrowdown");
+  const headingY = mustFinite(player?.rotation?.y, 0);
+  const forwardAmount = Number(forward) - Number(backward);
+  const strafeAmount = Number(right) - Number(left);
+  const forwardVector = {
+    x: -Math.sin(headingY),
+    z: -Math.cos(headingY),
+  };
+  const rightVector = {
+    x: Math.cos(headingY),
+    z: -Math.sin(headingY),
+  };
+  return normalizePlanarVector(
+    forwardVector.x * forwardAmount + rightVector.x * strafeAmount,
+    forwardVector.z * forwardAmount + rightVector.z * strafeAmount,
+  );
+}
+
 function raycastPlayerGround(runtime, player) {
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
   const collider = runtime.physics?.playerColliders?.get(player.id) ?? null;
@@ -381,11 +423,15 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   const backward = pressed.has("s") || pressed.has("arrowdown");
   const sprint = pressed.has("shift");
   const jumpEdge = inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
-  const desired = normalizePlanarVector(
-    Number(right) - Number(left),
-    Number(backward) - Number(forward),
-  );
-  updatePlayerLookDirection(player, desired);
+  const desired = player.usesLookHeading === true
+    ? getRelativePlayerMovement(player, pressed)
+    : normalizePlanarVector(
+      Number(right) - Number(left),
+      Number(backward) - Number(forward),
+    );
+  if (player.usesLookHeading !== true) {
+    updatePlayerLookDirection(player, desired);
+  }
 
   if (player.body_mode === "ghost") {
     const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
@@ -834,6 +880,11 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
     if (!player || !player.occupied_by_profile_id) {
       continue;
     }
+    const headingY = Number(input.headingY ?? input.heading_y);
+    if (Number.isFinite(headingY)) {
+      setPlayerLookHeading(player, headingY);
+      player.usesLookHeading = true;
+    }
     const key = String(input.key ?? "").trim().toLowerCase();
     if (!key) {
       continue;
@@ -1196,7 +1247,7 @@ export class PrivateWorldRuntime {
     return buildPrivateWorldRuntimeSnapshot(simulation);
   }
 
-  async queueInputByReference({ worldId, creatorUsername, profile, key, state } = {}) {
+  async queueInputByReference({ worldId, creatorUsername, profile, key, state, headingY = null, heading_y = null } = {}) {
     const keyRef = this.getWorldRefKey(worldId, creatorUsername);
     let instanceId = this.keysByWorldRef.get(keyRef);
     let simulation = instanceId ? this.instancesById.get(instanceId) : null;
@@ -1216,13 +1267,15 @@ export class PrivateWorldRuntime {
       throw new HttpError(403, "Only occupied player slots can send runtime input");
     }
     const normalizedKey = String(key ?? "").trim().toLowerCase();
-    if (!normalizedKey) {
-      throw new HttpError(400, "Runtime input key is required");
+    const resolvedHeadingY = Number(headingY ?? heading_y);
+    if (!normalizedKey && !Number.isFinite(resolvedHeadingY)) {
+      throw new HttpError(400, "Runtime input key or heading is required");
     }
     simulation.pendingInputs.push({
       playerId: occupiedPlayer.id,
       key: normalizedKey,
       state: state === "up" ? "up" : "down",
+      headingY: Number.isFinite(resolvedHeadingY) ? Number(normalizeAngle(resolvedHeadingY).toFixed(6)) : null,
       at: nowIso(),
     });
     return {

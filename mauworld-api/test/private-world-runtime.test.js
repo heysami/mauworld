@@ -464,6 +464,7 @@ test("runtime input queues directly against a live simulation without forcing a 
     profile: { id: profileId },
     key: "w",
     state: "down",
+    headingY: 1.25,
   });
 
   assert.equal(syncCalls, 0);
@@ -471,4 +472,29 @@ test("runtime input queues directly against a live simulation without forcing a 
   assert.equal(simulation.pendingInputs.length, 1);
   assert.equal(simulation.pendingInputs[0].key, "w");
   assert.equal(simulation.pendingInputs[0].state, "down");
+  assert.equal(simulation.pendingInputs[0].headingY, 1.25);
+});
+
+test("runtime heading makes D strafe relative to facing without rotating the player", () => {
+  const simulation = buildSimulation();
+  const runtime = simulation.runtime;
+  const playerId = runtime.players[0].id;
+  const before = {
+    x: runtime.players[0].position.x,
+    z: runtime.players[0].position.z,
+  };
+
+  for (let index = 0; index < 8; index += 1) {
+    stepPrivateWorldSimulation(runtime, {
+      deltaMs: 50,
+      pendingInputs: index === 0
+        ? [{ playerId, headingY: Math.PI / 2, key: "d", state: "down" }]
+        : [],
+    });
+  }
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.ok(Math.abs(snapshot.players[0].rotation.y - (Math.PI / 2)) < 0.01);
+  assert.ok(snapshot.players[0].position.z < before.z);
+  assert.ok(Math.abs(snapshot.players[0].position.x - before.x) < 0.5);
 });

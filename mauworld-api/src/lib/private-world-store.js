@@ -2740,6 +2740,7 @@ export function installPrivateWorldStore(MauworldStore) {
       profile,
       key: input.key,
       state: input.state,
+      headingY: input.heading_y ?? input.headingY,
     });
     return result;
   };

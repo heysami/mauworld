@@ -772,12 +772,32 @@ test("private world runtime input endpoint accepts player controls", async () =>
       creatorUsername: "maker",
       key: "w",
       state: "down",
+      heading_y: 1.25,
     });
 
   assert.equal(response.status, 200);
   assert.equal(response.body.ok, true);
   assert.equal(response.body.accepted, true);
   assert.equal(response.body.player_entity_id, "player_one");
+});
+
+test("private world runtime input endpoint accepts look-only updates", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/private/worlds/mw_origin123/input")
+    .set("Authorization", "Bearer token")
+    .send({
+      creatorUsername: "maker",
+      heading_y: -0.75,
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.accepted, true);
 });
 
 test("texture asset generation requires session-passed provider keys", async () => {

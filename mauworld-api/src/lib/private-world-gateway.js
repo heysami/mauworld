@@ -2129,6 +2129,7 @@ export class PrivateWorldGateway {
         creatorUsername: client.creatorUsername,
         key: String(message.key ?? "").trim(),
         state: message.state === "up" ? "up" : "down",
+        heading_y: message.heading_y,
       });
     } catch (error) {
       sendJson(client, {

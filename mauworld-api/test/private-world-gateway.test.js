@@ -219,10 +219,12 @@ test("private world runtime input is routed through the socket gateway", async (
     type: "runtime:input",
     key: "w",
     state: "down",
+    heading_y: 0.4,
   });
 
   assert.equal(queued.length, 1);
   assert.equal(queued[0].profile.id, client.profile.id);
+  assert.equal(queued[0].payload.heading_y, 0.4);
   assert.equal(queued[0].payload.worldId, client.worldId);
   assert.equal(queued[0].payload.creatorUsername, client.creatorUsername);
   assert.equal(queued[0].payload.key, "w");
