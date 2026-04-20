@@ -13253,7 +13253,7 @@ function findProjectedPlayerHit(pointerSource) {
     );
     const radiusPx = Math.max(
       28,
-      ((PRIVATE_PLAYER_METRICS.height * dominantScale) / Math.max(0.0001, unitsPerPixel)) * 0.42,
+      ((PRIVATE_PLAYER_METRICS.height * dominantScale) / Math.max(0.0001, unitsPerPixel)) * 0.48,
     );
     const distance = Math.hypot(canvasX - projected.x, canvasY - projected.y);
     if (distance > radiusPx || distance >= matchedDistance) {
@@ -13298,7 +13298,7 @@ function inspectProjectedPlayerHit(pointerSource) {
     );
     const radiusPx = Math.max(
       28,
-      ((PRIVATE_PLAYER_METRICS.height * dominantScale) / Math.max(0.0001, unitsPerPixel)) * 0.42,
+      ((PRIVATE_PLAYER_METRICS.height * dominantScale) / Math.max(0.0001, unitsPerPixel)) * 0.48,
     );
     players.push({
       entityId,
