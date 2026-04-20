@@ -16034,7 +16034,10 @@ function ensurePreview() {
       }
       return;
     }
-    const playerEntityId = hit?.object?.userData?.privateWorldPlayerId;
+    const playerEntityId = String(
+      hit?.object?.userData?.privateWorldPlayerId
+      || (entityRef?.kind === "player" ? entityRef.id : ""),
+    ).trim();
     if (playerEntityId) {
       void attemptOccupyPlayer(playerEntityId);
     }
@@ -17532,6 +17535,36 @@ function updatePreviewFromSelection(options = {}) {
     registerPreviewBillboard(preview, mesh, panelEntry.facing_mode);
     return mesh;
   };
+  const attachPlayerHitTarget = (playerMesh, playerId) => {
+    const resolvedPlayerId = String(playerId ?? "").trim();
+    if (!playerMesh || !resolvedPlayerId) {
+      return null;
+    }
+    const hitTarget = new THREE.Mesh(
+      new THREE.CapsuleGeometry(
+        PRIVATE_PLAYER_METRICS.width / 2,
+        PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
+        8,
+        16,
+      ),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        colorWrite: false,
+        depthWrite: false,
+        depthTest: false,
+        fog: false,
+      }),
+    );
+    hitTarget.scale.setScalar(1.24);
+    hitTarget.userData.privateWorldEntityId = resolvedPlayerId;
+    hitTarget.userData.privateWorldEntityKind = "player";
+    hitTarget.userData.privateWorldPlayerId = resolvedPlayerId;
+    hitTarget.userData.privateWorldPickPriority = 6;
+    playerMesh.add(hitTarget);
+    preview.entityPickables.push(hitTarget);
+    return hitTarget;
+  };
   const renderModelMesh = (modelEntry = {}, options = {}) => {
     const metadata = options.id ? { id: options.id, kind: "model" } : null;
     const group = new THREE.Group();
@@ -17709,6 +17742,7 @@ function updatePreviewFromSelection(options = {}) {
       runtimeVisible: runtimePlayer?.visible !== false,
     });
     mesh.userData.privateWorldPlayerId = resolvedPlayerId || player.id;
+    attachPlayerHitTarget(mesh, resolvedPlayerId || player.id);
   }
 
   for (const runtimePlayer of runtimeTransforms.players) {
@@ -17762,6 +17796,7 @@ function updatePreviewFromSelection(options = {}) {
       runtimeVisible: runtimePlayer?.visible !== false,
     });
     mesh.userData.privateWorldPlayerId = playerId;
+    attachPlayerHitTarget(mesh, playerId);
   }
 
   for (const prefabInstance of sceneDoc.prefab_instances ?? []) {
