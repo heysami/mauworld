@@ -187,6 +187,7 @@ test("private world presence updates refresh participant heartbeat in the store"
   assert.equal(poses[0].profile.id, client.profile.id);
   assert.equal(poses[0].payload.position_x, 4);
   assert.equal(poses[0].payload.velocity_x, 3.25);
+  assert.equal(poses[0].payload.force_client_pose, false);
 });
 
 test("private world queued presence updates keep only the latest sample", async () => {
@@ -235,6 +236,7 @@ test("private world queued presence updates keep only the latest sample", async 
   assert.equal(poses[0].payload.position_x, 3);
   assert.equal(poses[0].payload.position_z, -3);
   assert.equal(poses[0].payload.heading_y, 0.3);
+  assert.equal(poses[0].payload.force_client_pose, false);
 });
 
 test("private world plain presence updates do not sync occupied player pose", async () => {
@@ -260,6 +262,51 @@ test("private world plain presence updates do not sync occupied player pose", as
   });
 
   assert.equal(poses.length, 0);
+});
+
+test("private world forced presence updates sync the client pose and hide the extra viewer body", async () => {
+  const poses = [];
+  const gateway = createGateway({
+    async syncPrivateWorldPlayerPose(profile, payload) {
+      poses.push({ profile, payload });
+      return { synced: true };
+    },
+  });
+  const sender = createClient({
+    viewerSessionId: "profile:runner",
+    displayName: "runner",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const observer = createClient({
+    viewerSessionId: "profile:observer",
+    displayName: "observer",
+    position: { x: 3, y: 0, z: 0 },
+  });
+  gateway.clients.add(sender);
+  gateway.clients.add(observer);
+
+  await gateway.handlePresenceUpdate(sender, {
+    position_x: 5,
+    position_y: 2.25,
+    position_z: -4,
+    heading_y: 0.25,
+    velocity_x: 1.5,
+    velocity_y: 0.4,
+    velocity_z: -0.75,
+    motion_seq: 9,
+    join_role: "player",
+    player_entity_id: "player_one",
+    force_runtime_pose: true,
+  });
+
+  assert.equal(poses.length, 1);
+  assert.equal(poses[0].payload.position_y, 2.25);
+  assert.equal(poses[0].payload.force_client_pose, true);
+
+  const update = observer.socket.sent.at(-1);
+  assert.equal(update?.type, "presence:update");
+  assert.equal(update?.presence?.join_role, "player");
+  assert.equal(update?.presence?.player_entity_id, "player_one");
 });
 
 test("private world runtime input is not blocked behind pending presence sync", async () => {

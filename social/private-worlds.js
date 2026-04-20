@@ -3719,6 +3719,10 @@ function upsertPrivatePresenceObject(entry) {
   if (!preview?.presence || !presenceId || presenceId === getPrivateViewerSessionId()) {
     return;
   }
+  if (isPrivatePresencePlayerBodyHidden(entry)) {
+    removePrivatePresenceObject(presenceId);
+    return;
+  }
   const displayName = getPrivatePresenceDisplayName(entry);
   const existing = preview.presenceEntries.get(presenceId);
   if (!existing) {
@@ -3744,6 +3748,7 @@ function reconcilePrivatePresenceScene() {
   }
   const desiredIds = new Set(
     [...state.livePresence.values()]
+      .filter((entry) => !isPrivatePresencePlayerBodyHidden(entry))
       .map((entry) => getPrivatePresenceEntryId(entry))
       .filter((presenceId) => presenceId && presenceId !== getPrivateViewerSessionId()),
   );
@@ -3755,6 +3760,12 @@ function reconcilePrivatePresenceScene() {
   for (const entry of state.livePresence.values()) {
     upsertPrivatePresenceObject(entry);
   }
+}
+
+function isPrivatePresencePlayerBodyHidden(entry = {}) {
+  const joinRole = String(entry.join_role ?? entry.joinRole ?? "").trim().toLowerCase();
+  const playerEntityId = String(entry.player_entity_id ?? entry.playerEntityId ?? "").trim();
+  return joinRole === "player" && Boolean(playerEntityId);
 }
 
 function mergePrivatePresenceRows(rows = [], options = {}) {
@@ -5780,7 +5791,8 @@ function getLocalPossessedPlayerPosePayload(options = {}) {
   const velocityZ = Number(source.velocity?.z);
   const bodyMode = String(source.bodyMode ?? source.body_mode ?? runtimePlayer?.body_mode ?? "rigid").trim().toLowerCase();
   const includePlanarForRigid = options.includePlanarForRigid !== false;
-  const includeVerticalPose = bodyMode === "ghost";
+  const includeVerticalForRigid = options.includeVerticalForRigid === true;
+  const includeVerticalPose = bodyMode === "ghost" || (includeVerticalForRigid && bodyMode !== "ghost");
   if (!includeVerticalPose && !includePlanarForRigid) {
     return null;
   }
@@ -5868,11 +5880,12 @@ function applyPrivateViewerReleaseSpawn(spawn = null) {
 }
 
 function sendPrivatePresence(force = false) {
-  if (!state.joined || !getLocalParticipant()) {
+  const localParticipant = getLocalParticipant();
+  if (!state.joined || !localParticipant) {
     return false;
   }
   const now = performance.now();
-  const minIntervalMs = getLocalParticipant()?.join_role === "player"
+  const minIntervalMs = localParticipant.join_role === "player"
     ? PRIVATE_POSSESSED_PRESENCE_INTERVAL_MS
     : 120;
   if (!force && now - state.lastPresenceSentAt < minIntervalMs) {
@@ -5886,15 +5899,22 @@ function sendPrivatePresence(force = false) {
     position_y: Number(position.y.toFixed(4)),
     position_z: Number(position.z.toFixed(4)),
     heading_y: Number(position.heading.toFixed(4)),
+    join_role: String(localParticipant.join_role ?? "viewer").trim() || "viewer",
+    player_entity_id: localParticipant.player_entity_id ?? null,
   };
   const possessedPose = getLocalPossessedPlayerPosePayload({
-    includePlanarForRigid: false,
+    includePlanarForRigid: true,
+    includeVerticalForRigid: true,
   });
-  if (possessedPose) {
+  if (possessedPose && localParticipant.join_role === "player") {
     payload.motion_seq = nextPrivateMotionSequence();
+    payload.position_x = possessedPose.position_x;
+    payload.position_y = possessedPose.position_y;
+    payload.position_z = possessedPose.position_z;
     payload.velocity_x = possessedPose.velocity_x;
     payload.velocity_y = possessedPose.velocity_y;
     payload.velocity_z = possessedPose.velocity_z;
+    payload.force_runtime_pose = true;
   }
   return sendWorldSocketMessage(payload);
 }

@@ -2027,6 +2027,8 @@ export class PrivateWorldGateway {
       position_y: client.presence.position_y,
       position_z: client.presence.position_z,
       heading_y: client.presence.heading_y,
+      join_role: client.presence.join_role ?? null,
+      player_entity_id: client.presence.player_entity_id ?? null,
     };
   }
 
@@ -2049,7 +2051,25 @@ export class PrivateWorldGateway {
     const velocityY = Number(message.velocity_y);
     const velocityZ = Number(message.velocity_z);
     const motionSeq = Number(message.motion_seq);
-    const hasRuntimePose = Number.isFinite(motionSeq)
+    const joinRole = String(
+      message.join_role
+        ?? message.joinRole
+        ?? client.presence?.join_role
+        ?? "",
+    ).trim().toLowerCase() || null;
+    const playerEntityId = String(
+      message.player_entity_id
+        ?? message.playerEntityId
+        ?? client.presence?.player_entity_id
+        ?? "",
+    ).trim() || null;
+    const forceRuntimePose = message.force_runtime_pose === true
+      || message.forceRuntimePose === true
+      || message.force_client_pose === true
+      || message.forceClientPose === true
+      || message.client_authoritative_pose === true;
+    const hasRuntimePose = forceRuntimePose
+      || Number.isFinite(motionSeq)
       || Number.isFinite(velocityX)
       || Number.isFinite(velocityY)
       || Number.isFinite(velocityZ);
@@ -2064,6 +2084,8 @@ export class PrivateWorldGateway {
       velocity_x: Number.isFinite(velocityX) ? velocityX : 0,
       velocity_y: Number.isFinite(velocityY) ? velocityY : 0,
       velocity_z: Number.isFinite(velocityZ) ? velocityZ : 0,
+      join_role: joinRole,
+      player_entity_id: playerEntityId,
     };
     client.position = {
       x: positionX,
@@ -2091,6 +2113,7 @@ export class PrivateWorldGateway {
             velocity_z: Number.isFinite(velocityZ) ? velocityZ : 0,
             heading_y: Number.isFinite(headingY) ? headingY : 0,
             motion_seq: Number.isFinite(motionSeq) ? motionSeq : undefined,
+            force_client_pose: forceRuntimePose,
           });
         } catch (_error) {
           // Presence should keep flowing even if runtime pose sync misses a frame.

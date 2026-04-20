@@ -806,9 +806,14 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
   const currentBodyPosition = body ? vec3(body.translation(), player.position) : vec3(player.position);
   const currentBodyVelocity = body ? vec3(body.linvel(), player.velocity) : vec3(player.velocity);
-  const preserveVertical = player.body_mode !== "ghost";
+  const forceClientPose = input.force_client_pose === true
+    || input.forceClientPose === true
+    || input.force_runtime_pose === true
+    || input.forceRuntimePose === true
+    || input.client_authoritative_pose === true;
+  const preserveVertical = !forceClientPose && player.body_mode !== "ghost";
   const supportingCarryPlatform = preserveVertical ? findSupportingCarryPlatform(runtime, player) : null;
-  const preservePlanar = Boolean(supportingCarryPlatform);
+  const preservePlanar = !forceClientPose && Boolean(supportingCarryPlatform);
   const nextPosition = {
     x: preservePlanar
       ? currentBodyPosition.x
@@ -2235,6 +2240,7 @@ export class PrivateWorldRuntime {
     headingY = null,
     heading_y = null,
     motion_seq = null,
+    force_client_pose = false,
   } = {}) {
     const keyRef = this.getWorldRefKey(worldId, creatorUsername);
     let instanceId = this.keysByWorldRef.get(keyRef);
@@ -2266,6 +2272,7 @@ export class PrivateWorldRuntime {
       motion_seq,
       headingY,
       heading_y,
+      force_client_pose,
     });
     return {
       synced: true,
