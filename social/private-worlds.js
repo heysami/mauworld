@@ -10216,6 +10216,43 @@ function getLocalCarryPlatformSupport(playerLike = null) {
   return bestSupport;
 }
 
+function getLocalPossessedGroundSupport(prediction = null) {
+  if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    return {
+      hasSupport: false,
+      groundY: Number.NaN,
+      velocityY: Number.NaN,
+      carrySupport: null,
+    };
+  }
+  const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
+  const carrySupport = getLocalCarryPlatformSupport(prediction);
+  const projectedSurface = getPrivatePlayerProjectedShadowSurface({
+    ...prediction,
+    onGround: false,
+  });
+  const hasCarrySupport = Number.isFinite(Number(carrySupport?.supportedPlayerY));
+  const surfaceY = Number(
+    carrySupport?.surfaceY
+      ?? projectedSurface?.surfaceY,
+  );
+  const hasProjectedSurface = Number.isFinite(surfaceY);
+  const hasSupport = hasCarrySupport || hasProjectedSurface;
+  const groundY = hasCarrySupport
+    ? Number(carrySupport.supportedPlayerY)
+    : (
+      hasProjectedSurface
+        ? surfaceY + playerHalf.y
+        : Number.NaN
+    );
+  return {
+    hasSupport,
+    groundY,
+    velocityY: Number(carrySupport?.velocity?.y),
+    carrySupport,
+  };
+}
+
 function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
   if (!playerLike?.position) {
     return null;
@@ -10523,6 +10560,27 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const blend = clampNumber(PRIVATE_PLAYER_RUNTIME.acceleration * dt, 1, 0, 1);
   prediction.velocity.x += (intent.x * speed - prediction.velocity.x) * blend;
   prediction.velocity.z += (intent.z * speed - prediction.velocity.z) * blend;
+  const preJumpLocalJumpActive = prediction.localJumpUntilMs > now
+    || prediction.jumpVisualOffsetY > 0.0001
+    || prediction.jumpVisualVelocityY > 0.0001;
+  const preJumpGroundSupport = rigidBodyMode && !preJumpLocalJumpActive
+    ? getLocalPossessedGroundSupport(prediction)
+    : null;
+  if (
+    rigidBodyMode
+    && !preJumpLocalJumpActive
+    && preJumpGroundSupport?.hasSupport
+    && Number.isFinite(Number(preJumpGroundSupport.groundY))
+  ) {
+    prediction.groundY = Number(preJumpGroundSupport.groundY);
+    prediction.position.y = Number(preJumpGroundSupport.groundY);
+    prediction.velocity.y = Number.isFinite(Number(preJumpGroundSupport.velocityY))
+      ? Number(preJumpGroundSupport.velocityY)
+      : 0;
+    prediction.onGround = true;
+  } else if (rigidBodyMode && !preJumpLocalJumpActive) {
+    prediction.onGround = false;
+  }
   if (
     jumpPulseFresh
     && prediction.jumpEnabled
@@ -10547,7 +10605,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     || prediction.jumpVisualOffsetY > 0.0001
     || prediction.jumpVisualVelocityY > 0.0001;
   const carryPlatformSupport = rigidBodyMode && !localJumpActive
-    ? getLocalCarryPlatformSupport(prediction)
+    ? (preJumpGroundSupport?.carrySupport ?? getLocalCarryPlatformSupport(prediction))
     : null;
   const supportVelocityX = Number(carryPlatformSupport?.velocity?.x ?? 0) || 0;
   const supportVelocityZ = Number(carryPlatformSupport?.velocity?.z ?? 0) || 0;
@@ -10622,30 +10680,11 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const currentJumpActive = prediction.localJumpUntilMs > now
     || prediction.jumpVisualOffsetY > 0.0001
     || prediction.jumpVisualVelocityY > 0.0001;
-  const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
-  const resolvedCarryPlatformSupport = !currentJumpActive
-    ? getLocalCarryPlatformSupport(prediction)
+  const resolvedGroundSupport = !currentJumpActive
+    ? getLocalPossessedGroundSupport(prediction)
     : null;
-  const projectedSurface = !currentJumpActive
-    ? getPrivatePlayerProjectedShadowSurface({
-      ...prediction,
-      onGround: false,
-    })
-    : null;
-  const hasCarrySupport = Number.isFinite(Number(resolvedCarryPlatformSupport?.supportedPlayerY));
-  const supportSurfaceY = Number(
-    resolvedCarryPlatformSupport?.surfaceY
-      ?? projectedSurface?.surfaceY,
-  );
-  const hasProjectedSurface = Number.isFinite(supportSurfaceY);
-  const hasLocalSupport = hasCarrySupport || hasProjectedSurface;
-  const supportGroundY = hasCarrySupport
-    ? Number(resolvedCarryPlatformSupport.supportedPlayerY)
-    : (
-      hasProjectedSurface
-        ? supportSurfaceY + playerHalf.y
-        : Number(prediction.groundY)
-    );
+  const hasLocalSupport = resolvedGroundSupport?.hasSupport === true;
+  const supportGroundY = Number(resolvedGroundSupport?.groundY);
   if (!currentJumpActive && hasLocalSupport && Number.isFinite(supportGroundY)) {
     prediction.groundY = supportGroundY;
   }
@@ -10653,8 +10692,8 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
   if (currentJumpActive) {
     prediction.velocity.y = prediction.jumpVisualVelocityY;
-  } else if (Number.isFinite(Number(resolvedCarryPlatformSupport?.velocity?.y))) {
-    prediction.velocity.y = Number(resolvedCarryPlatformSupport.velocity.y);
+  } else if (Number.isFinite(Number(resolvedGroundSupport?.velocityY))) {
+    prediction.velocity.y = Number(resolvedGroundSupport.velocityY);
   } else {
     prediction.velocity.y = 0;
   }
