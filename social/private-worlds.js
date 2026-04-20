@@ -9731,6 +9731,15 @@ function setMode(mode, options = {}) {
   const nextMode = mode === "build" && isEditor() ? "build" : "play";
   const previousMode = state.mode;
   state.mode = nextMode;
+  if (previousMode === "play" && nextMode === "build" && state.pressedRuntimeKeys.size > 0) {
+    const pressedKeys = [...state.pressedRuntimeKeys];
+    state.pressedRuntimeKeys.clear();
+    for (const key of pressedKeys) {
+      void sendRuntimeInput(key, "up", {
+        headingY: getRuntimeInputHeadingY(),
+      });
+    }
+  }
   if (nextMode === "play") {
     state.buildModifierKeys.clear();
     endBuildDrag();
@@ -19225,6 +19234,10 @@ function getRuntimeInputHeadingY() {
   return Number(normalizeAngle(privateInputState.yaw).toFixed(6));
 }
 
+function shouldDrivePrivateRuntimeInput() {
+  return state.mode === "play" && getLocalParticipant()?.join_role === "player";
+}
+
 function nextPrivateMotionSequence() {
   state.lastPrivateMotionSeq = Math.max(0, Number(state.lastPrivateMotionSeq ?? 0) || 0) + 1;
   return state.lastPrivateMotionSeq;
@@ -20737,7 +20750,7 @@ function bindEvents() {
       return;
     }
     event.preventDefault();
-    if (getLocalParticipant()?.join_role === "player") {
+    if (shouldDrivePrivateRuntimeInput()) {
       if (state.pressedRuntimeKeys.has(key)) {
         return;
       }
@@ -20804,7 +20817,7 @@ function bindEvents() {
       return;
     }
     event.preventDefault();
-    if (getLocalParticipant()?.join_role === "player") {
+    if (shouldDrivePrivateRuntimeInput()) {
       state.pressedRuntimeKeys.delete(key);
       void sendRuntimeInput(key, "up", {
         headingY: getRuntimeInputHeadingY(),
