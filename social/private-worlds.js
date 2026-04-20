@@ -96,6 +96,15 @@ const PRIVATE_PLAYER_CAMERA = {
   thirdPersonHeight: 2.2,
   topDownHeight: 8,
 };
+const PRIVATE_PLAYER_RUNTIME = {
+  moveSpeed: 4.317 * PRIVATE_WORLD_BLOCK_UNIT,
+  sprintSpeed: 5.612 * PRIVATE_WORLD_BLOCK_UNIT,
+  acceleration: 26,
+  snapDistance: PRIVATE_WORLD_BLOCK_UNIT * 4,
+  activeCorrectionAlpha: 0.12,
+  idleCorrectionAlpha: 0.28,
+};
+const PRIVATE_RUNTIME_STATUS_THROTTLE_MS = 240;
 const PRIVATE_MOVEMENT_INTENT_KEYS = [
   "w",
   "a",
@@ -952,6 +961,7 @@ const state = {
   activeLockEntityKey: "",
   runtimeSnapshot: null,
   pressedRuntimeKeys: new Set(),
+  predictedPossessedPlayer: null,
   launcherTab: "access",
   launcherWorldTab: "mine",
   privatePanelTab: "chat",
@@ -998,6 +1008,7 @@ const state = {
   liveShareQuery: "",
   trailAccumulator: 0,
   lastPresenceSentAt: 0,
+  lastRuntimeStatusRenderedAt: 0,
   viewerSuppressClickAt: 0,
   buildSuppressedClick: null,
   buildModifierKeys: new Set(),
@@ -5292,6 +5303,15 @@ function sendWorldSocketMessage(payload) {
 
 function getPrivatePresencePosition() {
   const possessed = getPossessedRuntimePlayer();
+  const prediction = state.predictedPossessedPlayer;
+  if (prediction?.playerId && possessed?.id === prediction.playerId) {
+    return {
+      x: prediction.position.x,
+      y: prediction.position.y,
+      z: prediction.position.z,
+      heading: Number(prediction.rotation?.y ?? privateInputState.yaw) || privateInputState.yaw,
+    };
+  }
   if (possessed?.position) {
     return {
       x: Number(possessed.position.x ?? 0) || 0,
@@ -8841,6 +8861,184 @@ function getPossessedRuntimePlayer() {
   return state.runtimeSnapshot?.players?.find((entry) => entry.id === localParticipant.player_entity_id) ?? null;
 }
 
+function clearPossessedPlayerPrediction() {
+  state.predictedPossessedPlayer = null;
+}
+
+function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
+  const left = pressedKeys.has("a") || pressedKeys.has("arrowleft");
+  const right = pressedKeys.has("d") || pressedKeys.has("arrowright");
+  const forward = pressedKeys.has("w") || pressedKeys.has("arrowup");
+  const backward = pressedKeys.has("s") || pressedKeys.has("arrowdown");
+  let x = Number(right) - Number(left);
+  let z = Number(backward) - Number(forward);
+  const length = Math.hypot(x, z);
+  if (length > 0.000001) {
+    x /= length;
+    z /= length;
+  }
+  return {
+    x,
+    z,
+    active: length > 0.000001,
+    sprint: pressedKeys.has("shift") && length > 0.000001,
+  };
+}
+
+function createPossessedPlayerPrediction(runtimePlayer = {}) {
+  const position = runtimePlayer.position ?? {};
+  const velocity = runtimePlayer.velocity ?? {};
+  const rotation = runtimePlayer.rotation ?? {};
+  const positionX = Number(position.x);
+  const positionY = Number(position.y);
+  const positionZ = Number(position.z);
+  const velocityX = Number(velocity.x);
+  const velocityY = Number(velocity.y);
+  const velocityZ = Number(velocity.z);
+  const rotationX = Number(rotation.x);
+  const rotationY = Number(rotation.y);
+  const rotationZ = Number(rotation.z);
+  return {
+    playerId: String(runtimePlayer.id ?? "").trim(),
+    position: new THREE.Vector3(
+      Number.isFinite(positionX) ? positionX : 0,
+      Number.isFinite(positionY) ? positionY : 0,
+      Number.isFinite(positionZ) ? positionZ : 0,
+    ),
+    velocity: new THREE.Vector3(
+      Number.isFinite(velocityX) ? velocityX : 0,
+      Number.isFinite(velocityY) ? velocityY : 0,
+      Number.isFinite(velocityZ) ? velocityZ : 0,
+    ),
+    rotation: {
+      x: Number.isFinite(rotationX) ? rotationX : 0,
+      y: Number.isFinite(rotationY) ? rotationY : 0,
+      z: Number.isFinite(rotationZ) ? rotationZ : 0,
+    },
+    scale: Math.max(0.25, Number(runtimePlayer.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE),
+    cameraMode: String(runtimePlayer.camera_mode ?? "third_person").trim() || "third_person",
+    bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
+    onGround: runtimePlayer.on_ground === true,
+  };
+}
+
+function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlayer()) {
+  if (!runtimePlayer || getLocalParticipant()?.join_role !== "player") {
+    clearPossessedPlayerPrediction();
+    return null;
+  }
+  const playerId = String(runtimePlayer.id ?? "").trim();
+  if (!playerId) {
+    clearPossessedPlayerPrediction();
+    return null;
+  }
+  let prediction = state.predictedPossessedPlayer;
+  if (!prediction || prediction.playerId !== playerId) {
+    prediction = createPossessedPlayerPrediction(runtimePlayer);
+    state.predictedPossessedPlayer = prediction;
+    return prediction;
+  }
+  prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
+  prediction.cameraMode = String(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person").trim() || "third_person";
+  prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
+  return prediction;
+}
+
+function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlayer()) {
+  const prediction = ensurePossessedPlayerPrediction(runtimePlayer);
+  if (!prediction || !runtimePlayer) {
+    return null;
+  }
+  const intent = buildRuntimeMovementIntent();
+  const correctionAlpha = intent.active
+    ? PRIVATE_PLAYER_RUNTIME.activeCorrectionAlpha
+    : PRIVATE_PLAYER_RUNTIME.idleCorrectionAlpha;
+  const nextPositionX = Number(runtimePlayer.position?.x);
+  const nextPositionY = Number(runtimePlayer.position?.y);
+  const nextPositionZ = Number(runtimePlayer.position?.z);
+  const nextVelocityX = Number(runtimePlayer.velocity?.x);
+  const nextVelocityY = Number(runtimePlayer.velocity?.y);
+  const nextVelocityZ = Number(runtimePlayer.velocity?.z);
+  const serverPosition = new THREE.Vector3(
+    Number.isFinite(nextPositionX) ? nextPositionX : prediction.position.x,
+    Number.isFinite(nextPositionY) ? nextPositionY : prediction.position.y,
+    Number.isFinite(nextPositionZ) ? nextPositionZ : prediction.position.z,
+  );
+  const serverVelocity = new THREE.Vector3(
+    Number.isFinite(nextVelocityX) ? nextVelocityX : prediction.velocity.x,
+    Number.isFinite(nextVelocityY) ? nextVelocityY : prediction.velocity.y,
+    Number.isFinite(nextVelocityZ) ? nextVelocityZ : prediction.velocity.z,
+  );
+  if (prediction.position.distanceTo(serverPosition) >= PRIVATE_PLAYER_RUNTIME.snapDistance) {
+    prediction.position.copy(serverPosition);
+    prediction.velocity.copy(serverVelocity);
+  } else {
+    prediction.position.x += (serverPosition.x - prediction.position.x) * correctionAlpha;
+    prediction.position.z += (serverPosition.z - prediction.position.z) * correctionAlpha;
+    prediction.velocity.x += (serverVelocity.x - prediction.velocity.x) * Math.min(0.4, correctionAlpha + 0.14);
+    prediction.velocity.z += (serverVelocity.z - prediction.velocity.z) * Math.min(0.4, correctionAlpha + 0.14);
+  }
+  prediction.position.y = serverPosition.y;
+  prediction.velocity.y = serverVelocity.y;
+  const nextRotationX = Number(runtimePlayer.rotation?.x);
+  const nextRotationY = Number(runtimePlayer.rotation?.y);
+  const nextRotationZ = Number(runtimePlayer.rotation?.z);
+  if (Number.isFinite(nextRotationX)) {
+    prediction.rotation.x = nextRotationX;
+  }
+  if (Number.isFinite(nextRotationZ)) {
+    prediction.rotation.z = nextRotationZ;
+  }
+  if (!intent.active) {
+    if (Number.isFinite(nextRotationY)) {
+      prediction.rotation.y = nextRotationY;
+    }
+  }
+  prediction.onGround = runtimePlayer.on_ground === true;
+  prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
+  prediction.cameraMode = String(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person").trim() || "third_person";
+  prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
+  return prediction;
+}
+
+function stepPossessedPlayerPrediction(deltaSeconds = 0) {
+  const runtimePlayer = getPossessedRuntimePlayer();
+  const prediction = ensurePossessedPlayerPrediction(runtimePlayer);
+  if (!prediction || !runtimePlayer) {
+    return null;
+  }
+  const dt = clampNumber(deltaSeconds, 1 / 60, 0, 0.05);
+  if (dt <= 0) {
+    return prediction;
+  }
+  const intent = buildRuntimeMovementIntent();
+  const speed = intent.sprint
+    ? PRIVATE_PLAYER_RUNTIME.sprintSpeed
+    : PRIVATE_PLAYER_RUNTIME.moveSpeed;
+  const blend = clampNumber(PRIVATE_PLAYER_RUNTIME.acceleration * dt, 1, 0, 1);
+  prediction.velocity.x += (intent.x * speed - prediction.velocity.x) * blend;
+  prediction.velocity.z += (intent.z * speed - prediction.velocity.z) * blend;
+  prediction.position.x += prediction.velocity.x * dt;
+  prediction.position.z += prediction.velocity.z * dt;
+  const nextPositionY = Number(runtimePlayer.position?.y);
+  if (Number.isFinite(nextPositionY)) {
+    prediction.position.y = nextPositionY;
+  }
+  if (intent.active) {
+    prediction.rotation.y = Number(Math.atan2(intent.x, intent.z).toFixed(6));
+  }
+  return prediction;
+}
+
+function renderRuntimeStatusThrottled() {
+  const now = performance.now();
+  if (now - state.lastRuntimeStatusRenderedAt < PRIVATE_RUNTIME_STATUS_THROTTLE_MS) {
+    return;
+  }
+  state.lastRuntimeStatusRenderedAt = now;
+  renderRuntimeStatus();
+}
+
 function getRenderableSceneDoc() {
   const scene = getSelectedScene();
   if (!scene) {
@@ -11426,6 +11624,12 @@ function renderSelectedWorld() {
   const hasWorld = Boolean(world);
   const canEdit = isEditor();
   const localParticipant = getLocalParticipant(world);
+  if (localParticipant?.join_role === "player") {
+    reconcilePossessedPlayerPrediction();
+  } else {
+    clearPossessedPlayerPrediction();
+  }
+  state.lastRuntimeStatusRenderedAt = performance.now();
   if (elements.panelModeLabel) {
     elements.panelModeLabel.textContent = !hasWorld
       ? "No world open"
@@ -14440,8 +14644,8 @@ function syncPrivateLocalAvatar(preview, elapsedSeconds) {
   updatePrivateActorBubble(avatar, deltaSeconds, preview.camera);
 }
 
-function updatePossessedCamera(preview) {
-  const player = getPossessedPreviewPlayer(preview);
+function updatePossessedCamera(preview, deltaSeconds = 0) {
+  const player = getPossessedPreviewPlayer(preview, deltaSeconds);
   if (!player) {
     return false;
   }
@@ -14872,7 +15076,7 @@ function ensurePreview() {
     setPreviewRendererSize(state.preview, elements.previewCanvas.clientWidth || 640, elements.previewCanvas.clientHeight || 360);
     refreshPrivatePreviewEnvironment(state.preview);
     advanceRuntimeVisuals(state.preview, deltaSeconds);
-    const possessed = state.mode === "play" && updatePossessedCamera(state.preview);
+    const possessed = state.mode === "play" && updatePossessedCamera(state.preview, deltaSeconds);
     if (possessed) {
       if (state.preview.viewerAvatar) {
         state.preview.viewerAvatar.group.visible = false;
@@ -15945,10 +16149,13 @@ function syncPreviewRuntimeSnapshot(snapshot) {
     }
   }
   for (const runtimePrimitive of dynamicObjects) {
-    applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePrimitive.id), runtimePrimitive);
+    applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePrimitive.id), runtimePrimitive, {
+      leadSeconds: 1 / 20,
+    });
   }
   for (const runtimePlayer of players) {
     applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePlayer.id), runtimePlayer, {
+      leadSeconds: 1 / 24,
       fallbackScale: runtimePlayer?.scale
         ? { x: runtimePlayer.scale, y: runtimePlayer.scale, z: runtimePlayer.scale }
         : null,
@@ -15960,10 +16167,47 @@ function syncPreviewRuntimeSnapshot(snapshot) {
   return true;
 }
 
-function getPossessedPreviewPlayer(preview = state.preview) {
+function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
   const player = getPossessedRuntimePlayer();
   if (!player) {
+    clearPossessedPlayerPrediction();
     return null;
+  }
+  const prediction = stepPossessedPlayerPrediction(deltaSeconds);
+  if (prediction) {
+    const mesh = preview?.entityMeshes?.get(prediction.playerId);
+    if (mesh) {
+      mesh.position.set(prediction.position.x, prediction.position.y, prediction.position.z);
+      mesh.rotation.set(prediction.rotation.x, prediction.rotation.y, prediction.rotation.z);
+      mesh.scale.setScalar(prediction.scale);
+      if (mesh.userData.privateWorldRuntimeTargetPosition) {
+        mesh.userData.privateWorldRuntimeTargetPosition.copy(mesh.position);
+      }
+      if (mesh.userData.privateWorldRuntimeTargetScale) {
+        mesh.userData.privateWorldRuntimeTargetScale.copy(mesh.scale);
+      }
+      if (mesh.userData.privateWorldRuntimeTargetQuaternion) {
+        mesh.userData.privateWorldRuntimeTargetQuaternion.setFromEuler(mesh.rotation);
+      }
+    }
+    return {
+      ...player,
+      position: {
+        x: prediction.position.x,
+        y: prediction.position.y,
+        z: prediction.position.z,
+      },
+      rotation: {
+        ...(player.rotation ?? {}),
+        x: prediction.rotation.x,
+        y: prediction.rotation.y,
+        z: prediction.rotation.z,
+      },
+      scale: prediction.scale,
+      camera_mode: prediction.cameraMode,
+      body_mode: prediction.bodyMode,
+      on_ground: prediction.onGround,
+    };
   }
   const mesh = preview?.entityMeshes?.get(player.id);
   if (!mesh) {
@@ -16823,7 +17067,8 @@ function connectWorldSocket() {
             previousSelectedSceneId: state.selectedSceneId,
           });
         }
-        renderRuntimeStatus();
+        reconcilePossessedPlayerPrediction();
+        renderRuntimeStatusThrottled();
         const activeSceneChanged = String(previousRuntime?.active_scene_id ?? "") !== String(payload.snapshot?.active_scene_id ?? "");
         if (activeSceneChanged || !syncPreviewRuntimeSnapshot(payload.snapshot)) {
           updatePreviewFromSelection({ forceRebuild: true });
@@ -17073,6 +17318,7 @@ function connectWorldSocket() {
   });
   socket.addEventListener("close", () => {
     state.worldSocketKey = "";
+    clearPossessedPlayerPrediction();
     state.livePresence.clear();
     clearAllPrivateGamePreviewMedia({ unpublish: true });
     state.gameSessions.clear();
@@ -17147,6 +17393,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true, option
     state.launcherOpen = false;
     state.sceneDrawerOpen = false;
     if (!previousWorldKey || previousWorldKey !== nextWorldKey) {
+      clearPossessedPlayerPrediction();
       state.buildReturnSceneId = "";
       state.previewPointer.inside = false;
       clearPlacementTool();
@@ -17561,6 +17808,7 @@ async function releasePlayer() {
   if (!state.selectedWorld || !state.session) {
     return;
   }
+  clearPossessedPlayerPrediction();
   await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/release`, {
     method: "POST",
     body: {
@@ -17576,6 +17824,7 @@ async function leaveWorld() {
   if (!state.selectedWorld) {
     return;
   }
+  clearPossessedPlayerPrediction();
   const showLeaveLoading = state.entryLoading !== true;
   if (showLeaveLoading) {
     setEntryLoading(true, {
