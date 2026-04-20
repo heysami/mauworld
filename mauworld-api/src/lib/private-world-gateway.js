@@ -65,6 +65,13 @@ function isRuntimeInteractionSyncMessage(message) {
   return Array.isArray(message.interactions);
 }
 
+function isPresenceUpdateMessage(message) {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  return String(message.type ?? "").trim() === "presence:update";
+}
+
 function buildPrivateViewerSessionId(profile, guestSessionId = "", requestedViewerSessionId = "") {
   const requested = String(requestedViewerSessionId ?? "").trim();
   const guestId = String(guestSessionId ?? "").trim();
@@ -208,6 +215,9 @@ export class PrivateWorldGateway {
         lookInputQueued: false,
         pendingInteractionInput: null,
         interactionInputQueued: false,
+        pendingPresenceUpdate: null,
+        presenceUpdateQueued: false,
+        presenceQueue: Promise.resolve(),
         lastParticipantHeartbeatAt: 0,
       };
       this.clients.add(client);
@@ -236,6 +246,27 @@ export class PrivateWorldGateway {
   }
 
   queueClientMessage(client, message) {
+    if (isPresenceUpdateMessage(message)) {
+      client.pendingPresenceUpdate = message;
+      if (client.presenceUpdateQueued) {
+        return;
+      }
+      client.presenceUpdateQueued = true;
+      const runLatestPresence = async () => {
+        const latestMessage = client.pendingPresenceUpdate;
+        client.pendingPresenceUpdate = null;
+        try {
+          await this.handlePresenceUpdate(client, latestMessage);
+        } finally {
+          client.presenceUpdateQueued = false;
+          if (client.pendingPresenceUpdate) {
+            this.queueClientMessage(client, client.pendingPresenceUpdate);
+          }
+        }
+      };
+      client.presenceQueue = (client.presenceQueue ?? Promise.resolve()).then(runLatestPresence, runLatestPresence);
+      return;
+    }
     if (isLookOnlyRuntimeInputMessage(message)) {
       client.pendingLookInput = message;
       if (client.lookInputQueued) {

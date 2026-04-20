@@ -189,6 +189,106 @@ test("private world presence updates refresh participant heartbeat in the store"
   assert.equal(poses[0].payload.velocity_x, 3.25);
 });
 
+test("private world queued presence updates keep only the latest sample", async () => {
+  const poses = [];
+  const gateway = createGateway({
+    async syncPrivateWorldPlayerPose(profile, payload) {
+      poses.push({ profile, payload });
+      return { synced: true };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:runner",
+    displayName: "runner",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  gateway.queueClientMessage(client, {
+    type: "presence:update",
+    position_x: 1,
+    position_y: 0,
+    position_z: -1,
+    heading_y: 0.1,
+  });
+  gateway.queueClientMessage(client, {
+    type: "presence:update",
+    position_x: 2,
+    position_y: 0,
+    position_z: -2,
+    heading_y: 0.2,
+  });
+  gateway.queueClientMessage(client, {
+    type: "presence:update",
+    position_x: 3,
+    position_y: 0,
+    position_z: -3,
+    heading_y: 0.3,
+  });
+
+  await client.presenceQueue;
+
+  assert.equal(poses.length, 1);
+  assert.equal(poses[0].payload.position_x, 3);
+  assert.equal(poses[0].payload.position_z, -3);
+  assert.equal(poses[0].payload.heading_y, 0.3);
+});
+
+test("private world runtime input is not blocked behind pending presence sync", async () => {
+  const queued = [];
+  let resolvePresence = null;
+  const presenceBlocked = new Promise((resolve) => {
+    resolvePresence = resolve;
+  });
+  const gateway = createGateway({
+    async syncPrivateWorldPlayerPose() {
+      await presenceBlocked;
+      return { synced: true };
+    },
+    async queuePrivateWorldInput(profile, payload) {
+      queued.push({ profile, payload });
+      return { accepted: true };
+    },
+  });
+  const client = createClient({
+    viewerSessionId: "profile:runner",
+    displayName: "runner",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  gateway.clients.add(client);
+
+  gateway.queueClientMessage(client, {
+    type: "presence:update",
+    position_x: 4,
+    position_y: 1,
+    position_z: -2,
+    heading_y: 0.4,
+  });
+  await Promise.resolve();
+
+  gateway.queueClientMessage(client, {
+    type: "runtime:input",
+    key: "w",
+    state: "down",
+    heading_y: 0.6,
+    position_x: 8,
+    position_y: 1,
+    position_z: -3,
+    velocity_x: 5,
+    velocity_y: 0,
+    velocity_z: -2,
+  });
+
+  await client.messageQueue;
+
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].payload.key, "w");
+  assert.equal(queued[0].payload.position_x, 8);
+
+  resolvePresence();
+  await client.presenceQueue;
+});
+
 test("private world disconnect cleans up the participant in the store", async () => {
   const leaves = [];
   const gateway = createGateway({

@@ -2745,13 +2745,12 @@ export function installPrivateWorldStore(MauworldStore) {
   };
 
   MauworldStore.prototype.queuePrivateWorldInput = async function queuePrivateWorldInput(profile, input = {}) {
-    const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
     if (!this.privateWorldRuntime?.queueInputByReference) {
       throw new HttpError(503, "Private world runtime is unavailable");
     }
     const result = await this.privateWorldRuntime.queueInputByReference({
-      worldId: world.world_id,
-      creatorUsername: creator.username,
+      worldId: input.worldId,
+      creatorUsername: input.creatorUsername,
       profile,
       key: input.key,
       state: input.state,
@@ -2768,15 +2767,14 @@ export function installPrivateWorldStore(MauworldStore) {
   };
 
   MauworldStore.prototype.syncPrivateWorldPlayerPose = async function syncPrivateWorldPlayerPose(profile, input = {}) {
-    const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
     if (!this.privateWorldRuntime?.syncOccupiedPlayerPoseByReference) {
       return {
         synced: false,
       };
     }
     return await this.privateWorldRuntime.syncOccupiedPlayerPoseByReference({
-      worldId: world.world_id,
-      creatorUsername: creator.username,
+      worldId: input.worldId,
+      creatorUsername: input.creatorUsername,
       profile,
       position_x: input.position_x,
       position_y: input.position_y,
@@ -2790,7 +2788,6 @@ export function installPrivateWorldStore(MauworldStore) {
   };
 
   MauworldStore.prototype.syncPrivateWorldDynamicInteractions = async function syncPrivateWorldDynamicInteractions(profile, input = {}) {
-    const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
     if (!this.privateWorldRuntime?.syncDynamicInteractionsByReference) {
       return {
         synced: false,
@@ -2799,8 +2796,8 @@ export function installPrivateWorldStore(MauworldStore) {
       };
     }
     return await this.privateWorldRuntime.syncDynamicInteractionsByReference({
-      worldId: world.world_id,
-      creatorUsername: creator.username,
+      worldId: input.worldId,
+      creatorUsername: input.creatorUsername,
       profile,
       interactionStates: Array.isArray(input.interactions) ? input.interactions : [],
     });
