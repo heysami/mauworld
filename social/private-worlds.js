@@ -47,6 +47,11 @@ import {
   createWorldGameLibrary,
   createWorldGameShell,
 } from "./world-games-ui.js?v=20260419i";
+import {
+  applyAuthoritativeMotionSample,
+  computeLocalInteractionVelocity,
+  stepContinuousMotionState,
+} from "./private-runtime-motion.mjs?v=20260420a";
 
 const { mauworldApiUrl } = window.MauworldSocial;
 
@@ -108,6 +113,13 @@ const PRIVATE_PLAYER_RUNTIME = {
   snapDistance: PRIVATE_WORLD_BLOCK_UNIT * 4,
   idleCorrectionAlpha: 0.28,
   verticalSnapDistance: PRIVATE_WORLD_BLOCK_UNIT * 0.5,
+};
+const PRIVATE_DYNAMIC_RUNTIME = {
+  interactionHoldMs: 140,
+  interactionPadding: PRIVATE_WORLD_BLOCK_UNIT * 0.18,
+  interactionVerticalPadding: PRIVATE_WORLD_BLOCK_UNIT * 0.12,
+  interactionMinPlanarSpeed: PRIVATE_WORLD_BLOCK_UNIT * 0.14,
+  interactionTransfer: 0.84,
 };
 const PRIVATE_RUNTIME_STATUS_THROTTLE_MS = 240;
 const PRIVATE_RUNTIME_SNAPSHOT_PRIORITY = {
@@ -16694,16 +16706,43 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
     return;
   }
   const leadSeconds = clampNumber(options.leadSeconds, 1 / 30, 0, 0.08);
+  const motionMode = String(options.motionMode ?? "").trim().toLowerCase();
   const position = runtimeEntry.position ?? {};
   const velocity = runtimeEntry.velocity ?? {};
   const rotation = runtimeEntry.rotation ?? {};
-  const targetPosition = mesh.userData.privateWorldRuntimeTargetPosition ?? new THREE.Vector3();
-  targetPosition.set(
-    clampNumber(position.x, mesh.position.x, -4096, 4096) + ((Number(velocity.x) || 0) * leadSeconds),
-    clampNumber(position.y, mesh.position.y, -4096, 4096) + ((Number(velocity.y) || 0) * leadSeconds),
-    clampNumber(position.z, mesh.position.z, -4096, 4096) + ((Number(velocity.z) || 0) * leadSeconds),
-  );
-  mesh.userData.privateWorldRuntimeTargetPosition = targetPosition;
+  if (motionMode === "dynamic_continuous") {
+    mesh.userData.privateWorldRuntimeMotionMode = motionMode;
+    mesh.userData.privateWorldRuntimeDynamicMeta = {
+      entity_kind: runtimeEntry.entity_kind ?? "primitive",
+      rigid_mode: runtimeEntry.rigid_mode ?? "rigid",
+      scale: cloneJson(runtimeEntry.scale ?? null),
+      collider_scale: cloneJson(runtimeEntry.collider_scale ?? null),
+      sleeping: runtimeEntry.sleeping === true,
+    };
+    mesh.userData.privateWorldRuntimeMotionState = applyAuthoritativeMotionSample(
+      mesh.userData.privateWorldRuntimeMotionState ?? null,
+      {
+        renderPosition: {
+          x: mesh.position.x,
+          y: mesh.position.y,
+          z: mesh.position.z,
+        },
+        renderVelocity: mesh.userData.privateWorldRuntimeMotionState?.renderVelocity ?? null,
+        position,
+        velocity,
+        receivedAtMs: performance.now(),
+      },
+    );
+  } else {
+    mesh.userData.privateWorldRuntimeMotionMode = "target_lerp";
+    const targetPosition = mesh.userData.privateWorldRuntimeTargetPosition ?? new THREE.Vector3();
+    targetPosition.set(
+      clampNumber(position.x, mesh.position.x, -4096, 4096) + ((Number(velocity.x) || 0) * leadSeconds),
+      clampNumber(position.y, mesh.position.y, -4096, 4096) + ((Number(velocity.y) || 0) * leadSeconds),
+      clampNumber(position.z, mesh.position.z, -4096, 4096) + ((Number(velocity.z) || 0) * leadSeconds),
+    );
+    mesh.userData.privateWorldRuntimeTargetPosition = targetPosition;
+  }
   const targetQuaternion = mesh.userData.privateWorldRuntimeTargetQuaternion ?? new THREE.Quaternion();
   targetQuaternion.setFromEuler(new THREE.Euler(
     clampNumber(rotation.x, mesh.rotation.x, -Math.PI * 4, Math.PI * 4),
@@ -16724,7 +16763,9 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
     mesh.userData.privateWorldRuntimeTargetScale = targetScale;
   }
   if (mesh.userData.privateWorldRuntimeInitialized !== true) {
-    mesh.position.copy(targetPosition);
+    if (motionMode !== "dynamic_continuous" && mesh.userData.privateWorldRuntimeTargetPosition) {
+      mesh.position.copy(mesh.userData.privateWorldRuntimeTargetPosition);
+    }
     mesh.quaternion.copy(targetQuaternion);
     if (mesh.userData.privateWorldRuntimeTargetScale) {
       mesh.scale.copy(mesh.userData.privateWorldRuntimeTargetScale);
@@ -16778,11 +16819,79 @@ function advanceRuntimeVisuals(preview, deltaSeconds) {
     return;
   }
   const localPlayerId = getLocallyControlledPlayerEntityId();
+  const nowMs = performance.now();
+  const localPrediction = getLocalPossessedPlayerPrediction();
+  const localPlayerHalfExtents = localPrediction
+    ? getHalfExtentsFromScale(getPrivatePlayerCollisionSize(localPrediction.scale))
+    : null;
   const positionAlpha = 1 - Math.exp(-deltaSeconds * 18);
   const rotationAlpha = 1 - Math.exp(-deltaSeconds * 20);
   const scaleAlpha = 1 - Math.exp(-deltaSeconds * 16);
   for (const [entityId, mesh] of preview.entityMeshes.entries()) {
     if (localPlayerId && entityId === localPlayerId) {
+      continue;
+    }
+    const motionMode = String(mesh?.userData?.privateWorldRuntimeMotionMode ?? "").trim().toLowerCase();
+    const motionState = mesh?.userData?.privateWorldRuntimeMotionState ?? null;
+    if (motionMode === "dynamic_continuous" && motionState) {
+      const dynamicMeta = mesh.userData.privateWorldRuntimeDynamicMeta ?? {};
+      let interactionVelocity = null;
+      if (
+        localPrediction
+        && localPlayerHalfExtents
+        && String(dynamicMeta.rigid_mode ?? "rigid").trim().toLowerCase() !== "ghost"
+      ) {
+        const objectScale = toPlainCollisionScale(
+          dynamicMeta.collider_scale ?? dynamicMeta.scale ?? { x: 1, y: 1, z: 1 },
+          dynamicMeta.scale ?? { x: 1, y: 1, z: 1 },
+        );
+        interactionVelocity = computeLocalInteractionVelocity({
+          playerPosition: localPrediction.position,
+          playerVelocity: localPrediction.velocity,
+          playerHalfExtents: localPlayerHalfExtents,
+          objectPosition: motionState.renderPosition,
+          objectHalfExtents: getHalfExtentsFromScale(objectScale),
+          authoritativeVelocity: motionState.authoritativeVelocity,
+          padding: PRIVATE_DYNAMIC_RUNTIME.interactionPadding,
+          verticalPadding: PRIVATE_DYNAMIC_RUNTIME.interactionVerticalPadding,
+          minPlanarSpeed: PRIVATE_DYNAMIC_RUNTIME.interactionMinPlanarSpeed,
+          transfer: PRIVATE_DYNAMIC_RUNTIME.interactionTransfer,
+        });
+        if (interactionVelocity) {
+          motionState.localInteractionVelocity = interactionVelocity;
+          motionState.localInteractionUntilMs = nowMs + PRIVATE_DYNAMIC_RUNTIME.interactionHoldMs;
+        }
+      }
+      if (motionState.localInteractionUntilMs <= nowMs) {
+        motionState.localInteractionVelocity = null;
+      }
+      stepContinuousMotionState(motionState, {
+        deltaSeconds,
+        nowMs,
+        interactionVelocity: motionState.localInteractionVelocity,
+        sleeping: dynamicMeta.sleeping === true,
+      });
+      mesh.position.set(
+        motionState.renderPosition.x,
+        motionState.renderPosition.y,
+        motionState.renderPosition.z,
+      );
+      const targetQuaternion = mesh?.userData?.privateWorldRuntimeTargetQuaternion;
+      const targetScale = mesh?.userData?.privateWorldRuntimeTargetScale;
+      if (targetQuaternion) {
+        if (1 - Math.abs(mesh.quaternion.dot(targetQuaternion)) <= 0.000001) {
+          mesh.quaternion.copy(targetQuaternion);
+        } else {
+          mesh.quaternion.slerp(targetQuaternion, rotationAlpha);
+        }
+      }
+      if (targetScale) {
+        if (mesh.scale.distanceToSquared(targetScale) <= 0.000001) {
+          mesh.scale.copy(targetScale);
+        } else {
+          mesh.scale.lerp(targetScale, scaleAlpha);
+        }
+      }
       continue;
     }
     const targetPosition = mesh?.userData?.privateWorldRuntimeTargetPosition;
@@ -16832,6 +16941,7 @@ function syncPreviewRuntimeSnapshot(snapshot) {
   for (const runtimePrimitive of dynamicObjects) {
     applyRuntimeEntryToMesh(preview.entityMeshes.get(runtimePrimitive.id), runtimePrimitive, {
       leadSeconds: 0,
+      motionMode: "dynamic_continuous",
     });
   }
   for (const runtimePlayer of players) {

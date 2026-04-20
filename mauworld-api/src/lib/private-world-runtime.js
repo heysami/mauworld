@@ -324,6 +324,10 @@ function syncEntryFromRapierBody(entry, body) {
   entry.position = vec3(body.translation(), entry.position);
   entry.rotation = quaternionToEuler(body.rotation());
   entry.velocity = vec3(body.linvel(), entry.velocity);
+  if (entry.angular_velocity !== undefined) {
+    entry.angular_velocity = vec3(body.angvel(), entry.angular_velocity);
+  }
+  entry.sleeping = body.isSleeping?.() === true;
 }
 
 function applyOccupiedPlayerPose(runtime, player, input = {}) {
@@ -604,7 +608,9 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       position: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
       rotation: vec3(entry.rotation),
       velocity: { x: 0, y: 0, z: 0 },
+      angular_velocity: { x: 0, y: 0, z: 0 },
       onGround: false,
+      sleeping: false,
       occupied_by_profile_id: null,
       occupied_by_username: null,
       occupied_by_display_name: null,
@@ -627,6 +633,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     rotation: vec3(entry.rotation),
     velocity: { x: 0, y: 0, z: 0 },
     angular_velocity: { x: 0, y: 0, z: 0 },
+    sleeping: false,
     rigid_mode: entry.rigid_mode,
     physics: cloneJson(entry.physics ?? {}),
     visibility: true,
@@ -650,6 +657,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     rotation: vec3(entry.rotation),
     velocity: { x: 0, y: 0, z: 0 },
     angular_velocity: { x: 0, y: 0, z: 0 },
+    sleeping: false,
     rigid_mode: entry.rigid_mode,
     physics: cloneJson(entry.physics ?? {}),
     visibility: true,
@@ -1073,6 +1081,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       position: cloneJson(entry.position),
       rotation: cloneJson(entry.rotation),
       velocity: cloneJson(entry.velocity),
+      angular_velocity: cloneJson(entry.angular_velocity),
       camera_mode: entry.camera_mode,
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
@@ -1081,6 +1090,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       occupied_by_display_name: entry.occupied_by_display_name,
       ready: entry.ready === true,
       on_ground: entry.onGround === true,
+      sleeping: entry.sleeping === true,
       visible: entry.visibility !== false,
       material_override: cloneJson(entry.material_override),
     })),
@@ -1095,6 +1105,8 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       position: cloneJson(entry.position),
       rotation: cloneJson(entry.rotation),
       velocity: cloneJson(entry.velocity),
+      angular_velocity: cloneJson(entry.angular_velocity),
+      sleeping: entry.sleeping === true,
       rigid_mode: entry.rigid_mode,
       visible: entry.visibility !== false,
       material: cloneJson(entry.material),

@@ -262,6 +262,46 @@ test("runtime snapshots preserve authored player and object scale", () => {
   assert.deepEqual(snapshot.dynamic_objects[0].scale, { x: 6, y: 4, z: 3 });
 });
 
+test("runtime snapshots include dynamic motion metadata for continuous client smoothing", () => {
+  const simulation = buildSimulation({
+    participants: [],
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      voxels: [],
+      primitives: [
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 0, y: 6, z: 0 },
+          scale: { x: 2, y: 2, z: 2 },
+          rotation: { x: 0, y: 0.1, z: 0 },
+          material: { color: "#88aadd", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: { gravity_scale: 1, restitution: 0.1, friction: 0.4, mass: 1 },
+        },
+      ],
+      screens: [],
+      players: [],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 50,
+    pendingInputs: [],
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.equal(typeof snapshot.dynamic_objects[0].sleeping, "boolean");
+  assert.equal(Number.isFinite(snapshot.dynamic_objects[0].angular_velocity.x), true);
+  assert.equal(Number.isFinite(snapshot.dynamic_objects[0].angular_velocity.y), true);
+  assert.equal(Number.isFinite(snapshot.dynamic_objects[0].angular_velocity.z), true);
+});
+
 test("runtime keeps resolved-scene player ids stable for participant occupancy lookups", () => {
   const simulation = buildSimulation({
     sceneRow: {
