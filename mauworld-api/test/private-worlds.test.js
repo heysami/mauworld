@@ -65,6 +65,22 @@ test("normalizeSceneDoc gives player spawns a character-scale default", () => {
   assert.deepEqual(scene.players[0].position, { x: 0, y: 4.5, z: 0 });
 });
 
+test("normalizeSceneDoc keeps fixed top-down player framing fields", () => {
+  const scene = normalizeSceneDoc({
+    players: [{
+      id: "player_a",
+      label: "Player A",
+      camera_mode: "fixed_top_down",
+      fixed_top_down_width: 82,
+      fixed_top_down_height: 46,
+    }],
+  });
+
+  assert.equal(scene.players[0].camera_mode, "fixed_top_down");
+  assert.equal(scene.players[0].fixed_top_down_width, 82);
+  assert.equal(scene.players[0].fixed_top_down_height, 46);
+});
+
 test("normalizeSceneDoc keeps safe defaults and strips executable screen content", () => {
   const scene = normalizeSceneDoc({
     screens: [

@@ -102,6 +102,7 @@ const PRIVATE_PLAYER_CAMERA = {
   thirdPersonDistance: 4.8,
   thirdPersonHeight: 2.2,
   topDownHeight: 8,
+  fixedTopDownPadding: 18,
 };
 const PRIVATE_POSSESSION_DEBUG = {
   serverColor: "#4be7ff",
@@ -340,6 +341,8 @@ const TOOL_PRESET_BUILTINS = {
         scale: PRIVATE_PLAYER_DEFAULT_SCALE,
         rotation: { x: 0, y: 0, z: 0 },
         camera_mode: "third_person",
+        fixed_top_down_width: 0,
+        fixed_top_down_height: 0,
         body_mode: "rigid",
         occupiable: true,
       },
@@ -353,6 +356,8 @@ const TOOL_PRESET_BUILTINS = {
         scale: PRIVATE_PLAYER_DEFAULT_SCALE,
         rotation: { x: 0, y: 0, z: 0 },
         camera_mode: "third_person",
+        fixed_top_down_width: 0,
+        fixed_top_down_height: 0,
         body_mode: "ghost",
         occupiable: true,
       },
@@ -783,6 +788,8 @@ function createBaseToolPresetEntry(kind) {
       scale: PRIVATE_PLAYER_DEFAULT_SCALE,
       rotation: { x: 0, y: 0, z: 0 },
       camera_mode: "third_person",
+      fixed_top_down_width: 0,
+      fixed_top_down_height: 0,
       body_mode: "rigid",
       occupiable: true,
     };
@@ -3857,6 +3864,12 @@ function getPrivateCameraForwardVector(yaw = privateInputState.yaw, pitch = priv
 }
 
 function getPrivateCameraPlanarBasis(preview = state.preview) {
+  if (getActivePossessedCameraMode() === "fixed_top_down") {
+    return {
+      forward: new THREE.Vector3(0, 0, -1),
+      right: new THREE.Vector3(1, 0, 0),
+    };
+  }
   const fallbackForward = getPrivateFlatForwardVector();
   if (!preview?.camera) {
     return {
@@ -3911,6 +3924,7 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
   if (!preview?.camera) {
     return;
   }
+  const camera = activatePerspectivePreviewCamera(preview);
   const rig = getPrivateViewerRigConfig();
   const target = getPrivatePlayerLookTarget();
   const radius = clampNumber(
@@ -3925,9 +3939,9 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
     target.y - Math.sin(privateInputState.pitch) * radius,
     target.z + Math.cos(privateInputState.yaw) * cosPitch * radius,
   );
-  preview.camera.position.copy(nextPosition);
-  preview.camera.lookAt(target);
-  state.viewerCameraPosition.copy(preview.camera.position);
+  camera.position.copy(nextPosition);
+  camera.lookAt(target);
+  state.viewerCameraPosition.copy(camera.position);
 }
 
 function deleteByPath(target, path) {
@@ -3975,7 +3989,13 @@ const MATERIAL_PRESET_OPTIONS = [
 ];
 
 const PRIMITIVE_SHAPES = ["box", "sphere", "capsule", "cylinder", "cone", "plane", "panel"];
-const PLAYER_CAMERA_MODES = ["third_person", "first_person", "top_down"];
+const PLAYER_CAMERA_MODE_OPTIONS = [
+  { value: "third_person", label: "third person" },
+  { value: "first_person", label: "first person" },
+  { value: "top_down", label: "top down" },
+  { value: "fixed_top_down", label: "fixed top down" },
+];
+const PLAYER_CAMERA_MODES = PLAYER_CAMERA_MODE_OPTIONS.map((option) => option.value);
 const PLAYER_BODY_MODES = ["rigid", "ghost"];
 const EFFECT_OPTIONS = ["", "sparkles", "smoke", "glow", "embers", "mist"];
 const TRAIL_OPTIONS = ["", "ribbon", "glow", "spark", "comet"];
@@ -9285,11 +9305,17 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
   const right = pressedKeys.has("d") || pressedKeys.has("arrowright");
   const forward = pressedKeys.has("w") || pressedKeys.has("arrowup");
   const backward = pressedKeys.has("s") || pressedKeys.has("arrowdown");
-  const headingY = normalizeAngle(privateInputState.yaw);
+  const cameraMode = getActivePossessedCameraMode();
+  const fixedTopDown = cameraMode === "fixed_top_down";
+  const headingY = fixedTopDown ? 0 : normalizeAngle(privateInputState.yaw);
   const forwardAmount = Number(forward) - Number(backward);
   const strafeAmount = Number(right) - Number(left);
-  const forwardVector = getPrivateFlatForwardVector(headingY);
-  const rightVector = new THREE.Vector3(Math.cos(headingY), 0, -Math.sin(headingY));
+  const forwardVector = fixedTopDown
+    ? new THREE.Vector3(0, 0, -1)
+    : getPrivateFlatForwardVector(headingY);
+  const rightVector = fixedTopDown
+    ? new THREE.Vector3(1, 0, 0)
+    : new THREE.Vector3(Math.cos(headingY), 0, -Math.sin(headingY));
   let x = forwardVector.x * forwardAmount + rightVector.x * strafeAmount;
   let z = forwardVector.z * forwardAmount + rightVector.z * strafeAmount;
   const length = Math.hypot(x, z);
@@ -9348,10 +9374,31 @@ function normalizePlayerCameraMode(value = "third_person") {
   return PLAYER_CAMERA_MODES.includes(normalized) ? normalized : "third_person";
 }
 
+function getActivePossessedCameraMode() {
+  const prediction = state.predictedPossessedPlayer;
+  if (prediction?.cameraMode) {
+    return normalizePlayerCameraMode(prediction.cameraMode);
+  }
+  return normalizePlayerCameraMode(getPossessedRuntimePlayer()?.camera_mode ?? "third_person");
+}
+
+function getPlayerFixedTopDownWindow(player = {}, world = state.selectedWorld) {
+  const rig = getPrivateViewerRigConfig(world);
+  const width = Number(player?.fixed_top_down_width ?? 0);
+  const height = Number(player?.fixed_top_down_height ?? 0);
+  return {
+    width: Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, Number.isFinite(width) && width > 0 ? width : rig.width),
+    height: Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, Number.isFinite(height) && height > 0 ? height : rig.length),
+  };
+}
+
 function applyPossessedCameraModeRig(cameraMode = "third_person", runtimePlayer = null, options = {}) {
   const resolvedMode = normalizePlayerCameraMode(cameraMode);
   const headingY = Number(runtimePlayer?.rotation?.y);
-  if (Number.isFinite(headingY)) {
+  if (resolvedMode === "fixed_top_down") {
+    privateInputState.yaw = 0;
+    privateInputState.pitch = -1.05;
+  } else if (Number.isFinite(headingY)) {
     privateInputState.yaw = normalizeAngle(headingY);
   }
   if (resolvedMode === "first_person") {
@@ -11337,6 +11384,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
   }
 
   if (kind === "player") {
+    const fixedTopDownMode = String(entry.camera_mode ?? "third_person").trim() === "fixed_top_down";
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Everyone enters as a floating viewer. Possession happens by clicking a player in Play mode.</p>
       <label>
@@ -11347,7 +11395,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <div>
           <label>
             <span>Camera</span>
-            <select data-entity-field="camera_mode" data-value-type="text">${buildOptions(PLAYER_CAMERA_MODES, entry.camera_mode || "third_person")}</select>
+            <select data-entity-field="camera_mode" data-value-type="text">${buildLabeledOptions(PLAYER_CAMERA_MODE_OPTIONS, entry.camera_mode || "third_person")}</select>
           </label>
         </div>
         <div>
@@ -11371,6 +11419,23 @@ function renderEntityInspector(sceneDoc, selected = null) {
           <span>Can be occupied</span>
         </div>
       </div>
+      ${fixedTopDownMode ? `
+        <p class="pw-inspector-note">Fixed top down locks the camera over the world center. Set width and height to 0 to include the full private world.</p>
+        <div class="pw-inspector-grid pw-inspector-grid--2">
+          <div>
+            <label>
+              <span>Window Width</span>
+              <input type="number" step="0.1" min="0" data-entity-field="fixed_top_down_width" data-value-type="number" value="${htmlEscape(entry.fixed_top_down_width ?? 0)}" />
+            </label>
+          </div>
+          <div>
+            <label>
+              <span>Window Height</span>
+              <input type="number" step="0.1" min="0" data-entity-field="fixed_top_down_height" data-value-type="number" value="${htmlEscape(entry.fixed_top_down_height ?? 0)}" />
+            </label>
+          </div>
+        </div>
+      ` : ""}
     `;
     return;
   }
@@ -13301,18 +13366,28 @@ function getPreviewPointerMetrics(pointerSource) {
     return null;
   }
   const rect = elements.previewCanvas.getBoundingClientRect();
-  const width = Math.max(1, rect.width);
-  const height = Math.max(1, rect.height);
+  const viewport = getPreviewViewport(preview);
   const canvasX = clientX - rect.left;
   const canvasY = clientY - rect.top;
+  const viewportX = canvasX - viewport.x;
+  const viewportY = canvasY - viewport.y;
+  if (
+    viewportX < 0
+    || viewportY < 0
+    || viewportX > viewport.width
+    || viewportY > viewport.height
+  ) {
+    return null;
+  }
   return {
     preview,
     rect,
+    viewport,
     canvasX,
     canvasY,
     pointer: new THREE.Vector2(
-      (canvasX / width) * 2 - 1,
-      -((canvasY / height) * 2 - 1),
+      (viewportX / Math.max(1, viewport.width)) * 2 - 1,
+      -((viewportY / Math.max(1, viewport.height)) * 2 - 1),
     ),
   };
 }
@@ -13334,22 +13409,26 @@ function projectWorldPointToPreviewScreen(worldPoint, preview = state.preview, r
   ) {
     return null;
   }
+  const viewport = getPreviewViewport(preview);
   return {
     depth: screenPosition.z,
-    x: (screenPosition.x * 0.5 + 0.5) * activeRect.width,
-    y: (-screenPosition.y * 0.5 + 0.5) * activeRect.height,
+    x: viewport.x + (screenPosition.x * 0.5 + 0.5) * viewport.width,
+    y: viewport.y + (-screenPosition.y * 0.5 + 0.5) * viewport.height,
   };
 }
 
 function getPreviewWorldUnitsPerPixel(distance, preview = state.preview, rect = null) {
-  const activeRect = rect ?? elements.previewCanvas?.getBoundingClientRect?.();
-  if (!preview?.camera || !activeRect) {
+  if (!preview?.camera) {
     return 0.1;
+  }
+  const viewport = getPreviewViewport(preview);
+  if (preview.camera.isOrthographicCamera) {
+    return Math.abs(Number(preview.camera.top ?? 0) - Number(preview.camera.bottom ?? 0)) / Math.max(1, viewport.height);
   }
   const fovRadians = THREE.MathUtils.degToRad(Number(preview.camera.fov) || 58);
   return (
     Math.max(0.1, distance) * 2 * Math.tan(fovRadians / 2)
-  ) / Math.max(1, activeRect.height);
+  ) / Math.max(1, viewport.height);
 }
 
 function findProjectedPlayerHit(pointerSource) {
@@ -15532,25 +15611,33 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     player.position.z,
   );
   if (player.camera_mode === "first_person") {
+    const camera = activatePerspectivePreviewCamera(preview);
     const lookForward = getPrivateCameraForwardVector(yaw, pitch);
-    preview.camera.position.copy(lookTarget);
-    preview.camera.lookAt(lookTarget.clone().addScaledVector(
+    camera.position.copy(lookTarget);
+    camera.lookAt(lookTarget.clone().addScaledVector(
       lookForward,
       PRIVATE_PLAYER_CAMERA.firstPersonLookDistance * scale,
     ));
-    state.viewerCameraPosition.copy(preview.camera.position);
+    state.viewerCameraPosition.copy(camera.position);
     return true;
   }
   if (player.camera_mode === "top_down") {
-    preview.camera.position.set(
+    const camera = activatePerspectivePreviewCamera(preview);
+    camera.position.set(
       player.position.x,
       player.position.y + PRIVATE_PLAYER_CAMERA.topDownHeight * scale,
       player.position.z + 0.01,
     );
-    preview.camera.lookAt(lookTarget);
-    state.viewerCameraPosition.copy(preview.camera.position);
+    camera.lookAt(lookTarget);
+    state.viewerCameraPosition.copy(camera.position);
     return true;
   }
+  if (player.camera_mode === "fixed_top_down") {
+    const camera = applyFixedTopDownPreviewCamera(preview, player);
+    camera.lookAt(0, 0, 0);
+    return true;
+  }
+  const camera = activatePerspectivePreviewCamera(preview);
   const radius = clampNumber(
     state.cameraRadius,
     PRIVATE_PLAYER_VIEW.defaultRadius,
@@ -15558,13 +15645,13 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     PRIVATE_PLAYER_VIEW.maxRadius,
   );
   const cosPitch = Math.cos(pitch);
-  preview.camera.position.set(
+  camera.position.set(
     lookTarget.x + Math.sin(yaw) * cosPitch * radius,
     lookTarget.y - Math.sin(pitch) * radius,
     lookTarget.z + Math.cos(yaw) * cosPitch * radius,
   );
-  preview.camera.lookAt(lookTarget);
-  state.viewerCameraPosition.copy(preview.camera.position);
+  camera.lookAt(lookTarget);
+  state.viewerCameraPosition.copy(camera.position);
   return true;
 }
 
@@ -16026,10 +16113,15 @@ function ensurePreview() {
   scene.background = new THREE.Color(PRIVATE_WORLD_STYLE.background);
   scene.fog = new THREE.Fog(PRIVATE_WORLD_STYLE.fog, 170, 1600);
 
-  const camera = new THREE.PerspectiveCamera(58, initialWidth / Math.max(1, initialHeight), 0.1, 2400);
-  camera.position.copy(state.viewerCameraPosition);
-  camera.rotation.order = "YXZ";
-  camera.lookAt(getPrivatePlayerLookTarget());
+  const perspectiveCamera = new THREE.PerspectiveCamera(58, initialWidth / Math.max(1, initialHeight), 0.1, 2400);
+  perspectiveCamera.position.copy(state.viewerCameraPosition);
+  perspectiveCamera.rotation.order = "YXZ";
+  perspectiveCamera.lookAt(getPrivatePlayerLookTarget());
+  const orthographicCamera = new THREE.OrthographicCamera(-initialWidth / 2, initialWidth / 2, initialHeight / 2, -initialHeight / 2, 0.1, 2400);
+  orthographicCamera.rotation.order = "YXZ";
+  orthographicCamera.up.set(0, 0, -1);
+  orthographicCamera.position.set(0, PRIVATE_WORLD_DEFAULT_SIZE.height + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding, 0);
+  orthographicCamera.lookAt(0, 0, 0);
 
   const ambient = new THREE.HemisphereLight("#ffffff", "#ffe8f8", 1.48);
   ambient.position.set(0, 180, 0);
@@ -16040,7 +16132,10 @@ function ensurePreview() {
   state.preview = {
     renderer,
     scene,
-    camera,
+    camera: perspectiveCamera,
+    perspectiveCamera,
+    orthographicCamera,
+    cameraProjection: "perspective",
     root: new THREE.Group(),
     buildOverlay: new THREE.Group(),
     actors: new THREE.Group(),
@@ -16066,6 +16161,12 @@ function ensurePreview() {
     lastFrameAt: performance.now(),
     viewportWidth: Math.round(initialWidth),
     viewportHeight: Math.round(initialHeight),
+    activeViewport: {
+      x: 0,
+      y: 0,
+      width: Math.round(initialWidth),
+      height: Math.round(initialHeight),
+    },
     ambientLight: ambient,
     sunLight,
   };
@@ -16114,7 +16215,7 @@ function ensurePreview() {
     updatePreviewEffects(state.preview, timestamp / 1000);
     updateViewerTrailPuffs(state.preview, deltaSeconds);
     updatePrivateWorldBillboards(state.preview);
-    state.preview.renderer.render(state.preview.scene, state.preview.camera);
+    renderPreviewScene(state.preview);
     window.requestAnimationFrame(render);
   };
 
@@ -16187,6 +16288,9 @@ function ensurePreview() {
     privateInputState.pointerMoved = privateInputState.dragDistance > 4;
     privateInputState.lastPointerX = event.clientX;
     privateInputState.lastPointerY = event.clientY;
+    if (getActivePossessedCameraMode() === "fixed_top_down") {
+      return;
+    }
     privateInputState.yaw -= deltaX * 0.0045;
     privateInputState.pitch = clampNumber(
       privateInputState.pitch - deltaY * 0.0036,
@@ -17046,9 +17150,152 @@ function setPreviewRendererSize(preview, width, height) {
   }
   preview.viewportWidth = nextWidth;
   preview.viewportHeight = nextHeight;
-  preview.camera.aspect = nextWidth / Math.max(1, nextHeight);
-  preview.camera.updateProjectionMatrix();
+  if (preview.perspectiveCamera) {
+    preview.perspectiveCamera.aspect = nextWidth / Math.max(1, nextHeight);
+    preview.perspectiveCamera.updateProjectionMatrix();
+  } else {
+    preview.camera.aspect = nextWidth / Math.max(1, nextHeight);
+    preview.camera.updateProjectionMatrix();
+  }
   preview.renderer.setSize(nextWidth, nextHeight, false);
+}
+
+function getPreviewViewport(preview = state.preview) {
+  if (!preview) {
+    return { x: 0, y: 0, width: 1, height: 1 };
+  }
+  return preview.activeViewport ?? {
+    x: 0,
+    y: 0,
+    width: Math.max(1, preview.viewportWidth ?? 1),
+    height: Math.max(1, preview.viewportHeight ?? 1),
+  };
+}
+
+function setPreviewViewport(preview, viewport = null) {
+  if (!preview) {
+    return null;
+  }
+  if (!viewport) {
+    preview.activeViewport = {
+      x: 0,
+      y: 0,
+      width: Math.max(1, preview.viewportWidth ?? 1),
+      height: Math.max(1, preview.viewportHeight ?? 1),
+    };
+    return preview.activeViewport;
+  }
+  preview.activeViewport = {
+    x: Math.max(0, Math.round(Number(viewport.x) || 0)),
+    y: Math.max(0, Math.round(Number(viewport.y) || 0)),
+    width: Math.max(1, Math.round(Number(viewport.width) || 1)),
+    height: Math.max(1, Math.round(Number(viewport.height) || 1)),
+  };
+  return preview.activeViewport;
+}
+
+function getPreviewRenderViewport(preview = state.preview) {
+  const viewport = getPreviewViewport(preview);
+  const canvasHeight = Math.max(1, Math.round(Number(preview?.viewportHeight) || 1));
+  return {
+    x: viewport.x,
+    y: Math.max(0, canvasHeight - viewport.y - viewport.height),
+    width: viewport.width,
+    height: viewport.height,
+  };
+}
+
+function computeContainedPreviewViewport(preview, frameWidth, frameHeight) {
+  const canvasWidth = Math.max(1, Math.round(Number(preview?.viewportWidth) || 1));
+  const canvasHeight = Math.max(1, Math.round(Number(preview?.viewportHeight) || 1));
+  const targetWidth = Math.max(1, Number(frameWidth) || 1);
+  const targetHeight = Math.max(1, Number(frameHeight) || 1);
+  const targetAspect = targetWidth / Math.max(1, targetHeight);
+  const canvasAspect = canvasWidth / Math.max(1, canvasHeight);
+  if (!Number.isFinite(targetAspect) || targetAspect <= 0) {
+    return setPreviewViewport(preview);
+  }
+  if (Math.abs(canvasAspect - targetAspect) <= 0.0001) {
+    return setPreviewViewport(preview);
+  }
+  if (canvasAspect > targetAspect) {
+    const viewportWidth = Math.max(1, Math.round(canvasHeight * targetAspect));
+    return setPreviewViewport(preview, {
+      x: Math.round((canvasWidth - viewportWidth) / 2),
+      y: 0,
+      width: viewportWidth,
+      height: canvasHeight,
+    });
+  }
+  const viewportHeight = Math.max(1, Math.round(canvasWidth / targetAspect));
+  return setPreviewViewport(preview, {
+    x: 0,
+    y: Math.round((canvasHeight - viewportHeight) / 2),
+    width: canvasWidth,
+    height: viewportHeight,
+  });
+}
+
+function setPreviewCameraProjection(preview, projection = "perspective") {
+  if (!preview) {
+    return null;
+  }
+  preview.cameraProjection = projection === "orthographic" ? "orthographic" : "perspective";
+  preview.camera = preview.cameraProjection === "orthographic"
+    ? (preview.orthographicCamera ?? preview.camera)
+    : (preview.perspectiveCamera ?? preview.camera);
+  return preview.camera;
+}
+
+function activatePerspectivePreviewCamera(preview = state.preview) {
+  const camera = setPreviewCameraProjection(preview, "perspective");
+  if (!camera) {
+    return null;
+  }
+  camera.aspect = Math.max(1, Number(preview?.viewportWidth) || 1) / Math.max(1, Number(preview?.viewportHeight) || 1);
+  camera.updateProjectionMatrix();
+  setPreviewViewport(preview);
+  return camera;
+}
+
+function applyFixedTopDownPreviewCamera(preview, player = {}, world = state.selectedWorld) {
+  const camera = setPreviewCameraProjection(preview, "orthographic");
+  if (!camera) {
+    return null;
+  }
+  const rig = getPrivateViewerRigConfig(world);
+  const windowSize = getPlayerFixedTopDownWindow(player, world);
+  camera.left = -windowSize.width / 2;
+  camera.right = windowSize.width / 2;
+  camera.top = windowSize.height / 2;
+  camera.bottom = -windowSize.height / 2;
+  camera.near = 0.1;
+  camera.far = Math.max(240, rig.height + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding * 2 + 40);
+  camera.position.set(0, rig.height + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding, 0);
+  camera.up.set(0, 0, -1);
+  camera.lookAt(0, 0, 0);
+  camera.updateProjectionMatrix();
+  computeContainedPreviewViewport(preview, windowSize.width, windowSize.height);
+  return camera;
+}
+
+function renderPreviewScene(preview = state.preview) {
+  if (!preview?.renderer || !preview?.camera) {
+    return;
+  }
+  const renderer = preview.renderer;
+  const viewportWidth = Math.max(1, Math.round(Number(preview.viewportWidth) || 1));
+  const viewportHeight = Math.max(1, Math.round(Number(preview.viewportHeight) || 1));
+  const renderViewport = getPreviewRenderViewport(preview);
+  renderer.setScissorTest(true);
+  renderer.setViewport(0, 0, viewportWidth, viewportHeight);
+  renderer.setScissor(0, 0, viewportWidth, viewportHeight);
+  renderer.setClearColor("#000000", 1);
+  renderer.clear();
+  renderer.setViewport(renderViewport.x, renderViewport.y, renderViewport.width, renderViewport.height);
+  renderer.setScissor(renderViewport.x, renderViewport.y, renderViewport.width, renderViewport.height);
+  renderer.render(preview.scene, preview.camera);
+  renderer.setScissorTest(false);
 }
 
 function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {

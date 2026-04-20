@@ -39,7 +39,7 @@ const ALLOWED_WORLD_TYPES = new Set(Object.keys(PRIVATE_WORLD_TYPE_DEFINITIONS))
 const ALLOWED_TEMPLATE_SIZES = new Set(["small", "medium", "large"]);
 const ALLOWED_TEXTURE_PRESETS = new Set(["none", "grass", "wood", "wall", "floor", "stone", "glass", "metal", "fabric"]);
 const ALLOWED_PRIMITIVE_SHAPES = new Set(["box", "sphere", "capsule", "cylinder", "cone", "plane", "panel"]);
-const ALLOWED_PLAYER_CAMERA_MODES = new Set(["first_person", "third_person", "top_down"]);
+const ALLOWED_PLAYER_CAMERA_MODES = new Set(["first_person", "third_person", "top_down", "fixed_top_down"]);
 const ALLOWED_PLAYER_BODY_MODES = new Set(["rigid", "ghost"]);
 const ALLOWED_FACING_MODES = new Set(["fixed", "billboard", "upright_billboard"]);
 const ALLOWED_SCENE_SKYBOXES = new Set(["blank", "day", "sunset", "night"]);
@@ -460,6 +460,18 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     rotation: sanitizeEuler3(entry.rotation),
     scale: Number(clampNumber(entry.scale, PRIVATE_PLAYER_DEFAULT_SCALE, 0.25, 12).toFixed(4)),
     camera_mode: ALLOWED_PLAYER_CAMERA_MODES.has(cameraMode) ? cameraMode : "third_person",
+    fixed_top_down_width: Number(clampNumber(
+      entry.fixed_top_down_width ?? entry.fixedTopDownWidth ?? 0,
+      0,
+      0,
+      4096,
+    ).toFixed(4)),
+    fixed_top_down_height: Number(clampNumber(
+      entry.fixed_top_down_height ?? entry.fixedTopDownHeight ?? 0,
+      0,
+      0,
+      4096,
+    ).toFixed(4)),
     body_mode: ALLOWED_PLAYER_BODY_MODES.has(bodyMode) ? bodyMode : "rigid",
     occupiable: entry.occupiable !== false,
   };
@@ -1162,6 +1174,8 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         rotation: entry.rotation,
         scale: entry.scale,
         camera_mode: entry.camera_mode,
+        fixed_top_down_width: entry.fixed_top_down_width,
+        fixed_top_down_height: entry.fixed_top_down_height,
         body_mode: entry.body_mode,
       })),
       dynamic_objects: resolvedDoc.primitives.map((entry) => ({

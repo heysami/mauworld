@@ -248,7 +248,16 @@ test("runtime snapshots preserve authored player and object scale", () => {
         },
       ],
       screens: [],
-      players: [{ id: "player_one", label: "Player One", position: { x: 0, y: 4.5, z: 0 }, scale: 5, body_mode: "rigid", camera_mode: "third_person" }],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 0, y: 4.5, z: 0 },
+        scale: 5,
+        body_mode: "rigid",
+        camera_mode: "fixed_top_down",
+        fixed_top_down_width: 80,
+        fixed_top_down_height: 48,
+      }],
       texts: [],
       trigger_zones: [],
       prefabs: [],
@@ -259,6 +268,9 @@ test("runtime snapshots preserve authored player and object scale", () => {
 
   const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
   assert.equal(snapshot.players[0].scale, 5);
+  assert.equal(snapshot.players[0].camera_mode, "fixed_top_down");
+  assert.equal(snapshot.players[0].fixed_top_down_width, 80);
+  assert.equal(snapshot.players[0].fixed_top_down_height, 48);
   assert.deepEqual(snapshot.dynamic_objects[0].scale, { x: 6, y: 4, z: 3 });
 });
 
