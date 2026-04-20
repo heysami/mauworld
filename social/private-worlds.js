@@ -5712,7 +5712,7 @@ function getPrivatePresencePosition() {
   };
 }
 
-function getLocalPossessedPlayerPosePayload() {
+function getLocalPossessedPlayerPosePayload(options = {}) {
   const runtimePlayer = getPossessedRuntimePlayer();
   const prediction = getLocalPossessedPlayerPrediction();
   const source = prediction ?? runtimePlayer;
@@ -5726,7 +5726,9 @@ function getLocalPossessedPlayerPosePayload() {
   const velocityY = Number(source.velocity?.y);
   const velocityZ = Number(source.velocity?.z);
   const bodyMode = String(source.bodyMode ?? source.body_mode ?? runtimePlayer?.body_mode ?? "rigid").trim().toLowerCase();
-  if (bodyMode !== "ghost") {
+  const includePlanarForRigid = options.includePlanarForRigid !== false;
+  const includeVerticalPose = bodyMode === "ghost";
+  if (!includeVerticalPose && !includePlanarForRigid) {
     return null;
   }
   return {
@@ -5734,8 +5736,12 @@ function getLocalPossessedPlayerPosePayload() {
     position_z: Number((Number.isFinite(positionZ) ? positionZ : 0).toFixed(4)),
     velocity_x: Number((Number.isFinite(velocityX) ? velocityX : 0).toFixed(4)),
     velocity_z: Number((Number.isFinite(velocityZ) ? velocityZ : 0).toFixed(4)),
-    position_y: Number((Number.isFinite(positionY) ? positionY : PRIVATE_CAMERA.minY).toFixed(4)),
-    velocity_y: Number((Number.isFinite(velocityY) ? velocityY : 0).toFixed(4)),
+    position_y: includeVerticalPose
+      ? Number((Number.isFinite(positionY) ? positionY : PRIVATE_CAMERA.minY).toFixed(4))
+      : undefined,
+    velocity_y: includeVerticalPose
+      ? Number((Number.isFinite(velocityY) ? velocityY : 0).toFixed(4))
+      : undefined,
   };
 }
 
@@ -5828,7 +5834,9 @@ function sendPrivatePresence(force = false) {
     position_z: Number(position.z.toFixed(4)),
     heading_y: Number(position.heading.toFixed(4)),
   };
-  const possessedPose = getLocalPossessedPlayerPosePayload();
+  const possessedPose = getLocalPossessedPlayerPosePayload({
+    includePlanarForRigid: false,
+  });
   if (possessedPose) {
     payload.motion_seq = nextPrivateMotionSequence();
     payload.velocity_x = possessedPose.velocity_x;
