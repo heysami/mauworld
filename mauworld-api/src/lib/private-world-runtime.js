@@ -332,15 +332,23 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
   }
   const rawPosition = input.position && typeof input.position === "object" ? input.position : {};
   const rawVelocity = input.velocity && typeof input.velocity === "object" ? input.velocity : {};
+  const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
+  const currentBodyPosition = body ? vec3(body.translation(), player.position) : vec3(player.position);
+  const currentBodyVelocity = body ? vec3(body.linvel(), player.velocity) : vec3(player.velocity);
+  const preserveVertical = player.body_mode !== "ghost";
   const nextPosition = {
-    x: mustFinite(rawPosition.x ?? input.position_x, player.position.x),
-    y: mustFinite(rawPosition.y ?? input.position_y, player.position.y),
-    z: mustFinite(rawPosition.z ?? input.position_z, player.position.z),
+    x: mustFinite(rawPosition.x ?? input.position_x, currentBodyPosition.x),
+    y: preserveVertical
+      ? currentBodyPosition.y
+      : mustFinite(rawPosition.y ?? input.position_y, currentBodyPosition.y),
+    z: mustFinite(rawPosition.z ?? input.position_z, currentBodyPosition.z),
   };
   const nextVelocity = {
-    x: mustFinite(rawVelocity.x ?? input.velocity_x, player.velocity.x),
-    y: mustFinite(rawVelocity.y ?? input.velocity_y, player.velocity.y),
-    z: mustFinite(rawVelocity.z ?? input.velocity_z, player.velocity.z),
+    x: mustFinite(rawVelocity.x ?? input.velocity_x, currentBodyVelocity.x),
+    y: preserveVertical
+      ? currentBodyVelocity.y
+      : mustFinite(rawVelocity.y ?? input.velocity_y, currentBodyVelocity.y),
+    z: mustFinite(rawVelocity.z ?? input.velocity_z, currentBodyVelocity.z),
   };
   const resolvedHeadingY = Number(input.headingY ?? input.heading_y ?? rawPosition.heading_y ?? rawPosition.heading);
 
@@ -351,7 +359,6 @@ function applyOccupiedPlayerPose(runtime, player, input = {}) {
     player.usesLookHeading = true;
   }
 
-  const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
   if (body) {
     if (player.body_mode === "ghost" && typeof body.setNextKinematicTranslation === "function") {
       body.setNextKinematicTranslation(nextPosition);

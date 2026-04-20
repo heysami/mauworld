@@ -5453,13 +5453,19 @@ function getLocalPossessedPlayerPosePayload() {
   const velocityX = Number(source.velocity?.x);
   const velocityY = Number(source.velocity?.y);
   const velocityZ = Number(source.velocity?.z);
+  const bodyMode = String(source.bodyMode ?? source.body_mode ?? runtimePlayer?.body_mode ?? "rigid").trim().toLowerCase();
+  const includeVerticalPose = bodyMode === "ghost";
   return {
     position_x: Number((Number.isFinite(positionX) ? positionX : 0).toFixed(4)),
-    position_y: Number((Number.isFinite(positionY) ? positionY : PRIVATE_CAMERA.minY).toFixed(4)),
     position_z: Number((Number.isFinite(positionZ) ? positionZ : 0).toFixed(4)),
     velocity_x: Number((Number.isFinite(velocityX) ? velocityX : 0).toFixed(4)),
-    velocity_y: Number((Number.isFinite(velocityY) ? velocityY : 0).toFixed(4)),
     velocity_z: Number((Number.isFinite(velocityZ) ? velocityZ : 0).toFixed(4)),
+    position_y: includeVerticalPose
+      ? Number((Number.isFinite(positionY) ? positionY : PRIVATE_CAMERA.minY).toFixed(4))
+      : undefined,
+    velocity_y: includeVerticalPose
+      ? Number((Number.isFinite(velocityY) ? velocityY : 0).toFixed(4))
+      : undefined,
   };
 }
 
@@ -18602,11 +18608,15 @@ function appendRuntimePosePayload(payload = {}) {
     return payload;
   }
   payload.position_x = pose.position_x;
-  payload.position_y = pose.position_y;
   payload.position_z = pose.position_z;
   payload.velocity_x = pose.velocity_x;
-  payload.velocity_y = pose.velocity_y;
   payload.velocity_z = pose.velocity_z;
+  if (pose.position_y !== undefined) {
+    payload.position_y = pose.position_y;
+  }
+  if (pose.velocity_y !== undefined) {
+    payload.velocity_y = pose.velocity_y;
+  }
   return payload;
 }
 

@@ -521,6 +521,8 @@ test("runtime syncs the occupied server body to a client-authored pose", async (
   manager.keysByWorldRef.set(worldKey, simulation.instanceId);
 
   const profileId = simulation.runtime.players[0].occupied_by_profile_id;
+  const beforePositionY = simulation.runtime.players[0].position.y;
+  const beforeVelocityY = simulation.runtime.players[0].velocity.y;
   const result = await manager.syncOccupiedPlayerPoseByReference({
     worldId: simulation.worldId,
     creatorUsername: simulation.creatorUsername,
@@ -540,6 +542,64 @@ test("runtime syncs the occupied server body to a client-authored pose", async (
   assert.equal(result.synced, true);
   assert.equal(result.player_entity_id, player.id);
   assert.ok(Math.abs(player.position.x - 9.5) < 0.0001);
+  assert.ok(Math.abs(player.position.y - beforePositionY) < 0.0001);
+  assert.ok(Math.abs(player.position.z + 6.25) < 0.0001);
+  assert.ok(Math.abs(player.velocity.x - 7) < 0.0001);
+  assert.ok(Math.abs(player.velocity.y - beforeVelocityY) < 0.0001);
+  assert.ok(Math.abs(player.velocity.z + 3) < 0.0001);
+  assert.ok(Math.abs(player.rotation.y - 0.9) < 0.0001);
+  assert.ok(Math.abs(translation.x - 9.5) < 0.0001);
+  assert.ok(Math.abs(translation.y - beforePositionY) < 0.0001);
+  assert.ok(Math.abs(translation.z + 6.25) < 0.0001);
+  assert.ok(Math.abs(velocity.x - 7) < 0.0001);
+  assert.ok(Math.abs(velocity.y - beforeVelocityY) < 0.0001);
+  assert.ok(Math.abs(velocity.z + 3) < 0.0001);
+});
+
+test("runtime syncs full vertical pose for ghost occupied players", async () => {
+  const manager = new PrivateWorldRuntime({
+    store: {},
+  });
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: {
+        gravity: { x: 0, y: -9.8, z: 0 },
+        camera_mode: "third_person",
+      },
+      voxels: [],
+      primitives: [],
+      screens: [],
+      players: [{ id: "player_one", label: "Player One", position: { x: 0, y: 1, z: 0 }, scale: 1, body_mode: "ghost", camera_mode: "third_person" }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const worldKey = manager.getWorldRefKey(simulation.worldId, simulation.creatorUsername);
+  manager.instancesById.set(simulation.instanceId, simulation);
+  manager.keysByWorldRef.set(worldKey, simulation.instanceId);
+
+  const profileId = simulation.runtime.players[0].occupied_by_profile_id;
+  const result = await manager.syncOccupiedPlayerPoseByReference({
+    worldId: simulation.worldId,
+    creatorUsername: simulation.creatorUsername,
+    profile: { id: profileId },
+    position_x: 9.5,
+    position_y: 2.75,
+    position_z: -6.25,
+    velocity_x: 7,
+    velocity_y: 0.5,
+    velocity_z: -3,
+    heading_y: 0.9,
+  });
+
+  const player = simulation.runtime.players[0];
+  const translation = simulation.runtime.physics.playerBodies.get(player.id).translation();
+  assert.equal(result.synced, true);
+  assert.equal(result.player_entity_id, player.id);
+  assert.ok(Math.abs(player.position.x - 9.5) < 0.0001);
   assert.ok(Math.abs(player.position.y - 2.75) < 0.0001);
   assert.ok(Math.abs(player.position.z + 6.25) < 0.0001);
   assert.ok(Math.abs(player.velocity.x - 7) < 0.0001);
@@ -549,9 +609,6 @@ test("runtime syncs the occupied server body to a client-authored pose", async (
   assert.ok(Math.abs(translation.x - 9.5) < 0.0001);
   assert.ok(Math.abs(translation.y - 2.75) < 0.0001);
   assert.ok(Math.abs(translation.z + 6.25) < 0.0001);
-  assert.ok(Math.abs(velocity.x - 7) < 0.0001);
-  assert.ok(Math.abs(velocity.y - 0.5) < 0.0001);
-  assert.ok(Math.abs(velocity.z + 3) < 0.0001);
 });
 
 test("runtime heading makes D strafe relative to facing without rotating the player", () => {
