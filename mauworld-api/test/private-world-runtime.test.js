@@ -315,6 +315,7 @@ test("runtime snapshots preserve authored player and object scale", () => {
         fixed_top_down_angle: 45,
         fixed_top_down_width: 80,
         fixed_top_down_height: 48,
+        movement_enabled: false,
       }],
       texts: [],
       trigger_zones: [],
@@ -331,6 +332,7 @@ test("runtime snapshots preserve authored player and object scale", () => {
   assert.equal(snapshot.players[0].fixed_top_down_angle, 45);
   assert.equal(snapshot.players[0].fixed_top_down_width, 80);
   assert.equal(snapshot.players[0].fixed_top_down_height, 48);
+  assert.equal(snapshot.players[0].movement_enabled, false);
   assert.deepEqual(snapshot.dynamic_objects[0].scale, { x: 6, y: 4, z: 3 });
 });
 
@@ -607,6 +609,53 @@ test("runtime look-only input updates heading without queuing a stale movement t
   assert.equal(result.accepted, true);
   assert.equal(simulation.pendingInputs.length, 0);
   assert.ok(Math.abs(simulation.runtime.players[0].rotation.y - 0.9) < 0.0001);
+});
+
+test("runtime ignores movement input when a first-person player has movement disabled", () => {
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: {
+        gravity: { x: 0, y: -9.8, z: 0 },
+        camera_mode: "third_person",
+      },
+      voxels: [],
+      primitives: [],
+      screens: [],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 0, y: 1, z: 0 },
+        scale: 1,
+        body_mode: "rigid",
+        camera_mode: "first_person",
+        movement_enabled: false,
+      }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+  const player = simulation.runtime.players[0];
+  const body = simulation.runtime.physics.playerBodies.get(player.id);
+  body.setTranslation(player.position, true);
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 16,
+    pendingInputs: [{
+      playerId: player.id,
+      key: "w",
+      state: "down",
+      headingY: 0.6,
+    }],
+  });
+
+  assert.ok(Math.abs(player.position.x) < 0.0001);
+  assert.ok(Math.abs(player.position.z) < 0.0001);
+  assert.ok(Math.abs(player.velocity.x) < 0.0001);
+  assert.ok(Math.abs(player.velocity.z) < 0.0001);
+  assert.ok(Math.abs(player.rotation.y - 0.6) < 0.0001);
 });
 
 test("runtime rebuild preserves occupied player pose for same-scene camera edits", async () => {

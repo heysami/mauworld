@@ -346,6 +346,7 @@ const TOOL_PRESET_BUILTINS = {
         fixed_top_down_angle: 90,
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
+        movement_enabled: true,
         body_mode: "rigid",
         occupiable: true,
       },
@@ -363,6 +364,7 @@ const TOOL_PRESET_BUILTINS = {
         fixed_top_down_angle: 90,
         fixed_top_down_width: 0,
         fixed_top_down_height: 0,
+        movement_enabled: true,
         body_mode: "ghost",
         occupiable: true,
       },
@@ -797,6 +799,7 @@ function createBaseToolPresetEntry(kind) {
       fixed_top_down_angle: 90,
       fixed_top_down_width: 0,
       fixed_top_down_height: 0,
+      movement_enabled: true,
       body_mode: "rigid",
       occupiable: true,
     };
@@ -9344,6 +9347,7 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
   const right = pressedKeys.has("d") || pressedKeys.has("arrowright");
   const forward = pressedKeys.has("w") || pressedKeys.has("arrowup");
   const backward = pressedKeys.has("s") || pressedKeys.has("arrowdown");
+  const movementEnabled = isActivePossessedPlayerMovementEnabled();
   const cameraMode = getActivePossessedCameraMode();
   const orthogonalCamera = isOrthogonalCameraMode(cameraMode);
   const orthogonalOrientation = orthogonalCamera
@@ -9367,12 +9371,16 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
     x /= length;
     z /= length;
   }
+  if (!movementEnabled) {
+    x = 0;
+    z = 0;
+  }
   return {
     x,
     z,
     headingY,
-    active: length > 0.000001,
-    sprint: pressedKeys.has("shift") && length > 0.000001,
+    active: movementEnabled && length > 0.000001,
+    sprint: movementEnabled && pressedKeys.has("shift") && length > 0.000001,
   };
 }
 
@@ -9412,6 +9420,7 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     fixedTopDownAngle: normalizePlayerFixedTopDownAngle(runtimePlayer.fixed_top_down_angle ?? 90),
     fixedTopDownWidth: Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? 0) || 0),
     fixedTopDownHeight: Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? 0) || 0),
+    movementEnabled: normalizePlayerMovementEnabled(runtimePlayer.movement_enabled ?? true),
     bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
     onGround: runtimePlayer.on_ground === true,
   };
@@ -9439,6 +9448,23 @@ function isOrthogonalCameraMode(value = "third_person") {
 function isFixedTopDownCameraMode(value = "third_person") {
   const normalized = normalizePlayerCameraMode(value);
   return normalized === "fixed_orthogonal";
+}
+
+function isPlayerMovementToggleCameraMode(value = "third_person") {
+  const normalized = normalizePlayerCameraMode(value);
+  return normalized === "third_person" || normalized === "first_person";
+}
+
+function normalizePlayerMovementEnabled(value = true) {
+  return value !== false;
+}
+
+function isPlayerMovementEnabled(player = {}) {
+  const cameraMode = normalizePlayerCameraMode(player?.camera_mode ?? player?.cameraMode ?? "third_person");
+  if (!isPlayerMovementToggleCameraMode(cameraMode)) {
+    return true;
+  }
+  return normalizePlayerMovementEnabled(player?.movement_enabled ?? player?.movementEnabled ?? true);
 }
 
 function normalizePlayerFixedTopDownDirection(value = "north") {
@@ -9547,6 +9573,14 @@ function getActivePossessedFixedTopDownDirection() {
     return normalizePlayerFixedTopDownDirection(prediction.fixedTopDownDirection);
   }
   return normalizePlayerFixedTopDownDirection(getPossessedRuntimePlayer()?.fixed_top_down_direction ?? "north");
+}
+
+function isActivePossessedPlayerMovementEnabled() {
+  const prediction = state.predictedPossessedPlayer;
+  if (prediction) {
+    return isPlayerMovementEnabled(prediction);
+  }
+  return isPlayerMovementEnabled(getPossessedRuntimePlayer() ?? {});
 }
 
 function getPlayerFixedTopDownWindow(player = {}, world = state.selectedWorld) {
@@ -9665,6 +9699,12 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
     prediction = createPossessedPlayerPrediction(runtimePlayer);
     prediction.cameraMode = nextCameraMode;
     state.predictedPossessedPlayer = prediction;
+    if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
+      releaseHeldRuntimeKeys({
+        headingY: getRuntimeInputHeadingY(),
+      });
+      privateInputState.sprintHoldSeconds = 0;
+    }
     return prediction;
   }
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
@@ -9676,6 +9716,9 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   } else {
     prediction.cameraMode = nextCameraMode;
   }
+  prediction.movementEnabled = normalizePlayerMovementEnabled(
+    runtimePlayer.movement_enabled ?? prediction.movementEnabled ?? true,
+  );
   prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
     runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
   );
@@ -9685,6 +9728,12 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
+  if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
+    releaseHeldRuntimeKeys({
+      headingY: getRuntimeInputHeadingY(),
+    });
+    privateInputState.sprintHoldSeconds = 0;
+  }
   return prediction;
 }
 
@@ -9728,6 +9777,9 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   prediction.onGround = runtimePlayer.on_ground === true;
   prediction.scale = Math.max(0.25, Number(runtimePlayer.scale ?? prediction.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
   prediction.cameraMode = normalizePlayerCameraMode(runtimePlayer.camera_mode ?? prediction.cameraMode ?? "third_person");
+  prediction.movementEnabled = normalizePlayerMovementEnabled(
+    runtimePlayer.movement_enabled ?? prediction.movementEnabled ?? true,
+  );
   prediction.fixedTopDownDirection = normalizePlayerFixedTopDownDirection(
     runtimePlayer.fixed_top_down_direction ?? prediction.fixedTopDownDirection ?? "north",
   );
@@ -9737,6 +9789,12 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
+  if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
+    releaseHeldRuntimeKeys({
+      headingY: getRuntimeInputHeadingY(),
+    });
+    privateInputState.sprintHoldSeconds = 0;
+  }
   return prediction;
 }
 
@@ -11057,7 +11115,8 @@ function buildToolPresetSummary(kind, entry = {}) {
     ].join(" · ");
   }
   if (kind === "player") {
-    return `${entry.camera_mode || "third_person"} · ${entry.body_mode || "rigid"} · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
+    const movementSummary = isPlayerMovementEnabled(entry) ? "movement on" : "look only";
+    return `${entry.camera_mode || "third_person"} · ${entry.body_mode || "rigid"} · ${movementSummary} · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
   }
   if (kind === "screen") {
     const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.2 };
@@ -11641,6 +11700,8 @@ function renderEntityInspector(sceneDoc, selected = null) {
   if (kind === "player") {
     const cameraMode = normalizePlayerCameraMode(entry.camera_mode ?? "third_person");
     const orthogonalMode = isOrthogonalCameraMode(cameraMode);
+    const movementToggleMode = isPlayerMovementToggleCameraMode(cameraMode);
+    const movementEnabled = normalizePlayerMovementEnabled(entry.movement_enabled ?? true);
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownDirection = normalizePlayerFixedTopDownDirection(entry.fixed_top_down_direction ?? "north");
     const fixedTopDownAngle = normalizePlayerFixedTopDownAngle(entry.fixed_top_down_angle ?? 90);
@@ -11681,6 +11742,12 @@ function renderEntityInspector(sceneDoc, selected = null) {
           <span>Can be occupied</span>
         </div>
       </div>
+      ${movementToggleMode ? `
+        <div class="pw-checkbox">
+          <input type="checkbox" data-entity-field="movement_enabled" data-value-type="checkbox" ${movementEnabled ? "checked" : ""} />
+          <span>Allow movement</span>
+        </div>
+      ` : ""}
       ${orthogonalMode ? `
         <p class="pw-inspector-note">${fixedTopDownNote}</p>
         <div class="pw-inspector-grid pw-inspector-grid--2">
@@ -16800,6 +16867,7 @@ function buildPreviewRevisionSceneDoc(sceneDoc = {}) {
       delete player.fixed_top_down_angle;
       delete player.fixed_top_down_width;
       delete player.fixed_top_down_height;
+      delete player.movement_enabled;
     }
   }
   return revisionDoc;
@@ -17926,6 +17994,7 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
       fixed_top_down_angle: prediction.fixedTopDownAngle,
       fixed_top_down_width: prediction.fixedTopDownWidth,
       fixed_top_down_height: prediction.fixedTopDownHeight,
+      movement_enabled: prediction.movementEnabled,
       body_mode: prediction.bodyMode,
       on_ground: prediction.onGround,
     };
@@ -19855,6 +19924,12 @@ function shouldDrivePrivateRuntimeInput() {
     && getLocalParticipant()?.join_role === "player";
 }
 
+function shouldBlockRuntimeMovementInputKey(key = "") {
+  return shouldDrivePrivateRuntimeInput()
+    && !isActivePossessedPlayerMovementEnabled()
+    && RUNTIME_INPUT_KEYS.has(String(key ?? "").trim().toLowerCase());
+}
+
 function nextPrivateMotionSequence() {
   state.lastPrivateMotionSeq = Math.max(0, Number(state.lastPrivateMotionSeq ?? 0) || 0) + 1;
   return state.lastPrivateMotionSeq;
@@ -21369,6 +21444,15 @@ function bindEvents() {
     }
     event.preventDefault();
     if (shouldDrivePrivateRuntimeInput()) {
+      if (shouldBlockRuntimeMovementInputKey(key)) {
+        if (state.pressedRuntimeKeys.has(key)) {
+          state.pressedRuntimeKeys.delete(key);
+          void sendRuntimeInput(key, "up", {
+            headingY: getRuntimeInputHeadingY(),
+          });
+        }
+        return;
+      }
       if (state.pressedRuntimeKeys.has(key)) {
         return;
       }
@@ -21436,6 +21520,9 @@ function bindEvents() {
     }
     event.preventDefault();
     if (shouldDrivePrivateRuntimeInput()) {
+      if (shouldBlockRuntimeMovementInputKey(key) && !state.pressedRuntimeKeys.has(key)) {
+        return;
+      }
       state.pressedRuntimeKeys.delete(key);
       void sendRuntimeInput(key, "up", {
         headingY: getRuntimeInputHeadingY(),

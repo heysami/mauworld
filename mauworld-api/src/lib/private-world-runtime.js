@@ -644,6 +644,18 @@ function getRelativePlayerMovement(player, pressedKeys = player?.pressedKeys) {
   );
 }
 
+function isPlayerMovementToggleCameraMode(cameraMode = "third_person") {
+  const normalized = String(cameraMode ?? "third_person").trim().toLowerCase();
+  return normalized === "third_person" || normalized === "first_person";
+}
+
+function isPlayerMovementEnabled(player = {}) {
+  if (!isPlayerMovementToggleCameraMode(player?.camera_mode)) {
+    return true;
+  }
+  return player?.movement_enabled !== false;
+}
+
 function raycastPlayerGround(runtime, player) {
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
   const collider = runtime.physics?.playerColliders?.get(player.id) ?? null;
@@ -665,18 +677,21 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   }
 
   const pressed = player.pressedKeys;
+  const movementEnabled = isPlayerMovementEnabled(player);
   const left = pressed.has("a") || pressed.has("arrowleft");
   const right = pressed.has("d") || pressed.has("arrowright");
   const forward = pressed.has("w") || pressed.has("arrowup");
   const backward = pressed.has("s") || pressed.has("arrowdown");
-  const sprint = pressed.has("shift");
-  const jumpEdge = inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
-  const desired = player.usesLookHeading === true
+  const sprint = movementEnabled && pressed.has("shift");
+  const jumpEdge = movementEnabled && inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
+  const desired = movementEnabled
+    ? (player.usesLookHeading === true
     ? getRelativePlayerMovement(player, pressed)
     : normalizePlanarVector(
       Number(right) - Number(left),
       Number(backward) - Number(forward),
-    );
+    ))
+    : { x: 0, z: 0 };
   if (player.usesLookHeading !== true) {
     updatePlayerLookDirection(player, desired);
   }
@@ -780,6 +795,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       fixed_top_down_angle: mustFinite(entry.fixed_top_down_angle, 90),
       fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
       fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
+      movement_enabled: entry.movement_enabled !== false,
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
       initialPosition: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
@@ -1340,6 +1356,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       fixed_top_down_angle: mustFinite(entry.fixed_top_down_angle, 90),
       fixed_top_down_width: mustFinite(entry.fixed_top_down_width, 0),
       fixed_top_down_height: mustFinite(entry.fixed_top_down_height, 0),
+      movement_enabled: entry.movement_enabled !== false,
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
       occupied_by_profile_id: entry.occupied_by_profile_id,

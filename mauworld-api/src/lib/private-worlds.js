@@ -502,6 +502,10 @@ function normalizeAllowedPlayerFixedTopDownAngle(value = 90) {
   return 90;
 }
 
+function normalizeAllowedPlayerMovementEnabled(value = true) {
+  return value !== false;
+}
+
 function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
   const cameraMode = normalizeAllowedPlayerCameraMode(entry.camera_mode ?? entry.cameraMode ?? "third_person");
   const fixedTopDownDirection = normalizeAllowedPlayerFixedTopDownDirection(
@@ -509,6 +513,9 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
   );
   const fixedTopDownAngle = normalizeAllowedPlayerFixedTopDownAngle(
     entry.fixed_top_down_angle ?? entry.fixedTopDownAngle ?? 90,
+  );
+  const movementEnabled = normalizeAllowedPlayerMovementEnabled(
+    entry.movement_enabled ?? entry.movementEnabled ?? true,
   );
   const bodyMode = String(entry.body_mode ?? entry.bodyMode ?? "rigid").trim().toLowerCase();
   return {
@@ -532,6 +539,7 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
       0,
       4096,
     ).toFixed(4)),
+    movement_enabled: movementEnabled,
     body_mode: ALLOWED_PLAYER_BODY_MODES.has(bodyMode) ? bodyMode : "rigid",
     occupiable: entry.occupiable !== false,
   };
@@ -1236,6 +1244,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         fixed_top_down_angle: entry.fixed_top_down_angle,
         fixed_top_down_width: entry.fixed_top_down_width,
         fixed_top_down_height: entry.fixed_top_down_height,
+        movement_enabled: entry.movement_enabled,
         body_mode: entry.body_mode,
       })),
       dynamic_objects: resolvedDoc.primitives.map((entry) => ({
