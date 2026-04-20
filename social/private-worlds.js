@@ -17502,18 +17502,48 @@ function applyFixedTopDownPerspectivePreviewCamera(preview, player = {}, world =
   const targetX = Number.isFinite(centerX) ? centerX : 0;
   const targetY = Number.isFinite(centerY) ? centerY : 0;
   const targetZ = Number.isFinite(centerZ) ? centerZ : 0;
+  const target = new THREE.Vector3(targetX, targetY, targetZ);
   const aspect = Math.max(0.0001, windowSize.width / Math.max(0.0001, windowSize.height));
-  const fovRadians = THREE.MathUtils.degToRad(Number(camera.fov) || 58);
-  const cameraHeight = Math.max(
-    PRIVATE_WORLD_BLOCK_UNIT * 2,
-    windowSize.height / Math.max(0.0001, 2 * Math.tan(fovRadians / 2)),
-  );
+  const halfWidth = windowSize.width / 2;
+  const halfHeight = windowSize.height / 2;
+  const corners = [
+    new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, -halfWidth).addScaledVector(orientation.upVector, -halfHeight),
+    new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, halfWidth).addScaledVector(orientation.upVector, -halfHeight),
+    new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, -halfWidth).addScaledVector(orientation.upVector, halfHeight),
+    new THREE.Vector3(targetX, targetY, targetZ).addScaledVector(orientation.rightVector, halfWidth).addScaledVector(orientation.upVector, halfHeight),
+  ];
+  const offsetDirection = orientation.upVector.clone().multiplyScalar(-1);
+  offsetDirection.y = 1.35;
+  offsetDirection.normalize();
+  let minDistance = PRIVATE_WORLD_BLOCK_UNIT * 2;
+  let maxDistance = Math.max(rig.width, rig.length, rig.height, windowSize.width, windowSize.height) * 16;
   camera.aspect = aspect;
   camera.near = 0.1;
-  camera.far = Math.max(240, cameraHeight + rig.height + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding * 2 + 40);
-  camera.position.set(targetX, targetY + cameraHeight, targetZ);
-  camera.up.copy(orientation.upVector);
-  camera.lookAt(targetX, targetY, targetZ);
+  camera.up.set(0, 1, 0);
+  for (let index = 0; index < 18; index += 1) {
+    const distance = (minDistance + maxDistance) / 2;
+    camera.position.copy(target).addScaledVector(offsetDirection, distance);
+    camera.lookAt(target);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+    const fits = corners.every((corner) => {
+      const projected = corner.clone().project(camera);
+      return Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && Math.abs(projected.x) <= 1
+        && Math.abs(projected.y) <= 1
+        && projected.z >= -1
+        && projected.z <= 1;
+    });
+    if (fits) {
+      maxDistance = distance;
+    } else {
+      minDistance = distance;
+    }
+  }
+  camera.position.copy(target).addScaledVector(offsetDirection, maxDistance);
+  camera.far = Math.max(240, maxDistance + rig.height + PRIVATE_PLAYER_CAMERA.fixedTopDownPadding * 2 + 40);
+  camera.lookAt(target);
   camera.updateProjectionMatrix();
   computeContainedPreviewViewport(preview, windowSize.width, windowSize.height);
   return camera;
