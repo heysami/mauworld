@@ -1944,6 +1944,9 @@ export class PrivateWorldGateway {
     const positionY = Number(message.position_y);
     const positionZ = Number(message.position_z);
     const headingY = Number(message.heading_y);
+    const velocityX = Number(message.velocity_x);
+    const velocityY = Number(message.velocity_y);
+    const velocityZ = Number(message.velocity_z);
     if (!Number.isFinite(positionX) || !Number.isFinite(positionY) || !Number.isFinite(positionZ)) {
       return;
     }
@@ -1952,6 +1955,9 @@ export class PrivateWorldGateway {
       position_y: positionY,
       position_z: positionZ,
       heading_y: Number.isFinite(headingY) ? headingY : 0,
+      velocity_x: Number.isFinite(velocityX) ? velocityX : 0,
+      velocity_y: Number.isFinite(velocityY) ? velocityY : 0,
+      velocity_z: Number.isFinite(velocityZ) ? velocityZ : 0,
     };
     client.position = {
       x: positionX,
@@ -1965,6 +1971,23 @@ export class PrivateWorldGateway {
           type: "presence:update",
           presence,
         });
+      }
+      if (typeof this.store?.syncPrivateWorldPlayerPose === "function") {
+        try {
+          await this.store.syncPrivateWorldPlayerPose(client.profile, {
+            worldId: client.worldId,
+            creatorUsername: client.creatorUsername,
+            position_x: positionX,
+            position_y: positionY,
+            position_z: positionZ,
+            velocity_x: Number.isFinite(velocityX) ? velocityX : 0,
+            velocity_y: Number.isFinite(velocityY) ? velocityY : 0,
+            velocity_z: Number.isFinite(velocityZ) ? velocityZ : 0,
+            heading_y: Number.isFinite(headingY) ? headingY : 0,
+          });
+        } catch (_error) {
+          // Presence should keep flowing even if runtime pose sync misses a frame.
+        }
       }
     }
     const now = Date.now();
@@ -2130,6 +2153,12 @@ export class PrivateWorldGateway {
         key: String(message.key ?? "").trim(),
         state: message.state === "up" ? "up" : "down",
         heading_y: message.heading_y,
+        position_x: message.position_x,
+        position_y: message.position_y,
+        position_z: message.position_z,
+        velocity_x: message.velocity_x,
+        velocity_y: message.velocity_y,
+        velocity_z: message.velocity_z,
       });
     } catch (error) {
       sendJson(client, {

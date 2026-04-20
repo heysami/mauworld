@@ -760,9 +760,18 @@ test("private world detail forwards guest session ids for guest viewers", async 
 });
 
 test("private world runtime input endpoint accepts player controls", async () => {
+  let capturedInput = null;
+  const store = createStubStore();
+  store.queuePrivateWorldInput = async (_profile, payload) => {
+    capturedInput = payload;
+    return {
+      accepted: true,
+      player_entity_id: "player_one",
+    };
+  };
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
-    store: createStubStore(),
+    store,
   });
 
   const response = await request(app)
@@ -773,12 +782,24 @@ test("private world runtime input endpoint accepts player controls", async () =>
       key: "w",
       state: "down",
       heading_y: 1.25,
+      position_x: 12,
+      position_y: 4,
+      position_z: -8,
+      velocity_x: 6.5,
+      velocity_y: 0,
+      velocity_z: -2.5,
     });
 
   assert.equal(response.status, 200);
   assert.equal(response.body.ok, true);
   assert.equal(response.body.accepted, true);
   assert.equal(response.body.player_entity_id, "player_one");
+  assert.equal(capturedInput?.position_x, 12);
+  assert.equal(capturedInput?.position_y, 4);
+  assert.equal(capturedInput?.position_z, -8);
+  assert.equal(capturedInput?.velocity_x, 6.5);
+  assert.equal(capturedInput?.velocity_y, 0);
+  assert.equal(capturedInput?.velocity_z, -2.5);
 });
 
 test("private world runtime input endpoint accepts look-only updates", async () => {
@@ -897,10 +918,25 @@ test("private world join endpoint forwards public viewer session ids for public 
   assert.equal(capturedInput?.publicViewerSessionId, "viewer_123");
 });
 
-test("private world release endpoint returns the user to viewer mode", async () => {
+test("private world release endpoint returns the user to viewer mode with a release spawn", async () => {
+  let capturedInput = null;
+  const store = createStubStore();
+  store.releasePrivateWorldParticipant = async (input) => {
+    capturedInput = input;
+    return {
+      released: true,
+      release_spawn: {
+        player_entity_id: "player_one",
+        position_x: 0,
+        position_y: 4.5,
+        position_z: -2,
+        heading_y: 0.75,
+      },
+    };
+  };
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
-    store: createStubStore(),
+    store,
   });
 
   const response = await request(app)
@@ -913,6 +949,14 @@ test("private world release endpoint returns the user to viewer mode", async () 
   assert.equal(response.status, 200);
   assert.equal(response.body.ok, true);
   assert.equal(response.body.released, true);
+  assert.equal(capturedInput?.creatorUsername, "maker");
+  assert.deepEqual(response.body.release_spawn, {
+    player_entity_id: "player_one",
+    position_x: 0,
+    position_y: 4.5,
+    position_z: -2,
+    heading_y: 0.75,
+  });
 });
 
 test("private world lock heartbeat endpoint renews a held lock", async () => {

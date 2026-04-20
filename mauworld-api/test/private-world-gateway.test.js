@@ -151,10 +151,15 @@ test("private world browser audience rebalances to nearby subscribers only", asy
 
 test("private world presence updates refresh participant heartbeat in the store", async () => {
   const touches = [];
+  const poses = [];
   const gateway = createGateway({
     async touchPrivateWorldParticipant(payload) {
       touches.push(payload);
       return { touched: true };
+    },
+    async syncPrivateWorldPlayerPose(profile, payload) {
+      poses.push({ profile, payload });
+      return { synced: true };
     },
   });
   const client = createClient({
@@ -169,12 +174,19 @@ test("private world presence updates refresh participant heartbeat in the store"
     position_y: 1,
     position_z: -2,
     heading_y: 0.4,
+    velocity_x: 3.25,
+    velocity_y: 0,
+    velocity_z: -1.5,
   });
 
   assert.equal(touches.length, 1);
   assert.equal(touches[0].worldId, "world_test");
   assert.equal(touches[0].creatorUsername, "creator");
   assert.equal(touches[0].profile.id, client.profile.id);
+  assert.equal(poses.length, 1);
+  assert.equal(poses[0].profile.id, client.profile.id);
+  assert.equal(poses[0].payload.position_x, 4);
+  assert.equal(poses[0].payload.velocity_x, 3.25);
 });
 
 test("private world disconnect cleans up the participant in the store", async () => {
@@ -220,6 +232,12 @@ test("private world runtime input is routed through the socket gateway", async (
     key: "w",
     state: "down",
     heading_y: 0.4,
+    position_x: 8,
+    position_y: 1,
+    position_z: -3,
+    velocity_x: 5,
+    velocity_y: 0,
+    velocity_z: -2,
   });
 
   assert.equal(queued.length, 1);
@@ -229,6 +247,8 @@ test("private world runtime input is routed through the socket gateway", async (
   assert.equal(queued[0].payload.creatorUsername, client.creatorUsername);
   assert.equal(queued[0].payload.key, "w");
   assert.equal(queued[0].payload.state, "down");
+  assert.equal(queued[0].payload.position_x, 8);
+  assert.equal(queued[0].payload.velocity_x, 5);
 });
 
 test("private world connection preserves a per-client viewer session id for authenticated users", async () => {

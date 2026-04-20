@@ -1135,6 +1135,104 @@ test("occupyPrivateWorldParticipant resolves canonical player clicks against rep
   assert.equal(state.tables.private_world_participants[0].player_entity_id, "player_player-player-player-1");
 });
 
+test("releasePrivateWorldParticipant resets the player to the authored spawn before clearing occupancy", async () => {
+  const freshIso = new Date(Date.now() - 5_000).toISOString();
+  const state = {
+    tables: {
+      private_worlds: [
+        {
+          id: "world_row_live",
+          world_id: "mw_live",
+          creator_profile_id: "profile_creator",
+        },
+      ],
+      user_profiles: [
+        {
+          id: "profile_creator",
+          username: "maker",
+          display_name: "Maker",
+        },
+      ],
+      private_world_active_instances: [
+        {
+          id: "instance_live",
+          world_id: "world_row_live",
+          status: "started",
+        },
+      ],
+      private_world_participants: [
+        {
+          id: "participant_live",
+          instance_id: "instance_live",
+          profile_id: "profile_creator",
+          guest_session_id: null,
+          join_role: "player",
+          player_entity_id: "player_player-player-player-1",
+          visible_to_others: true,
+          last_seen_at: freshIso,
+          updated_at: freshIso,
+        },
+      ],
+      private_world_ready_states: [
+        {
+          instance_id: "instance_live",
+          participant_id: "participant_live",
+          ready: true,
+          updated_at: freshIso,
+        },
+      ],
+    },
+    queryLog: [],
+  };
+
+  let committedInput = null;
+  const fakeStore = {
+    serviceClient: createFakeServiceClient(state),
+    privateWorldRuntime: {
+      async resetOccupiedPlayerToInitialPoseByReference(input) {
+        committedInput = input;
+        return {
+          player_entity_id: "player_player-player-player-1",
+          position: {
+            x: 0,
+            y: 1,
+            z: 0,
+          },
+          heading_y: 0,
+        };
+      },
+    },
+  };
+
+  const result = await MauworldStore.prototype.releasePrivateWorldParticipant.call(fakeStore, {
+    worldId: "mw_live",
+    creatorUsername: "maker",
+    profile: {
+      id: "profile_creator",
+    },
+  });
+
+  assert.equal(result.released, true);
+  assert.deepEqual(committedInput, {
+    worldId: "mw_live",
+    creatorUsername: "maker",
+    profile: {
+      id: "profile_creator",
+    },
+    playerEntityId: "player_player-player-player-1",
+  });
+  assert.deepEqual(result.release_spawn, {
+    player_entity_id: "player_player-player-player-1",
+    position_x: 0,
+    position_y: 1,
+    position_z: 0,
+    heading_y: 0,
+  });
+  assert.equal(state.tables.private_world_participants[0].join_role, "viewer");
+  assert.equal(state.tables.private_world_participants[0].player_entity_id, null);
+  assert.equal(state.tables.private_world_ready_states.length, 0);
+});
+
 test("findNearestPrivateWorldAnchor skips blocked post-card footprints", async () => {
   const state = {
     tables: {

@@ -678,6 +678,12 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       key: rawKey,
       state: req.body?.state === "up" ? "up" : "down",
       heading_y: Number.isFinite(headingY) ? headingY : undefined,
+      position_x: req.body?.position_x,
+      position_y: req.body?.position_y,
+      position_z: req.body?.position_z,
+      velocity_x: req.body?.velocity_x,
+      velocity_y: req.body?.velocity_y,
+      velocity_z: req.body?.velocity_z,
     });
     jsonOk(res, payload);
   }));

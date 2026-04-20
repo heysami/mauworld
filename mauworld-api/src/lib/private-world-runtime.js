@@ -326,6 +326,52 @@ function syncEntryFromRapierBody(entry, body) {
   entry.velocity = vec3(body.linvel(), entry.velocity);
 }
 
+function applyOccupiedPlayerPose(runtime, player, input = {}) {
+  if (!runtime || !player) {
+    return null;
+  }
+  const rawPosition = input.position && typeof input.position === "object" ? input.position : {};
+  const rawVelocity = input.velocity && typeof input.velocity === "object" ? input.velocity : {};
+  const nextPosition = {
+    x: mustFinite(rawPosition.x ?? input.position_x, player.position.x),
+    y: mustFinite(rawPosition.y ?? input.position_y, player.position.y),
+    z: mustFinite(rawPosition.z ?? input.position_z, player.position.z),
+  };
+  const nextVelocity = {
+    x: mustFinite(rawVelocity.x ?? input.velocity_x, player.velocity.x),
+    y: mustFinite(rawVelocity.y ?? input.velocity_y, player.velocity.y),
+    z: mustFinite(rawVelocity.z ?? input.velocity_z, player.velocity.z),
+  };
+  const resolvedHeadingY = Number(input.headingY ?? input.heading_y ?? rawPosition.heading_y ?? rawPosition.heading);
+
+  player.position = nextPosition;
+  player.velocity = nextVelocity;
+  if (Number.isFinite(resolvedHeadingY)) {
+    setPlayerLookHeading(player, resolvedHeadingY);
+    player.usesLookHeading = true;
+  }
+
+  const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
+  if (body) {
+    if (player.body_mode === "ghost" && typeof body.setNextKinematicTranslation === "function") {
+      body.setNextKinematicTranslation(nextPosition);
+    }
+    body.setTranslation(nextPosition, true);
+    body.setLinvel(nextVelocity, true);
+    body.setRotation(toRapierRotation(player.rotation), true);
+    body.wakeUp?.();
+  }
+
+  return {
+    player_entity_id: player.id,
+    position: cloneJson(nextPosition),
+    velocity: cloneJson(nextVelocity),
+    heading_y: Number.isFinite(resolvedHeadingY)
+      ? Number(normalizeAngle(resolvedHeadingY).toFixed(6))
+      : mustFinite(player.rotation?.y, 0),
+  };
+}
+
 function syncRapierOccupancy(simulation) {
   const physics = simulation.physics;
   if (!physics) {
@@ -531,6 +577,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       body_mode: entry.body_mode,
       occupiable: entry.occupiable !== false,
       initialPosition: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
+      initialRotation: vec3(entry.rotation),
       position: vec3(entry.position, { x: 0, y: (PLAYER_DIMENSIONS.height * scale) / 2, z: 0 }),
       rotation: vec3(entry.rotation),
       velocity: { x: 0, y: 0, z: 0 },
@@ -1247,7 +1294,132 @@ export class PrivateWorldRuntime {
     return buildPrivateWorldRuntimeSnapshot(simulation);
   }
 
-  async queueInputByReference({ worldId, creatorUsername, profile, key, state, headingY = null, heading_y = null } = {}) {
+  async resetOccupiedPlayerToInitialPoseByReference({
+    worldId,
+    creatorUsername,
+    profile,
+    playerEntityId = "",
+  } = {}) {
+    const keyRef = this.getWorldRefKey(worldId, creatorUsername);
+    let instanceId = this.keysByWorldRef.get(keyRef);
+    let simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    if (!simulation) {
+      const snapshot = await this.syncWorldByReference({ worldId, creatorUsername });
+      if (!snapshot) {
+        return null;
+      }
+      instanceId = this.keysByWorldRef.get(keyRef);
+      simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    }
+    if (!simulation) {
+      return null;
+    }
+
+    const runtimePlayerIds = simulation.runtime.players.map((entry) => entry.id).filter(Boolean);
+    const resolvedPlayerEntityId = resolveEntityIdAlias("player", playerEntityId, runtimePlayerIds);
+    const occupiedPlayer = simulation.runtime.players.find((entry) => entry.occupied_by_profile_id === profile?.id)
+      ?? (resolvedPlayerEntityId
+        ? simulation.runtime.players.find((entry) => entry.id === resolvedPlayerEntityId) ?? null
+        : null);
+    if (!occupiedPlayer) {
+      return null;
+    }
+
+    const nextPosition = vec3(occupiedPlayer.initialPosition, occupiedPlayer.position);
+    const nextRotation = vec3(occupiedPlayer.initialRotation, occupiedPlayer.rotation);
+
+    occupiedPlayer.position = nextPosition;
+    occupiedPlayer.rotation = nextRotation;
+    occupiedPlayer.velocity = { x: 0, y: 0, z: 0 };
+    occupiedPlayer.pressedKeys.clear();
+    occupiedPlayer.usesLookHeading = Number.isFinite(Number(nextRotation.y));
+
+    const body = simulation.runtime.physics?.playerBodies?.get(occupiedPlayer.id) ?? null;
+    if (body) {
+      if (occupiedPlayer.body_mode === "ghost" && typeof body.setNextKinematicTranslation === "function") {
+        body.setNextKinematicTranslation(nextPosition);
+      }
+      body.setTranslation(nextPosition, true);
+      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      body.setRotation(toRapierRotation(nextRotation), true);
+      body.wakeUp?.();
+    }
+
+    return {
+      player_entity_id: occupiedPlayer.id,
+      position: cloneJson(nextPosition),
+      heading_y: Number(normalizeAngle(mustFinite(nextRotation?.y, 0)).toFixed(6)),
+    };
+  }
+
+  async syncOccupiedPlayerPoseByReference({
+    worldId,
+    creatorUsername,
+    profile,
+    position = null,
+    position_x = null,
+    position_y = null,
+    position_z = null,
+    velocity = null,
+    velocity_x = null,
+    velocity_y = null,
+    velocity_z = null,
+    headingY = null,
+    heading_y = null,
+  } = {}) {
+    const keyRef = this.getWorldRefKey(worldId, creatorUsername);
+    let instanceId = this.keysByWorldRef.get(keyRef);
+    let simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    if (!simulation) {
+      const snapshot = await this.syncWorldByReference({ worldId, creatorUsername });
+      if (!snapshot) {
+        return { synced: false };
+      }
+      instanceId = this.keysByWorldRef.get(keyRef);
+      simulation = instanceId ? this.instancesById.get(instanceId) : null;
+    }
+    if (!simulation) {
+      return { synced: false };
+    }
+    const occupiedPlayer = simulation.runtime.players.find((entry) => entry.occupied_by_profile_id === profile?.id) ?? null;
+    if (!occupiedPlayer) {
+      return { synced: false };
+    }
+    const syncedPose = applyOccupiedPlayerPose(simulation.runtime, occupiedPlayer, {
+      position,
+      position_x,
+      position_y,
+      position_z,
+      velocity,
+      velocity_x,
+      velocity_y,
+      velocity_z,
+      headingY,
+      heading_y,
+    });
+    return {
+      synced: true,
+      ...syncedPose,
+    };
+  }
+
+  async queueInputByReference({
+    worldId,
+    creatorUsername,
+    profile,
+    key,
+    state,
+    headingY = null,
+    heading_y = null,
+    position = null,
+    position_x = null,
+    position_y = null,
+    position_z = null,
+    velocity = null,
+    velocity_x = null,
+    velocity_y = null,
+    velocity_z = null,
+  } = {}) {
     const keyRef = this.getWorldRefKey(worldId, creatorUsername);
     let instanceId = this.keysByWorldRef.get(keyRef);
     let simulation = instanceId ? this.instancesById.get(instanceId) : null;
@@ -1268,6 +1440,33 @@ export class PrivateWorldRuntime {
     }
     const normalizedKey = String(key ?? "").trim().toLowerCase();
     const resolvedHeadingY = Number(headingY ?? heading_y);
+    const hasClientPose = [
+      position_x,
+      position_y,
+      position_z,
+      velocity_x,
+      velocity_y,
+      velocity_z,
+      position?.x,
+      position?.y,
+      position?.z,
+      velocity?.x,
+      velocity?.y,
+      velocity?.z,
+    ].some((value) => Number.isFinite(Number(value)));
+    if (hasClientPose) {
+      applyOccupiedPlayerPose(simulation.runtime, occupiedPlayer, {
+        position,
+        position_x,
+        position_y,
+        position_z,
+        velocity,
+        velocity_x,
+        velocity_y,
+        velocity_z,
+        headingY: Number.isFinite(resolvedHeadingY) ? resolvedHeadingY : null,
+      });
+    }
     if (!normalizedKey && !Number.isFinite(resolvedHeadingY)) {
       throw new HttpError(400, "Runtime input key or heading is required");
     }

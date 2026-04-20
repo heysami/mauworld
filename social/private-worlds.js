@@ -40,6 +40,7 @@ import {
   buildPrivateWorldBrowserResultsMarkup,
   getPrivateWorldBrowserKey,
 } from "./private-world-browser.js";
+import { resolvePlayerMovementAgainstBlockers } from "./private-player-collision.mjs";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 import {
   createWorldGamesApi,
@@ -112,6 +113,7 @@ const PRIVATE_RUNTIME_SNAPSHOT_PRIORITY = {
 };
 const PRIVATE_RUNTIME_LOOK_SYNC_MS = 45;
 const PRIVATE_RUNTIME_LOOK_SYNC_EPSILON = 0.0025;
+const PRIVATE_POSSESSED_PRESENCE_INTERVAL_MS = 33;
 const PRIVATE_MOVEMENT_INTENT_KEYS = [
   "w",
   "a",
@@ -5438,23 +5440,122 @@ function getPrivatePresencePosition() {
   };
 }
 
+function getLocalPossessedPlayerPosePayload() {
+  const runtimePlayer = getPossessedRuntimePlayer();
+  const prediction = getLocalPossessedPlayerPrediction();
+  const source = prediction ?? runtimePlayer;
+  if (!source) {
+    return null;
+  }
+  const positionX = Number(source.position?.x);
+  const positionY = Number(source.position?.y);
+  const positionZ = Number(source.position?.z);
+  const velocityX = Number(source.velocity?.x);
+  const velocityY = Number(source.velocity?.y);
+  const velocityZ = Number(source.velocity?.z);
+  return {
+    position_x: Number((Number.isFinite(positionX) ? positionX : 0).toFixed(4)),
+    position_y: Number((Number.isFinite(positionY) ? positionY : PRIVATE_CAMERA.minY).toFixed(4)),
+    position_z: Number((Number.isFinite(positionZ) ? positionZ : 0).toFixed(4)),
+    velocity_x: Number((Number.isFinite(velocityX) ? velocityX : 0).toFixed(4)),
+    velocity_y: Number((Number.isFinite(velocityY) ? velocityY : 0).toFixed(4)),
+    velocity_z: Number((Number.isFinite(velocityZ) ? velocityZ : 0).toFixed(4)),
+  };
+}
+
+function getPrivatePlayerReleaseSpawn(playerEntityId = "", world = state.selectedWorld) {
+  const resolvedPlayerId = resolvePrivatePlayerEntityId(playerEntityId, getRuntimePlayerIds()) ?? String(playerEntityId ?? "").trim();
+  if (!resolvedPlayerId) {
+    return null;
+  }
+  const activeSceneId = String(world?.active_instance?.active_scene_id ?? "").trim();
+  const activeScene = world?.scenes?.find((entry) => String(entry?.id ?? "").trim() === activeSceneId)
+    ?? getSelectedScene()
+    ?? null;
+  const sceneDoc = activeScene?.compiled_doc?.runtime?.resolved_scene_doc ?? activeScene?.scene_doc ?? null;
+  const players = Array.isArray(sceneDoc?.players) ? sceneDoc.players : [];
+  const runtimePlayerIds = getRuntimePlayerIds();
+  const playerEntry = players.find((entry) => {
+    const authoredPlayerId = String(entry?.id ?? "").trim();
+    if (!authoredPlayerId) {
+      return false;
+    }
+    const canonicalPlayerId = resolvePrivatePlayerEntityId(authoredPlayerId, runtimePlayerIds) ?? authoredPlayerId;
+    return canonicalPlayerId === resolvedPlayerId || authoredPlayerId === resolvedPlayerId;
+  }) ?? null;
+  if (!playerEntry) {
+    return null;
+  }
+  const positionX = Number(playerEntry.position?.x);
+  const positionY = Number(playerEntry.position?.y);
+  const positionZ = Number(playerEntry.position?.z);
+  const headingY = Number(playerEntry.rotation?.y);
+  return {
+    player_entity_id: resolvedPlayerId,
+    position_x: Number.isFinite(positionX) ? positionX : 0,
+    position_y: Number.isFinite(positionY) ? positionY : PRIVATE_CAMERA.minY,
+    position_z: Number.isFinite(positionZ) ? positionZ : 0,
+    heading_y: Number.isFinite(headingY) ? headingY : 0,
+  };
+}
+
+function applyPrivateViewerReleaseSpawn(spawn = null) {
+  if (!spawn) {
+    return false;
+  }
+  const nextX = Number(spawn.position_x);
+  const nextY = Number(spawn.position_y);
+  const nextZ = Number(spawn.position_z);
+  if (Number.isFinite(nextX)) {
+    state.viewerPosition.x = nextX;
+  }
+  if (Number.isFinite(nextY)) {
+    state.viewerPosition.y = nextY;
+  }
+  if (Number.isFinite(nextZ)) {
+    state.viewerPosition.z = nextZ;
+  }
+  clampViewerPositionToWorldBounds(state.viewerPosition);
+  const headingY = Number(spawn.heading_y);
+  if (Number.isFinite(headingY)) {
+    privateInputState.yaw = normalizeAngle(headingY);
+  }
+  if (state.preview?.viewerAvatar) {
+    state.preview.viewerAvatar.position.copy(state.viewerPosition);
+    state.preview.viewerAvatar.lastPosition.copy(state.viewerPosition);
+    state.preview.viewerAvatar.group.position.copy(state.viewerPosition);
+    state.preview.viewerAvatar.facingYaw = normalizeAngle(privateInputState.yaw + Math.PI);
+  }
+  return true;
+}
+
 function sendPrivatePresence(force = false) {
   if (!state.joined || !getLocalParticipant()) {
     return false;
   }
   const now = performance.now();
-  if (!force && now - state.lastPresenceSentAt < 120) {
+  const minIntervalMs = getLocalParticipant()?.join_role === "player"
+    ? PRIVATE_POSSESSED_PRESENCE_INTERVAL_MS
+    : 120;
+  if (!force && now - state.lastPresenceSentAt < minIntervalMs) {
     return false;
   }
   state.lastPresenceSentAt = now;
   const position = getPrivatePresencePosition();
-  return sendWorldSocketMessage({
+  const payload = {
     type: "presence:update",
     position_x: Number(position.x.toFixed(4)),
     position_y: Number(position.y.toFixed(4)),
     position_z: Number(position.z.toFixed(4)),
     heading_y: Number(position.heading.toFixed(4)),
-  });
+  };
+  const possessedPose = getLocalPossessedPlayerPosePayload();
+  if (possessedPose) {
+    payload.velocity_x = possessedPose.velocity_x;
+    payload.velocity_y = possessedPose.velocity_y;
+    payload.velocity_z = possessedPose.velocity_z;
+  }
+  return sendWorldSocketMessage(payload);
 }
 
 function pushPrivateChatEntry(payload = {}) {
@@ -9188,6 +9289,173 @@ function reconcilePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimeP
   return prediction;
 }
 
+function toPlainCollisionScale(scale = {}, fallback = { x: 1, y: 1, z: 1 }) {
+  const fallbackX = Number(fallback?.x ?? 1);
+  const fallbackY = Number(fallback?.y ?? 1);
+  const fallbackZ = Number(fallback?.z ?? 1);
+  return {
+    x: Math.max(0.1, Number(scale?.x ?? fallbackX) || fallbackX || 1),
+    y: Math.max(0.1, Number(scale?.y ?? fallbackY) || fallbackY || 1),
+    z: Math.max(0.1, Number(scale?.z ?? fallbackZ) || fallbackZ || 1),
+  };
+}
+
+function getPrivatePlayerCollisionSize(scale = PRIVATE_PLAYER_DEFAULT_SCALE) {
+  const resolvedScale = Math.max(0.25, Number(scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE);
+  return {
+    x: PRIVATE_PLAYER_METRICS.width * resolvedScale,
+    y: PRIVATE_PLAYER_METRICS.height * resolvedScale,
+    z: PRIVATE_PLAYER_METRICS.width * resolvedScale,
+  };
+}
+
+function isPrivateCollisionModeRigid(value = "rigid") {
+  return String(value ?? "rigid").trim().toLowerCase() !== "ghost";
+}
+
+function getPrivateCollisionEntrySize(kind, entry = {}) {
+  if (entry?.collider_scale) {
+    return toPlainCollisionScale(entry.collider_scale, entry.scale ?? { x: 1, y: 1, z: 1 });
+  }
+  if (kind === "voxel") {
+    return getPrivateVoxelScale(entry.scale);
+  }
+  const size = getEntityApproxRenderSize(kind, entry);
+  return toPlainCollisionScale(size, { x: 1, y: 1, z: 1 });
+}
+
+function buildPrivateCollisionProbe(startPosition = {}, desiredPosition = {}, playerSize = {}) {
+  const probePadding = PRIVATE_WORLD_BLOCK_UNIT * 2;
+  const playerHalf = getHalfExtentsFromScale(playerSize);
+  const minX = Math.min(Number(startPosition.x ?? 0) || 0, Number(desiredPosition.x ?? 0) || 0) - playerHalf.x - probePadding;
+  const maxX = Math.max(Number(startPosition.x ?? 0) || 0, Number(desiredPosition.x ?? 0) || 0) + playerHalf.x + probePadding;
+  const minY = Math.min(Number(startPosition.y ?? 0) || 0, Number(desiredPosition.y ?? 0) || 0) - playerHalf.y - probePadding;
+  const maxY = Math.max(Number(startPosition.y ?? 0) || 0, Number(desiredPosition.y ?? 0) || 0) + playerHalf.y + probePadding;
+  const minZ = Math.min(Number(startPosition.z ?? 0) || 0, Number(desiredPosition.z ?? 0) || 0) - playerHalf.z - probePadding;
+  const maxZ = Math.max(Number(startPosition.z ?? 0) || 0, Number(desiredPosition.z ?? 0) || 0) + playerHalf.z + probePadding;
+  return { minX, maxX, minY, maxY, minZ, maxZ };
+}
+
+function addPrivateCollisionBlocker(blockers, blocker = {}, probe = null) {
+  const position = {
+    x: Number(blocker.position?.x ?? 0) || 0,
+    y: Number(blocker.position?.y ?? 0) || 0,
+    z: Number(blocker.position?.z ?? 0) || 0,
+  };
+  const size = toPlainCollisionScale(blocker.size, { x: 1, y: 1, z: 1 });
+  const half = getHalfExtentsFromScale(size);
+  if (probe) {
+    if (
+      position.x + half.x < probe.minX
+      || position.x - half.x > probe.maxX
+      || position.y + half.y < probe.minY
+      || position.y - half.y > probe.maxY
+      || position.z + half.z < probe.minZ
+      || position.z - half.z > probe.maxZ
+    ) {
+      return;
+    }
+  }
+  blockers.push({
+    position,
+    size,
+    rotation: {
+      x: Number(blocker.rotation?.x ?? 0) || 0,
+      y: Number(blocker.rotation?.y ?? 0) || 0,
+      z: Number(blocker.rotation?.z ?? 0) || 0,
+    },
+  });
+}
+
+function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = prediction?.position) {
+  if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    return [];
+  }
+  const playerSize = getPrivatePlayerCollisionSize(prediction.scale);
+  const probe = buildPrivateCollisionProbe(prediction.position, desiredPosition, playerSize);
+  const blockers = [];
+  let sceneDoc = null;
+  try {
+    sceneDoc = getRenderableSceneDoc();
+  } catch (_error) {
+    sceneDoc = null;
+  }
+
+  for (const voxel of sceneDoc?.voxels ?? []) {
+    addPrivateCollisionBlocker(blockers, {
+      position: voxel.position,
+      size: getPrivateCollisionEntrySize("voxel", voxel),
+      rotation: voxel.rotation,
+    }, probe);
+  }
+
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  const runtimeSceneId = String(runtime?.active_scene_id ?? "").trim();
+  const selectedSceneId = String(state.selectedSceneId ?? "").trim();
+  const runtimeMatchesSelectedScene = Boolean(runtime && runtimeSceneId && runtimeSceneId === selectedSceneId);
+  const localPlayerId = String(prediction.playerId ?? getLocallyControlledPlayerEntityId() ?? "").trim();
+
+  if (runtimeMatchesSelectedScene) {
+    for (const entry of runtime.dynamic_objects ?? []) {
+      if (!isPrivateCollisionModeRigid(entry?.rigid_mode)) {
+        continue;
+      }
+      const kind = entry?.entity_kind === "model" ? "model" : "primitive";
+      addPrivateCollisionBlocker(blockers, {
+        position: entry.position,
+        size: getPrivateCollisionEntrySize(kind, entry),
+        rotation: entry.rotation,
+      }, probe);
+    }
+    for (const entry of runtime.players ?? []) {
+      const playerId = String(entry?.id ?? "").trim();
+      if (!playerId || playerId === localPlayerId || !isPrivateCollisionModeRigid(entry?.body_mode)) {
+        continue;
+      }
+      addPrivateCollisionBlocker(blockers, {
+        position: entry.position,
+        size: getPrivatePlayerCollisionSize(entry.scale),
+        rotation: entry.rotation,
+      }, probe);
+    }
+    return blockers;
+  }
+
+  for (const primitive of sceneDoc?.primitives ?? []) {
+    if (!isPrivateCollisionModeRigid(primitive?.rigid_mode)) {
+      continue;
+    }
+    addPrivateCollisionBlocker(blockers, {
+      position: primitive.position,
+      size: getPrivateCollisionEntrySize("primitive", primitive),
+      rotation: primitive.rotation,
+    }, probe);
+  }
+  for (const model of sceneDoc?.models ?? []) {
+    if (!isPrivateCollisionModeRigid(model?.rigid_mode)) {
+      continue;
+    }
+    addPrivateCollisionBlocker(blockers, {
+      position: model.position,
+      size: getPrivateCollisionEntrySize("model", model),
+      rotation: model.rotation,
+    }, probe);
+  }
+  const runtimePlayerIds = getRuntimePlayerIds();
+  for (const player of sceneDoc?.players ?? []) {
+    const playerId = resolvePrivatePlayerEntityId(player?.id, runtimePlayerIds) ?? String(player?.id ?? "").trim();
+    if (!playerId || playerId === localPlayerId || !isPrivateCollisionModeRigid(player?.body_mode)) {
+      continue;
+    }
+    addPrivateCollisionBlocker(blockers, {
+      position: player.position,
+      size: getPrivatePlayerCollisionSize(player.scale),
+      rotation: player.rotation,
+    }, probe);
+  }
+  return blockers;
+}
+
 function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const runtimePlayer = getPossessedRuntimePlayer();
   const prediction = ensurePossessedPlayerPrediction(runtimePlayer);
@@ -9205,12 +9473,30 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const blend = clampNumber(PRIVATE_PLAYER_RUNTIME.acceleration * dt, 1, 0, 1);
   prediction.velocity.x += (intent.x * speed - prediction.velocity.x) * blend;
   prediction.velocity.z += (intent.z * speed - prediction.velocity.z) * blend;
-  prediction.position.x += prediction.velocity.x * dt;
-  prediction.position.z += prediction.velocity.z * dt;
   const nextPositionY = Number(runtimePlayer.position?.y);
-  if (Number.isFinite(nextPositionY)) {
-    prediction.position.y = nextPositionY;
+  const desiredPosition = {
+    x: prediction.position.x + prediction.velocity.x * dt,
+    y: Number.isFinite(nextPositionY) ? nextPositionY : prediction.position.y,
+    z: prediction.position.z + prediction.velocity.z * dt,
+  };
+  if (isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    const collision = resolvePlayerMovementAgainstBlockers({
+      startPosition: {
+        x: prediction.position.x,
+        y: desiredPosition.y,
+        z: prediction.position.z,
+      },
+      desiredPosition,
+      playerSize: getPrivatePlayerCollisionSize(prediction.scale),
+      blockers: getPrivatePossessedCollisionBlockers(prediction, desiredPosition),
+    });
+    prediction.position.x = collision.position.x;
+    prediction.position.z = collision.position.z;
+  } else {
+    prediction.position.x = desiredPosition.x;
+    prediction.position.z = desiredPosition.z;
   }
+  prediction.position.y = desiredPosition.y;
   prediction.rotation.y = intent.headingY;
   return prediction;
 }
@@ -18095,16 +18381,26 @@ async function releasePlayer() {
   if (!state.selectedWorld || !state.session) {
     return;
   }
-  clearPossessedPlayerPrediction();
-  await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/release`, {
+  const localParticipant = getLocalParticipant();
+  const playerEntityId = String(localParticipant?.player_entity_id ?? "").trim();
+  const fallbackReleaseSpawn = getPrivatePlayerReleaseSpawn(playerEntityId, state.selectedWorld);
+  state.pressedRuntimeKeys.clear();
+  const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/release`, {
     method: "POST",
     body: {
       creatorUsername: state.selectedWorld.creator.username,
     },
   });
-  state.pressedRuntimeKeys.clear();
+  if (localParticipant) {
+    localParticipant.join_role = "viewer";
+    localParticipant.player_entity_id = null;
+  }
+  clearPossessedPlayerPrediction();
+  applyPrivateViewerReleaseSpawn(payload.release_spawn ?? fallbackReleaseSpawn);
   pushEvent("player:released", state.selectedWorld.name);
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+  syncPrivateCameraToFollowTarget(state.preview);
+  sendPrivatePresence(true);
 }
 
 async function leaveWorld() {
@@ -18300,6 +18596,20 @@ function getRuntimeInputHeadingY() {
   return Number(normalizeAngle(privateInputState.yaw).toFixed(6));
 }
 
+function appendRuntimePosePayload(payload = {}) {
+  const pose = getLocalPossessedPlayerPosePayload();
+  if (!pose) {
+    return payload;
+  }
+  payload.position_x = pose.position_x;
+  payload.position_y = pose.position_y;
+  payload.position_z = pose.position_z;
+  payload.velocity_x = pose.velocity_x;
+  payload.velocity_y = pose.velocity_y;
+  payload.velocity_z = pose.velocity_z;
+  return payload;
+}
+
 async function sendRuntimeInput(key, runtimeState = "down", options = {}) {
   if (!state.selectedWorld || !state.session || getLocalParticipant()?.join_role !== "player") {
     return false;
@@ -18320,20 +18630,22 @@ async function sendRuntimeInput(key, runtimeState = "down", options = {}) {
   if (hasHeadingY) {
     payload.heading_y = Number(normalizeAngle(headingY).toFixed(6));
   }
+  appendRuntimePosePayload(payload);
   if (sendWorldSocketMessage(payload)) {
     return true;
   }
   if (options.socketOnly === true || !normalizedKey) {
     return false;
   }
+  const body = appendRuntimePosePayload({
+    creatorUsername: state.selectedWorld.creator.username,
+    key: normalizedKey,
+    state: runtimeState,
+    heading_y: hasHeadingY ? Number(normalizeAngle(headingY).toFixed(6)) : undefined,
+  });
   await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/input`, {
     method: "POST",
-    body: {
-      creatorUsername: state.selectedWorld.creator.username,
-      key: normalizedKey,
-      state: runtimeState,
-      heading_y: hasHeadingY ? Number(normalizeAngle(headingY).toFixed(6)) : undefined,
-    },
+    body,
   });
   return true;
 }
@@ -18355,11 +18667,11 @@ function syncRuntimeLookHeading(force = false) {
   ) {
     return false;
   }
-  const sent = sendWorldSocketMessage({
+  const sent = sendWorldSocketMessage(appendRuntimePosePayload({
     type: "runtime:input",
     state: "look",
     heading_y: headingY,
-  });
+  }));
   if (sent) {
     state.lastRuntimeLookSentAt = now;
     state.lastRuntimeLookHeadingY = headingY;

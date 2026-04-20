@@ -2568,6 +2568,12 @@ export function installPrivateWorldStore(MauworldStore) {
     if (!participant || participant.join_role !== "player") {
       throw new HttpError(409, "You are not currently possessing a player");
     }
+    const releaseSpawn = await this.privateWorldRuntime?.resetOccupiedPlayerToInitialPoseByReference?.({
+      worldId: world.world_id,
+      creatorUsername: creator.username,
+      profile,
+      playerEntityId: participant.player_entity_id,
+    });
     await must(
       this.serviceClient
         .from("private_world_participants")
@@ -2597,6 +2603,15 @@ export function installPrivateWorldStore(MauworldStore) {
     await syncRuntimeForWorld(this, world, creator);
     return {
       released: true,
+      release_spawn: releaseSpawn
+        ? {
+            player_entity_id: releaseSpawn.player_entity_id,
+            position_x: releaseSpawn.position?.x ?? 0,
+            position_y: releaseSpawn.position?.y ?? 0,
+            position_z: releaseSpawn.position?.z ?? 0,
+            heading_y: releaseSpawn.heading_y ?? 0,
+          }
+        : null,
     };
   };
 
@@ -2741,8 +2756,35 @@ export function installPrivateWorldStore(MauworldStore) {
       key: input.key,
       state: input.state,
       headingY: input.heading_y ?? input.headingY,
+      position_x: input.position_x,
+      position_y: input.position_y,
+      position_z: input.position_z,
+      velocity_x: input.velocity_x,
+      velocity_y: input.velocity_y,
+      velocity_z: input.velocity_z,
     });
     return result;
+  };
+
+  MauworldStore.prototype.syncPrivateWorldPlayerPose = async function syncPrivateWorldPlayerPose(profile, input = {}) {
+    const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
+    if (!this.privateWorldRuntime?.syncOccupiedPlayerPoseByReference) {
+      return {
+        synced: false,
+      };
+    }
+    return await this.privateWorldRuntime.syncOccupiedPlayerPoseByReference({
+      worldId: world.world_id,
+      creatorUsername: creator.username,
+      profile,
+      position_x: input.position_x,
+      position_y: input.position_y,
+      position_z: input.position_z,
+      velocity_x: input.velocity_x,
+      velocity_y: input.velocity_y,
+      velocity_z: input.velocity_z,
+      headingY: input.heading_y ?? input.headingY,
+    });
   };
 
   MauworldStore.prototype.acquirePrivateWorldEntityLock = async function acquirePrivateWorldEntityLock(profile, input = {}) {
