@@ -187,8 +187,8 @@ const WORLD_STREAM = {
   fogMultiplier: 2.4,
 };
 
-const PRIVATE_WORLD_MINIATURE_FAST_POLL_MS = Math.round(1000 / 24);
-const PRIVATE_WORLD_MINIATURE_IDLE_POLL_MS = 250;
+const PRIVATE_WORLD_MINIATURE_FAST_POLL_MS = 250;
+const PRIVATE_WORLD_MINIATURE_IDLE_POLL_MS = 5000;
 
 const WORLD_STYLE = {
   background: "#fbfcff",
@@ -6377,6 +6377,7 @@ function buildPillarObject(entry) {
     lod,
     detailGroup,
     anchor,
+    radius: entry.radius,
     body: pillarMesh,
     outline,
     bands,
@@ -10900,13 +10901,11 @@ async function loadPrivateWorldMiniaturesLive() {
       await loadStream(true);
       return;
     }
-    const liveKeys = new Set();
     for (const miniature of liveMiniatures) {
       const key = getPrivateWorldMiniatureEntryId(miniature);
       if (!key) {
         continue;
       }
-      liveKeys.add(key);
       const existing = state.worldCache.privateWorldMiniatures.get(key);
       if (!existing) {
         continue;
@@ -10920,17 +10919,9 @@ async function loadPrivateWorldMiniaturesLive() {
         visible_players: Array.isArray(miniature.visible_players) ? miniature.visible_players : [],
       });
     }
-    for (const [key, existing] of state.worldCache.privateWorldMiniatures.entries()) {
-      if (
-        isCellWithinWindow(existing.anchor_cell_x, existing.anchor_cell_z, requestWindow)
-        && !liveKeys.has(key)
-      ) {
-        state.worldCache.privateWorldMiniatures.delete(key);
-      }
-    }
     state.stream = getCachedWorldPayload(getLivePresenceRows());
     syncPrivateWorldMiniatures(state.stream.privateWorldMiniatures ?? [], {
-      pruneMissing: true,
+      pruneMissing: false,
       reregister: false,
     });
   } catch (error) {
@@ -12565,31 +12556,47 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
     }
     entry.lod?.update(sceneState.camera);
     const distance = entry.anchor.distanceTo(sceneState.camera.position);
+    const horizontalDistance = Math.hypot(
+      sceneState.camera.position.x - entry.anchor.x,
+      sceneState.camera.position.z - entry.anchor.z,
+    );
+    const withinPillarHeight =
+      sceneState.camera.position.y >= entry.anchor.y - 24
+      && sceneState.camera.position.y <= entry.anchor.y + entry.height + 36;
+    const occlusionFade = withinPillarHeight
+      ? easeInOutCubic(
+          clamp(
+            (horizontalDistance - entry.radius * 0.9) / Math.max(1, entry.radius * 1.7),
+            0,
+            1,
+          ),
+        )
+      : 1;
     const activeCell = isCellWithinWindow(entry.cellX, entry.cellZ, pillarActiveWindow);
     const fade = 1 - clamp((distance - nearDistance * 0.4) / Math.max(1, retainedDistance - nearDistance * 0.4), 0, 1);
     const worldMix = activeCell ? 1 : 0.42;
-    entry.body.material.opacity = (0.28 + fade * 0.68) * worldMix;
-    entry.outline.material.opacity = (activeCell ? 0.9 : 0.42) * fade;
+    entry.body.material.opacity = (0.28 + fade * 0.68) * worldMix * occlusionFade;
+    entry.outline.material.opacity = (activeCell ? 0.9 : 0.42) * fade * occlusionFade;
     for (const band of entry.bands) {
-      band.mesh.material.opacity = (activeCell ? 0.58 : 0.26) + fade * 0.18;
+      band.mesh.material.opacity = ((activeCell ? 0.58 : 0.26) + fade * 0.18) * occlusionFade;
       band.mesh.position.y = band.baseY + Math.sin(elapsedSeconds * band.bobSpeed + band.phase + entry.phase) * band.bobAmount;
       const pulse = 1 + Math.sin(elapsedSeconds * (band.bobSpeed + 0.1) + band.phase) * band.pulse;
       band.mesh.scale.setScalar(pulse);
     }
     entry.cap.position.y = entry.capBaseY + Math.sin(elapsedSeconds * 0.76 + entry.phase) * 0.6;
-    entry.cap.material.opacity = (0.24 + fade * 0.56) * worldMix;
-    entry.crown.material.opacity = (activeCell ? 0.16 : 0.08) + fade * 0.12;
+    entry.cap.material.opacity = (0.24 + fade * 0.56) * worldMix * occlusionFade;
+    entry.crown.material.opacity = ((activeCell ? 0.16 : 0.08) + fade * 0.12) * occlusionFade;
     const crownPulse = 1 + Math.sin(elapsedSeconds * 0.9 + entry.phase) * 0.05;
     entry.crown.scale.set(crownPulse, crownPulse, 1);
     entry.label.material.opacity = activeCell
-      ? 0.26 + fade * 0.66
-      : 0.1 + fade * 0.18;
+      ? (0.26 + fade * 0.66) * occlusionFade
+      : (0.1 + fade * 0.18) * occlusionFade;
     entry.proxy.position.y = entry.proxyBaseY + Math.sin(elapsedSeconds * 0.42 + entry.phase) * 0.4;
     entry.proxy.material.opacity = (
       activeCell
         ? 0.34 + fade * 0.48
         : 0.16 + fade * 0.22
-    ) * (entry.proxy.visible ? 1 : 0);
+    ) * (entry.proxy.visible ? 1 : 0) * occlusionFade;
     if (entry.flow && entry.flowData?.length) {
       const positions = entry.flow.geometry.attributes.position.array;
       for (let index = 0; index < entry.flowData.length; index += 1) {
@@ -12602,7 +12609,7 @@ function updateAnimatedObjects(deltaSeconds, elapsedSeconds) {
         positions[offset + 2] = Math.sin(angle) * particle.radius;
       }
       entry.flow.geometry.attributes.position.needsUpdate = true;
-      entry.flow.material.opacity = (activeCell ? 0.24 : 0.1) + fade * 0.22;
+      entry.flow.material.opacity = ((activeCell ? 0.24 : 0.1) + fade * 0.22) * occlusionFade;
     }
   }
 
