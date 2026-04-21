@@ -11294,7 +11294,21 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
       })
       : null;
     const jumpLandingGroundY = Number(descendingJumpSupport?.groundY);
-    if (descendingJumpSupport?.hasSupport === true && Number.isFinite(jumpLandingGroundY)) {
+    const jumpLandingGap = Number.isFinite(jumpLandingGroundY)
+      ? ((Number(prediction.position.y ?? jumpLandingGroundY) || jumpLandingGroundY) - jumpLandingGroundY)
+      : Number.POSITIVE_INFINITY;
+    const jumpLandingSnapTolerance = Math.min(
+      0.22,
+      Math.max(
+        0.05,
+        Math.abs(Number(prediction.jumpVisualVelocityY ?? 0) || 0) * dt + 0.02,
+      ),
+    );
+    if (
+      descendingJumpSupport?.hasSupport === true
+      && Number.isFinite(jumpLandingGroundY)
+      && jumpLandingGap <= jumpLandingSnapTolerance
+    ) {
       prediction.groundY = jumpLandingGroundY;
       prediction.position.y = jumpLandingGroundY;
       prediction.velocity.y = Number.isFinite(Number(descendingJumpSupport?.velocityY))
