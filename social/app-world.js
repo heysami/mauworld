@@ -7086,19 +7086,19 @@ function getPrivateMiniaturePlayerTargetPosition(animatedEntry, player = {}) {
 
 function createPrivateMiniaturePlayerDot(animatedEntry, player = {}, key = "") {
   const marker = new THREE.Group();
-  const outline = new THREE.Mesh(
-    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius, 12, 12),
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius * 1.28, 12, 12),
     new THREE.MeshBasicMaterial({
-      color: "#ffffff",
+      color: "#ff4a4a",
       transparent: true,
-      opacity: 0.98,
+      opacity: 0.16,
       toneMapped: false,
       depthTest: false,
       depthWrite: false,
     }),
   );
   const core = new THREE.Mesh(
-    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius * 0.8, 12, 12),
+    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius * 0.94, 12, 12),
     new THREE.MeshBasicMaterial({
       color: "#ff1414",
       toneMapped: false,
@@ -7106,23 +7106,28 @@ function createPrivateMiniaturePlayerDot(animatedEntry, player = {}, key = "") {
       depthWrite: false,
     }),
   );
-  const glow = new THREE.Mesh(
-    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius * 1.26, 12, 12),
+  const highlight = new THREE.Mesh(
+    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius * 0.2, 10, 10),
     new THREE.MeshBasicMaterial({
-      color: "#ff2a2a",
+      color: "#fff6f6",
       transparent: true,
-      opacity: 0.14,
+      opacity: 0.82,
       toneMapped: false,
       depthTest: false,
       depthWrite: false,
     }),
   );
+  highlight.position.set(
+    animatedEntry.playerMarkerRadius * 0.22,
+    animatedEntry.playerMarkerRadius * 0.18,
+    animatedEntry.playerMarkerRadius * 0.52,
+  );
   glow.renderOrder = 18;
-  outline.renderOrder = 19;
-  core.renderOrder = 20;
+  core.renderOrder = 19;
+  highlight.renderOrder = 20;
   marker.add(glow);
-  marker.add(outline);
   marker.add(core);
+  marker.add(highlight);
   const targetPosition = getPrivateMiniaturePlayerTargetPosition(animatedEntry, player);
   marker.position.copy(targetPosition);
   animatedEntry.playerDots.add(marker);
