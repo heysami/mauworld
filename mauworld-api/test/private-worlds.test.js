@@ -4,6 +4,7 @@ import {
   buildPrivateWorldExportPackage,
   compilePrivateWorldScriptDsl,
   compileSceneDoc,
+  collectPrivateWorldAssetIds,
   computeMiniatureDimensions,
   createDefaultSceneDoc,
   resolveEntityIdAlias,
@@ -261,6 +262,33 @@ test("normalizeSceneDoc preserves texture asset ids on materials", () => {
 
   assert.equal(scene.primitives[0].material.texture_asset_id, "asset_texture_123");
   assert.equal(scene.primitives[0].material.texture_preset, "none");
+});
+
+test("normalizeSceneDoc keeps player appearance asset ids and collects their linked assets", () => {
+  const scene = normalizeSceneDoc({
+    players: [
+      {
+        id: "hero",
+        label: "Hero",
+        asset_id: "asset_model_player",
+        body_mode: "ghost",
+        material: {
+          color: "#abcdef",
+          texture_asset_id: "asset_texture_player",
+          emissive_intensity: 1.6,
+        },
+      },
+    ],
+  });
+
+  assert.equal(scene.players[0].asset_id, "asset_model_player");
+  assert.equal(scene.players[0].material.color, "#abcdef");
+  assert.equal(scene.players[0].material.texture_asset_id, "asset_texture_player");
+  assert.equal(scene.players[0].material.emissive_intensity, 1.6);
+  assert.deepEqual(
+    new Set(collectPrivateWorldAssetIds(scene)),
+    new Set(["asset_model_player", "asset_texture_player"]),
+  );
 });
 
 test("normalizeSceneDoc keeps object panel shapes and facing modes", () => {

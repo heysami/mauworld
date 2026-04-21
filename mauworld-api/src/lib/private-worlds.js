@@ -537,12 +537,18 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     entry.jump_enabled ?? entry.jumpEnabled ?? false,
   );
   const bodyMode = String(entry.body_mode ?? entry.bodyMode ?? "rigid").trim().toLowerCase();
+  const normalizedBodyMode = ALLOWED_PLAYER_BODY_MODES.has(bodyMode) ? bodyMode : "rigid";
   return {
     id: ensureEntityId("player", entry.id || `player-${index + 1}`, options),
     label: String(entry.label ?? `Player ${index + 1}`).trim().slice(0, 48) || `Player ${index + 1}`,
     position: sanitizeVector3(entry.position, { x: 0, y: PRIVATE_PLAYER_STANDING_CENTER_Y, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
     scale: Number(clampNumber(entry.scale, PRIVATE_PLAYER_DEFAULT_SCALE, 0.25, 12).toFixed(4)),
+    asset_id: String(entry.asset_id ?? entry.assetId ?? entry.model_asset_id ?? entry.modelAssetId ?? "").trim() || null,
+    material: sanitizeMaterial(
+      entry.material,
+      normalizedBodyMode === "ghost" ? "#6dd3ff" : "#ff8e4f",
+    ),
     camera_mode: cameraMode,
     fixed_top_down_direction: fixedTopDownDirection,
     fixed_top_down_angle: fixedTopDownAngle,
@@ -561,7 +567,7 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     ).toFixed(4)),
     movement_enabled: movementEnabled,
     jump_enabled: jumpEnabled,
-    body_mode: ALLOWED_PLAYER_BODY_MODES.has(bodyMode) ? bodyMode : "rigid",
+    body_mode: normalizedBodyMode,
     occupiable: entry.occupiable !== false,
   };
 }
@@ -1305,6 +1311,8 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         position: entry.position,
         rotation: entry.rotation,
         scale: entry.scale,
+        asset_id: entry.asset_id ?? null,
+        material: entry.material,
         camera_mode: entry.camera_mode,
         fixed_top_down_direction: entry.fixed_top_down_direction,
         fixed_top_down_angle: entry.fixed_top_down_angle,
@@ -1422,6 +1430,7 @@ export function collectPrivateWorldAssetIds(sceneDoc = {}) {
     normalized.primitives,
     normalized.panels,
     normalized.models,
+    normalized.players,
     normalized.screens,
     normalized.texts,
   ]) {
@@ -1430,6 +1439,11 @@ export function collectPrivateWorldAssetIds(sceneDoc = {}) {
     }
   }
   for (const entry of normalized.models) {
+    if (entry.asset_id) {
+      assetIds.add(entry.asset_id);
+    }
+  }
+  for (const entry of normalized.players) {
     if (entry.asset_id) {
       assetIds.add(entry.asset_id);
     }

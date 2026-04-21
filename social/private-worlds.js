@@ -234,7 +234,8 @@ const AI_PROVIDER_SESSION_KEYS = {
   image: AI_IMAGE_STORAGE_KEY,
   model: AI_MODEL_STORAGE_KEY,
 };
-const MATERIALIZABLE_ENTITY_KINDS = new Set(["voxel", "primitive", "panel", "model", "screen", "text"]);
+const MATERIALIZABLE_ENTITY_KINDS = new Set(["voxel", "primitive", "panel", "model", "player", "screen", "text"]);
+const MODEL_ASSET_TARGET_ENTITY_KINDS = new Set(["model", "player"]);
 const FACING_MODE_OPTIONS = [
   { value: "fixed", label: "Fixed" },
   { value: "billboard", label: "Billboard" },
@@ -410,6 +411,8 @@ const TOOL_PRESET_BUILTINS = {
         jump_enabled: false,
         body_mode: "rigid",
         occupiable: true,
+        asset_id: "",
+        material: { color: "#ff8e4f", texture_preset: "none", texture_asset_id: null, emissive_intensity: 0 },
       },
     },
     {
@@ -430,6 +433,8 @@ const TOOL_PRESET_BUILTINS = {
         jump_enabled: false,
         body_mode: "ghost",
         occupiable: true,
+        asset_id: "",
+        material: { color: "#6dd3ff", texture_preset: "none", texture_asset_id: null, emissive_intensity: 0 },
       },
     },
   ],
@@ -868,6 +873,8 @@ function createBaseToolPresetEntry(kind) {
       jump_enabled: false,
       body_mode: "rigid",
       occupiable: true,
+      asset_id: "",
+      material: { color: "#ff8e4f", texture_preset: "none", texture_asset_id: null, emissive_intensity: 0 },
     };
   }
   if (kind === "screen") {
@@ -12072,6 +12079,12 @@ function buildEntitySummary(kind, entry = {}) {
   if (kind === "text") {
     return `${describeVector3(entry.position)} · ${getFacingModeLabel(entry.facing_mode)} · scale ${Number(entry.scale ?? 1).toFixed(1)}`;
   }
+  if (kind === "player") {
+    const appearanceSummary = entry.asset_id
+      ? "model asset"
+      : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"));
+    return `${describeVector3(entry.position)} · ${entry.camera_mode || "third_person"} · ${appearanceSummary} · scale ${Number(entry.scale ?? 1).toFixed(1)}`;
+  }
   const details = [];
   if (entry.material?.texture_preset) {
     details.push(entry.material.texture_preset);
@@ -12335,6 +12348,171 @@ function buildMaterialEditor(material = {}, options = {}) {
   `;
 }
 
+function getPrivatePlayerDefaultMaterial(playerLike = {}) {
+  const bodyMode = String(playerLike?.body_mode ?? playerLike?.bodyMode ?? "rigid").trim().toLowerCase();
+  return {
+    color: bodyMode === "ghost" ? "#6dd3ff" : "#ff8e4f",
+    texture_preset: "none",
+    texture_asset_id: null,
+    emissive_intensity: 0,
+  };
+}
+
+function getResolvedPrivatePlayerMaterial(playerLike = {}, options = {}) {
+  const fallback = options.fallback ?? getPrivatePlayerDefaultMaterial(playerLike);
+  const material = typeof playerLike?.material === "object" && playerLike.material
+    ? playerLike.material
+    : {};
+  return {
+    color: String(material.color ?? "").trim() || fallback.color,
+    texture_preset: String(material.texture_preset ?? material.texturePreset ?? "").trim() || fallback.texture_preset,
+    texture_asset_id: String(material.texture_asset_id ?? material.textureAssetId ?? "").trim() || fallback.texture_asset_id,
+    emissive_intensity: Math.max(
+      0,
+      Number(material.emissive_intensity ?? material.emissiveIntensity ?? fallback.emissive_intensity ?? 0) || 0,
+    ),
+  };
+}
+
+function getRenderablePrivatePlayerMaterial(playerLike = {}, options = {}) {
+  const resolved = getResolvedPrivatePlayerMaterial(playerLike, options);
+  return {
+    ...resolved,
+    color: options.occupied === true ? "#ff5a6f" : resolved.color,
+  };
+}
+
+function canApplyModelAssetToRef(targetKind = "", targetId = "") {
+  const normalizedTargetKind = String(targetKind ?? "").trim();
+  const normalizedTargetId = String(targetId ?? "").trim();
+  if (!normalizedTargetId || !MODEL_ASSET_TARGET_ENTITY_KINDS.has(normalizedTargetKind)) {
+    return false;
+  }
+  try {
+    const sceneDoc = parseSceneTextarea();
+    return Boolean(findEntityByRef(sceneDoc, { kind: normalizedTargetKind, id: normalizedTargetId })?.entry);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function getSelectedModelAttachTarget() {
+  const targetKind = String(state.builderSelection?.kind ?? "").trim();
+  const targetId = String(state.builderSelection?.id ?? "").trim();
+  if (!targetKind || !targetId || !MODEL_ASSET_TARGET_ENTITY_KINDS.has(targetKind)) {
+    return null;
+  }
+  try {
+    const sceneDoc = parseSceneTextarea();
+    const found = findEntityByRef(sceneDoc, { kind: targetKind, id: targetId });
+    if (!found?.entry) {
+      return null;
+    }
+    return {
+      kind: targetKind,
+      id: targetId,
+      entry: found.entry,
+      index: found.index,
+      name: getDisplayNameForEntity(targetKind, found.entry, found.index),
+      title: buildCompactEntityTitle(targetKind, found.entry, found.index),
+      meta: [
+        getEntityCollection(targetKind)?.singular || "Item",
+        found.entry?.id ? truncatePrivateUiLabel(found.entry.id, 72) : "",
+      ].filter(Boolean).join(" · "),
+      summary: buildEntitySummary(targetKind, found.entry),
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function applyModelAssetToSelection(assetId, options = {}) {
+  const targetKind = String(options.targetKind ?? state.builderSelection?.kind ?? "").trim();
+  const targetId = String(options.targetId ?? state.builderSelection?.id ?? "").trim();
+  const asset = getPrivateAssetById(assetId);
+  if (!asset || asset.asset_type !== "model" || !canApplyModelAssetToRef(targetKind, targetId)) {
+    return false;
+  }
+  mutateSceneDoc((sceneDoc) => {
+    const found = findEntityByRef(sceneDoc, { kind: targetKind, id: targetId });
+    if (!found?.entry) {
+      return;
+    }
+    found.entry.asset_id = asset.id;
+    if (targetKind === "model" && !found.entry.bounds) {
+      found.entry.bounds = cloneJson(asset.bounds ?? { x: 1, y: 1, z: 1 });
+    }
+    if (targetKind === "player") {
+      found.entry.material = found.entry.material || getPrivatePlayerDefaultMaterial(found.entry);
+    }
+  });
+  pushEvent("asset:model-applied", asset.name || asset.id);
+  return true;
+}
+
+function clearModelAssetFromSelection(path = "asset_id") {
+  const normalizedPath = String(path ?? "asset_id").trim() || "asset_id";
+  updateSelectedEntityField(normalizedPath, "", "text");
+}
+
+function getModelAssetTargetActionLabel(target = null) {
+  const targetKind = String(target?.kind ?? "").trim();
+  if (targetKind === "player") {
+    return "Use on selected player";
+  }
+  if (targetKind === "model") {
+    return "Swap selected model";
+  }
+  return "Use selected model";
+}
+
+function buildModelAssetEditor(assetId = "", options = {}) {
+  const normalizedAssetId = String(assetId ?? "").trim();
+  const fieldPath = String(options.path ?? "asset_id").trim() || "asset_id";
+  const targetKind = String(options.targetKind ?? "").trim();
+  const targetId = String(options.targetId ?? "").trim();
+  const asset = normalizedAssetId ? getPrivateAssetById(normalizedAssetId) : null;
+  const thumbnail = getPrivateAssetFile(asset, "thumbnail");
+  const canChooseModel = Boolean(targetKind && targetId && canApplyModelAssetToRef(targetKind, targetId));
+  const disabled = !canChooseModel || !state.session || !state.selectedWorld || !isEditor() || state.mode !== "build";
+  const title = asset?.name
+    || (normalizedAssetId ? "Linked model asset" : "No custom model linked");
+  const summary = asset
+    ? (asset.intended_use || asset.world_context_summary || buildAssetSummary(asset))
+    : normalizedAssetId
+      ? `Model asset ${normalizedAssetId} is linked here, but it is not available in your library right now.`
+      : "Choose a model asset from your library or generate one with AI.";
+  const idNote = normalizedAssetId
+    ? `<small class="pw-material-texture-card__id">${htmlEscape(normalizedAssetId)}</small>`
+    : "";
+  const preview = thumbnail?.url
+    ? `<img class="pw-material-texture-card__thumb" src="${htmlEscape(thumbnail.url)}" alt="${htmlEscape(title)} preview" />`
+    : `<div class="pw-material-texture-card__thumb pw-material-texture-card__thumb--empty" aria-hidden="true">model</div>`;
+  const actions = canChooseModel
+    ? `
+      <div class="pw-inline-actions pw-material-texture-card__actions">
+        <button type="button" data-open-model-library ${disabled ? "disabled" : ""}>Choose from library</button>
+        <button type="button" class="is-muted" data-generate-model-from-inspector ${disabled ? "disabled" : ""}>Generate with AI</button>
+        ${normalizedAssetId ? `<button type="button" class="is-muted" data-clear-model-asset-path="${htmlEscape(fieldPath)}" ${disabled ? "disabled" : ""}>Clear</button>` : ""}
+      </div>
+    `
+    : "";
+  return `
+    <section class="pw-material-texture-card">
+      <div class="pw-material-texture-card__row">
+        ${preview}
+        <div class="pw-material-texture-card__body">
+          <span class="pw-material-texture-card__eyebrow">Model</span>
+          <strong>${htmlEscape(title)}</strong>
+          <p class="pw-material-texture-card__summary">${htmlEscape(summary)}</p>
+          ${idNote}
+        </div>
+      </div>
+      ${actions}
+    </section>
+  `;
+}
+
 function getPrivateAssetById(assetId = "") {
   const normalizedAssetId = String(assetId ?? "").trim();
   if (!normalizedAssetId) {
@@ -12404,7 +12582,11 @@ function applyTextureAssetToSelection(assetId, options = {}) {
     if (!found?.entry) {
       return;
     }
-    found.entry.material = found.entry.material || { color: "#c8d0d8", texture_preset: "none", emissive_intensity: 0 };
+    found.entry.material = found.entry.material || (
+      targetKind === "player"
+        ? getPrivatePlayerDefaultMaterial(found.entry)
+        : { color: "#c8d0d8", texture_preset: "none", emissive_intensity: 0 }
+    );
     found.entry.material.texture_asset_id = assetId;
     found.entry.material.texture_preset = "none";
   });
@@ -12522,13 +12704,42 @@ function openTextureAssetLibrary(options = {}) {
   return true;
 }
 
+function openModelAssetLibrary(options = {}) {
+  const target = getSelectedModelAttachTarget();
+  if (!target) {
+    setStatus("Select one player or model first, then choose a model asset for it.");
+    return false;
+  }
+  state.assetFilterType = "model";
+  if (options.resetQuery !== false) {
+    state.assetQuery = "";
+  }
+  if (elements.assetTypeFilter) {
+    elements.assetTypeFilter.value = "model";
+  }
+  if (elements.assetSearch) {
+    elements.assetSearch.value = state.assetQuery;
+  }
+  setSceneDrawerOpen(true);
+  setSceneDrawerTab("assets");
+  setStatus(`Choose a model for ${target.title}.`);
+  void loadAssets();
+  window.requestAnimationFrame(() => {
+    elements.assetSearch?.focus?.();
+  });
+  return true;
+}
+
 function renderAssetsLibrary() {
   if (!elements.assetSections) {
     return;
   }
   const activeTextureTarget = getSelectedTextureAttachTarget();
+  const activeModelTarget = getSelectedModelAttachTarget();
   const filterType = String(state.assetFilterType ?? "all").trim() || "all";
-  const showAssetContext = Boolean(activeTextureTarget && filterType !== "model");
+  const showAssetContext = filterType === "model"
+    ? Boolean(activeModelTarget)
+    : Boolean(activeTextureTarget);
   if (elements.assetSearch && elements.assetSearch.value !== String(state.assetQuery ?? "")) {
     elements.assetSearch.value = String(state.assetQuery ?? "");
   }
@@ -12537,12 +12748,17 @@ function renderAssetsLibrary() {
   }
   if (elements.assetContext) {
     if (showAssetContext) {
+      const contextTarget = filterType === "model" ? activeModelTarget : activeTextureTarget;
+      const contextLabel = filterType === "model" ? "Model target" : "Texture target";
+      const contextHint = filterType === "model"
+        ? "Choose a library model to use here, or generate a new one with AI."
+        : "Choose a library texture to attach it here, or generate a new one with AI.";
       elements.assetContext.hidden = false;
       elements.assetContext.innerHTML = `
-        <span>Texture target</span>
-        <strong title="${htmlEscape(activeTextureTarget.name)}">${htmlEscape(activeTextureTarget.title)}</strong>
-        ${activeTextureTarget.meta ? `<small class="pw-asset-context__meta">${htmlEscape(activeTextureTarget.meta)}</small>` : ""}
-        <small>Choose a library texture to attach it here, or generate a new one for this item.</small>
+        <span>${htmlEscape(contextLabel)}</span>
+        <strong title="${htmlEscape(contextTarget.name)}">${htmlEscape(contextTarget.title)}</strong>
+        ${contextTarget.meta ? `<small class="pw-asset-context__meta">${htmlEscape(contextTarget.meta)}</small>` : ""}
+        <small>${htmlEscape(contextHint)}</small>
       `;
     } else {
       elements.assetContext.hidden = true;
@@ -12588,6 +12804,7 @@ function renderAssetsLibrary() {
   elements.assetSections.innerHTML = assets.map((asset) => {
     const isReady = String(asset.status ?? "ready").trim().toLowerCase() === "ready";
     const canApplyTexture = isReady && asset.asset_type === "texture" && Boolean(activeTextureTarget);
+    const canApplyModel = isReady && asset.asset_type === "model" && Boolean(activeModelTarget);
     const thumbnail = getPrivateAssetFile(asset, asset.asset_type === "model" ? "thumbnail" : "base_color");
     return `
       <article class="pw-prefab-card">
@@ -12601,7 +12818,10 @@ function renderAssetsLibrary() {
         <div class="pw-inline-actions">
           ${asset.asset_type === "texture"
             ? `<button type="button" ${canApplyTexture ? `data-apply-texture-asset="${htmlEscape(asset.id)}"` : "disabled"}>${!isReady ? "Waiting for ready" : canApplyTexture ? "Attach to selected item" : "Pick a material item"}</button>`
-            : `<button type="button" ${isReady ? `data-place-model-asset="${htmlEscape(asset.id)}"` : "disabled"}>${isReady ? "Place in world" : "Waiting for ready"}</button>`}
+            : `
+              ${canApplyModel ? `<button type="button" data-apply-model-asset="${htmlEscape(asset.id)}">${htmlEscape(getModelAssetTargetActionLabel(activeModelTarget))}</button>` : ""}
+              <button type="button" ${isReady ? `data-place-model-asset="${htmlEscape(asset.id)}"` : "disabled"}>${isReady ? "Place in world" : "Waiting for ready"}</button>
+            `}
         </div>
       </article>
     `;
@@ -12680,7 +12900,10 @@ function buildToolPresetSummary(kind, entry = {}) {
   }
   if (kind === "player") {
     const movementSummary = isPlayerMovementEnabled(entry) ? "movement on" : "look only";
-    return `${entry.camera_mode || "third_person"} · ${entry.body_mode || "rigid"} · ${movementSummary} · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
+    const appearanceSummary = entry.asset_id
+      ? "model asset"
+      : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"));
+    return `${entry.camera_mode || "third_person"} · ${entry.body_mode || "rigid"} · ${movementSummary} · ${appearanceSummary} · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
   }
   if (kind === "screen") {
     const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.2 };
@@ -13216,10 +13439,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <span>Label</span>
         <input type="text" data-entity-field="label" data-value-type="text" value="${htmlEscape(entry.label || "")}" />
       </label>
-      <label>
-        <span>Asset ID</span>
-        <input type="text" data-entity-field="asset_id" data-value-type="text" value="${htmlEscape(entry.asset_id || "")}" />
-      </label>
+      ${buildModelAssetEditor(entry.asset_id, { targetKind: kind, targetId: entry.id })}
       ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
@@ -13289,7 +13509,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const overworldMode = isOverworldCameraMode(cameraMode);
     const movementToggleMode = isPlayerMovementToggleCameraMode(cameraMode);
     const movementEnabled = normalizePlayerMovementEnabled(entry.movement_enabled ?? true);
-  const jumpEnabled = normalizePlayerJumpEnabled(entry.jump_enabled ?? false);
+    const jumpEnabled = normalizePlayerJumpEnabled(entry.jump_enabled ?? false);
     const fixedTopDownMode = isFixedTopDownCameraMode(cameraMode);
     const fixedTopDownDirection = normalizePlayerFixedTopDownDirection(entry.fixed_top_down_direction ?? "north");
     const fixedTopDownAngle = normalizePlayerFixedTopDownAngle(entry.fixed_top_down_angle ?? 90);
@@ -13304,11 +13524,16 @@ function renderEntityInspector(sceneDoc, selected = null) {
         ? "Orthogonal fixed locks the camera over the world center. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and width and height at 0 frame the full private world."
         : "Orthogonal follows the occupied player. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and camera distance sets the follow framing.";
     elements.entityEditor.innerHTML = `
-      <p class="pw-inspector-note">Everyone enters as a floating viewer. Possession happens by clicking a player in Play mode.</p>
+      <p class="pw-inspector-note">Everyone enters as a floating viewer. Walk into a player in Play mode to unlock Inhabit. Players can stay as textured capsules or use a linked model asset for their visible body.</p>
       <label>
         <span>Label</span>
         <input type="text" data-entity-field="label" data-value-type="text" value="${htmlEscape(entry.label || "")}" />
       </label>
+      ${buildModelAssetEditor(entry.asset_id, { targetKind: kind, targetId: entry.id })}
+      ${buildMaterialEditor(
+        getResolvedPrivatePlayerMaterial(entry),
+        { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id },
+      )}
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
           <label>
@@ -19198,10 +19423,54 @@ function makeMaterial(material = {}, scale = { x: 1, y: 1, z: 1 }, { selected = 
 }
 
 function getObjectMaterials(object) {
-  if (!object?.material) {
+  if (!object) {
     return [];
   }
-  return Array.isArray(object.material) ? object.material : [object.material];
+  const materials = [];
+  const seen = new Set();
+  object.traverse?.((node) => {
+    const nodeMaterials = node?.material
+      ? (Array.isArray(node.material) ? node.material : [node.material])
+      : [];
+    for (const material of nodeMaterials) {
+      if (!material || seen.has(material)) {
+        continue;
+      }
+      seen.add(material);
+      materials.push(material);
+    }
+  });
+  return materials;
+}
+
+function applyPreviewMaterialToModelScene(object, material = {}, scale = { x: 1, y: 1, z: 1 }) {
+  if (!object) {
+    return;
+  }
+  const resolvedColor = String(material?.color ?? "").trim();
+  const textureAssetId = String(material?.texture_asset_id ?? material?.textureAssetId ?? "").trim();
+  const emissiveIntensity = Math.max(0, Number(material?.emissive_intensity ?? material?.emissiveIntensity ?? 0) || 0);
+  object.traverse((node) => {
+    if (!node.isMesh) {
+      return;
+    }
+    const nodeMaterials = Array.isArray(node.material) ? node.material : [node.material];
+    for (const nodeMaterial of nodeMaterials) {
+      if (!nodeMaterial) {
+        continue;
+      }
+      if (resolvedColor) {
+        nodeMaterial.color?.set?.(resolvedColor);
+      }
+      if (textureAssetId) {
+        void applyTextureAssetMapsToMaterial(nodeMaterial, textureAssetId, scale);
+      }
+      if (nodeMaterial.emissiveIntensity !== undefined) {
+        nodeMaterial.emissiveIntensity = Math.max(Number(nodeMaterial.emissiveIntensity || 0), emissiveIntensity);
+      }
+      nodeMaterial.needsUpdate = true;
+    }
+  });
 }
 
 function applyRenderableVisibility(object, {
@@ -20074,9 +20343,7 @@ function syncPreviewRuntimeSnapshot(snapshot) {
       fallbackScale: runtimePlayer?.scale
         ? { x: runtimePlayer.scale, y: runtimePlayer.scale, z: runtimePlayer.scale }
         : null,
-      playerColor: runtimePlayer?.occupied_by_username
-        ? "#ff5a6f"
-        : (runtimePlayer?.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f"),
+      playerColor: runtimePlayer?.occupied_by_username ? "#ff5a6f" : "",
     });
   }
   return true;
@@ -20348,20 +20615,7 @@ function updatePreviewFromSelection(options = {}) {
           }
           const clone = clonePreviewModelScene(loadedScene);
           clone.scale.set(bounds.x || 1, bounds.y || 1, bounds.z || 1);
-          clone.traverse((node) => {
-            if (!node.isMesh) {
-              return;
-            }
-            if (Array.isArray(node.material)) {
-              node.material.forEach((material) => {
-                if (model.material?.texture_asset_id) {
-                  void applyTextureAssetMapsToMaterial(material, model.material.texture_asset_id, bounds);
-                }
-              });
-            } else if (node.material && model.material?.texture_asset_id) {
-              void applyTextureAssetMapsToMaterial(node.material, model.material.texture_asset_id, bounds);
-            }
-          });
+          applyPreviewMaterialToModelScene(clone, getMergedMaterial(model.material), bounds);
           placeholder.removeFromParent();
           placeholder.geometry?.dispose?.();
           placeholder.material?.dispose?.();
@@ -20374,25 +20628,16 @@ function updatePreviewFromSelection(options = {}) {
 
     for (const [index, player] of (prefabDoc.players ?? []).entries()) {
       renderedAny = true;
-      const tint = getMergedMaterial({ color: player.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f", texture_preset: "none" });
-      const mesh = addPrefabMesh(
+      const playerRoot = renderPlayerMesh({
+        ...player,
+        material: getMergedMaterial(player.material ?? getPrivatePlayerDefaultMaterial(player)),
+      }, {
         parent,
-        new THREE.CapsuleGeometry(
-          PRIVATE_PLAYER_METRICS.width / 2,
-          PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
-          8,
-          16,
-        ),
-        makeMaterial(
-          tint,
-          { x: player.scale || 1, y: player.scale || 1, z: player.scale || 1 },
-          { selected },
-        ),
-        player.position || { x: 0, y: 1, z: 0 },
-        player.rotation || { x: 0, y: 0, z: 0 },
-        { x: player.scale || 1, y: player.scale || 1, z: player.scale || 1 },
-        metadata ?? { id: player.id || `prefab_player_${index}`, kind: "player" },
-      );
+        selected,
+        registerEntityMesh: false,
+        attachHitTarget: false,
+      });
+      attachPrefabPickable(playerRoot, metadata ?? { id: player.id || `prefab_player_${index}`, kind: "player" });
     }
 
     for (const [index, screen] of (prefabDoc.screens ?? []).entries()) {
@@ -20632,6 +20877,94 @@ function updatePreviewFromSelection(options = {}) {
     preview.entityPickables.push(hitTarget);
     return hitTarget;
   };
+  const renderPlayerMesh = (playerEntry = {}, options = {}) => {
+    const metadata = options.metadata ?? (options.id ? { id: options.id, kind: "player" } : null);
+    const parent = options.parent ?? preview.root;
+    const registerEntityMesh = options.registerEntityMesh !== false && metadata?.kind === "player";
+    const attachHitTarget = options.attachHitTarget !== false && metadata?.kind === "player";
+    const resolvedScale = Math.max(0.25, Number(options.scale ?? playerEntry.scale ?? 1) || 1);
+    const resolvedMaterial = getRenderablePrivatePlayerMaterial(playerEntry, {
+      occupied: playerEntry?.occupied_by_username != null,
+      fallback: getPrivatePlayerDefaultMaterial(playerEntry),
+    });
+    const displayMaterial = {
+      ...resolvedMaterial,
+      emissive_intensity: options.selected === true
+        ? Math.max(Number(resolvedMaterial.emissive_intensity ?? 0) || 0, 0.22)
+        : resolvedMaterial.emissive_intensity,
+    };
+    const root = new THREE.Group();
+    root.position.set(
+      playerEntry.position?.x || 0,
+      playerEntry.position?.y || 1,
+      playerEntry.position?.z || 0,
+    );
+    root.rotation.set(
+      playerEntry.rotation?.x || 0,
+      playerEntry.rotation?.y || 0,
+      playerEntry.rotation?.z || 0,
+    );
+    root.scale.setScalar(resolvedScale);
+    if (metadata?.id) {
+      root.userData.privateWorldEntityId = metadata.id;
+      root.userData.privateWorldEntityKind = metadata.kind;
+      if (registerEntityMesh) {
+        preview.entityMeshes.set(metadata.id, root);
+      }
+    }
+    const resolvedPlayerId = String(options.playerId ?? metadata?.id ?? playerEntry.id ?? "").trim();
+    if (resolvedPlayerId) {
+      root.userData.privateWorldPlayerId = resolvedPlayerId;
+      if (attachHitTarget) {
+        attachPlayerHitTarget(root, resolvedPlayerId);
+      }
+    }
+    parent.add(root);
+    const visualScale = {
+      x: PRIVATE_PLAYER_METRICS.width * resolvedScale,
+      y: PRIVATE_PLAYER_METRICS.height * resolvedScale,
+      z: PRIVATE_PLAYER_METRICS.width * resolvedScale,
+    };
+    const capsule = new THREE.Mesh(
+      new THREE.CapsuleGeometry(
+        PRIVATE_PLAYER_METRICS.width / 2,
+        PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
+        8,
+        16,
+      ),
+      makeMaterial(displayMaterial, visualScale, {
+        selected: options.selected === true,
+      }),
+    );
+    root.add(capsule);
+    const assetId = String(playerEntry.asset_id ?? playerEntry.assetId ?? "").trim();
+    const asset = assetId ? getPrivateAssetById(assetId) : null;
+    if (asset) {
+      const bounds = asset.bounds ?? { x: 1, y: 1, z: 1 };
+      void loadPreviewModelAssetScene(asset).then((loadedScene) => {
+        if (!loadedScene || !root.parent) {
+          return;
+        }
+        const clone = clonePreviewModelScene(loadedScene);
+        clone.scale.set(
+          PRIVATE_PLAYER_METRICS.width / Math.max(0.1, Number(bounds.x ?? 1) || 1),
+          PRIVATE_PLAYER_METRICS.height / Math.max(0.1, Number(bounds.y ?? 1) || 1),
+          PRIVATE_PLAYER_METRICS.width / Math.max(0.1, Number(bounds.z ?? 1) || 1),
+        );
+        applyPreviewMaterialToModelScene(clone, displayMaterial, visualScale);
+        capsule.visible = false;
+        root.add(clone);
+      }).catch(() => {
+        capsule.visible = true;
+      });
+    }
+    applyRenderableVisibility(root, {
+      invisibleInPlay: playerEntry.invisible === true,
+      runtimeVisible: options.runtimeVisible,
+    });
+    syncPrivatePlayerJumpShadow(root, playerEntry);
+    return root;
+  };
   const renderModelMesh = (modelEntry = {}, options = {}) => {
     const metadata = options.id ? { id: options.id, kind: "model" } : null;
     const group = new THREE.Group();
@@ -20677,20 +21010,7 @@ function updatePreviewFromSelection(options = {}) {
         }
         const clone = clonePreviewModelScene(loadedScene);
         clone.scale.set(bounds.x || 1, bounds.y || 1, bounds.z || 1);
-        clone.traverse((node) => {
-          if (!node.isMesh) {
-            return;
-          }
-          if (Array.isArray(node.material)) {
-            node.material.forEach((material) => {
-              if (modelEntry.material?.texture_asset_id) {
-                void applyTextureAssetMapsToMaterial(material, modelEntry.material.texture_asset_id, bounds);
-              }
-            });
-          } else if (node.material && modelEntry.material?.texture_asset_id) {
-            void applyTextureAssetMapsToMaterial(node.material, modelEntry.material.texture_asset_id, bounds);
-          }
-        });
+        applyPreviewMaterialToModelScene(clone, modelEntry.material ?? {}, bounds);
         placeholder.removeFromParent();
         placeholder.geometry?.dispose?.();
         placeholder.material?.dispose?.();
@@ -20786,32 +21106,30 @@ function updatePreviewFromSelection(options = {}) {
           z: localPrediction.rotation.z,
         }
       : (runtimePlayer?.rotation || player.rotation || { x: 0, y: 0, z: 0 });
-    const mesh = addMesh(
-      new THREE.CapsuleGeometry(
-        PRIVATE_PLAYER_METRICS.width / 2,
-        PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
-        8,
-        16,
-      ),
-      makeMaterial(
-        { color: runtimePlayer?.occupied_by_username ? "#ff5a6f" : (player.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f"), texture_preset: "none" },
-        { x: resolvedPlayerScale, y: resolvedPlayerScale, z: resolvedPlayerScale },
-        {
-          selected: isSelected("player", player.id),
-        },
-      ),
-      renderedPlayerPosition,
-      renderedPlayerRotation,
-      { x: resolvedPlayerScale, y: resolvedPlayerScale, z: resolvedPlayerScale },
-      { id: resolvedPlayerId || player.id, kind: "player" },
-    );
-    applyRenderableVisibility(mesh, {
+    const renderedPlayerMaterial = runtimePlayer?.material_override
+      ? {
+          ...(runtimePlayer.material ?? player.material ?? getPrivatePlayerDefaultMaterial(runtimePlayer ?? player)),
+          ...runtimePlayer.material_override,
+        }
+      : (runtimePlayer?.material ?? player.material ?? getPrivatePlayerDefaultMaterial(runtimePlayer ?? player));
+    renderPlayerMesh({
+      ...player,
+      ...runtimePlayer,
+      position: renderedPlayerPosition,
+      rotation: renderedPlayerRotation,
+      scale: resolvedPlayerScale,
+      body_mode: localPrediction?.bodyMode ?? runtimePlayer?.body_mode ?? player.body_mode,
+      jump_enabled: localPrediction?.jumpEnabled ?? runtimePlayer?.jump_enabled ?? player.jump_enabled,
+      on_ground: localPrediction?.onGround ?? runtimePlayer?.on_ground ?? player.on_ground,
+      material: renderedPlayerMaterial,
+      asset_id: runtimePlayer?.asset_id ?? player.asset_id ?? null,
+      occupied_by_username: runtimePlayer?.occupied_by_username ?? null,
+    }, {
+      id: resolvedPlayerId || player.id,
+      selected: isSelected("player", player.id),
       runtimeVisible: runtimePlayer?.visible !== false
         && !(localPrediction && shouldHidePossessedPlayerForCameraMode(localPrediction.cameraMode)),
     });
-    mesh.userData.privateWorldPlayerId = resolvedPlayerId || player.id;
-    syncPrivatePlayerJumpShadow(mesh, localPrediction ?? runtimePlayer ?? player);
-    attachPlayerHitTarget(mesh, resolvedPlayerId || player.id);
   }
 
   for (const runtimePlayer of runtimeTransforms.players) {
@@ -20837,37 +21155,27 @@ function updatePreviewFromSelection(options = {}) {
         }
       : (runtimePlayer.rotation || { x: 0, y: 0, z: 0 });
     const renderedPlayerScale = localPrediction?.scale || runtimePlayer?.scale || PRIVATE_PLAYER_DEFAULT_SCALE;
-    const mesh = addMesh(
-      new THREE.CapsuleGeometry(
-        PRIVATE_PLAYER_METRICS.width / 2,
-        PRIVATE_PLAYER_METRICS.height - PRIVATE_PLAYER_METRICS.width,
-        8,
-        16,
-      ),
-      makeMaterial(
-        { color: runtimePlayer?.occupied_by_username ? "#ff5a6f" : (runtimePlayer?.body_mode === "ghost" ? "#6dd3ff" : "#ff8e4f"), texture_preset: "none" },
-        {
-          x: renderedPlayerScale,
-          y: renderedPlayerScale,
-          z: renderedPlayerScale,
-        },
-      ),
-      renderedPlayerPosition,
-      renderedPlayerRotation,
-      {
-        x: renderedPlayerScale,
-        y: renderedPlayerScale,
-        z: renderedPlayerScale,
-      },
-      { id: playerId, kind: "player" },
-    );
-    applyRenderableVisibility(mesh, {
+    const renderedPlayerMaterial = runtimePlayer?.material_override
+      ? {
+          ...(runtimePlayer.material ?? getPrivatePlayerDefaultMaterial(runtimePlayer)),
+          ...runtimePlayer.material_override,
+        }
+      : (runtimePlayer?.material ?? getPrivatePlayerDefaultMaterial(runtimePlayer));
+    renderPlayerMesh({
+      ...runtimePlayer,
+      position: renderedPlayerPosition,
+      rotation: renderedPlayerRotation,
+      scale: renderedPlayerScale,
+      body_mode: localPrediction?.bodyMode ?? runtimePlayer?.body_mode,
+      jump_enabled: localPrediction?.jumpEnabled ?? runtimePlayer?.jump_enabled,
+      on_ground: localPrediction?.onGround ?? runtimePlayer?.on_ground,
+      material: renderedPlayerMaterial,
+      occupied_by_username: runtimePlayer?.occupied_by_username ?? null,
+    }, {
+      id: playerId,
       runtimeVisible: runtimePlayer?.visible !== false
         && !(localPrediction && shouldHidePossessedPlayerForCameraMode(localPrediction.cameraMode)),
     });
-    mesh.userData.privateWorldPlayerId = playerId;
-    syncPrivatePlayerJumpShadow(mesh, localPrediction ?? runtimePlayer);
-    attachPlayerHitTarget(mesh, playerId);
   }
 
   for (const prefabInstance of sceneDoc.prefab_instances ?? []) {
@@ -23269,6 +23577,11 @@ function bindEvents() {
       applyTextureAssetToSelection(textureButton.getAttribute("data-apply-texture-asset"));
       return;
     }
+    const applyModelButton = event.target.closest("[data-apply-model-asset]");
+    if (applyModelButton) {
+      applyModelAssetToSelection(applyModelButton.getAttribute("data-apply-model-asset"));
+      return;
+    }
     const modelButton = event.target.closest("[data-place-model-asset]");
     if (modelButton) {
       placeModelAsset(modelButton.getAttribute("data-place-model-asset"));
@@ -23406,14 +23719,29 @@ function bindEvents() {
       openTextureAssetLibrary();
       return;
     }
+    const openModelLibraryButton = event.target.closest("[data-open-model-library]");
+    if (openModelLibraryButton) {
+      openModelAssetLibrary();
+      return;
+    }
     const generateTextureButton = event.target.closest("[data-generate-texture-from-inspector]");
     if (generateTextureButton) {
       openAssetAiDialog("texture");
       return;
     }
+    const generateModelButton = event.target.closest("[data-generate-model-from-inspector]");
+    if (generateModelButton) {
+      openAssetAiDialog("model");
+      return;
+    }
     const clearTextureButton = event.target.closest("[data-clear-texture-asset-path]");
     if (clearTextureButton) {
       clearTextureAssetFromSelection(clearTextureButton.getAttribute("data-clear-texture-asset-path") || "material.");
+      return;
+    }
+    const clearModelButton = event.target.closest("[data-clear-model-asset-path]");
+    if (clearModelButton) {
+      clearModelAssetFromSelection(clearModelButton.getAttribute("data-clear-model-asset-path") || "asset_id");
       return;
     }
     const screenGenerateButton = event.target.closest("[data-screen-ai-generate]");

@@ -350,7 +350,7 @@ function rewriteSceneDocAssetIds(sceneDoc = {}, assetIdMap = new Map()) {
     }
     return material;
   };
-  for (const collectionKey of ["voxels", "primitives", "models", "screens", "texts"]) {
+  for (const collectionKey of ["voxels", "primitives", "models", "players", "screens", "texts"]) {
     doc[collectionKey] = Array.isArray(doc[collectionKey]) ? doc[collectionKey] : [];
     doc[collectionKey] = doc[collectionKey].map((entry) => ({
       ...entry,
@@ -358,6 +358,10 @@ function rewriteSceneDocAssetIds(sceneDoc = {}, assetIdMap = new Map()) {
     }));
   }
   doc.models = (doc.models ?? []).map((entry) => ({
+    ...entry,
+    asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,
+  }));
+  doc.players = (doc.players ?? []).map((entry) => ({
     ...entry,
     asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,
   }));
