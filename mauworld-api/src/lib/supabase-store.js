@@ -125,6 +125,31 @@ function isPromotionDue(version, intervalHours) {
   return new Date(version.promoted_at).getTime() + clampedHours * 60 * 60 * 1000 <= Date.now();
 }
 
+async function resolveSoftTimed(task, {
+  timeoutMs = 1500,
+  fallbackValue = [],
+  label = "request",
+} = {}) {
+  let timeoutHandle = null;
+  const taskPromise = Promise.resolve()
+    .then(() => task())
+    .catch((error) => {
+      console.warn(`${label} failed`, error);
+      return fallbackValue;
+    });
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      console.warn(`${label} timed out after ${timeoutMs}ms`);
+      resolve(fallbackValue);
+    }, timeoutMs);
+  });
+  const result = await Promise.race([taskPromise, timeoutPromise]);
+  if (timeoutHandle) {
+    clearTimeout(timeoutHandle);
+  }
+  return result;
+}
+
 export function resolveWorldQueueStatus({ hasInstance = false, pendingStatus = null } = {}) {
   if (hasInstance) {
     return "ready";
@@ -3365,14 +3390,21 @@ export class MauworldStore {
         "Could not load live presence sessions",
       ),
       typeof this.listPrivateWorldMiniaturesForSnapshot === "function"
-        ? this.listPrivateWorldMiniaturesForSnapshot({
-            worldSnapshotId: worldSnapshot.id,
-            viewerSessionId: input.viewerSessionId,
-            cellXMin,
-            cellXMax,
-            cellZMin,
-            cellZMax,
-          })
+        ? resolveSoftTimed(
+            () => this.listPrivateWorldMiniaturesForSnapshot({
+              worldSnapshotId: worldSnapshot.id,
+              viewerSessionId: input.viewerSessionId,
+              cellXMin,
+              cellXMax,
+              cellZMin,
+              cellZMax,
+            }),
+            {
+              timeoutMs: 1500,
+              fallbackValue: [],
+              label: "public world stream private world miniatures",
+            },
+          )
         : Promise.resolve([]),
     ]);
 
@@ -3502,14 +3534,21 @@ export class MauworldStore {
     }
     const miniatures =
       typeof this.listPrivateWorldMiniaturesForSnapshot === "function"
-        ? await this.listPrivateWorldMiniaturesForSnapshot({
-            worldSnapshotId: worldSnapshot.id,
-            viewerSessionId: input.viewerSessionId,
-            cellXMin,
-            cellXMax,
-            cellZMin,
-            cellZMax,
-          })
+        ? await resolveSoftTimed(
+            () => this.listPrivateWorldMiniaturesForSnapshot({
+              worldSnapshotId: worldSnapshot.id,
+              viewerSessionId: input.viewerSessionId,
+              cellXMin,
+              cellXMax,
+              cellZMin,
+              cellZMax,
+            }),
+            {
+              timeoutMs: 1500,
+              fallbackValue: [],
+              label: "public world live miniature stream",
+            },
+          )
         : [];
 
     return {
