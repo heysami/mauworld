@@ -11269,7 +11269,7 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
       resetPossessedPlayerJumpBridge(prediction);
     }
   }
-  const currentJumpActive = prediction.localJumpUntilMs > now
+  let currentJumpActive = prediction.localJumpUntilMs > now
     || prediction.jumpVisualOffsetY > 0.0001
     || prediction.jumpVisualVelocityY > 0.0001;
   const resolvedGroundSupport = !currentJumpActive
@@ -11280,11 +11280,33 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     : null;
   let finalGroundSupport = resolvedGroundSupport;
   if (currentJumpActive) {
-    prediction.position.y = (Number.isFinite(Number(prediction.groundY)) ? Number(prediction.groundY) : prediction.position.y)
+    const jumpBaseGroundY = Number.isFinite(Number(prediction.groundY))
+      ? Number(prediction.groundY)
+      : prediction.position.y;
+    prediction.position.y = jumpBaseGroundY
       + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
     prediction.velocity.y = prediction.jumpVisualVelocityY;
     prediction.onGround = false;
-    finalGroundSupport = null;
+    const descendingJumpSupport = prediction.jumpVisualVelocityY <= 0
+      ? getLocalPossessedGroundSupport(prediction, {
+        startPosition: frameStartPosition,
+        desiredPosition: prediction.position,
+      })
+      : null;
+    const jumpLandingGroundY = Number(descendingJumpSupport?.groundY);
+    if (descendingJumpSupport?.hasSupport === true && Number.isFinite(jumpLandingGroundY)) {
+      prediction.groundY = jumpLandingGroundY;
+      prediction.position.y = jumpLandingGroundY;
+      prediction.velocity.y = Number.isFinite(Number(descendingJumpSupport?.velocityY))
+        ? Number(descendingJumpSupport.velocityY)
+        : 0;
+      prediction.onGround = true;
+      resetPossessedPlayerJumpBridge(prediction);
+      currentJumpActive = false;
+      finalGroundSupport = descendingJumpSupport;
+    } else {
+      finalGroundSupport = null;
+    }
   } else {
     const hasLocalSupport = resolvedGroundSupport?.hasSupport === true;
     const supportGroundY = Number(resolvedGroundSupport?.groundY);
