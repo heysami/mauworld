@@ -186,6 +186,8 @@ const WORLD_STREAM = {
   fogMultiplier: 2.4,
 };
 
+const PRIVATE_WORLD_MINIATURE_LIVE_POLL_MS = 250;
+
 const WORLD_STYLE = {
   background: "#fbfcff",
   fog: "#f4fbff",
@@ -1053,7 +1055,7 @@ function renderPublicSessionSummary() {
     labelElement: elements.sessionLabel,
     actionButton: elements.openAccountButton,
     copy: {
-      signedOutLabel: "Guest mode. Log in to chat and share nearby.",
+      signedOutLabel: "Guest mode. Bubble chat is on. Log in to share nearby and use persistent voice chat.",
       signedOutAction: "Log In",
     },
   });
@@ -1062,13 +1064,11 @@ function renderPublicSessionSummary() {
 function renderPublicInteractionAccess() {
   const signedIn = isPublicViewerSignedIn();
   if (elements.chatInput) {
-    elements.chatInput.disabled = !signedIn;
-    elements.chatInput.placeholder = signedIn
-      ? "/ say something nearby and press Enter"
-      : "Log in to chat nearby";
+    elements.chatInput.disabled = false;
+    elements.chatInput.placeholder = "/ say something nearby and press Enter";
   }
   for (const button of elements.chatReactionButtons) {
-    button.disabled = !signedIn;
+    button.disabled = false;
   }
   if (elements.browserShareTitle) {
     elements.browserShareTitle.disabled = !signedIn;
@@ -10849,7 +10849,12 @@ async function loadStreamForPosition(position, force = false) {
 }
 
 async function loadPrivateWorldMiniaturesLive() {
-  if (!state.meta || !state.activeCellWindow || state.privateWorldMiniaturesLoading) {
+  if (
+    !state.meta
+    || !state.activeCellWindow
+    || state.privateWorldMiniaturesLoading
+    || state.worldCache.privateWorldMiniatures.size === 0
+  ) {
     return;
   }
   const requestWindow = state.activeCellWindow;
@@ -11019,12 +11024,6 @@ function updateChatCounter() {
 }
 
 function openChatComposer() {
-  if (!isPublicViewerSignedIn()) {
-    setWorldPanelTab("chat");
-    showToast("Log in to chat nearby.");
-    void openPrivateWorldGate("account");
-    return;
-  }
   if (!elements.chatInput) {
     return;
   }
@@ -11042,11 +11041,6 @@ const chatFeature = createChatFeature({
   reactionAttribute: "data-world-chat-reaction",
   onAfterInputChange: updateChatCounter,
   onSubmit(text) {
-    if (!isPublicViewerSignedIn()) {
-      showToast("Log in to chat nearby.");
-      void openPrivateWorldGate("account");
-      return false;
-    }
     if (!state.realtimeClient?.sendChat(text)) {
       showToast("Realtime chat is offline.");
       return false;
@@ -13816,7 +13810,7 @@ async function bootstrapWorld() {
     loadPrivateWorldMiniaturesLive().catch(() => {
       // Errors are logged inside the live miniature refresher to avoid toast spam.
     });
-  }, Math.round(1000 / 24));
+  }, PRIVATE_WORLD_MINIATURE_LIVE_POLL_MS);
 
   animate();
   setLoading(false);
