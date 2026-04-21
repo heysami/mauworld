@@ -7101,6 +7101,8 @@ function createPrivateMiniaturePlayerDot(animatedEntry, player = {}, key = "") {
     new THREE.SphereGeometry(animatedEntry.playerMarkerRadius * 0.94, 12, 12),
     new THREE.MeshBasicMaterial({
       color: "#ff1414",
+      transparent: true,
+      opacity: 1,
       toneMapped: false,
       depthTest: false,
       depthWrite: false,
