@@ -1138,6 +1138,8 @@ const state = {
   launchRequestQueued: false,
   authRefreshPromise: null,
   authRefreshQueued: false,
+  overworldCameraCenter: null,
+  overworldCameraPlayerId: "",
 };
 
 const privateInputState = {
@@ -3990,6 +3992,7 @@ function clampViewerPositionToWorldBounds(position, world = state.selectedWorld)
 
 function resetViewerRig(world = state.selectedWorld) {
   const rig = getPrivateViewerRigConfig(world);
+  clearPossessedOverworldCameraCenter();
   privateInputState.yaw = 0;
   privateInputState.pitch = world ? -0.34 : 0.66;
   privateInputState.sprintHoldSeconds = 0;
@@ -9679,6 +9682,8 @@ function getLocalPossessedPlayerPrediction(playerId = getLocallyControlledPlayer
 
 function clearPossessedPlayerPrediction() {
   state.predictedPossessedPlayer = null;
+  state.overworldCameraCenter = null;
+  state.overworldCameraPlayerId = "";
   resetRuntimeLookSync();
 }
 
@@ -9696,6 +9701,15 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
   const headingY = orthogonalCamera
     ? orthogonalOrientation.headingY
     : normalizeAngle(privateInputState.yaw);
+  if (isDraggableOverworldCameraMode(cameraMode)) {
+    return {
+      x: 0,
+      z: 0,
+      headingY,
+      active: false,
+      sprint: false,
+    };
+  }
   const forwardAmount = Number(forward) - Number(backward);
   const strafeAmount = Number(right) - Number(left);
   const forwardVector = orthogonalCamera
@@ -9789,6 +9803,11 @@ function resetPossessedPlayerJumpBridge(prediction = null) {
   prediction.jumpVisualVelocityY = 0;
 }
 
+function clearPossessedOverworldCameraCenter() {
+  state.overworldCameraCenter = null;
+  state.overworldCameraPlayerId = "";
+}
+
 function normalizePlayerCameraMode(value = "third_person") {
   const normalized = String(value ?? "third_person")
     .trim()
@@ -9844,6 +9863,11 @@ function isPlayerMovementEnabled(player = {}) {
     return true;
   }
   return normalizePlayerMovementEnabled(player?.movement_enabled ?? player?.movementEnabled ?? true);
+}
+
+function shouldSuppressPossessedRuntimeMovement(player = {}) {
+  return !isPlayerMovementEnabled(player)
+    || isDraggableOverworldCameraMode(player?.camera_mode ?? player?.cameraMode ?? "third_person");
 }
 
 function normalizePlayerFixedTopDownDirection(value = "north") {
@@ -10015,26 +10039,46 @@ function shouldHidePossessedPlayerForCameraMode(value = "third_person") {
   return isOverworldCameraMode(value);
 }
 
-function getPossessedOverworldPanVectors(player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? {}) {
-  const orientation = getPlayerFixedTopDownOrientation(
+function getPossessedOverworldCameraCenter(player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? null) {
+  const resolvedPlayer = player ?? null;
+  const playerId = String(resolvedPlayer?.id ?? resolvedPlayer?.playerId ?? "").trim();
+  const cameraMode = normalizePlayerCameraMode(resolvedPlayer?.camera_mode ?? resolvedPlayer?.cameraMode ?? "third_person");
+  if (!playerId || !isDraggableOverworldCameraMode(cameraMode)) {
+    clearPossessedOverworldCameraCenter();
+    return null;
+  }
+  if (!state.overworldCameraCenter || state.overworldCameraPlayerId !== playerId) {
+    state.overworldCameraCenter = new THREE.Vector3(
+      Number(resolvedPlayer?.position?.x ?? 0) || 0,
+      Number(resolvedPlayer?.position?.y ?? 0) || 0,
+      Number(resolvedPlayer?.position?.z ?? 0) || 0,
+    );
+    state.overworldCameraPlayerId = playerId;
+  }
+  return state.overworldCameraCenter;
+}
+
+function getPossessedOverworldPanOrientation(player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? {}) {
+  return getPlayerFixedTopDownOrientation(
     player?.fixed_top_down_direction ?? "north",
     player?.fixed_top_down_angle ?? 90,
   );
-  const right = orientation.cameraRightVector.clone();
-  right.y = 0;
-  if (right.lengthSq() <= 0.000001) {
-    right.copy(orientation.rightVector);
-  } else {
-    right.normalize();
+}
+
+function resolvePossessedOverworldPanTranslation(deltaRight = 0, deltaUp = 0, player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? {}) {
+  const orientation = getPossessedOverworldPanOrientation(player);
+  const determinant =
+    orientation.cameraRightVector.x * orientation.cameraUpVector.z
+    - orientation.cameraRightVector.z * orientation.cameraUpVector.x;
+  if (Math.abs(determinant) <= 0.000001) {
+    return orientation.rightVector.clone().multiplyScalar(deltaRight)
+      .add(orientation.planarForwardVector.clone().multiplyScalar(deltaUp));
   }
-  const up = orientation.cameraUpVector.clone();
-  up.y = 0;
-  if (up.lengthSq() <= 0.000001) {
-    up.copy(orientation.planarForwardVector);
-  } else {
-    up.normalize();
-  }
-  return { right, up };
+  const worldX =
+    (deltaRight * orientation.cameraUpVector.z - deltaUp * orientation.cameraRightVector.z) / determinant;
+  const worldZ =
+    (orientation.cameraRightVector.x * deltaUp - orientation.cameraUpVector.x * deltaRight) / determinant;
+  return new THREE.Vector3(worldX, 0, worldZ);
 }
 
 function panPossessedOverworldByScreenDelta(deltaX = 0, deltaY = 0, preview = state.preview) {
@@ -10043,7 +10087,8 @@ function panPossessedOverworldByScreenDelta(deltaX = 0, deltaY = 0, preview = st
   }
   const player = getPossessedRuntimePlayer();
   const prediction = ensurePossessedPlayerPrediction(player);
-  if (!player || !prediction || !isDraggableOverworldCameraMode(prediction.cameraMode)) {
+  const cameraCenter = getPossessedOverworldCameraCenter(player ?? prediction);
+  if (!player || !prediction || !cameraCenter || !isDraggableOverworldCameraMode(prediction.cameraMode)) {
     return false;
   }
   const viewport = getPreviewViewport(preview);
@@ -10056,55 +10101,19 @@ function panPossessedOverworldByScreenDelta(deltaX = 0, deltaY = 0, preview = st
   }
   const worldUnitsPerPixelX = windowWidth / viewportWidth;
   const worldUnitsPerPixelY = windowHeight / viewportHeight;
-  const { right, up } = getPossessedOverworldPanVectors(prediction);
-  const translation = right.multiplyScalar(-deltaX * worldUnitsPerPixelX)
-    .add(up.multiplyScalar(deltaY * worldUnitsPerPixelY));
+  const translation = resolvePossessedOverworldPanTranslation(
+    deltaX * worldUnitsPerPixelX,
+    -deltaY * worldUnitsPerPixelY,
+    prediction,
+  );
   if (translation.lengthSq() <= 0.000001) {
     return false;
   }
-  const startPosition = {
-    x: prediction.position.x,
-    y: prediction.position.y,
-    z: prediction.position.z,
-  };
-  const desiredPosition = {
-    x: prediction.position.x + translation.x,
-    y: prediction.position.y,
-    z: prediction.position.z + translation.z,
-  };
-  if (isPrivateCollisionModeRigid(prediction.bodyMode)) {
-    const collision = resolvePlayerMovementAgainstBlockers({
-      startPosition,
-      desiredPosition,
-      playerSize: getPrivatePlayerCollisionSize(prediction.scale),
-      blockers: getPrivatePossessedCollisionBlockers(prediction, desiredPosition),
-    });
-    prediction.position.x = collision.position.x;
-    prediction.position.z = collision.position.z;
-    const support = getLocalPossessedGroundSupport(prediction, {
-      startPosition,
-      desiredPosition: prediction.position,
-    });
-    if (support?.hasSupport && Number.isFinite(Number(support.groundY))) {
-      prediction.groundY = Number(support.groundY);
-      prediction.position.y = Number(support.groundY);
-      prediction.velocity.y = Number.isFinite(Number(support.velocityY))
-        ? Number(support.velocityY)
-        : 0;
-      prediction.onGround = true;
-    }
-  } else {
-    prediction.position.x = desiredPosition.x;
-    prediction.position.z = desiredPosition.z;
-  }
-  clampViewerPositionToWorldBounds(prediction.position);
-  prediction.velocity.x = 0;
-  prediction.velocity.z = 0;
-  if (!Number.isFinite(Number(prediction.velocity.y))) {
-    prediction.velocity.y = 0;
-  }
+  const bounds = getPrivateWorldBounds(state.selectedWorld);
+  cameraCenter.x = clampNumber(cameraCenter.x - translation.x, cameraCenter.x, bounds.minX, bounds.maxX);
+  cameraCenter.z = clampNumber(cameraCenter.z - translation.z, cameraCenter.z, bounds.minZ, bounds.maxZ);
+  cameraCenter.y = Number(player?.position?.y ?? cameraCenter.y) || cameraCenter.y || 0;
   updatePossessedCamera(preview, 0);
-  void sendPrivatePresence();
   return true;
 }
 
@@ -10147,6 +10156,7 @@ function applyPossessedCameraModeRig(cameraMode = "third_person", runtimePlayer 
   const previousMode = normalizePlayerCameraMode(options.previousCameraMode ?? "");
   const headingY = Number(runtimePlayer?.rotation?.y);
   if (resolvedMode !== previousMode) {
+    clearPossessedOverworldCameraCenter();
     const nextHeadingY = isOrthogonalCameraMode(resolvedMode)
       ? getPlayerFixedTopDownOrientation(
         runtimePlayer?.fixed_top_down_direction ?? "north",
@@ -10202,7 +10212,7 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
     prediction = createPossessedPlayerPrediction(runtimePlayer);
     prediction.cameraMode = nextCameraMode;
     state.predictedPossessedPlayer = prediction;
-    if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
+    if (shouldSuppressPossessedRuntimeMovement(prediction) && state.pressedRuntimeKeys.size > 0) {
       releaseHeldRuntimeKeys({
         headingY: getRuntimeInputHeadingY(),
         shouldReleaseKey: isRuntimeMovementInputKey,
@@ -10238,7 +10248,7 @@ function ensurePossessedPlayerPrediction(runtimePlayer = getPossessedRuntimePlay
   prediction.fixedTopDownWidth = Math.max(0, Number(runtimePlayer.fixed_top_down_width ?? prediction.fixedTopDownWidth ?? 0) || 0);
   prediction.fixedTopDownHeight = Math.max(0, Number(runtimePlayer.fixed_top_down_height ?? prediction.fixedTopDownHeight ?? 0) || 0);
   prediction.bodyMode = String(runtimePlayer.body_mode ?? prediction.bodyMode ?? "rigid").trim() || "rigid";
-  if (!isPlayerMovementEnabled(prediction) && state.pressedRuntimeKeys.size > 0) {
+  if (shouldSuppressPossessedRuntimeMovement(prediction) && state.pressedRuntimeKeys.size > 0) {
     releaseHeldRuntimeKeys({
       headingY: getRuntimeInputHeadingY(),
       shouldReleaseKey: isRuntimeMovementInputKey,
@@ -17855,11 +17865,14 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     return true;
   }
   if (player.camera_mode === "orthogonal" || player.camera_mode === "overworld") {
+    const overworldCenter = player.camera_mode === "overworld"
+      ? getPossessedOverworldCameraCenter(player)
+      : null;
     const camera = applyFixedTopDownPreviewCamera(preview, player, state.selectedWorld, {
       center: {
-        x: player.position.x,
+        x: overworldCenter?.x ?? player.position.x,
         y: lookTarget.y,
-        z: player.position.z,
+        z: overworldCenter?.z ?? player.position.z,
       },
     });
     state.viewerCameraPosition.copy(camera.position);
@@ -18527,12 +18540,11 @@ function ensurePreview() {
     privateInputState.pointerMoved = privateInputState.dragDistance > 4;
     privateInputState.lastPointerX = event.clientX;
     privateInputState.lastPointerY = event.clientY;
-    if (
-      state.mode === "play"
+    const draggableOverworldCamera = state.mode === "play"
       && getLocalParticipant()?.join_role === "player"
-      && isDraggableOverworldCameraMode(getActivePossessedCameraMode())
-      && panPossessedOverworldByScreenDelta(deltaX, deltaY, state.preview)
-    ) {
+      && isDraggableOverworldCameraMode(getActivePossessedCameraMode());
+    if (draggableOverworldCamera) {
+      panPossessedOverworldByScreenDelta(deltaX, deltaY, state.preview);
       return;
     }
     if (isFixedTopDownCameraMode(getActivePossessedCameraMode())) {
@@ -21882,8 +21894,11 @@ function shouldDrivePrivateRuntimeInput() {
 
 function shouldBlockRuntimeMovementInputKey(key = "") {
   return shouldDrivePrivateRuntimeInput()
-    && !isActivePossessedPlayerMovementEnabled()
-    && isRuntimeMovementInputKey(key);
+    && isRuntimeMovementInputKey(key)
+    && (
+      !isActivePossessedPlayerMovementEnabled()
+      || isDraggableOverworldCameraMode(getActivePossessedCameraMode())
+    );
 }
 
 function nextPrivateMotionSequence() {
