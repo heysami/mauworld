@@ -42,7 +42,7 @@ import { renderScreenHtmlTexture } from "./screen-texture.js";
 import {
   isLivePrivateWorldInstanceStatus,
   resolvePrivateWorldMiniatureRenderState,
-} from "./private-world-miniatures.js?v=20260420a";
+} from "./private-world-miniatures.js?v=20260421mini1";
 import {
   createWorldGamesApi,
   createWorldGameLibrary,
@@ -6958,6 +6958,9 @@ function getPrivateMiniatureSourceBounds(entry = {}) {
   for (const voxel of compiled.static_voxels ?? []) {
     includePoint(voxel.position, voxel.scale);
   }
+  for (const platform of compiled.moving_platforms ?? []) {
+    includePoint(platform.position, platform.scale);
+  }
   for (const screen of compiled.screens ?? []) {
     includePoint(screen.position, screen.scale);
   }
@@ -6984,6 +6987,28 @@ function getPrivateMiniatureSourceBounds(entry = {}) {
     height: Math.max(1, bounds.maxY - bounds.minY),
     length: Math.max(1, bounds.maxZ - bounds.minZ),
   };
+}
+
+function getPrivateMiniaturePrimitiveGeometry(shape = "box") {
+  if (shape === "sphere") {
+    return new THREE.SphereGeometry(0.5, 20, 20);
+  }
+  if (shape === "capsule") {
+    return new THREE.CapsuleGeometry(0.25, 0.5, 4, 8);
+  }
+  if (shape === "cylinder") {
+    return new THREE.CylinderGeometry(0.5, 0.5, 1, 20);
+  }
+  if (shape === "cone") {
+    return new THREE.ConeGeometry(0.5, 1, 20);
+  }
+  if (shape === "panel") {
+    return new THREE.BoxGeometry(1, 1, 0.08);
+  }
+  if (shape === "plane") {
+    return new THREE.BoxGeometry(1, 0.08, 1);
+  }
+  return new THREE.BoxGeometry(1, 1, 1);
 }
 
 function buildPrivateWorldMiniatureObject(entry) {
@@ -7103,6 +7128,48 @@ function buildPrivateWorldMiniatureObject(entry) {
       }),
     );
     detail.position.copy(position);
+    detail.scale.set(meshScale.x, meshScale.y, meshScale.z);
+    detailGroup.add(detail);
+  }
+
+  for (const platform of (entry.compiled?.miniature?.moving_platforms ?? []).slice(0, 24)) {
+    const geometry = getPrivateMiniaturePrimitiveGeometry(platform.shape);
+    const position = mapPoint(platform.position);
+    const scaleVector = platform.scale ?? { x: 1, y: 1, z: 1 };
+    const meshScale = {
+      x: Math.max(0.12, (Number(scaleVector.x ?? 1) || 1) * scale),
+      y: Math.max(0.12, (Number(scaleVector.y ?? 1) || 1) * scale),
+      z: Math.max(0.12, (Number(scaleVector.z ?? 1) || 1) * scale),
+    };
+    const rotation = platform.rotation ?? { x: 0, y: 0, z: 0 };
+
+    const silhouette = new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({
+        color: "#8c94a1",
+        roughness: 0.9,
+        metalness: 0.02,
+      }),
+    );
+    silhouette.position.copy(position);
+    silhouette.rotation.set(
+      Number(rotation.x ?? 0) || 0,
+      Number(rotation.y ?? 0) || 0,
+      Number(rotation.z ?? 0) || 0,
+    );
+    silhouette.scale.set(meshScale.x, meshScale.y, meshScale.z);
+    silhouetteGroup.add(silhouette);
+
+    const detail = new THREE.Mesh(
+      geometry.clone(),
+      new THREE.MeshStandardMaterial({
+        color: platform.material?.color ?? "#7ec8ff",
+        roughness: 0.76,
+        metalness: 0.08,
+      }),
+    );
+    detail.position.copy(position);
+    detail.rotation.copy(silhouette.rotation);
     detail.scale.set(meshScale.x, meshScale.y, meshScale.z);
     detailGroup.add(detail);
   }

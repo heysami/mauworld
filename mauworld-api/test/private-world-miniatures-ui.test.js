@@ -39,7 +39,7 @@ test("private-world miniature render state enforces exact far/mid/near visuals",
       showLabel: false,
       showSilhouette: true,
       showDetail: false,
-      showPlayerDots: false,
+      showPlayerDots: true,
       domeOpacity: 0.18,
     },
   );

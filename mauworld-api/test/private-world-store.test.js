@@ -43,6 +43,18 @@ function createQuery(rows = []) {
       result = result.filter((entry) => allowed.has(entry?.[column]));
       return this;
     },
+    gte(column, value) {
+      result = result.filter((entry) => entry?.[column] >= value);
+      return this;
+    },
+    gt(column, value) {
+      result = result.filter((entry) => entry?.[column] > value);
+      return this;
+    },
+    lte(column, value) {
+      result = result.filter((entry) => entry?.[column] <= value);
+      return this;
+    },
     order(column, { ascending = true } = {}) {
       result = [...result].sort((left, right) => {
         if (left?.[column] === right?.[column]) {
@@ -267,4 +279,149 @@ test("private world detail prefers a synced runtime snapshot over a stale cached
 
   assert.equal(syncCalls, 1);
   assert.equal(detail.world.active_instance.runtime.players[0].id, "fresh_player");
+});
+
+test("public-world miniature payload keeps mid-range player dots and moving platforms", async () => {
+  const freshIso = new Date().toISOString();
+  const futureIso = new Date(Date.now() + 60_000).toISOString();
+  const store = new FakeStore();
+  store.serviceClient = {
+    from(table) {
+      const tables = {
+        live_presence_sessions: [{
+          viewer_session_id: "viewer_public",
+          world_snapshot_id: "snapshot_public",
+          position_x: 100,
+          position_y: 0,
+          position_z: 0,
+          expires_at: futureIso,
+        }],
+        private_world_active_instances: [{
+          id: "instance_live",
+          world_id: "world_row",
+          active_scene_id: "scene_live",
+          status: "started",
+          anchor_world_snapshot_id: "snapshot_public",
+          anchor_position_x: 0,
+          anchor_position_y: 0,
+          anchor_position_z: 0,
+          anchor_cell_x: 0,
+          anchor_cell_z: 0,
+          miniature_width: 12,
+          miniature_length: 6,
+          miniature_height: 3,
+        }],
+        private_worlds: [{
+          id: "world_row",
+          world_id: "mw_live",
+          creator_profile_id: "profile_creator",
+          world_type: "private",
+          template_size: "medium",
+          name: "Live World",
+          about: "Testing",
+        }],
+        private_world_scenes: [{
+          id: "scene_live",
+          world_id: "world_row",
+          compiled_doc: {
+            miniature: {
+              static_voxels: [
+                {
+                  id: "voxel_1",
+                  position: { x: 0, y: 0.5, z: 0 },
+                  scale: { x: 2, y: 1, z: 2 },
+                  material: { color: "#ffffff" },
+                },
+              ],
+              screens: [],
+              players: [
+                {
+                  id: "player_one",
+                  position: { x: 1, y: 1, z: 0 },
+                },
+              ],
+              moving_platforms: [
+                {
+                  id: "primitive_platform",
+                  shape: "box",
+                  position: { x: 0, y: 0.5, z: 0 },
+                  rotation: { x: 0, y: 0, z: 0 },
+                  scale: { x: 4, y: 1, z: 4 },
+                  material: { color: "#00aaff" },
+                },
+              ],
+            },
+            stats: {},
+          },
+        }],
+        private_world_participants: [{
+          id: "participant_one",
+          instance_id: "instance_live",
+          profile_id: "profile_creator",
+          guest_session_id: null,
+          join_role: "player",
+          player_entity_id: "player_one",
+          visible_to_others: true,
+          last_seen_at: freshIso,
+          updated_at: freshIso,
+        }],
+        private_world_ready_states: [],
+        user_profiles: [{
+          id: "profile_creator",
+          username: "maker",
+          display_name: "Maker",
+        }],
+      };
+      return createQuery(tables[table] ?? []);
+    },
+  };
+  store.privateWorldRuntime = {
+    getSnapshotByWorldRef() {
+      return {
+        players: [
+          {
+            id: "player_one",
+            position: { x: 3, y: 1.5, z: -2 },
+          },
+        ],
+        dynamic_objects: [
+          {
+            id: "primitive_platform",
+            shape: "box",
+            position: { x: 5, y: 1, z: -1 },
+            rotation: { x: 0, y: 0.4, z: 0 },
+            scale: { x: 4, y: 1, z: 4 },
+            material: { color: "#55ddff" },
+            visible: true,
+          },
+        ],
+      };
+    },
+  };
+
+  const miniatures = await store.listPrivateWorldMiniaturesForSnapshot({
+    worldSnapshotId: "snapshot_public",
+    viewerSessionId: "viewer_public",
+    cellXMin: -1,
+    cellXMax: 1,
+    cellZMin: -1,
+    cellZMax: 1,
+  });
+
+  assert.equal(miniatures.length, 1);
+  assert.equal(miniatures[0].lod_band, "mid");
+  assert.deepEqual(miniatures[0].visible_players, [
+    {
+      player_entity_id: "player_one",
+      username: "maker",
+      position: { x: 3, y: 1.5, z: -2 },
+    },
+  ]);
+  assert.equal(miniatures[0].compiled.miniature.moving_platforms.length, 1);
+  assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].id, "primitive_platform");
+  assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].shape, "box");
+  assert.deepEqual(miniatures[0].compiled.miniature.moving_platforms[0].position, { x: 5, y: 1, z: -1 });
+  assert.deepEqual(miniatures[0].compiled.miniature.moving_platforms[0].rotation, { x: 0, y: 0.4, z: 0 });
+  assert.deepEqual(miniatures[0].compiled.miniature.moving_platforms[0].scale, { x: 4, y: 1, z: 4 });
+  assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].material.color, "#8c94a1");
 });

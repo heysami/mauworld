@@ -576,6 +576,54 @@ test("compileSceneDoc flattens linked prefab instances into runtime scene data",
   assert.equal(compiled.stats.prefab_instance_count, 1);
 });
 
+test("compileSceneDoc exposes moving-platform primitives in the miniature payload", () => {
+  const compiled = compileSceneDoc({
+    primitives: [
+      {
+        id: "primitive_moving_platform",
+        shape: "box",
+        position: { x: 1, y: 0.5, z: 2 },
+        scale: { x: 4, y: 1, z: 4 },
+        physics: {
+          carry_riders: true,
+        },
+      },
+      {
+        id: "primitive_crate",
+        shape: "box",
+        position: { x: 8, y: 1, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    ],
+    rules: [
+      {
+        id: "rule_move_platform",
+        trigger: "scene_start",
+        action: "move_platform",
+        target_id: "primitive_moving_platform",
+        payload: {
+          motion_delta: { x: 6, y: 0, z: 0 },
+          duration_ms: 3000,
+          loop_mode: "pingpong",
+        },
+      },
+    ],
+  }, {
+    world_type: "room",
+    width: 40,
+    length: 20,
+    height: 10,
+  });
+
+  assert.equal(compiled.miniature.moving_platforms.length, 1);
+  assert.equal(compiled.miniature.moving_platforms[0].id, compiled.runtime.rules[0].target_id);
+  assert.equal(compiled.miniature.moving_platforms[0].shape, "box");
+  assert.deepEqual(compiled.miniature.moving_platforms[0].position, { x: 1, y: 0.5, z: 2 });
+  assert.deepEqual(compiled.miniature.moving_platforms[0].rotation, { x: 0, y: 0, z: 0 });
+  assert.deepEqual(compiled.miniature.moving_platforms[0].scale, { x: 4, y: 1, z: 4 });
+  assert.equal(compiled.miniature.moving_platforms[0].material.texture_preset, "none");
+});
+
 test("compileSceneDoc keeps already-normalized player ids stable when scene docs are reused", () => {
   const compiled = compileSceneDoc({
     players: [

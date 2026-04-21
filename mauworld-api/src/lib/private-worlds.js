@@ -1248,6 +1248,21 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
     ),
   });
   resolvedDoc.rules = dsl.rules.length > 0 ? dsl.rules : resolvedDoc.rules;
+  const movingPlatformTargetIds = new Set(
+    resolvedDoc.rules
+      .filter((entry) => entry.action === "move_platform" && entry.target_id)
+      .map((entry) => entry.target_id),
+  );
+  const miniatureMovingPlatforms = resolvedDoc.primitives
+    .filter((entry) => movingPlatformTargetIds.has(entry.id) || entry.physics?.carry_riders === true)
+    .map((entry) => ({
+      id: entry.id,
+      shape: entry.shape,
+      position: entry.position,
+      rotation: entry.rotation,
+      scale: entry.scale,
+      material: entry.material,
+    }));
   const solidVoxelCount = resolvedDoc.voxels.length;
   const dynamicObjectCount = [
     ...resolvedDoc.primitives,
@@ -1342,6 +1357,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         scale: entry.scale,
         material: entry.material,
       })),
+      moving_platforms: miniatureMovingPlatforms,
       models: resolvedDoc.models.map((entry) => ({
         id: entry.id,
         asset_id: entry.asset_id,

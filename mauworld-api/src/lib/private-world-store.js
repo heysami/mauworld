@@ -3017,6 +3017,9 @@ export function installPrivateWorldStore(MauworldStore) {
         : null;
       const lodBand = resolveMiniatureLodBand(row, viewerPresence);
       const compiledMiniature = cloneJson(scene.compiled_doc?.miniature ?? {});
+      const runtimeDynamicObjectsById = new Map(
+        (runtimeSnapshot?.dynamic_objects ?? []).map((entry) => [entry.id, entry]),
+      );
       const miniaturePlayerIds = [
         ...(runtimeSnapshot?.players?.map((entry) => entry.id) ?? []),
         ...(compiledMiniature.players?.map((entry) => entry.id) ?? []),
@@ -3037,9 +3040,30 @@ export function installPrivateWorldStore(MauworldStore) {
           };
         })
         .filter((entry) => entry.position);
+      const liveMovingPlatforms = (compiledMiniature.moving_platforms ?? [])
+        .map((entry) => {
+          const runtimeObject = runtimeDynamicObjectsById.get(entry.id) ?? null;
+          if (runtimeObject?.visible === false) {
+            return null;
+          }
+          return {
+            ...entry,
+            shape: runtimeObject?.shape ?? entry.shape ?? "box",
+            position: cloneJson(runtimeObject?.position ?? entry.position),
+            rotation: cloneJson(runtimeObject?.rotation ?? entry.rotation ?? { x: 0, y: 0, z: 0 }),
+            scale: cloneJson(runtimeObject?.scale ?? entry.scale),
+            material: cloneJson(
+              runtimeObject?.material_override
+              ?? runtimeObject?.material
+              ?? entry.material,
+            ),
+          };
+        })
+        .filter(Boolean);
       const miniaturePayload = lodBand === "near"
         ? {
             static_voxels: (compiledMiniature.static_voxels ?? []).slice(0, 120),
+            moving_platforms: liveMovingPlatforms.slice(0, 24),
             screens: (compiledMiniature.screens ?? []).slice(0, 16),
             players: [],
           }
@@ -3052,11 +3076,19 @@ export function installPrivateWorldStore(MauworldStore) {
                   color: "#8c94a1",
                 },
               })),
+              moving_platforms: liveMovingPlatforms.slice(0, 24).map((entry) => ({
+                ...entry,
+                material: {
+                  ...(entry.material ?? {}),
+                  color: "#8c94a1",
+                },
+              })),
               screens: [],
               players: [],
             }
           : {
               static_voxels: [],
+              moving_platforms: [],
               screens: [],
               players: [],
             };
@@ -3096,7 +3128,7 @@ export function installPrivateWorldStore(MauworldStore) {
           miniature: miniaturePayload,
           stats: cloneJson(scene.compiled_doc?.stats ?? {}),
         },
-        visible_players: lodBand === "near" ? liveVisiblePlayers : [],
+        visible_players: lodBand === "far" ? [] : liveVisiblePlayers,
       });
     }
     return miniatures;
