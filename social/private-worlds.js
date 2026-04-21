@@ -10732,7 +10732,10 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
     const verticalTolerance = overlapRecovery
       ? getPrivatePlatformCarryRecoveryTolerance(playerHalf, half)
       : getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
-    if (topY > playerBottom + verticalTolerance) {
+    const overlapLiftTolerance = overlapRecovery
+      ? Math.max(verticalTolerance, playerHalf.y * 0.22)
+      : verticalTolerance;
+    if (topY > playerBottom + overlapLiftTolerance) {
       return;
     }
     const limitX = half.x + playerHalf.x;
