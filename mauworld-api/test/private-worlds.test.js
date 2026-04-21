@@ -109,6 +109,40 @@ test("normalizeSceneDoc keeps orthogonal follow camera distance", () => {
   assert.equal(scene.players[0].fixed_top_down_distance, 36);
 });
 
+test("normalizeSceneDoc keeps overworld camera variants", () => {
+  const scene = normalizeSceneDoc({
+    players: [
+      {
+        id: "player_a",
+        label: "Player A",
+        camera_mode: "overworld",
+        fixed_top_down_direction: "west",
+        fixed_top_down_angle: 45,
+        fixed_top_down_distance: 32,
+      },
+      {
+        id: "player_b",
+        label: "Player B",
+        camera_mode: "overworld fixed",
+        fixed_top_down_direction: "south east",
+        fixed_top_down_angle: 90,
+        fixed_top_down_width: 84,
+        fixed_top_down_height: 48,
+      },
+    ],
+  });
+
+  assert.equal(scene.players[0].camera_mode, "overworld");
+  assert.equal(scene.players[0].fixed_top_down_direction, "west");
+  assert.equal(scene.players[0].fixed_top_down_angle, 45);
+  assert.equal(scene.players[0].fixed_top_down_distance, 32);
+  assert.equal(scene.players[1].camera_mode, "overworld_fixed");
+  assert.equal(scene.players[1].fixed_top_down_direction, "south_east");
+  assert.equal(scene.players[1].fixed_top_down_angle, 90);
+  assert.equal(scene.players[1].fixed_top_down_width, 84);
+  assert.equal(scene.players[1].fixed_top_down_height, 48);
+});
+
 test("normalizeSceneDoc maps legacy top-down camera modes to orthogonal variants", () => {
   const scene = normalizeSceneDoc({
     players: [

@@ -805,6 +805,61 @@ test("runtime snapshots preserve orthogonal follow camera distance", () => {
   assert.equal(snapshot.players[0].fixed_top_down_distance, 36);
 });
 
+test("runtime snapshots preserve overworld camera variants", () => {
+  const simulation = buildSimulation({
+    sceneDoc: {
+      settings: {
+        gravity: { x: 0, y: -9.8, z: 0 },
+        camera_mode: "third_person",
+      },
+      voxels: [],
+      primitives: [],
+      screens: [],
+      players: [
+        {
+          id: "player_one",
+          label: "Player One",
+          position: { x: 0, y: 4.5, z: 0 },
+          scale: 5,
+          body_mode: "rigid",
+          camera_mode: "overworld",
+          fixed_top_down_direction: "east",
+          fixed_top_down_angle: 45,
+          fixed_top_down_distance: 36,
+        },
+        {
+          id: "player_two",
+          label: "Player Two",
+          position: { x: 10, y: 4.5, z: 0 },
+          scale: 5,
+          body_mode: "rigid",
+          camera_mode: "overworld_fixed",
+          fixed_top_down_direction: "south_west",
+          fixed_top_down_angle: 90,
+          fixed_top_down_width: 80,
+          fixed_top_down_height: 48,
+        },
+      ],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [],
+    },
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.equal(snapshot.players[0].camera_mode, "overworld");
+  assert.equal(snapshot.players[0].fixed_top_down_direction, "east");
+  assert.equal(snapshot.players[0].fixed_top_down_angle, 45);
+  assert.equal(snapshot.players[0].fixed_top_down_distance, 36);
+  assert.equal(snapshot.players[1].camera_mode, "overworld_fixed");
+  assert.equal(snapshot.players[1].fixed_top_down_direction, "south_west");
+  assert.equal(snapshot.players[1].fixed_top_down_angle, 90);
+  assert.equal(snapshot.players[1].fixed_top_down_width, 80);
+  assert.equal(snapshot.players[1].fixed_top_down_height, 48);
+});
+
 test("runtime snapshots include dynamic motion metadata for continuous client smoothing", () => {
   const simulation = buildSimulation({
     participants: [],

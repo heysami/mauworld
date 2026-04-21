@@ -4207,6 +4207,8 @@ const PLAYER_CAMERA_MODE_OPTIONS = [
   { value: "first_person", label: "first person" },
   { value: "orthogonal", label: "orthogonal" },
   { value: "fixed_orthogonal", label: "orthogonal fixed" },
+  { value: "overworld", label: "overworld" },
+  { value: "overworld_fixed", label: "overworld fixed" },
 ];
 const PLAYER_CAMERA_MODES = PLAYER_CAMERA_MODE_OPTIONS.map((option) => option.value);
 const PLAYER_FIXED_TOP_DOWN_DIRECTION_OPTIONS = [
@@ -9803,12 +9805,24 @@ function normalizePlayerCameraMode(value = "third_person") {
 
 function isOrthogonalCameraMode(value = "third_person") {
   const normalized = normalizePlayerCameraMode(value);
-  return normalized === "orthogonal" || normalized === "fixed_orthogonal";
+  return normalized === "orthogonal"
+    || normalized === "fixed_orthogonal"
+    || normalized === "overworld"
+    || normalized === "overworld_fixed";
 }
 
 function isFixedTopDownCameraMode(value = "third_person") {
   const normalized = normalizePlayerCameraMode(value);
-  return normalized === "fixed_orthogonal";
+  return normalized === "fixed_orthogonal" || normalized === "overworld_fixed";
+}
+
+function isOverworldCameraMode(value = "third_person") {
+  const normalized = normalizePlayerCameraMode(value);
+  return normalized === "overworld" || normalized === "overworld_fixed";
+}
+
+function isDraggableOverworldCameraMode(value = "third_person") {
+  return normalizePlayerCameraMode(value) === "overworld";
 }
 
 function isPlayerMovementToggleCameraMode(value = "third_person") {
@@ -9995,6 +10009,103 @@ function getPlayerFixedTopDownWindow(player = {}, world = state.selectedWorld) {
     width: Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, Number.isFinite(width) && width > 0 ? width : defaultWidth),
     height: Math.max(PRIVATE_WORLD_BLOCK_UNIT * 2, Number.isFinite(height) && height > 0 ? height : defaultHeight),
   };
+}
+
+function shouldHidePossessedPlayerForCameraMode(value = "third_person") {
+  return isOverworldCameraMode(value);
+}
+
+function getPossessedOverworldPanVectors(player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? {}) {
+  const orientation = getPlayerFixedTopDownOrientation(
+    player?.fixed_top_down_direction ?? "north",
+    player?.fixed_top_down_angle ?? 90,
+  );
+  const right = orientation.cameraRightVector.clone();
+  right.y = 0;
+  if (right.lengthSq() <= 0.000001) {
+    right.copy(orientation.rightVector);
+  } else {
+    right.normalize();
+  }
+  const up = orientation.cameraUpVector.clone();
+  up.y = 0;
+  if (up.lengthSq() <= 0.000001) {
+    up.copy(orientation.planarForwardVector);
+  } else {
+    up.normalize();
+  }
+  return { right, up };
+}
+
+function panPossessedOverworldByScreenDelta(deltaX = 0, deltaY = 0, preview = state.preview) {
+  if (!preview?.camera?.isOrthographicCamera) {
+    return false;
+  }
+  const player = getPossessedRuntimePlayer();
+  const prediction = ensurePossessedPlayerPrediction(player);
+  if (!player || !prediction || !isDraggableOverworldCameraMode(prediction.cameraMode)) {
+    return false;
+  }
+  const viewport = getPreviewViewport(preview);
+  const viewportWidth = Math.max(1, Number(viewport?.width) || Number(preview.viewportWidth) || 1);
+  const viewportHeight = Math.max(1, Number(viewport?.height) || Number(preview.viewportHeight) || 1);
+  const windowWidth = Math.abs(Number(preview.camera.right ?? 0) - Number(preview.camera.left ?? 0));
+  const windowHeight = Math.abs(Number(preview.camera.top ?? 0) - Number(preview.camera.bottom ?? 0));
+  if (windowWidth <= 0.000001 || windowHeight <= 0.000001) {
+    return false;
+  }
+  const worldUnitsPerPixelX = windowWidth / viewportWidth;
+  const worldUnitsPerPixelY = windowHeight / viewportHeight;
+  const { right, up } = getPossessedOverworldPanVectors(prediction);
+  const translation = right.multiplyScalar(-deltaX * worldUnitsPerPixelX)
+    .add(up.multiplyScalar(deltaY * worldUnitsPerPixelY));
+  if (translation.lengthSq() <= 0.000001) {
+    return false;
+  }
+  const startPosition = {
+    x: prediction.position.x,
+    y: prediction.position.y,
+    z: prediction.position.z,
+  };
+  const desiredPosition = {
+    x: prediction.position.x + translation.x,
+    y: prediction.position.y,
+    z: prediction.position.z + translation.z,
+  };
+  if (isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    const collision = resolvePlayerMovementAgainstBlockers({
+      startPosition,
+      desiredPosition,
+      playerSize: getPrivatePlayerCollisionSize(prediction.scale),
+      blockers: getPrivatePossessedCollisionBlockers(prediction, desiredPosition),
+    });
+    prediction.position.x = collision.position.x;
+    prediction.position.z = collision.position.z;
+    const support = getLocalPossessedGroundSupport(prediction, {
+      startPosition,
+      desiredPosition: prediction.position,
+    });
+    if (support?.hasSupport && Number.isFinite(Number(support.groundY))) {
+      prediction.groundY = Number(support.groundY);
+      prediction.position.y = Number(support.groundY);
+      prediction.velocity.y = Number.isFinite(Number(support.velocityY))
+        ? Number(support.velocityY)
+        : 0;
+      prediction.onGround = true;
+    }
+  } else {
+    prediction.position.x = desiredPosition.x;
+    prediction.position.z = desiredPosition.z;
+  }
+  clampViewerPositionToWorldBounds(prediction.position);
+  prediction.velocity.x = 0;
+  prediction.velocity.z = 0;
+  if (!Number.isFinite(Number(prediction.velocity.y))) {
+    prediction.velocity.y = 0;
+  }
+  updatePossessedCamera(preview, 0);
+  void sendPrivatePresence();
+  return true;
 }
 
 function getProjectedWorldAxisSpan(world = state.selectedWorld, axis = null) {
@@ -13028,6 +13139,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
   if (kind === "player") {
     const cameraMode = normalizePlayerCameraMode(entry.camera_mode ?? "third_person");
     const orthogonalMode = isOrthogonalCameraMode(cameraMode);
+    const overworldMode = isOverworldCameraMode(cameraMode);
     const movementToggleMode = isPlayerMovementToggleCameraMode(cameraMode);
     const movementEnabled = normalizePlayerMovementEnabled(entry.movement_enabled ?? true);
   const jumpEnabled = normalizePlayerJumpEnabled(entry.jump_enabled ?? false);
@@ -13037,9 +13149,13 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const fixedTopDownDistance = normalizePlayerFixedTopDownDistance(
       entry.fixed_top_down_distance ?? PRIVATE_PLAYER_VIEW.defaultRadius,
     );
-    const fixedTopDownNote = fixedTopDownMode
-      ? "Orthogonal fixed locks the camera over the world center. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and width and height at 0 frame the full private world."
-      : "Orthogonal follows the occupied player. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and camera distance sets the follow framing.";
+    const fixedTopDownNote = overworldMode
+      ? fixedTopDownMode
+        ? "Overworld fixed locks the camera over the world center, hides the occupied player locally, and keeps the same direction, angle, and full-world framing controls as orthogonal fixed."
+        : "Overworld follows the occupied player, hides the occupied player locally, and lets you drag on the canvas to pan across the world while keeping the same direction, angle, and follow distance controls as orthogonal."
+      : fixedTopDownMode
+        ? "Orthogonal fixed locks the camera over the world center. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and width and height at 0 frame the full private world."
+        : "Orthogonal follows the occupied player. Direction chooses the viewing side, angle sets 90deg top-down, 45deg angled, or 0deg side scroller, and camera distance sets the follow framing.";
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Everyone enters as a floating viewer. Possession happens by clicking a player in Play mode.</p>
       <label>
@@ -17719,6 +17835,14 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     player.position.y + eyeOffset,
     player.position.z,
   );
+  if (shouldHidePossessedPlayerForCameraMode(player.camera_mode)) {
+    const mesh = preview?.entityMeshes?.get(player.id);
+    if (mesh) {
+      applyRenderableVisibility(mesh, {
+        runtimeVisible: false,
+      });
+    }
+  }
   if (player.camera_mode === "first_person") {
     const camera = activatePerspectivePreviewCamera(preview);
     const lookForward = getPrivateCameraForwardVector(yaw, pitch);
@@ -17730,7 +17854,7 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     state.viewerCameraPosition.copy(camera.position);
     return true;
   }
-  if (player.camera_mode === "orthogonal") {
+  if (player.camera_mode === "orthogonal" || player.camera_mode === "overworld") {
     const camera = applyFixedTopDownPreviewCamera(preview, player, state.selectedWorld, {
       center: {
         x: player.position.x,
@@ -17741,7 +17865,7 @@ function updatePossessedCamera(preview, deltaSeconds = 0) {
     state.viewerCameraPosition.copy(camera.position);
     return true;
   }
-  if (player.camera_mode === "fixed_orthogonal") {
+  if (player.camera_mode === "fixed_orthogonal" || player.camera_mode === "overworld_fixed") {
     const camera = applyFixedTopDownPreviewCamera(preview, player);
     state.viewerCameraPosition.copy(camera.position);
     return true;
@@ -18403,6 +18527,14 @@ function ensurePreview() {
     privateInputState.pointerMoved = privateInputState.dragDistance > 4;
     privateInputState.lastPointerX = event.clientX;
     privateInputState.lastPointerY = event.clientY;
+    if (
+      state.mode === "play"
+      && getLocalParticipant()?.join_role === "player"
+      && isDraggableOverworldCameraMode(getActivePossessedCameraMode())
+      && panPossessedOverworldByScreenDelta(deltaX, deltaY, state.preview)
+    ) {
+      return;
+    }
     if (isFixedTopDownCameraMode(getActivePossessedCameraMode())) {
       return;
     }
@@ -20476,7 +20608,8 @@ function updatePreviewFromSelection(options = {}) {
       { id: resolvedPlayerId || player.id, kind: "player" },
     );
     applyRenderableVisibility(mesh, {
-      runtimeVisible: runtimePlayer?.visible !== false,
+      runtimeVisible: runtimePlayer?.visible !== false
+        && !(localPrediction && shouldHidePossessedPlayerForCameraMode(localPrediction.cameraMode)),
     });
     mesh.userData.privateWorldPlayerId = resolvedPlayerId || player.id;
     syncPrivatePlayerJumpShadow(mesh, localPrediction ?? runtimePlayer ?? player);
@@ -20531,7 +20664,8 @@ function updatePreviewFromSelection(options = {}) {
       { id: playerId, kind: "player" },
     );
     applyRenderableVisibility(mesh, {
-      runtimeVisible: runtimePlayer?.visible !== false,
+      runtimeVisible: runtimePlayer?.visible !== false
+        && !(localPrediction && shouldHidePossessedPlayerForCameraMode(localPrediction.cameraMode)),
     });
     mesh.userData.privateWorldPlayerId = playerId;
     syncPrivatePlayerJumpShadow(mesh, localPrediction ?? runtimePlayer);

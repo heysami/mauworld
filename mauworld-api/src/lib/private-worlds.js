@@ -44,6 +44,8 @@ const ALLOWED_PLAYER_CAMERA_MODES = new Set([
   "third_person",
   "orthogonal",
   "fixed_orthogonal",
+  "overworld",
+  "overworld_fixed",
 ]);
 const ALLOWED_PLAYER_FIXED_TOP_DOWN_DIRECTIONS = new Set([
   "north",
