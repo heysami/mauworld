@@ -10630,7 +10630,15 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     verticalTolerance: supportVerticalTolerance,
   });
   const activeCarryPlatformId = String(prediction.localCarryPlatformId ?? "").trim();
-  const allowStableGroundFallback = !activeCarryPlatformId;
+  const storedGroundY = Number(prediction.groundY);
+  const baseGroundY = Number(prediction.baseGroundY);
+  const stableGroundTolerance = Math.max(0.08, supportVerticalTolerance * 0.5);
+  const allowStableGroundFallback = (
+    !activeCarryPlatformId
+    && Number.isFinite(storedGroundY)
+    && Number.isFinite(baseGroundY)
+    && Math.abs(storedGroundY - baseGroundY) <= stableGroundTolerance
+  );
   let carrySupport = null;
   let groundY = Number.NaN;
   let resolvedHasSupport = false;
@@ -10681,13 +10689,11 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     }
   }
   if (!resolvedHasSupport && allowStableGroundFallback) {
-    const storedGroundY = Number(prediction.groundY);
     const playerY = Number(desiredPosition?.y ?? prediction.position?.y);
-    const fallbackTolerance = Math.max(0.08, supportVerticalTolerance * 0.5);
     if (
       Number.isFinite(storedGroundY)
       && Number.isFinite(playerY)
-      && Math.abs(playerY - storedGroundY) <= fallbackTolerance
+      && Math.abs(playerY - storedGroundY) <= stableGroundTolerance
     ) {
       groundY = storedGroundY;
       resolvedHasSupport = true;
