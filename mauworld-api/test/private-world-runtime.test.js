@@ -7,7 +7,7 @@ import {
   PrivateWorldRuntime,
   shouldRebuildPrivateWorldRuntime,
 } from "../src/lib/private-world-runtime.js";
-import { compilePrivateWorldScriptDsl } from "../src/lib/private-worlds.js";
+import { compilePrivateWorldScriptDsl, compileSceneDoc } from "../src/lib/private-worlds.js";
 
 function buildSimulation(input = {}) {
   return createPrivateWorldSimulationState({
@@ -714,6 +714,128 @@ test("runtime can disable jumping while keeping space key rules active", () => {
   assert.ok(runtime.dynamicObjects[0].velocity.y > 0);
   assert.ok(Math.abs(runtime.players[0].position.y - beforePlayerY) < 0.05);
   assert.ok(runtime.players[0].velocity.y <= 0.05);
+});
+
+test("runtime directional force rules use the occupied player's current facing", () => {
+  const simulation = buildSimulation({
+    participants: [{
+      profile_id: "profile_one",
+      profile: { username: "maker", display_name: "Maker" },
+      join_role: "player",
+      player_entity_id: "player_one",
+      ready_state: { ready: true },
+    }],
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: 0, z: 0 } },
+      voxels: [],
+      primitives: [
+        {
+          id: "crate_one",
+          shape: "box",
+          position: { x: 4, y: 1, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          rotation: { x: 0, y: 0, z: 0 },
+          material: { color: "#ffffff", texture_preset: "none" },
+          rigid_mode: "rigid",
+          physics: { gravity_scale: 0, restitution: 0, friction: 0, mass: 1 },
+        },
+      ],
+      screens: [],
+      players: [{
+        id: "player_one",
+        label: "Player One",
+        position: { x: 0, y: 1, z: 0 },
+        rotation: { x: 0, y: -Math.PI / 2, z: 0 },
+        scale: 1,
+        body_mode: "rigid",
+        camera_mode: "third_person",
+        jump_enabled: false,
+      }],
+      texts: [],
+      trigger_zones: [],
+      prefabs: [],
+      particles: [],
+      rules: [
+        {
+          id: "rule_face_force",
+          trigger: "key_press",
+          action: "apply_force",
+          key: "mouse_left",
+          target_id: "crate_one",
+          payload: {
+            force_direction: "player_facing",
+            force_magnitude: 8,
+          },
+        },
+      ],
+    },
+  });
+  const runtime = simulation.runtime;
+  const playerId = runtime.players[0].id;
+
+  stepPrivateWorldSimulation(runtime, {
+    deltaMs: 50,
+    pendingInputs: [{ playerId, key: "mouse_left", state: "down" }],
+  });
+
+  assert.ok(runtime.dynamicObjects[0].velocity.x > 0.1);
+  assert.ok(Math.abs(runtime.dynamicObjects[0].velocity.z) < 0.2);
+});
+
+test("runtime uses modular jump bindings from script_config", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 1, z: 0 },
+      scale: 1,
+      body_mode: "ghost",
+      camera_mode: "third_person",
+      jump_enabled: false,
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    particles: [],
+    script_dsl: `
+# function[controls]: Controls
+@module playmode.wasd_jump
+@target player_one
+@set jump_enabled true
+@set jump_height 12
+@bind jump_key mouse_right
+    `,
+  };
+  const compiled = compileSceneDoc(sceneDoc, {
+    world_type: "room",
+    width: 40,
+    length: 30,
+    height: 12,
+  });
+  const sceneRow = {
+    id: "scene_runtime",
+    name: "Runtime Scene",
+    scene_doc: sceneDoc,
+    compiled_doc: compiled,
+  };
+  const simulation = buildSimulation({
+    sceneRow,
+    scenes: [sceneRow],
+  });
+  const runtime = simulation.runtime;
+  const playerId = runtime.players[0].id;
+
+  stepPrivateWorldSimulation(runtime, {
+    deltaMs: 50,
+    pendingInputs: [{ playerId, key: "mouse_right", state: "down" }],
+  });
+
+  assert.ok(runtime.players[0].velocity.y > 0.1);
+  assert.equal(buildPrivateWorldRuntimeSnapshot(runtime).script_config.player_controls[playerId].bindings.jump_key, "mouse_right");
 });
 
 test("runtime snapshots preserve authored player and object scale", () => {

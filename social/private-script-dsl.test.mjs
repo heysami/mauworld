@@ -1,0 +1,94 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  buildImplicitPrivateWorldScriptConfig,
+  compilePrivateWorldScriptDsl,
+  parsePrivateWorldScriptFunctions,
+} from "./private-script-dsl.mjs";
+
+test("parses modular function directives and emits script config", () => {
+  const sceneDoc = {
+    settings: {
+      gravity: { x: 0, y: -9.8, z: 0 },
+    },
+    players: [{
+      id: "player_one",
+      camera_mode: "overworld",
+      movement_enabled: true,
+      jump_enabled: false,
+    }],
+  };
+  const source = `
+# function[controls]: Controls
+@module playmode.wasd_jump
+@target player_one
+@enabled true
+@set jump_enabled true
+@set jump_height 18
+@bind jump_key mouse_right
+
+# function[gravity]: Gravity
+@module physics.world
+@target scene
+@set gravity (0,-12,0)
+
+# function[force]: Force
+key_press key mouse_left from player_one -> apply_force to crate direction facing strength 8
+  `;
+
+  const parsedFunctions = parsePrivateWorldScriptFunctions(source, {
+    entityAliases: new Map([
+      ["player_one", "player_one"],
+      ["crate", "crate"],
+    ]),
+  });
+  const compiled = compilePrivateWorldScriptDsl(source, {
+    sceneDoc,
+    entityAliases: new Map([
+      ["player_one", "player_one"],
+      ["crate", "crate"],
+    ]),
+  });
+
+  assert.equal(parsedFunctions[0].module_kind, "playmode.wasd_jump");
+  assert.equal(parsedFunctions[1].target_id, "scene");
+  assert.equal(compiled.script_config.player_controls.player_one.bindings.jump_key, "mouse_right");
+  assert.equal(compiled.script_config.player_controls.player_one.params.jump_enabled, true);
+  assert.equal(compiled.script_config.player_controls.player_one.params.jump_height, 18);
+  assert.deepEqual(compiled.script_config.world_physics.params.gravity, { x: 0, y: -12, z: 0 });
+  assert.equal(compiled.rules[0].payload.force_direction, "player_facing");
+  assert.equal(compiled.rules[0].payload.force_magnitude, 8);
+  assert.ok(compiled.script_config.action_metadata.input_tokens.includes("mouse_left"));
+  assert.ok(compiled.script_config.action_metadata.input_tokens.includes("mouse_right"));
+});
+
+test("commented placeholder functions stay non-running", () => {
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[placeholder]: Launch Bullet Placeholder
+# Placeholder only: projectile spawning is not implemented yet.
+# key_press key mouse_left from player_one -> launch_bullet to projectile_spawn
+  `);
+
+  assert.equal(compiled.rules.length, 0);
+  assert.deepEqual(compiled.errors, []);
+});
+
+test("implicit defaults preserve legacy player and scene settings", () => {
+  const config = buildImplicitPrivateWorldScriptConfig({
+    settings: {
+      gravity: { x: 0, y: -7, z: 0 },
+    },
+    players: [{
+      id: "player_one",
+      movement_enabled: false,
+      jump_enabled: true,
+      camera_mode: "overworld",
+    }],
+  });
+
+  assert.equal(config.player_controls.player_one.enabled, false);
+  assert.equal(config.player_controls.player_one.params.jump_enabled, true);
+  assert.equal(config.camera_behaviors.player_one.overworld_drag_pan.enabled, true);
+  assert.deepEqual(config.world_physics.params.gravity, { x: 0, y: -7, z: 0 });
+});

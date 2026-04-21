@@ -75,13 +75,13 @@ function buildBrainstormPrompt(input = {}) {
   const transcript = buildMessageTranscript(input.messages);
   const introByType = {
     screen_html: "You are helping a Mauworld builder brainstorm a world screen before any final HTML is generated.",
-    world_script: "You are helping a Mauworld builder brainstorm scene logic before any final DSL script is generated.",
+    world_script: "You are helping a Mauworld builder brainstorm scene logic before any final modular DSL script is generated.",
     texture: "You are helping a Mauworld builder brainstorm a reusable texture asset before any final generation request is sent.",
     "3d_model": "You are helping a Mauworld builder brainstorm a reusable 3D model asset before any final generation request is sent.",
   };
   const holdBackByType = {
     screen_html: "Do not write the final HTML yet.",
-    world_script: "Do not write the final DSL script yet.",
+    world_script: "Do not write the final modular DSL script yet.",
     texture: "Do not write the final provider prompt or JSON spec yet.",
     "3d_model": "Do not write the final provider prompt or JSON spec yet.",
   };
@@ -126,17 +126,30 @@ function buildScreenHtmlPrompt(input = {}) {
 function buildScriptPrompt(input = {}) {
   const transcript = buildMessageTranscript(input.messages);
   return [
-    "Generate a concise Mauworld private-world rule script.",
+    "Generate a concise Mauworld private-world modular DSL script.",
     "Use the brainstorm thread and context below as the source of truth.",
-    "Target a structured trigger/action DSL using the available triggers:",
+    "The script can mix function blocks, directives, comments, and trigger/action rule lines.",
+    "Function blocks must use headers like: # function[my_function_id]: My Function Name",
+    "Supported directives inside a function:",
+    "@module <kind>",
+    "@target <player_id|entity_id|scene>",
+    "@set <param> <value>",
+    "@bind <binding> <key_or_mouse_token>",
+    "@enabled <true|false>",
+    "Supported module kinds:",
+    "playmode.wasd_jump, camera.overworld_drag_pan, behavior.face_mouse_orthogonal, physics.world.",
+    "Use readable comments when a placeholder or reminder should stay non-running.",
+    "Legacy trigger/action rule lines are still valid. Available triggers:",
     "zone_enter, zone_exit, key_press, timer, scene_start, all_players_ready.",
-    "Target the available actions:",
+    "Available actions:",
     "apply_force, teleport, move_platform, switch_scene, set_material, set_visibility, toggle_particles, set_text, start_scene.",
-    "Prefer short readable rules that can be translated by a backend compiler.",
+    "Supported mouse input tokens are mouse_left, mouse_right, and mouse_middle.",
+    "Directional force rules can use syntax like: key_press key mouse_left from player_1 -> apply_force to crate direction facing strength 12",
     "For moving platforms, use syntax like:",
     "scene_start -> move_platform to primitive_1 delta(10,0,10) duration 3s loop pingpong",
     "Use entity ids exactly as they appear in the scene context.",
     "Moving platforms work best on rigid objects with ignore_gravity and carry_riders enabled.",
+    "Do not output a runnable bullet-launch action yet. Projectile spawning is not implemented, so keep any bullet example commented as a placeholder only.",
     buildSharedContext(input),
     `User objective: ${input.objective || "Create basic interactive world logic"}`,
     transcript ? `Brainstorm thread:\n${transcript}` : "",

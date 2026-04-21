@@ -1,6 +1,7 @@
 import * as RAPIER from "@dimforge/rapier3d-compat/rapier.es.js";
 import { HttpError } from "./http.js";
 import { normalizeSceneDoc, resolveEntityIdAlias } from "./private-worlds.js";
+import { compilePrivateWorldScriptDsl as compileSharedPrivateWorldScriptDsl } from "../../../social/private-script-dsl.mjs";
 
 await RAPIER.init({});
 
@@ -50,6 +51,79 @@ function mustFinite(value, fallback = 0) {
 
 function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function getRuntimeScriptConfig(runtime = {}) {
+  if (runtime?.scriptConfig) {
+    return runtime.scriptConfig;
+  }
+  const fallback = compileSharedPrivateWorldScriptDsl(runtime?.sceneDoc?.script_dsl ?? "", {
+    sceneDoc: runtime?.sceneDoc ?? {},
+    entityAliases: new Map(
+      [
+        ...(runtime?.sceneDoc?.voxels ?? []),
+        ...(runtime?.sceneDoc?.primitives ?? []),
+        ...(runtime?.sceneDoc?.panels ?? []),
+        ...(runtime?.sceneDoc?.models ?? []),
+        ...(runtime?.sceneDoc?.screens ?? []),
+        ...(runtime?.sceneDoc?.players ?? []),
+        ...(runtime?.sceneDoc?.texts ?? []),
+        ...(runtime?.sceneDoc?.trigger_zones ?? []),
+        ...(runtime?.sceneDoc?.particles ?? []),
+      ].map((entry) => [entry.id, entry.id]),
+    ),
+  });
+  return fallback.script_config ?? null;
+}
+
+function getPlayerControlConfig(runtime = {}, player = {}) {
+  const playerId = String(player?.id ?? "").trim();
+  if (!playerId) {
+    return null;
+  }
+  return getRuntimeScriptConfig(runtime)?.player_controls?.[playerId] ?? null;
+}
+
+function getPlayerMoveSpeed(runtime = {}, player = {}) {
+  return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.move_speed, PLAYER_MOVE_SPEED));
+}
+
+function getPlayerSprintSpeed(runtime = {}, player = {}) {
+  return Math.max(getPlayerMoveSpeed(runtime, player), mustFinite(
+    getPlayerControlConfig(runtime, player)?.params?.sprint_speed,
+    PLAYER_SPRINT_SPEED,
+  ));
+}
+
+function getPlayerAcceleration(runtime = {}, player = {}) {
+  return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.acceleration, PLAYER_ACCELERATION));
+}
+
+function getPlayerJumpHeight(runtime = {}, player = {}) {
+  return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.jump_height, PLAYER_JUMP_HEIGHT));
+}
+
+function getPlayerJumpVelocity(runtime = {}, player = {}) {
+  const gravityMagnitude = Math.abs(mustFinite(runtime?.gravity?.y, -9.8));
+  return Math.sqrt(Math.max(0, gravityMagnitude * 2 * getPlayerJumpHeight(runtime, player)));
+}
+
+function getPlayerJumpBinding(runtime = {}, player = {}) {
+  const binding = String(getPlayerControlConfig(runtime, player)?.bindings?.jump_key ?? "space").trim().toLowerCase();
+  return binding || "space";
+}
+
+function getPlayerSprintBinding(runtime = {}, player = {}) {
+  const binding = String(getPlayerControlConfig(runtime, player)?.bindings?.sprint_key ?? "shift").trim().toLowerCase();
+  return binding || "shift";
+}
+
+function getHeadingForwardVector(headingY = 0) {
+  const resolvedHeadingY = mustFinite(headingY, 0);
+  return {
+    x: -Math.sin(resolvedHeadingY),
+    z: -Math.cos(resolvedHeadingY),
+  };
 }
 
 function normalizeAngle(angle) {
@@ -476,14 +550,14 @@ function getPlatformCarryVerticalTolerance(riderState, platformState) {
   );
 }
 
-function getPlayerDesiredPlanarMovement(player) {
+function getPlayerDesiredPlanarMovement(runtime, player) {
   const pressed = player?.pressedKeys instanceof Set ? player.pressedKeys : new Set();
-  const movementEnabled = isPlayerMovementEnabled(player);
+  const movementEnabled = isPlayerMovementEnabled(runtime, player);
   const left = pressed.has("a") || pressed.has("arrowleft");
   const right = pressed.has("d") || pressed.has("arrowright");
   const forward = pressed.has("w") || pressed.has("arrowup");
   const backward = pressed.has("s") || pressed.has("arrowdown");
-  const sprint = movementEnabled && pressed.has("shift");
+  const sprint = movementEnabled && pressed.has(getPlayerSprintBinding(runtime, player));
   const desired = movementEnabled
     ? (player?.usesLookHeading === true
       ? getRelativePlayerMovement(player, pressed)
@@ -498,12 +572,12 @@ function getPlayerDesiredPlanarMovement(player) {
   };
 }
 
-function getPlayerAllowedCarryRelativeDelta(player, deltaSeconds) {
+function getPlayerAllowedCarryRelativeDelta(runtime, player, deltaSeconds) {
   if (!player) {
     return { x: 0, y: 0, z: 0 };
   }
-  const { desired, sprint } = getPlayerDesiredPlanarMovement(player);
-  const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
+  const { desired, sprint } = getPlayerDesiredPlanarMovement(runtime, player);
+  const speed = sprint ? getPlayerSprintSpeed(runtime, player) : getPlayerMoveSpeed(runtime, player);
   const safeDeltaSeconds = Math.max(0, mustFinite(deltaSeconds, 0));
   return {
     x: desired.x * speed * safeDeltaSeconds,
@@ -731,7 +805,7 @@ function carryPlatformRiders(simulation, preStepState, deltaSeconds = 0) {
       z: currentPosition.z - baseTargetPosition.z,
     };
     const allowedRelativeDelta = riderState.kind === "player"
-      ? getPlayerAllowedCarryRelativeDelta(rider, deltaSeconds)
+      ? getPlayerAllowedCarryRelativeDelta(simulation, rider, deltaSeconds)
       : { x: 0, y: 0, z: 0 };
     if (
       riderState.kind === "player"
@@ -1187,10 +1261,7 @@ function getRelativePlayerMovement(player, pressedKeys = player?.pressedKeys) {
   const headingY = mustFinite(player?.rotation?.y, 0);
   const forwardAmount = Number(forward) - Number(backward);
   const strafeAmount = Number(right) - Number(left);
-  const forwardVector = {
-    x: -Math.sin(headingY),
-    z: -Math.cos(headingY),
-  };
+  const forwardVector = getHeadingForwardVector(headingY);
   const rightVector = {
     x: Math.cos(headingY),
     z: -Math.sin(headingY),
@@ -1206,14 +1277,19 @@ function isPlayerMovementToggleCameraMode(cameraMode = "third_person") {
   return normalized === "third_person" || normalized === "first_person";
 }
 
-function isPlayerMovementEnabled(player = {}) {
+function isPlayerMovementEnabled(runtime = {}, player = {}) {
   if (!isPlayerMovementToggleCameraMode(player?.camera_mode)) {
     return true;
   }
-  return player?.movement_enabled !== false;
+  const controlConfig = getPlayerControlConfig(runtime, player);
+  return controlConfig ? controlConfig.enabled !== false : player?.movement_enabled !== false;
 }
 
-function isPlayerJumpEnabled(player = {}) {
+function isPlayerJumpEnabled(runtime = {}, player = {}) {
+  const controlConfig = getPlayerControlConfig(runtime, player);
+  if (controlConfig && Object.hasOwn(controlConfig.params ?? {}, "jump_enabled")) {
+    return controlConfig.params.jump_enabled === true;
+  }
   return player?.jump_enabled === true;
 }
 
@@ -1245,7 +1321,7 @@ function raycastPlayerGround(runtime, player) {
 }
 
 function primeQueuedPlayerJump(runtime, player, nowMs = mustFinite(runtime?.elapsedMs, 0)) {
-  if (!runtime || !player || !isPlayerJumpEnabled(player)) {
+  if (!runtime || !player || !isPlayerJumpEnabled(runtime, player)) {
     return false;
   }
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
@@ -1263,7 +1339,7 @@ function primeQueuedPlayerJump(runtime, player, nowMs = mustFinite(runtime?.elap
     }
     player.velocity = {
       x: mustFinite(player.velocity?.x, 0),
-      y: PLAYER_JUMP_VELOCITY,
+      y: getPlayerJumpVelocity(runtime, player),
       z: mustFinite(player.velocity?.z, 0),
     };
     player.onGround = false;
@@ -1283,7 +1359,7 @@ function primeQueuedPlayerJump(runtime, player, nowMs = mustFinite(runtime?.elap
   const currentVelocity = vec3(body.linvel(), player.velocity);
   const nextVelocity = {
     x: currentVelocity.x,
-    y: PLAYER_JUMP_VELOCITY,
+    y: getPlayerJumpVelocity(runtime, player),
     z: currentVelocity.z,
   };
   player.velocity = nextVelocity;
@@ -1307,14 +1383,15 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   }
 
   const pressed = player.pressedKeys;
-  const movementEnabled = isPlayerMovementEnabled(player);
+  const movementEnabled = isPlayerMovementEnabled(runtime, player);
   const left = pressed.has("a") || pressed.has("arrowleft");
   const right = pressed.has("d") || pressed.has("arrowright");
   const forward = pressed.has("w") || pressed.has("arrowup");
   const backward = pressed.has("s") || pressed.has("arrowdown");
-  const sprint = movementEnabled && pressed.has("shift");
+  const sprint = movementEnabled && pressed.has(getPlayerSprintBinding(runtime, player));
   const nowMs = mustFinite(runtime?.elapsedMs, 0);
-  const jumpEdge = isPlayerJumpEnabled(player) && inputEdges.some((entry) => entry.key === "space" && entry.state === "down");
+  const jumpBinding = getPlayerJumpBinding(runtime, player);
+  const jumpEdge = isPlayerJumpEnabled(runtime, player) && inputEdges.some((entry) => entry.key === jumpBinding && entry.state === "down");
   if (jumpEdge) {
     player.jumpBufferedUntilMs = nowMs + PLAYER_JUMP_BUFFER_MS;
   } else if (mustFinite(player.jumpBufferedUntilMs, 0) < nowMs) {
@@ -1333,13 +1410,13 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   }
 
   if (player.body_mode === "ghost") {
-    const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
+    const speed = sprint ? getPlayerSprintSpeed(runtime, player) : getPlayerMoveSpeed(runtime, player);
     const gravity = Math.abs(mustFinite(runtime?.gravity?.y, -9.8));
     const groundY = getGhostPlayerGroundY(player);
     const currentVelocity = vec3(player.velocity);
     let nextVelocityY = currentVelocity.y;
     if (mustFinite(player.jumpBufferedUntilMs, 0) >= nowMs && player.onGround) {
-      nextVelocityY = PLAYER_JUMP_VELOCITY;
+      nextVelocityY = getPlayerJumpVelocity(runtime, player);
       player.onGround = false;
       player.jumpBufferedUntilMs = 0;
     } else {
@@ -1372,11 +1449,11 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
     return;
   }
 
-  const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
+  const speed = sprint ? getPlayerSprintSpeed(runtime, player) : getPlayerMoveSpeed(runtime, player);
   const currentVelocity = vec3(body.linvel(), player.velocity);
   const targetVelocityX = desired.x * speed;
   const targetVelocityZ = desired.z * speed;
-  const blend = clampNumber(PLAYER_ACCELERATION * deltaSeconds, 0, 1);
+  const blend = clampNumber(getPlayerAcceleration(runtime, player) * deltaSeconds, 0, 1);
   const nextVelocity = {
     x: currentVelocity.x + (targetVelocityX - currentVelocity.x) * blend,
     y: currentVelocity.y,
@@ -1384,7 +1461,7 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   };
   player.onGround = raycastPlayerGround(runtime, player);
   if (mustFinite(player.jumpBufferedUntilMs, 0) >= nowMs && player.onGround) {
-    nextVelocity.y = PLAYER_JUMP_VELOCITY;
+    nextVelocity.y = getPlayerJumpVelocity(runtime, player);
     player.onGround = false;
     player.jumpBufferedUntilMs = 0;
   }
@@ -1429,6 +1506,32 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   const sceneDoc = normalizeSceneDoc(resolvedSceneDoc, {
     preserveNormalizedIds: compiledResolvedSceneDoc != null,
   });
+  const sceneEntities = [
+    ...(sceneDoc.voxels ?? []),
+    ...(sceneDoc.primitives ?? []),
+    ...(sceneDoc.panels ?? []),
+    ...(sceneDoc.models ?? []),
+    ...(sceneDoc.screens ?? []),
+    ...(sceneDoc.players ?? []),
+    ...(sceneDoc.texts ?? []),
+    ...(sceneDoc.trigger_zones ?? []),
+    ...(sceneDoc.particles ?? []),
+  ];
+  const entityAliases = new Map(
+    sceneEntities
+      .map((entry) => String(entry?.id ?? "").trim())
+      .filter(Boolean)
+      .map((entryId) => [entryId, entryId]),
+  );
+  const compiledScriptConfig = sceneRow?.compiled_doc?.runtime?.script_config ?? null;
+  const fallbackCompile = compiledScriptConfig
+    ? null
+    : compileSharedPrivateWorldScriptDsl(sceneDoc.script_dsl ?? "", {
+      sceneDoc,
+      entityAliases,
+    });
+  const scriptConfig = cloneJson(compiledScriptConfig ?? fallbackCompile?.script_config ?? null);
+  const gravity = vec3(scriptConfig?.world_physics?.params?.gravity ?? sceneDoc.settings?.gravity, { x: 0, y: -9.8, z: 0 });
   const authoredPlayerIds = normalizeSceneDoc(sceneRow?.scene_doc ?? {}).players.map((entry) => entry.id);
   const staticSolids = (sceneDoc.voxels ?? []).map((entry) => ({
     id: entry.id,
@@ -1565,8 +1668,9 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     sceneVersion: mustFinite(sceneRow?.version, 0),
     sceneUpdatedAt: sceneRow?.updated_at ?? sceneRow?.created_at ?? null,
     sceneDoc,
+    scriptConfig,
     rules: buildSceneRules(sceneRow, sceneDoc),
-    gravity: vec3(sceneDoc.settings?.gravity, { x: 0, y: -9.8, z: 0 }),
+    gravity,
     startOnReady: sceneDoc.settings?.start_on_ready !== false,
     sceneStarted,
     status,
@@ -1752,6 +1856,12 @@ function executeRuleAction(simulation, rule, context = {}) {
     const target = findTargetBody(simulation, targetId);
     if (target) {
       const force = vec3(rule.payload?.force, { x: 0, y: 0, z: 0 });
+      if (rule.payload?.force_direction === "player_facing" && context.actorPlayer) {
+        const magnitude = mustFinite(rule.payload?.force_magnitude, 0);
+        const forward = getHeadingForwardVector(context.actorPlayer.rotation?.y);
+        force.x += forward.x * magnitude;
+        force.z += forward.z * magnitude;
+      }
       const body = simulation.physics?.playerBodies?.get(target.id)
         ?? simulation.physics?.objectBodies?.get(target.id)
         ?? null;
@@ -1767,6 +1877,7 @@ function executeRuleAction(simulation, rule, context = {}) {
         type: "apply_force",
         rule_id: rule.id,
         target_id: target.id,
+        source_player_id: String(context.actorPlayer?.id ?? "").trim() || undefined,
       });
     }
     markRuleFired();
@@ -1993,6 +2104,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
           (!rule.key || String(rule.key).toLowerCase() === edge.key)
           && (!rule.source_id || rule.source_id === player.id)
         ),
+        { actorPlayer: player },
       );
     }
   }
@@ -2056,6 +2168,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     scene_name: runtime.sceneName ?? null,
     scene_version: runtime.sceneVersion,
     scene_updated_at: runtime.sceneUpdatedAt ?? null,
+    script_config: cloneJson(runtime.scriptConfig ?? null),
     status: runtime.status,
     scene_started: runtime.sceneStarted === true,
     tick: runtime.tick,
@@ -2576,9 +2689,9 @@ export class PrivateWorldRuntime {
       };
     }
     if (
-      normalizedKey === "space"
+      normalizedKey === getPlayerJumpBinding(simulation.runtime, occupiedPlayer)
       && state !== "up"
-      && !occupiedPlayer.pressedKeys.has("space")
+      && !occupiedPlayer.pressedKeys.has(getPlayerJumpBinding(simulation.runtime, occupiedPlayer))
       && useClientAuthoritativePose !== true
     ) {
       primeQueuedPlayerJump(simulation.runtime, occupiedPlayer);

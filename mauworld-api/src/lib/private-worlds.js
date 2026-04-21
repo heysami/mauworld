@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { HttpError } from "./http.js";
 import { assertSafePublicText, stripMarkdown } from "./text.js";
+import { compilePrivateWorldScriptDsl as compileSharedPrivateWorldScriptDsl } from "../../../social/private-script-dsl.mjs";
 
 export const PRIVATE_WORLD_LIMITS = {
   maxViewers: 20,
@@ -665,6 +666,20 @@ function buildRuleDsl(rules = []) {
         .filter(Boolean)
         .join(" ");
       const actionParts = [`${rule.action}${scope ? ` ${scope}` : ""}`];
+      if (rule.action === "apply_force") {
+        const force = rule.payload?.force ?? null;
+        if (force) {
+          actionParts.push(`force(${mustFinite(force.x, 0)},${mustFinite(force.y, 0)},${mustFinite(force.z, 0)})`);
+        }
+        const direction = String(rule.payload?.force_direction ?? "").trim().toLowerCase();
+        if (direction === "player_facing") {
+          actionParts.push("direction facing");
+        }
+        const magnitude = Number(rule.payload?.force_magnitude);
+        if (Number.isFinite(magnitude)) {
+          actionParts.push(`strength ${magnitude}`);
+        }
+      }
       if (rule.action === "move_platform") {
         const delta = rule.payload?.motion_delta ?? rule.payload?.delta ?? null;
         if (delta) {
@@ -773,154 +788,7 @@ function parseDslVector(token) {
 }
 
 export function compilePrivateWorldScriptDsl(input, options = {}) {
-  const source = String(input ?? "").trim();
-  if (!source) {
-    return {
-      rules: [],
-      errors: [],
-    };
-  }
-
-  const rules = [];
-  const errors = [];
-  const aliasMap = options.entityAliases instanceof Map ? options.entityAliases : new Map();
-  const lines = source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith("#") && !line.startsWith("//"));
-
-  for (const [index, line] of lines.entries()) {
-    const [rawTrigger, rawAction] = line.split(/\s*->\s*/);
-    if (!rawTrigger || !rawAction) {
-      errors.push({ line: index + 1, message: "Expected `trigger -> action`" });
-      continue;
-    }
-    const triggerTokens = tokenizeDslSegment(rawTrigger);
-    const actionTokens = tokenizeDslSegment(rawAction);
-    const trigger = String(triggerTokens.shift() ?? "").trim().toLowerCase();
-    const action = String(actionTokens.shift() ?? "").trim().toLowerCase();
-    if (!ALLOWED_RULE_TRIGGERS.has(trigger)) {
-      errors.push({ line: index + 1, message: `Unsupported trigger: ${trigger || "(empty)"}` });
-      continue;
-    }
-    if (!ALLOWED_RULE_ACTIONS.has(action)) {
-      errors.push({ line: index + 1, message: `Unsupported action: ${action || "(empty)"}` });
-      continue;
-    }
-
-    const rule = {
-      id: ensureEntityId("rule", `dsl-${index + 1}`),
-      trigger,
-      action,
-      source_id: null,
-      target_id: null,
-      key: null,
-      delay_ms: 0,
-      payload: {},
-    };
-
-    for (let tokenIndex = 0; tokenIndex < triggerTokens.length; tokenIndex += 1) {
-      const token = triggerTokens[tokenIndex];
-      const next = triggerTokens[tokenIndex + 1];
-      if (token === "from" && next) {
-        rule.source_id = resolveEntityAlias(aliasMap, next);
-        tokenIndex += 1;
-      } else if (token === "key" && next) {
-        rule.key = String(next).trim().toLowerCase();
-        tokenIndex += 1;
-      } else if (token === "after" && next) {
-        const match = String(next).match(/^([-0-9.]+)(ms|s)?$/i);
-        if (match) {
-          const value = Number(match[1]);
-          const unit = String(match[2] ?? "ms").toLowerCase();
-          rule.delay_ms = clampInteger(unit === "s" ? value * 1000 : value, 0, 0, 600000);
-          tokenIndex += 1;
-        }
-      }
-    }
-
-    const freeTextTokens = [];
-    for (let tokenIndex = 0; tokenIndex < actionTokens.length; tokenIndex += 1) {
-      const token = actionTokens[tokenIndex];
-      const next = actionTokens[tokenIndex + 1];
-      const vector = parseDslVector(token);
-      if (vector?.kind === "force") {
-        rule.payload.force = vector.value;
-        continue;
-      }
-      if (vector?.kind === "position") {
-        rule.payload.position = vector.value;
-        continue;
-      }
-      if (vector?.kind === "delta" || vector?.kind === "offset" || vector?.kind === "path") {
-        rule.payload.motion_delta = vector.value;
-        continue;
-      }
-      if (token === "to" && next) {
-        rule.target_id = resolveEntityAlias(aliasMap, next);
-        tokenIndex += 1;
-      } else if (token === "scene" && next) {
-        rule.payload.scene_id = next;
-        tokenIndex += 1;
-      } else if (token === "target" && next) {
-        rule.payload.target_id = resolveEntityAlias(aliasMap, next);
-        tokenIndex += 1;
-      } else if (token === "particle" && next) {
-        rule.payload.particle_id = resolveEntityAlias(aliasMap, next);
-        tokenIndex += 1;
-      } else if (token === "text" && next) {
-        rule.payload.text_id = resolveEntityAlias(aliasMap, next);
-        tokenIndex += 1;
-      } else if (token === "value" && next) {
-        rule.payload.value = next;
-        tokenIndex += 1;
-      } else if (token === "visible" && next) {
-        rule.payload.visible = next === "true";
-        tokenIndex += 1;
-      } else if (token === "enabled" && next) {
-        rule.payload.enabled = next === "true";
-        tokenIndex += 1;
-      } else if (token === "duration" && next) {
-        const match = String(next).match(/^([-0-9.]+)(ms|s)?$/i);
-        if (match) {
-          const value = Number(match[1]);
-          const unit = String(match[2] ?? "ms").toLowerCase();
-          rule.payload.duration_ms = clampInteger(unit === "s" ? value * 1000 : value, 3000, 100, 600000);
-          tokenIndex += 1;
-        }
-      } else if ((token === "loop" || token === "mode" || token === "repeat") && next) {
-        rule.payload.loop_mode = String(next).trim().toLowerCase();
-        tokenIndex += 1;
-      } else if (token === "force" && actionTokens.length >= tokenIndex + 4) {
-        rule.payload.force = sanitizeVector3({
-          x: Number(actionTokens[tokenIndex + 1]),
-          y: Number(actionTokens[tokenIndex + 2]),
-          z: Number(actionTokens[tokenIndex + 3]),
-        });
-        tokenIndex += 3;
-      } else if (token === "position" && actionTokens.length >= tokenIndex + 4) {
-        rule.payload.position = sanitizeVector3({
-          x: Number(actionTokens[tokenIndex + 1]),
-          y: Number(actionTokens[tokenIndex + 2]),
-          z: Number(actionTokens[tokenIndex + 3]),
-        });
-        tokenIndex += 3;
-      } else {
-        freeTextTokens.push(token);
-      }
-    }
-
-    if (action === "set_text" && !rule.payload.value && freeTextTokens.length > 0) {
-      rule.payload.value = freeTextTokens.join(" ").slice(0, 160);
-    }
-    rules.push(rule);
-  }
-
-  return {
-    rules,
-    errors,
-  };
+  return compileSharedPrivateWorldScriptDsl(input, options);
 }
 
 function transformPrefabEntity(entity = {}, instance = {}) {
@@ -1255,6 +1123,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         ...resolvedDoc.particles,
       ].map((entry) => [entry.id, entry.id]),
     ),
+    sceneDoc: resolvedDoc,
   });
   resolvedDoc.rules = dsl.rules.length > 0 ? dsl.rules : resolvedDoc.rules;
   const movingPlatformTargetIds = new Set(
@@ -1359,6 +1228,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       structured_rules: structuredRules,
       dsl_rules: dsl.rules,
       dsl_errors: dsl.errors,
+      script_config: dsl.script_config,
       particles: resolvedDoc.particles,
       resolved_scene_doc: resolvedDoc,
     },

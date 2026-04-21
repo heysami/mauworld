@@ -616,6 +616,87 @@ test("compilePrivateWorldScriptDsl translates DSL triggers and actions", () => {
   assert.equal(compiled.rules[2].payload.loop_mode, "pingpong");
 });
 
+test("compilePrivateWorldScriptDsl compiles modular control directives and directional force metadata", () => {
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[controls]: Controls
+@module playmode.wasd_jump
+@target player_one
+@enabled true
+@set jump_enabled true
+@set jump_height 16
+@bind jump_key mouse_right
+
+# function[camera]: Drag
+@module camera.overworld_drag_pan
+@target player_one
+@enabled true
+@bind drag_button mouse_middle
+
+# function[force]: Force
+key_press key mouse_left from player_one -> apply_force to crate direction facing strength 12
+  `, {
+    sceneDoc: {
+      settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+      players: [{
+        id: "player_one",
+        camera_mode: "overworld",
+        movement_enabled: true,
+        jump_enabled: false,
+      }],
+    },
+    entityAliases: new Map([
+      ["player_one", "player_one"],
+      ["crate", "primitive_crate"],
+    ]),
+  });
+
+  assert.equal(compiled.script_config.player_controls.player_one.params.jump_enabled, true);
+  assert.equal(compiled.script_config.player_controls.player_one.params.jump_height, 16);
+  assert.equal(compiled.script_config.player_controls.player_one.bindings.jump_key, "mouse_right");
+  assert.equal(compiled.script_config.camera_behaviors.player_one.overworld_drag_pan.bindings.drag_button, "mouse_middle");
+  assert.equal(compiled.rules[0].payload.force_direction, "player_facing");
+  assert.equal(compiled.rules[0].payload.force_magnitude, 12);
+  assert.deepEqual(compiled.script_config.action_metadata.directional_force_rule_ids, [compiled.rules[0].id]);
+});
+
+test("compileSceneDoc emits runtime script_config for modular DSL scenes", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 1, z: 0 },
+      scale: 1,
+      body_mode: "ghost",
+      camera_mode: "overworld",
+      jump_enabled: false,
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    particles: [],
+    script_dsl: `
+# function[controls]: Controls
+@module playmode.wasd_jump
+@target player_one
+@set jump_enabled true
+@bind jump_key mouse_right
+    `,
+  };
+  const compiled = compileSceneDoc(sceneDoc, {
+    world_type: "room",
+    width: 40,
+    length: 30,
+    height: 12,
+  });
+
+  assert.equal(compiled.runtime.script_config.player_controls.player_one.params.jump_enabled, true);
+  assert.equal(compiled.runtime.script_config.player_controls.player_one.bindings.jump_key, "mouse_right");
+});
+
 test("compileSceneDoc flattens linked prefab instances into runtime scene data", () => {
   const compiled = compileSceneDoc({
     prefab_instances: [
