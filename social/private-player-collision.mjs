@@ -34,7 +34,7 @@ function buildAbsoluteRotationMatrix(rotation = {}) {
   };
 }
 
-function rotatedHalfExtents(size = {}, rotation = {}) {
+export function getRotatedCollisionHalfExtents(size = {}, rotation = {}) {
   const half = halfExtents(size);
   const matrix = buildAbsoluteRotationMatrix(rotation);
   return {
@@ -93,7 +93,7 @@ export function resolvePlayerMovementAgainstBlockers(input = {}) {
         y: finite(blocker?.position?.y, 0),
         z: finite(blocker?.position?.z, 0),
       },
-      half: rotatedHalfExtents(blocker?.size ?? {}, blocker?.rotation ?? {}),
+      half: getRotatedCollisionHalfExtents(blocker?.size ?? {}, blocker?.rotation ?? {}),
     }));
 
   const resolved = { ...startPosition };
@@ -172,7 +172,7 @@ export function resolvePlayerGroundSupport(input = {}) {
         y: finite(blocker?.position?.y, 0),
         z: finite(blocker?.position?.z, 0),
       },
-      half: rotatedHalfExtents(blocker?.size ?? {}, blocker?.rotation ?? {}),
+      half: getRotatedCollisionHalfExtents(blocker?.size ?? {}, blocker?.rotation ?? {}),
     }));
 
   let bestSupport = null;

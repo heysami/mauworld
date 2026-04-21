@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  getRotatedCollisionHalfExtents,
   resolvePlayerGroundSupport,
   resolvePlayerMovementAgainstBlockers,
 } from "./private-player-collision.mjs";
@@ -74,6 +75,16 @@ test("uses a rotated blocker's broader axis-aligned footprint", () => {
 
   assert.equal(result.blockedAxes.x, true);
   assert.ok(result.position.x < 2.2);
+});
+
+test("computes a taller vertical envelope for a tilted support surface", () => {
+  const half = getRotatedCollisionHalfExtents(
+    { x: 123, y: 1.6, z: 27.4 },
+    { x: -0.139376, y: 0.002381, z: -0.026014 },
+  );
+
+  assert.ok(half.y > 4.2);
+  assert.ok(half.y < 4.4);
 });
 
 test("pushes a body back out when it starts slightly embedded in a wall", () => {

@@ -41,9 +41,10 @@ import {
   getPrivateWorldBrowserKey,
 } from "./private-world-browser.js";
 import {
+  getRotatedCollisionHalfExtents,
   resolvePlayerGroundSupport,
   resolvePlayerMovementAgainstBlockers,
-} from "./private-player-collision.mjs?v=20260421a";
+} from "./private-player-collision.mjs?v=20260421b";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 import {
   createWorldGamesApi,
@@ -10171,6 +10172,28 @@ function getPrivateCollisionEntrySize(kind, entry = {}) {
   return toPlainCollisionScale(size, { x: 1, y: 1, z: 1 });
 }
 
+function getPrivateCollisionSupportEnvelope(position = {}, size = {}, rotation = {}) {
+  const normalizedPosition = {
+    x: Number(position?.x ?? 0) || 0,
+    y: Number(position?.y ?? 0) || 0,
+    z: Number(position?.z ?? 0) || 0,
+  };
+  const normalizedSize = toPlainCollisionScale(size, { x: 1, y: 1, z: 1 });
+  const normalizedRotation = {
+    x: Number(rotation?.x ?? 0) || 0,
+    y: Number(rotation?.y ?? 0) || 0,
+    z: Number(rotation?.z ?? 0) || 0,
+  };
+  const half = getRotatedCollisionHalfExtents(normalizedSize, normalizedRotation);
+  return {
+    position: normalizedPosition,
+    size: normalizedSize,
+    rotation: normalizedRotation,
+    half,
+    surfaceY: normalizedPosition.y + half.y,
+  };
+}
+
 function getPrivatePlatformCarryVerticalTolerance(playerHalf = {}, platformHalf = null) {
   const playerHalfY = Math.max(0, Number(playerHalf?.y ?? 0) || 0);
   const platformHalfY = Math.max(0, Number(platformHalf?.y ?? 0) || 0);
@@ -10214,13 +10237,8 @@ function buildPrivateCollisionProbe(startPosition = {}, desiredPosition = {}, pl
 }
 
 function addPrivateCollisionBlocker(blockers, blocker = {}, probe = null) {
-  const position = {
-    x: Number(blocker.position?.x ?? 0) || 0,
-    y: Number(blocker.position?.y ?? 0) || 0,
-    z: Number(blocker.position?.z ?? 0) || 0,
-  };
-  const size = toPlainCollisionScale(blocker.size, { x: 1, y: 1, z: 1 });
-  const half = getHalfExtentsFromScale(size);
+  const envelope = getPrivateCollisionSupportEnvelope(blocker.position, blocker.size, blocker.rotation);
+  const { position, size, rotation, half } = envelope;
   if (probe) {
     if (
       position.x + half.x < probe.minX
@@ -10236,22 +10254,13 @@ function addPrivateCollisionBlocker(blockers, blocker = {}, probe = null) {
   blockers.push({
     position,
     size,
-    rotation: {
-      x: Number(blocker.rotation?.x ?? 0) || 0,
-      y: Number(blocker.rotation?.y ?? 0) || 0,
-      z: Number(blocker.rotation?.z ?? 0) || 0,
-    },
+    rotation,
   });
 }
 
 function addPrivateSupportSurface(surfaces, surface = {}, probe = null) {
-  const position = {
-    x: Number(surface.position?.x ?? 0) || 0,
-    y: Number(surface.position?.y ?? 0) || 0,
-    z: Number(surface.position?.z ?? 0) || 0,
-  };
-  const size = toPlainCollisionScale(surface.size, { x: 1, y: 1, z: 1 });
-  const half = getHalfExtentsFromScale(size);
+  const envelope = getPrivateCollisionSupportEnvelope(surface.position, surface.size, surface.rotation);
+  const { position, size, rotation, half } = envelope;
   if (probe) {
     if (
       position.x + half.x < probe.minX
@@ -10267,11 +10276,7 @@ function addPrivateSupportSurface(surfaces, surface = {}, probe = null) {
   surfaces.push({
     position,
     size,
-    rotation: {
-      x: Number(surface.rotation?.x ?? 0) || 0,
-      y: Number(surface.rotation?.y ?? 0) || 0,
-      z: Number(surface.rotation?.z ?? 0) || 0,
-    },
+    rotation,
     carry_riders: surface.carry_riders === true,
     velocity: {
       x: Number(surface.velocity?.x ?? 0) || 0,
@@ -10437,11 +10442,12 @@ function getLocalCarryPlatformSupport(playerLike = null) {
     const entryId = String(entry?.id ?? "").trim();
     const kind = entry?.entity_kind === "model" ? "model" : "primitive";
     const size = getPrivateCollisionEntrySize(kind, entry);
-    const half = getHalfExtentsFromScale(size);
     const motionSample = getPrivateDynamicEntryMotionSample(entry);
-    const position = motionSample.position;
+    const envelope = getPrivateCollisionSupportEnvelope(motionSample.position, size, entry.rotation);
+    const position = envelope.position;
+    const half = envelope.half;
     const velocity = motionSample.velocity;
-    const platformTop = position.y + half.y;
+    const platformTop = envelope.surfaceY;
     const verticalGap = playerBottom - platformTop;
     const verticalTolerance = playerLike?.onGround === true
       ? getPrivatePlatformCarryRecoveryTolerance(playerHalf, half)
@@ -10498,9 +10504,9 @@ function getLocalCarryPlatformStateById(platformId = "") {
   const entryId = String(entry?.id ?? "").trim();
   const kind = entry?.entity_kind === "model" ? "model" : "primitive";
   const size = getPrivateCollisionEntrySize(kind, entry);
-  const half = getHalfExtentsFromScale(size);
   const motionSample = getPrivateDynamicEntryMotionSample(entry);
-  const position = motionSample.position;
+  const envelope = getPrivateCollisionSupportEnvelope(motionSample.position, size, entry.rotation);
+  const position = envelope.position;
   const velocity = motionSample.velocity;
   return {
     entry,
@@ -10508,8 +10514,8 @@ function getLocalCarryPlatformStateById(platformId = "") {
     position,
     velocity,
     size,
-    half,
-    surfaceY: position.y + half.y,
+    half: envelope.half,
+    surfaceY: envelope.surfaceY,
   };
 }
 
@@ -10726,9 +10732,10 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
   const playerBottom = playerPosition.y - playerHalf.y;
   const overlapRecovery = playerLike?.onGround === true;
   let bestSurface = null;
-  const considerSurface = (position = {}, size = {}, metadata = null) => {
-    const half = getHalfExtentsFromScale(size);
-    const topY = (Number(position.y ?? 0) || 0) + half.y;
+  const considerSurface = (position = {}, size = {}, rotation = {}, metadata = null) => {
+    const envelope = getPrivateCollisionSupportEnvelope(position, size, rotation);
+    const half = envelope.half;
+    const topY = envelope.surfaceY;
     const verticalTolerance = overlapRecovery
       ? getPrivatePlatformCarryRecoveryTolerance(playerHalf, half)
       : getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
@@ -10741,8 +10748,8 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
     const limitX = half.x + playerHalf.x;
     const limitZ = half.z + playerHalf.z;
     if (
-      Math.abs(playerPosition.x - (Number(position.x ?? 0) || 0)) > limitX
-      || Math.abs(playerPosition.z - (Number(position.z ?? 0) || 0)) > limitZ
+      Math.abs(playerPosition.x - envelope.position.x) > limitX
+      || Math.abs(playerPosition.z - envelope.position.z) > limitZ
     ) {
       return;
     }
@@ -10754,9 +10761,9 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
               entry: metadata?.entry ?? null,
               entryId: String(metadata?.entryId ?? "").trim(),
               position: {
-                x: Number(position.x ?? 0) || 0,
-                y: Number(position.y ?? 0) || 0,
-                z: Number(position.z ?? 0) || 0,
+                x: envelope.position.x,
+                y: envelope.position.y,
+                z: envelope.position.z,
               },
               velocity: {
                 x: Number(metadata?.velocity?.x ?? 0) || 0,
@@ -10781,7 +10788,7 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
   }
 
   for (const voxel of sceneDoc?.voxels ?? []) {
-    considerSurface(voxel.position, getPrivateCollisionEntrySize("voxel", voxel));
+    considerSurface(voxel.position, getPrivateCollisionEntrySize("voxel", voxel), voxel.rotation);
   }
 
   const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
@@ -10804,6 +10811,7 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
       considerSurface(
         motionSample.position,
         getPrivateCollisionEntrySize(kind, entry),
+        entry.rotation,
         {
           carry_riders: entry?.carry_riders === true,
           velocity: motionSample.velocity,
@@ -10822,7 +10830,7 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
     if (primitive?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(primitive?.rigid_mode)) {
       continue;
     }
-    considerSurface(primitive.position, getPrivateCollisionEntrySize("primitive", primitive), {
+    considerSurface(primitive.position, getPrivateCollisionEntrySize("primitive", primitive), primitive.rotation, {
       carry_riders: primitive?.physics?.carry_riders === true,
       entryId: primitiveId,
       entry: primitive,
@@ -10837,7 +10845,7 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
     if (model?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(model?.rigid_mode)) {
       continue;
     }
-    considerSurface(model.position, getPrivateCollisionEntrySize("model", model), {
+    considerSurface(model.position, getPrivateCollisionEntrySize("model", model), model.rotation, {
       carry_riders: model?.physics?.carry_riders === true,
       entryId: modelId,
       entry: model,
@@ -15282,11 +15290,13 @@ function installPrivateDebugTools() {
       const platformSize = runtimePlatform
         ? getPrivateCollisionEntrySize(runtimePlatform?.entity_kind === "model" ? "model" : "primitive", runtimePlatform)
         : null;
-      const platformHalf = platformSize ? getHalfExtentsFromScale(platformSize) : null;
       const playerRenderPosition = prediction?.position ?? playerPose?.render?.position ?? playerPose?.runtime?.position ?? null;
       const platformRenderPosition = platformPose?.render?.position ?? platformPose?.runtime?.position ?? null;
       const playerBottom = playerRenderPosition ? Number(playerRenderPosition.y ?? 0) - playerHalf.y : Number.NaN;
-      const platformTop = platformRenderPosition && platformHalf ? Number(platformRenderPosition.y ?? 0) + platformHalf.y : Number.NaN;
+      const platformEnvelope = platformRenderPosition && platformSize
+        ? getPrivateCollisionSupportEnvelope(platformRenderPosition, platformSize, runtimePlatform?.rotation)
+        : null;
+      const platformTop = Number(platformEnvelope?.surfaceY ?? Number.NaN);
       return {
         mode: state.mode,
         joined: state.joined === true,
