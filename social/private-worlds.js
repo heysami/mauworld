@@ -113,6 +113,11 @@ const PRIVATE_PLAYER_JUMP_SHADOW = {
   opacity: 0.28,
 };
 const PRIVATE_PLAYER_DEFAULT_SCALE = PRIVATE_WORLD_BLOCK_UNIT;
+const PRIVATE_PLAYER_INHABIT = {
+  touchBuffer: PRIVATE_WORLD_BLOCK_UNIT * 0.2,
+  viewerRadius: (PRIVATE_PLAYER_METRICS.width * PRIVATE_PLAYER_DEFAULT_SCALE) / 2,
+  minVerticalTolerance: PRIVATE_WORLD_BLOCK_UNIT * 1.4,
+};
 const PRIVATE_PLAYER_CAMERA = {
   firstPersonLookDistance: 3.8,
   thirdPersonDistance: 4.8,
@@ -689,6 +694,7 @@ const elements = {
   panelExport: document.querySelector("[data-private-panel-export]"),
   panelEnter: document.querySelector("[data-private-panel-enter]"),
   panelLeave: document.querySelector("[data-private-panel-leave]"),
+  panelInhabit: document.querySelector("[data-private-panel-inhabit]"),
   panelReady: document.querySelector("[data-private-panel-ready]"),
   panelRelease: document.querySelector("[data-private-panel-release]"),
   panelReset: document.querySelector("[data-private-panel-reset]"),
@@ -1121,6 +1127,8 @@ const state = {
   lastRuntimeLookHeadingY: null,
   lastRuntimeInteractionSentAt: 0,
   lastRuntimeStatusRenderedAt: 0,
+  nearbyInhabitablePlayerId: "",
+  nearbyInhabitablePlayerLabel: "",
   viewerSuppressClickAt: 0,
   buildSuppressedClick: null,
   buildModifierKeys: new Set(),
@@ -1228,8 +1236,49 @@ function setStatus(text) {
   }
 }
 
+function resetPrivateInteractionState(options = {}) {
+  const releaseRuntimeKeys = options.releaseRuntimeKeys !== false;
+  const releasePointerCapture = options.releasePointerCapture !== false;
+  if (releaseRuntimeKeys && state.pressedRuntimeKeys.size > 0) {
+    releaseHeldRuntimeKeys({
+      headingY: Number.isFinite(Number(options.headingY))
+        ? Number(options.headingY)
+        : getRuntimeInputHeadingY(),
+    });
+  }
+  state.pressedRuntimeKeys.clear();
+  state.buildModifierKeys.clear();
+  privateInputState.keys.clear();
+  privateInputState.jumpHeld = false;
+  privateInputState.jumpVelocityY = 0;
+  privateInputState.sprintHoldSeconds = 0;
+  privateInputState.pointerDown = false;
+  privateInputState.pointerMoved = false;
+  privateInputState.dragDistance = 0;
+  privateInputState.lastPointerX = 0;
+  privateInputState.lastPointerY = 0;
+  const pointerId = Number(privateInputState.pointerId ?? 0) || 0;
+  privateInputState.pointerId = 0;
+  state.viewerSuppressClickAt = 0;
+  state.buildSuppressedClick = null;
+  state.previewPointer.inside = false;
+  state.buildHover = null;
+  endBuildDrag(pointerId || undefined);
+  if (releasePointerCapture && pointerId && elements.previewCanvas?.releasePointerCapture) {
+    try {
+      elements.previewCanvas.releasePointerCapture(pointerId);
+    } catch (_error) {
+      // Ignore stale capture state while clearing loading/input locks.
+    }
+  }
+  syncBuildPlacementOverlay();
+}
+
 function setEntryLoading(active, options = {}) {
   state.entryLoading = active === true;
+  if (state.entryLoading) {
+    resetPrivateInteractionState();
+  }
   if (elements.entryLoadingTitle && options.title) {
     elements.entryLoadingTitle.textContent = options.title;
   } else if (elements.entryLoadingTitle && !state.entryLoading) {
@@ -1244,6 +1293,7 @@ function setEntryLoading(active, options = {}) {
     elements.entryLoading.hidden = !state.entryLoading;
   }
   document.body.classList.toggle("is-world-entry-loading", state.entryLoading);
+  renderPrivateRuntimeActions();
 }
 
 function waitForUiPaint() {
@@ -6019,7 +6069,7 @@ function buildRuntimeDynamicInteractionPayloads() {
 }
 
 function sendRuntimeDynamicInteractions(force = false) {
-  if (!state.selectedWorld || !state.session || getLocalParticipant()?.join_role !== "player") {
+  if (!state.selectedWorld || !state.session || state.entryLoading === true || getLocalParticipant()?.join_role !== "player") {
     return false;
   }
   const interactions = buildRuntimeDynamicInteractionPayloads();
@@ -9577,6 +9627,113 @@ function getLocalParticipant(world = state.selectedWorld) {
     return world.active_instance.participants.find((entry) => entry.profile?.id === state.profile.id) ?? null;
   }
   return world.active_instance.participants.find((entry) => entry.guest_session_id === getGuestSessionId()) ?? null;
+}
+
+function getNearbyInhabitablePlayerCandidate(world = state.selectedWorld) {
+  if (
+    !world
+    || state.mode !== "play"
+    || state.entryLoading === true
+    || !state.session
+  ) {
+    return null;
+  }
+  const localParticipant = getLocalParticipant(world);
+  if (!localParticipant || localParticipant.join_role === "player") {
+    return null;
+  }
+  const sceneDoc = getRenderableSceneDoc();
+  const scenePlayers = Array.isArray(sceneDoc?.players) ? sceneDoc.players : [];
+  if (!scenePlayers.length) {
+    return null;
+  }
+  const runtime = state.runtimeSnapshot ?? world?.active_instance?.runtime ?? null;
+  const runtimePlayers = Array.isArray(runtime?.players) ? runtime.players : [];
+  const runtimePlayerIds = getRuntimePlayerIds();
+  const viewerX = Number(state.viewerPosition.x ?? 0) || 0;
+  const viewerY = Number(state.viewerPosition.y ?? 0) || 0;
+  const viewerZ = Number(state.viewerPosition.z ?? 0) || 0;
+  let bestCandidate = null;
+  for (const player of scenePlayers) {
+    if (!player || player.occupiable === false) {
+      continue;
+    }
+    const authoredPlayerId = String(player.id ?? "").trim();
+    if (!authoredPlayerId) {
+      continue;
+    }
+    const resolvedPlayerId = resolvePrivatePlayerEntityId(authoredPlayerId, runtimePlayerIds) ?? authoredPlayerId;
+    const runtimePlayer = runtimePlayers.find((entry) => {
+      const runtimePlayerId = String(entry?.id ?? "").trim();
+      return runtimePlayerId === resolvedPlayerId || runtimePlayerId === authoredPlayerId;
+    }) ?? null;
+    if (runtimePlayer?.visible === false) {
+      continue;
+    }
+    const occupiedByUsername = String(runtimePlayer?.occupied_by_username ?? "").trim();
+    const occupiedByDisplayName = String(runtimePlayer?.occupied_by_display_name ?? "").trim();
+    if (occupiedByUsername || occupiedByDisplayName) {
+      continue;
+    }
+    const position = runtimePlayer?.position ?? player.position;
+    if (!position) {
+      continue;
+    }
+    const playerX = Number(position.x ?? 0) || 0;
+    const playerY = Number(position.y ?? 0) || 0;
+    const playerZ = Number(position.z ?? 0) || 0;
+    const scale = Math.max(
+      0.25,
+      Number(runtimePlayer?.scale ?? player.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE,
+    );
+    const collisionSize = getPrivatePlayerCollisionSize(scale);
+    const touchDistance = (Math.max(collisionSize.x, collisionSize.z) / 2)
+      + PRIVATE_PLAYER_INHABIT.viewerRadius
+      + PRIVATE_PLAYER_INHABIT.touchBuffer;
+    const planarDistance = Math.hypot(viewerX - playerX, viewerZ - playerZ);
+    if (planarDistance > touchDistance) {
+      continue;
+    }
+    const verticalTolerance = Math.max(collisionSize.y, PRIVATE_PLAYER_INHABIT.minVerticalTolerance);
+    if (Math.abs(viewerY - playerY) > verticalTolerance) {
+      continue;
+    }
+    const label = String(runtimePlayer?.label ?? player.label ?? "").trim();
+    if (!bestCandidate || planarDistance < bestCandidate.planarDistance) {
+      bestCandidate = {
+        id: resolvedPlayerId || authoredPlayerId,
+        label,
+        planarDistance,
+      };
+    }
+  }
+  return bestCandidate;
+}
+
+function getPrivateInhabitButtonLabel() {
+  const label = String(state.nearbyInhabitablePlayerLabel ?? "").trim();
+  return label ? `Inhabit ${label}` : "Inhabit";
+}
+
+function setNearbyInhabitablePlayerCandidate(candidate = null, options = {}) {
+  const nextId = String(candidate?.id ?? "").trim();
+  const nextLabel = String(candidate?.label ?? "").trim();
+  const changed =
+    nextId !== String(state.nearbyInhabitablePlayerId ?? "").trim()
+    || nextLabel !== String(state.nearbyInhabitablePlayerLabel ?? "").trim();
+  state.nearbyInhabitablePlayerId = nextId;
+  state.nearbyInhabitablePlayerLabel = nextLabel;
+  if (changed && options.render !== false) {
+    renderPrivateRuntimeActions();
+  }
+  return changed;
+}
+
+function syncNearbyInhabitablePlayerCandidate(world = state.selectedWorld, options = {}) {
+  return setNearbyInhabitablePlayerCandidate(
+    getNearbyInhabitablePlayerCandidate(world),
+    options,
+  );
 }
 
 function getRuntimeSnapshotWorldKey(world = state.selectedWorld) {
@@ -14157,7 +14314,7 @@ function renderRuntimeStatus() {
       <strong>Controls</strong>
       <span>${localParticipant?.join_role === "player"
         ? "You are inside a player. Ready Up marks this player as prepared, and Leave Player returns to viewer mode."
-        : "Viewers can walk around immediately. Click a player capsule to inhabit it, then that player's enabled controls apply."}</span>
+        : "Viewers can walk around immediately. Touch a player capsule to unlock Inhabit, then use that button to step inside."}</span>
     </div>
     ${PRIVATE_POSSESSION_DEBUG.enabled === true && possessionDrift ? `
       <div class="pw-world-meta__row">
@@ -14176,6 +14333,76 @@ function renderRuntimeStatus() {
       </div>
     ` : ""}
   `;
+}
+
+function renderPrivateRuntimeActions() {
+  const world = state.selectedWorld;
+  const hasWorld = Boolean(world);
+  const canEdit = isEditor();
+  const localParticipant = getLocalParticipant(world);
+  const joinedAsPlayer = localParticipant?.join_role === "player";
+  const loading = state.entryLoading === true;
+  const showEnterControl = hasWorld && Boolean(state.session) && !localParticipant;
+  const showLeaveControl = hasWorld && Boolean(localParticipant) && !joinedAsPlayer;
+  const showInhabitControl =
+    hasWorld
+    && state.mode === "play"
+    && Boolean(state.session)
+    && Boolean(localParticipant)
+    && !joinedAsPlayer
+    && Boolean(state.nearbyInhabitablePlayerId);
+  const showReadyControl = hasWorld && Boolean(state.session) && joinedAsPlayer;
+  const showReleaseControl = hasWorld && Boolean(state.session) && joinedAsPlayer;
+  const showResetControl = hasWorld && canEdit;
+  const readyLabel = localParticipant?.ready === true ? "Not Ready" : "Ready Up";
+  if (elements.panelEnter) {
+    elements.panelEnter.hidden = !showEnterControl;
+    elements.panelEnter.disabled = !showEnterControl || loading;
+  }
+  if (elements.panelLeave) {
+    elements.panelLeave.hidden = !showLeaveControl;
+    elements.panelLeave.disabled = !showLeaveControl || loading;
+  }
+  if (elements.panelInhabit) {
+    elements.panelInhabit.hidden = !showInhabitControl;
+    elements.panelInhabit.disabled = !showInhabitControl || loading;
+    elements.panelInhabit.textContent = getPrivateInhabitButtonLabel();
+  }
+  if (elements.panelReady) {
+    elements.panelReady.hidden = !showReadyControl;
+    elements.panelReady.disabled = !showReadyControl || loading;
+    elements.panelReady.textContent = readyLabel;
+  }
+  if (elements.panelRelease) {
+    elements.panelRelease.hidden = !showReleaseControl;
+    elements.panelRelease.disabled = !showReleaseControl || loading;
+  }
+  if (elements.panelReset) {
+    elements.panelReset.hidden = !showResetControl;
+    elements.panelReset.disabled = !showResetControl || loading;
+  }
+  if (elements.panelRuntimeActions) {
+    elements.panelRuntimeActions.hidden =
+      !showEnterControl
+      && !showLeaveControl
+      && !showInhabitControl
+      && !showReadyControl
+      && !showReleaseControl
+      && !showResetControl;
+  }
+  if (elements.readyToggle) {
+    elements.readyToggle.hidden = !showReadyControl;
+    elements.readyToggle.disabled = !showReadyControl || loading;
+    elements.readyToggle.textContent = readyLabel;
+  }
+  if (elements.releasePlayer) {
+    elements.releasePlayer.hidden = !showReleaseControl;
+    elements.releasePlayer.disabled = !showReleaseControl || loading;
+  }
+  if (elements.resetScene) {
+    elements.resetScene.hidden = !showResetControl;
+    elements.resetScene.disabled = !showResetControl || loading;
+  }
 }
 
 function renderSelectedWorld() {
@@ -14253,13 +14480,7 @@ function renderSelectedWorld() {
   }
   state.joined = Boolean(localParticipant);
   state.joinedAsGuest = !state.session && localParticipant?.join_role === "guest";
-  const joinedAsPlayer = localParticipant?.join_role === "player";
-  const showEnterControl = hasWorld && Boolean(state.session) && !localParticipant;
-  const showLeaveControl = hasWorld && Boolean(localParticipant) && !joinedAsPlayer;
-  const showReadyControl = hasWorld && state.session && joinedAsPlayer;
-  const showReleaseControl = hasWorld && state.session && joinedAsPlayer;
-  const showResetControl = hasWorld && canEdit;
-  const readyLabel = localParticipant?.ready === true ? "Not Ready" : "Ready Up";
+  syncNearbyInhabitablePlayerCandidate(world, { render: false });
   if (!hasWorld) {
     state.privatePanelTab = "chat";
   } else {
@@ -14325,48 +14546,7 @@ function renderSelectedWorld() {
   if (elements.panelExport) {
     elements.panelExport.disabled = !hasWorld || !state.session;
   }
-  if (elements.panelEnter) {
-    elements.panelEnter.hidden = !showEnterControl;
-    elements.panelEnter.disabled = !showEnterControl;
-  }
-  if (elements.panelLeave) {
-    elements.panelLeave.hidden = !showLeaveControl;
-    elements.panelLeave.disabled = !showLeaveControl;
-  }
-  if (elements.panelReady) {
-    elements.panelReady.hidden = !showReadyControl;
-    elements.panelReady.disabled = !showReadyControl;
-    elements.panelReady.textContent = readyLabel;
-  }
-  if (elements.panelRelease) {
-    elements.panelRelease.hidden = !showReleaseControl;
-    elements.panelRelease.disabled = !showReleaseControl;
-  }
-  if (elements.panelReset) {
-    elements.panelReset.hidden = !showResetControl;
-    elements.panelReset.disabled = !showResetControl;
-  }
-  if (elements.panelRuntimeActions) {
-    elements.panelRuntimeActions.hidden =
-      !showEnterControl
-      && !showLeaveControl
-      && !showReadyControl
-      && !showReleaseControl
-      && !showResetControl;
-  }
-  if (elements.readyToggle) {
-    elements.readyToggle.hidden = !showReadyControl;
-    elements.readyToggle.disabled = !showReadyControl;
-    elements.readyToggle.textContent = readyLabel;
-  }
-  if (elements.releasePlayer) {
-    elements.releasePlayer.hidden = !showReleaseControl;
-    elements.releasePlayer.disabled = !showReleaseControl;
-  }
-  if (elements.resetScene) {
-    elements.resetScene.hidden = !showResetControl;
-    elements.resetScene.disabled = !showResetControl;
-  }
+  renderPrivateRuntimeActions();
   if (elements.panelShareCopy) {
     elements.panelShareCopy.disabled = !hasWorld || !canCopyToClipboard();
   }
@@ -17692,6 +17872,11 @@ function ensureViewerAvatar(preview) {
 }
 
 function updatePrivateMovement(preview, deltaSeconds) {
+  if (state.entryLoading === true) {
+    privateInputState.jumpHeld = false;
+    privateInputState.sprintHoldSeconds = 0;
+    return;
+  }
   const activeKeys = new Set(privateInputState.keys);
   const sprintIntentActive = hasPrivateSprintIntent(activeKeys);
   const viewerJumpMode = isLocalViewerJumpMode();
@@ -18434,6 +18619,7 @@ function ensurePreview() {
       updatePrivateMovement(state.preview, deltaSeconds);
       syncPrivateLocalAvatar(state.preview, timestamp / 1000);
     }
+    syncNearbyInhabitablePlayerCandidate();
     sendPrivatePresence();
     pruneExpiredPrivateChatEvents();
     updatePrivatePresenceScene(deltaSeconds, timestamp / 1000);
@@ -18450,6 +18636,9 @@ function ensurePreview() {
 
   window.addEventListener("resize", render);
   elements.previewCanvas.addEventListener("pointerdown", (event) => {
+    if (state.entryLoading === true) {
+      return;
+    }
     if (state.mode === "play") {
       focusPrivateWorldCanvas();
     }
@@ -18503,6 +18692,9 @@ function ensurePreview() {
     state.previewPointer.clientY = event.clientY;
     state.previewPointer.pointerId = event.pointerId;
     state.previewPointer.inside = true;
+    if (state.entryLoading === true) {
+      return;
+    }
     if (state.mode === "build" && isEditor()) {
       refreshBuildHoverFromPointer(event);
     }
@@ -18555,6 +18747,14 @@ function ensurePreview() {
     state.previewPointer.clientY = event.clientY;
     state.previewPointer.pointerId = event.pointerId;
     state.previewPointer.inside = true;
+    if (state.entryLoading === true) {
+      privateInputState.pointerDown = false;
+      privateInputState.pointerMoved = false;
+      privateInputState.dragDistance = 0;
+      privateInputState.pointerId = 0;
+      elements.previewCanvas.releasePointerCapture?.(event.pointerId);
+      return;
+    }
     refreshBuildHoverFromPointer(event);
     if (state.buildDrag && state.buildDrag.pointerId === event.pointerId) {
       endBuildDrag(event.pointerId, event);
@@ -18585,6 +18785,9 @@ function ensurePreview() {
     syncBuildPlacementOverlay();
   });
   elements.previewCanvas.addEventListener("wheel", (event) => {
+    if (state.entryLoading === true) {
+      return;
+    }
     if (adjustSelectedEntityByWheel(event)) {
       return;
     }
@@ -18602,6 +18805,9 @@ function ensurePreview() {
     syncPrivateCameraToFollowTarget(state.preview);
   }, { passive: false });
   elements.previewCanvas.addEventListener("click", (event) => {
+    if (state.entryLoading === true) {
+      return;
+    }
     if (state.mode === "build" && shouldSuppressBuildClick(event)) {
       return;
     }
@@ -18665,14 +18871,6 @@ function ensurePreview() {
         requestOpenPrivateGameSession(session);
       }
       return;
-    }
-    const playerEntityId = String(
-      hit?.object?.userData?.privateWorldPlayerId
-      || (entityRef?.kind === "player" ? entityRef.id : "")
-      || findProjectedPlayerHit(event),
-    ).trim();
-    if (playerEntityId) {
-      void attemptOccupyPlayer(playerEntityId);
     }
   });
   window.requestAnimationFrame(render);
@@ -21595,25 +21793,34 @@ async function joinWorld(options = {}) {
 }
 
 async function occupyPlayer(playerEntityId) {
-  if (!state.selectedWorld || !state.session) {
+  if (!state.selectedWorld || !state.session || state.entryLoading === true) {
     return;
   }
-  await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/occupy`, {
-    method: "POST",
-    body: {
-      creatorUsername: state.selectedWorld.creator.username,
-      playerEntityId,
-    },
+  setEntryLoading(true, {
+    title: "Inhabiting player",
+    note: "Linking your controls to this character.",
   });
-  pushEvent("player:occupied", playerEntityId);
-  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
-  focusPrivateWorldCanvas();
-  syncRuntimeLookHeading(true);
+  await waitForUiPaint();
+  try {
+    await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/occupy`, {
+      method: "POST",
+      body: {
+        creatorUsername: state.selectedWorld.creator.username,
+        playerEntityId,
+      },
+    });
+    pushEvent("player:occupied", playerEntityId);
+    await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+    focusPrivateWorldCanvas();
+    syncRuntimeLookHeading(true);
+  } finally {
+    setEntryLoading(false);
+  }
 }
 
 async function attemptOccupyPlayer(playerEntityId) {
   const targetPlayerId = String(playerEntityId ?? "").trim();
-  if (!targetPlayerId || !state.selectedWorld) {
+  if (!targetPlayerId || !state.selectedWorld || state.entryLoading === true) {
     return;
   }
   if (!state.session) {
@@ -21635,29 +21842,37 @@ async function attemptOccupyPlayer(playerEntityId) {
 }
 
 async function releasePlayer() {
-  if (!state.selectedWorld || !state.session) {
+  if (!state.selectedWorld || !state.session || state.entryLoading === true) {
     return;
   }
   const localParticipant = getLocalParticipant();
   const playerEntityId = String(localParticipant?.player_entity_id ?? "").trim();
   const fallbackReleaseSpawn = getPrivatePlayerReleaseSpawn(playerEntityId, state.selectedWorld);
-  state.pressedRuntimeKeys.clear();
-  const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/release`, {
-    method: "POST",
-    body: {
-      creatorUsername: state.selectedWorld.creator.username,
-    },
+  setEntryLoading(true, {
+    title: "Leaving player",
+    note: "Returning you to viewer mode.",
   });
-  if (localParticipant) {
-    localParticipant.join_role = "viewer";
-    localParticipant.player_entity_id = null;
+  await waitForUiPaint();
+  try {
+    const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/participants/release`, {
+      method: "POST",
+      body: {
+        creatorUsername: state.selectedWorld.creator.username,
+      },
+    });
+    if (localParticipant) {
+      localParticipant.join_role = "viewer";
+      localParticipant.player_entity_id = null;
+    }
+    clearPossessedPlayerPrediction();
+    applyPrivateViewerReleaseSpawn(payload.release_spawn ?? fallbackReleaseSpawn);
+    pushEvent("player:released", state.selectedWorld.name);
+    await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+    syncPrivateCameraToFollowTarget(state.preview);
+    sendPrivatePresence(true);
+  } finally {
+    setEntryLoading(false);
   }
-  clearPossessedPlayerPrediction();
-  applyPrivateViewerReleaseSpawn(payload.release_spawn ?? fallbackReleaseSpawn);
-  pushEvent("player:released", state.selectedWorld.name);
-  await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
-  syncPrivateCameraToFollowTarget(state.preview);
-  sendPrivatePresence(true);
 }
 
 async function enterBuildMode() {
@@ -21679,6 +21894,9 @@ async function enterBuildMode() {
 }
 
 async function leaveWorld() {
+  if (state.entryLoading === true) {
+    return;
+  }
   if (!state.selectedWorld) {
     return;
   }
@@ -21877,6 +22095,7 @@ function getRuntimeInputHeadingY() {
 
 function shouldDrivePrivateRuntimeInput() {
   return state.mode === "play"
+    && state.entryLoading !== true
     && getLocalParticipant()?.join_role === "player";
 }
 
@@ -22788,6 +23007,13 @@ function bindEvents() {
   elements.panelLeave?.addEventListener("click", () => {
     void leaveWorld();
   });
+  elements.panelInhabit?.addEventListener("click", () => {
+    const playerEntityId = String(state.nearbyInhabitablePlayerId ?? "").trim();
+    if (!playerEntityId || state.entryLoading === true) {
+      return;
+    }
+    void attemptOccupyPlayer(playerEntityId);
+  });
   elements.panelReady?.addEventListener("click", () => {
     void setReady();
   });
@@ -23343,6 +23569,9 @@ function bindEvents() {
     if (state.aiDialog.open) {
       return;
     }
+    if (state.entryLoading === true) {
+      return;
+    }
     if (
       event.key === "/"
       && !event.ctrlKey
@@ -23356,6 +23585,9 @@ function bindEvents() {
   });
   window.addEventListener("keydown", (event) => {
     if (state.aiDialog.open) {
+      return;
+    }
+    if (state.entryLoading === true) {
       return;
     }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
@@ -23403,6 +23635,9 @@ function bindEvents() {
     if (state.aiDialog.open) {
       return;
     }
+    if (state.entryLoading === true) {
+      return;
+    }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
       return;
     }
@@ -23421,6 +23656,9 @@ function bindEvents() {
   });
   window.addEventListener("keydown", (event) => {
     if (state.aiDialog.open) {
+      return;
+    }
+    if (state.entryLoading === true) {
       return;
     }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target?.isContentEditable) {
@@ -23465,6 +23703,9 @@ function bindEvents() {
     if (state.aiDialog.open) {
       return;
     }
+    if (state.entryLoading === true) {
+      return;
+    }
     const buildShortcut = getBuildTransformShortcut(event);
     const axisShortcut = getBuildTransformAxisShortcut(event);
     const buildKey = normalizeRuntimeKey(event);
@@ -23491,6 +23732,9 @@ function bindEvents() {
     if (state.aiDialog.open) {
       return;
     }
+    if (state.entryLoading === true) {
+      return;
+    }
     if (event.defaultPrevented && getBuildTransformAxisShortcut(event)) {
       return;
     }
@@ -23506,6 +23750,9 @@ function bindEvents() {
   });
   window.addEventListener("keyup", (event) => {
     if (state.aiDialog.open) {
+      return;
+    }
+    if (state.entryLoading === true) {
       return;
     }
     const key = normalizeRuntimeKey(event);
@@ -23556,6 +23803,9 @@ function bindEvents() {
     }
   });
   window.addEventListener("keydown", (event) => {
+    if (state.entryLoading === true) {
+      return;
+    }
     if (event.key !== "Escape") {
       return;
     }

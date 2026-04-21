@@ -165,6 +165,7 @@ body.private-worlds-body.is-launcher-open .private-worlds-shell::after {
 
 body.private-worlds-body.is-world-entry-loading .pw-mau-panel,
 body.private-worlds-body.is-world-entry-loading .pw-launcher,
+body.private-worlds-body.is-world-entry-loading .pw-canvas,
 body.private-worlds-body.is-world-entry-loading .pw-toolbelt,
 body.private-worlds-body.is-world-entry-loading .pw-tool-preset-panel,
 body.private-worlds-body.is-world-entry-loading .pw-scene-drawer,
