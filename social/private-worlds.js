@@ -9753,6 +9753,7 @@ function createPossessedPlayerPrediction(runtimePlayer = {}) {
     movementEnabled: normalizePlayerMovementEnabled(runtimePlayer.movement_enabled ?? true),
     jumpEnabled: normalizePlayerJumpEnabled(runtimePlayer.jump_enabled ?? false),
     bodyMode: String(runtimePlayer.body_mode ?? "rigid").trim() || "rigid",
+    baseGroundY: Number.isFinite(positionY) ? positionY : 0,
     groundY: Number.isFinite(positionY) ? positionY : 0,
     onGround: runtimePlayer.on_ground === true || String(runtimePlayer.body_mode ?? "rigid").trim().toLowerCase() === "ghost",
     jumpHeld: false,
@@ -10628,6 +10629,8 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     blockers: getPrivatePossessedSupportSurfaces(prediction, desiredPosition),
     verticalTolerance: supportVerticalTolerance,
   });
+  const activeCarryPlatformId = String(prediction.localCarryPlatformId ?? "").trim();
+  const allowStableGroundFallback = !activeCarryPlatformId;
   let carrySupport = null;
   let groundY = Number.NaN;
   let resolvedHasSupport = false;
@@ -10661,6 +10664,8 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
       ...prediction,
       position: desiredPosition,
       onGround: prediction.onGround === true,
+    }, {
+      allowCurrentSurfaceFallback: allowStableGroundFallback,
     });
     const surfaceY = Number(projectedSurface?.surfaceY);
     if (Number.isFinite(surfaceY)) {
@@ -10675,7 +10680,7 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
       }
     }
   }
-  if (!resolvedHasSupport) {
+  if (!resolvedHasSupport && allowStableGroundFallback) {
     const storedGroundY = Number(prediction.groundY);
     const playerY = Number(desiredPosition?.y ?? prediction.position?.y);
     const fallbackTolerance = Math.max(0.08, supportVerticalTolerance * 0.5);
@@ -10696,10 +10701,11 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
   };
 }
 
-function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
+function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {}) {
   if (!playerLike?.position) {
     return null;
   }
+  const allowCurrentSurfaceFallback = options?.allowCurrentSurfaceFallback !== false;
   const playerScale = Math.max(
     0.25,
     Number(playerLike.scale ?? PRIVATE_PLAYER_DEFAULT_SCALE) || PRIVATE_PLAYER_DEFAULT_SCALE,
@@ -10829,7 +10835,7 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null) {
     });
   }
 
-  if (!bestSurface && playerLike?.onGround === true) {
+  if (!bestSurface && allowCurrentSurfaceFallback && playerLike?.onGround === true) {
     bestSurface = {
       surfaceY: playerBottom,
     };
@@ -11210,34 +11216,74 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
       desiredPosition: prediction.position,
     })
     : null;
-  const hasLocalSupport = resolvedGroundSupport?.hasSupport === true;
-  const supportGroundY = Number(resolvedGroundSupport?.groundY);
-  if (!currentJumpActive && hasLocalSupport && Number.isFinite(supportGroundY)) {
-    prediction.groundY = supportGroundY;
-  }
-  prediction.position.y = (Number.isFinite(Number(prediction.groundY)) ? Number(prediction.groundY) : prediction.position.y)
-    + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
+  let finalGroundSupport = resolvedGroundSupport;
   if (currentJumpActive) {
+    prediction.position.y = (Number.isFinite(Number(prediction.groundY)) ? Number(prediction.groundY) : prediction.position.y)
+      + Math.max(0, Number(prediction.jumpVisualOffsetY ?? 0) || 0);
     prediction.velocity.y = prediction.jumpVisualVelocityY;
-  } else if (Number.isFinite(Number(resolvedGroundSupport?.velocityY))) {
-    prediction.velocity.y = Number(resolvedGroundSupport.velocityY);
+    prediction.onGround = false;
+    finalGroundSupport = null;
   } else {
-    prediction.velocity.y = 0;
+    const hasLocalSupport = resolvedGroundSupport?.hasSupport === true;
+    const supportGroundY = Number(resolvedGroundSupport?.groundY);
+    if (hasLocalSupport && Number.isFinite(supportGroundY)) {
+      prediction.groundY = supportGroundY;
+      prediction.position.y = supportGroundY;
+      prediction.velocity.y = Number.isFinite(Number(resolvedGroundSupport?.velocityY))
+        ? Number(resolvedGroundSupport.velocityY)
+        : 0;
+      prediction.onGround = true;
+    } else {
+      const airborneStartPosition = {
+        x: prediction.position.x,
+        y: prediction.position.y,
+        z: prediction.position.z,
+      };
+      const baseVelocityY = Number(prediction.velocity.y ?? 0) || 0;
+      const nextVelocityY = (prediction.onGround ? Math.min(0, baseVelocityY) : baseVelocityY)
+        - PRIVATE_PLAYER_RUNTIME.gravity * dt;
+      prediction.groundY = Number.NaN;
+      prediction.velocity.y = nextVelocityY;
+      prediction.position.y += nextVelocityY * dt;
+      finalGroundSupport = getLocalPossessedGroundSupport(prediction, {
+        startPosition: airborneStartPosition,
+        desiredPosition: prediction.position,
+      });
+      const landingGroundY = Number(finalGroundSupport?.groundY);
+      if (finalGroundSupport?.hasSupport === true && Number.isFinite(landingGroundY)) {
+        prediction.groundY = landingGroundY;
+        prediction.position.y = landingGroundY;
+        prediction.velocity.y = Number.isFinite(Number(finalGroundSupport?.velocityY))
+          ? Number(finalGroundSupport.velocityY)
+          : 0;
+        prediction.onGround = true;
+      } else {
+        const baseGroundY = Number(prediction.baseGroundY);
+        if (Number.isFinite(baseGroundY) && prediction.position.y <= baseGroundY) {
+          prediction.groundY = baseGroundY;
+          prediction.position.y = baseGroundY;
+          prediction.velocity.y = 0;
+          prediction.onGround = true;
+          finalGroundSupport = null;
+        } else {
+          prediction.onGround = false;
+        }
+      }
+    }
   }
-  prediction.onGround = !currentJumpActive && hasLocalSupport;
-  if (!currentJumpActive && resolvedGroundSupport?.carrySupport?.entryId) {
-    prediction.localCarryPlatformId = String(resolvedGroundSupport.carrySupport.entryId ?? "");
+  if (!currentJumpActive && finalGroundSupport?.carrySupport?.entryId && prediction.onGround) {
+    prediction.localCarryPlatformId = String(finalGroundSupport.carrySupport.entryId ?? "");
     prediction.localCarryPlatformPosition = {
-      x: Number(resolvedGroundSupport.carrySupport.position?.x ?? prediction.position.x) || 0,
-      y: Number(resolvedGroundSupport.carrySupport.position?.y ?? prediction.position.y) || 0,
-      z: Number(resolvedGroundSupport.carrySupport.position?.z ?? prediction.position.z) || 0,
+      x: Number(finalGroundSupport.carrySupport.position?.x ?? prediction.position.x) || 0,
+      y: Number(finalGroundSupport.carrySupport.position?.y ?? prediction.position.y) || 0,
+      z: Number(finalGroundSupport.carrySupport.position?.z ?? prediction.position.z) || 0,
     };
     prediction.localCarryPlatformOffset = {
-      x: prediction.position.x - (Number(resolvedGroundSupport.carrySupport.position?.x ?? 0) || 0),
-      y: prediction.position.y - (Number(resolvedGroundSupport.carrySupport.position?.y ?? 0) || 0),
-      z: prediction.position.z - (Number(resolvedGroundSupport.carrySupport.position?.z ?? 0) || 0),
+      x: prediction.position.x - (Number(finalGroundSupport.carrySupport.position?.x ?? 0) || 0),
+      y: prediction.position.y - (Number(finalGroundSupport.carrySupport.position?.y ?? 0) || 0),
+      z: prediction.position.z - (Number(finalGroundSupport.carrySupport.position?.z ?? 0) || 0),
     };
-  } else if (currentJumpActive || !resolvedGroundSupport?.carrySupport) {
+  } else if (currentJumpActive || !finalGroundSupport?.carrySupport || !prediction.onGround) {
     prediction.localCarryPlatformId = "";
     prediction.localCarryPlatformPosition = null;
     prediction.localCarryPlatformOffset = null;
