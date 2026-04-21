@@ -388,6 +388,7 @@ function sanitizePrimitiveEntry(entry = {}, index = 0, options = {}) {
   const shape = String(entry.shape ?? "box").trim().toLowerCase();
   return {
     id: ensureEntityId("primitive", entry.id || `primitive-${index + 1}`, options),
+    asset_id: String(entry.asset_id ?? entry.assetId ?? entry.model_asset_id ?? entry.modelAssetId ?? "").trim() || null,
     shape: ALLOWED_PRIMITIVE_SHAPES.has(shape) ? shape : "box",
     position: sanitizeVector3(entry.position, { x: 0, y: 1, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
@@ -1326,6 +1327,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       dynamic_objects: resolvedDoc.primitives.map((entry) => ({
         id: entry.id,
         entity_kind: "primitive",
+        asset_id: entry.asset_id ?? null,
         position: entry.position,
         rotation: entry.rotation,
         shape: entry.shape,
@@ -1439,6 +1441,11 @@ export function collectPrivateWorldAssetIds(sceneDoc = {}) {
     }
   }
   for (const entry of normalized.models) {
+    if (entry.asset_id) {
+      assetIds.add(entry.asset_id);
+    }
+  }
+  for (const entry of normalized.primitives) {
     if (entry.asset_id) {
       assetIds.add(entry.asset_id);
     }

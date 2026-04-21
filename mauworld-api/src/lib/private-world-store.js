@@ -361,6 +361,10 @@ function rewriteSceneDocAssetIds(sceneDoc = {}, assetIdMap = new Map()) {
     ...entry,
     asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,
   }));
+  doc.primitives = (doc.primitives ?? []).map((entry) => ({
+    ...entry,
+    asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,
+  }));
   doc.players = (doc.players ?? []).map((entry) => ({
     ...entry,
     asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,

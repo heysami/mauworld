@@ -725,6 +725,7 @@ test("runtime snapshots preserve authored player and object scale", () => {
       primitives: [
         {
           id: "crate_one",
+          asset_id: "asset_model_crate",
           shape: "box",
           position: { x: 0, y: 8, z: 0 },
           scale: { x: 6, y: 4, z: 3 },
@@ -767,6 +768,7 @@ test("runtime snapshots preserve authored player and object scale", () => {
   assert.equal(snapshot.players[0].movement_enabled, false);
   assert.equal(snapshot.players[0].jump_enabled, false);
   assert.deepEqual(snapshot.dynamic_objects[0].scale, { x: 6, y: 4, z: 3 });
+  assert.equal(snapshot.dynamic_objects[0].asset_id, "asset_model_crate");
 });
 
 test("runtime snapshots preserve orthogonal follow camera distance", () => {

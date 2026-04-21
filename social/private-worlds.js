@@ -235,7 +235,7 @@ const AI_PROVIDER_SESSION_KEYS = {
   model: AI_MODEL_STORAGE_KEY,
 };
 const MATERIALIZABLE_ENTITY_KINDS = new Set(["voxel", "primitive", "panel", "model", "player", "screen", "text"]);
-const MODEL_ASSET_TARGET_ENTITY_KINDS = new Set(["model", "player"]);
+const MODEL_ASSET_TARGET_ENTITY_KINDS = new Set(["primitive", "model", "player"]);
 const FACING_MODE_OPTIONS = [
   { value: "fixed", label: "Fixed" },
   { value: "billboard", label: "Billboard" },
@@ -836,6 +836,7 @@ function createBaseToolPresetEntry(kind) {
   if (kind === "primitive") {
     return {
       shape: "box",
+      asset_id: "",
       scale: { x: PRIVATE_WORLD_BLOCK_UNIT, y: PRIVATE_WORLD_BLOCK_UNIT, z: PRIVATE_WORLD_BLOCK_UNIT },
       rotation: { x: 0, y: 0, z: 0 },
       material: { color: "#d3d8e2", texture_preset: "stone", emissive_intensity: 0 },
@@ -12065,8 +12066,17 @@ function buildEntitySummary(kind, entry = {}) {
   }
   if (kind === "primitive" && isPrimitivePanelShape(entry)) {
     const scale = getPrimitivePanelDimensions(entry);
-    const textureLabel = entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none");
-    return `${describeVector3(entry.position)} · ${getFacingModeLabel(entry.facing_mode)} · ${textureLabel} · ${Number(scale.x ?? 4).toFixed(1)} x ${Number(scale.y ?? 2.25).toFixed(1)}`;
+    const appearanceLabel = entry.asset_id
+      ? "model asset"
+      : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"));
+    return `${describeVector3(entry.position)} · ${getFacingModeLabel(entry.facing_mode)} · ${appearanceLabel} · ${Number(scale.x ?? 4).toFixed(1)} x ${Number(scale.y ?? 2.25).toFixed(1)}`;
+  }
+  if (kind === "primitive") {
+    const scale = entry.scale ?? { x: 1, y: 1, z: 1 };
+    const appearanceLabel = entry.asset_id
+      ? "model asset"
+      : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"));
+    return `${describeVector3(entry.position)} · ${entry.shape || "box"} · ${appearanceLabel} · ${Number(scale.x ?? 1).toFixed(1)} x ${Number(scale.y ?? 1).toFixed(1)} x ${Number(scale.z ?? 1).toFixed(1)}`;
   }
   if (kind === "panel") {
     const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.1 };
@@ -12460,6 +12470,9 @@ function getModelAssetTargetActionLabel(target = null) {
   if (targetKind === "player") {
     return "Use on selected player";
   }
+  if (targetKind === "primitive") {
+    return "Use on selected object";
+  }
   if (targetKind === "model") {
     return "Swap selected model";
   }
@@ -12707,7 +12720,7 @@ function openTextureAssetLibrary(options = {}) {
 function openModelAssetLibrary(options = {}) {
   const target = getSelectedModelAttachTarget();
   if (!target) {
-    setStatus("Select one player or model first, then choose a model asset for it.");
+    setStatus("Select one object, player, or model first, then choose a model asset for it.");
     return false;
   }
   state.assetFilterType = "model";
@@ -12876,11 +12889,17 @@ function buildToolPresetSummary(kind, entry = {}) {
         "panel",
         getFacingModeLabel(entry.facing_mode),
         `${roundPrivateValue(panelScale.x ?? 4, 1)} x ${roundPrivateValue(panelScale.y ?? 2.25, 1)}`,
-        entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"),
+        entry.asset_id ? "model asset" : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none")),
         ...extra,
       ].join(" · ");
     }
-    return [entry.shape || "box", entry.rigid_mode || "rigid", `${roundPrivateValue(scale.x ?? 1, 1)} x ${roundPrivateValue(scale.y ?? 1, 1)} x ${roundPrivateValue(scale.z ?? 1, 1)}`, ...extra].join(" · ");
+    return [
+      entry.shape || "box",
+      entry.rigid_mode || "rigid",
+      entry.asset_id ? "model asset" : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none")),
+      `${roundPrivateValue(scale.x ?? 1, 1)} x ${roundPrivateValue(scale.y ?? 1, 1)} x ${roundPrivateValue(scale.z ?? 1, 1)}`,
+      ...extra,
+    ].join(" · ");
   }
   if (kind === "panel") {
     const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.1 };
@@ -13319,7 +13338,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
       : "";
     const gravityIgnored = entry.rigid_mode === "ghost" || entry.physics?.ignore_gravity === true;
     elements.entityEditor.innerHTML = `
-      <p class="pw-inspector-note">Physics objects can collide, stack, bounce, and carry particles or trails. Invisible objects stay translucent in Build mode so their light and transform are still easy to edit.</p>
+      <p class="pw-inspector-note">Physics objects can collide, stack, bounce, and carry particles or trails. Link a model asset here when you want a custom visible body while keeping this object's primitive collider and physics settings.</p>
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
           <label>
@@ -13334,6 +13353,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
           </label>
         </div>
       </div>
+      ${buildModelAssetEditor(entry.asset_id, { targetKind: kind, targetId: entry.id })}
       ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
       ${primitiveFacingEditor}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
@@ -20547,31 +20567,16 @@ function updatePreviewFromSelection(options = {}) {
 
     for (const [index, primitive] of (prefabDoc.primitives ?? []).entries()) {
       renderedAny = true;
-      const primitiveScale = primitive.scale || { x: 1, y: 1, z: 1 };
-      const isPanelPrimitive = isPrimitivePanelShape(primitive);
-      const mesh = addPrefabMesh(
+      renderPrimitiveMesh({
+        ...primitive,
+        material: getMergedMaterial(primitive.material),
+      }, {
+        id: primitive.id || `prefab_primitive_${index}`,
+        metadata: metadata ?? { id: primitive.id || `prefab_primitive_${index}`, kind: "primitive" },
         parent,
-        getPrimitiveGeometry(primitive),
-        isPanelPrimitive
-          ? buildPanelPreviewMaterial(getMergedMaterial(primitive.material), primitiveScale, { selected })
-          : makeMaterial(getMergedMaterial(primitive.material), primitiveScale, { selected }),
-        primitive.position || { x: 0, y: 1, z: 0 },
-        primitive.rotation || { x: 0, y: 0, z: 0 },
-        isPanelPrimitive
-          ? { x: primitiveScale.x || 4, y: primitiveScale.y || 2.25, z: 1 }
-          : primitiveScale,
-        metadata ?? { id: primitive.id || `prefab_primitive_${index}`, kind: "primitive" },
-      );
-      applyRenderableVisibility(mesh, {
-        invisibleInPlay: primitive.invisible === true,
+        selected,
+        registerEntityMesh: false,
       });
-      attachEmissionLight(mesh, getMergedMaterial(primitive.material), primitiveScale);
-      if (isPanelPrimitive) {
-        registerPreviewBillboard(preview, mesh, primitive.facing_mode);
-      }
-      if (selected && mesh.material?.emissiveIntensity !== undefined) {
-        mesh.material.emissiveIntensity = Math.max(Number(mesh.material.emissiveIntensity || 0), 0.3);
-      }
     }
 
     for (const [index, panel] of (prefabDoc.panels ?? []).entries()) {
@@ -20764,6 +20769,10 @@ function updatePreviewFromSelection(options = {}) {
   const renderPrimitiveMesh = (primitiveSource = {}, options = {}) => {
     const authoredPrimitive = options.authoredPrimitive ?? null;
     const primitiveId = String(options.id ?? primitiveSource.id ?? authoredPrimitive?.id ?? "").trim();
+    const metadata = options.metadata ?? (primitiveId ? { id: primitiveId, kind: "primitive" } : null);
+    const parent = options.parent ?? preview.root;
+    const registerEntityMesh = options.registerEntityMesh !== false && metadata?.kind === "primitive";
+    const registerPickable = options.registerPickable !== false && Boolean(metadata?.id);
     const resolvedPrimitiveScale = options.scale
       ?? primitiveSource?.scale
       ?? authoredPrimitive?.scale
@@ -20773,32 +20782,141 @@ function updatePreviewFromSelection(options = {}) {
       ?? (primitiveSource?.material_override
         ? { ...(primitiveSource.material ?? authoredPrimitive?.material ?? {}), ...primitiveSource.material_override }
         : (primitiveSource?.material ?? authoredPrimitive?.material ?? { color: "#edf2f8", texture_preset: "none" }));
-    const mesh = addMesh(
-      getPrimitiveGeometry(primitiveSource?.shape ? primitiveSource : (authoredPrimitive ?? primitiveSource)),
-      isPanelPrimitive
-        ? buildPanelPreviewMaterial(
-          resolvedPrimitiveMaterial,
-          resolvedPrimitiveScale,
-          {
-            selected: options.selected === true,
-          },
-        )
-        : makeMaterial(
-          resolvedPrimitiveMaterial,
-          resolvedPrimitiveScale,
-          {
-            selected: options.selected === true,
-          },
-        ),
-      primitiveSource?.position || authoredPrimitive?.position || { x: 0, y: 1, z: 0 },
-      primitiveSource?.rotation || authoredPrimitive?.rotation || { x: 0, y: 0, z: 0 },
-      isPanelPrimitive
-        ? { x: resolvedPrimitiveScale.x || 4, y: resolvedPrimitiveScale.y || 2.25, z: 1 }
-        : resolvedPrimitiveScale,
-      primitiveId ? { id: primitiveId, kind: "primitive" } : null,
-    );
+    const displayPrimitiveMaterial = {
+      ...resolvedPrimitiveMaterial,
+      emissive_intensity: options.selected === true
+        ? Math.max(Number(resolvedPrimitiveMaterial?.emissive_intensity ?? resolvedPrimitiveMaterial?.emissiveIntensity ?? 0) || 0, 0.22)
+        : (resolvedPrimitiveMaterial?.emissive_intensity ?? resolvedPrimitiveMaterial?.emissiveIntensity),
+    };
+    const primitiveEntry = {
+      ...(authoredPrimitive ?? primitiveSource),
+      ...primitiveSource,
+      scale: resolvedPrimitiveScale,
+    };
+    const actualPrimitiveSize = getEntityApproxRenderSize("primitive", primitiveEntry);
+    const primitiveGeometry = getPrimitiveGeometry(primitiveSource?.shape ? primitiveSource : (authoredPrimitive ?? primitiveSource));
+    const assetId = String(options.assetId ?? primitiveSource?.asset_id ?? authoredPrimitive?.asset_id ?? "").trim();
+    const asset = assetId ? getPrivateAssetById(assetId) : null;
+    const registerPickableObject = (object) => {
+      if (!object || !metadata?.id || !registerPickable) {
+        return object;
+      }
+      object.userData.privateWorldEntityId = metadata.id;
+      object.userData.privateWorldEntityKind = metadata.kind;
+      preview.entityPickables.push(object);
+      return object;
+    };
+    let mesh = null;
+    if (asset) {
+      const root = new THREE.Group();
+      root.position.set(
+        primitiveSource?.position?.x ?? authoredPrimitive?.position?.x ?? 0,
+        primitiveSource?.position?.y ?? authoredPrimitive?.position?.y ?? 1,
+        primitiveSource?.position?.z ?? authoredPrimitive?.position?.z ?? 0,
+      );
+      root.rotation.set(
+        primitiveSource?.rotation?.x ?? authoredPrimitive?.rotation?.x ?? 0,
+        primitiveSource?.rotation?.y ?? authoredPrimitive?.rotation?.y ?? 0,
+        primitiveSource?.rotation?.z ?? authoredPrimitive?.rotation?.z ?? 0,
+      );
+      root.scale.set(
+        resolvedPrimitiveScale.x || 1,
+        resolvedPrimitiveScale.y || 1,
+        resolvedPrimitiveScale.z || 1,
+      );
+      if (metadata?.id) {
+        root.userData.privateWorldEntityId = metadata.id;
+        root.userData.privateWorldEntityKind = metadata.kind;
+        if (registerEntityMesh) {
+          preview.entityMeshes.set(metadata.id, root);
+        }
+      }
+      parent.add(root);
+      const fallbackMesh = new THREE.Mesh(
+        primitiveGeometry,
+        isPanelPrimitive
+          ? buildPanelPreviewMaterial(displayPrimitiveMaterial, resolvedPrimitiveScale, { selected: options.selected === true })
+          : makeMaterial(displayPrimitiveMaterial, resolvedPrimitiveScale, { selected: options.selected === true }),
+      );
+      root.add(fallbackMesh);
+      const hitTarget = registerPickableObject(new THREE.Mesh(
+        primitiveGeometry.clone(),
+        new THREE.MeshBasicMaterial({
+          transparent: true,
+          opacity: 0,
+          colorWrite: false,
+          depthWrite: false,
+          depthTest: false,
+          fog: false,
+        }),
+      ));
+      if (hitTarget) {
+        root.add(hitTarget);
+      }
+      const bounds = asset.bounds ?? { x: 1, y: 1, z: 1 };
+      void loadPreviewModelAssetScene(asset).then((loadedScene) => {
+        if (!loadedScene || !root.parent) {
+          return;
+        }
+        const clone = clonePreviewModelScene(loadedScene);
+        clone.scale.set(
+          actualPrimitiveSize.x / Math.max(0.1, (resolvedPrimitiveScale.x || 1) * (Number(bounds.x ?? 1) || 1)),
+          actualPrimitiveSize.y / Math.max(0.1, (resolvedPrimitiveScale.y || 1) * (Number(bounds.y ?? 1) || 1)),
+          actualPrimitiveSize.z / Math.max(0.1, (resolvedPrimitiveScale.z || 1) * (Number(bounds.z ?? 1) || 1)),
+        );
+        applyPreviewMaterialToModelScene(clone, displayPrimitiveMaterial, actualPrimitiveSize);
+        fallbackMesh.visible = false;
+        root.add(clone);
+      }).catch(() => {
+        fallbackMesh.visible = true;
+      });
+      mesh = root;
+    } else {
+      mesh = new THREE.Mesh(
+        primitiveGeometry,
+        isPanelPrimitive
+          ? buildPanelPreviewMaterial(
+            displayPrimitiveMaterial,
+            resolvedPrimitiveScale,
+            {
+              selected: options.selected === true,
+            },
+          )
+          : makeMaterial(
+            displayPrimitiveMaterial,
+            resolvedPrimitiveScale,
+            {
+              selected: options.selected === true,
+            },
+          ),
+      );
+      mesh.position.set(
+        primitiveSource?.position?.x ?? authoredPrimitive?.position?.x ?? 0,
+        primitiveSource?.position?.y ?? authoredPrimitive?.position?.y ?? 1,
+        primitiveSource?.position?.z ?? authoredPrimitive?.position?.z ?? 0,
+      );
+      mesh.rotation.set(
+        primitiveSource?.rotation?.x ?? authoredPrimitive?.rotation?.x ?? 0,
+        primitiveSource?.rotation?.y ?? authoredPrimitive?.rotation?.y ?? 0,
+        primitiveSource?.rotation?.z ?? authoredPrimitive?.rotation?.z ?? 0,
+      );
+      mesh.scale.set(
+        isPanelPrimitive ? (resolvedPrimitiveScale.x || 4) : (resolvedPrimitiveScale.x || 1),
+        isPanelPrimitive ? (resolvedPrimitiveScale.y || 2.25) : (resolvedPrimitiveScale.y || 1),
+        isPanelPrimitive ? 1 : (resolvedPrimitiveScale.z || 1),
+      );
+      if (metadata?.id) {
+        mesh.userData.privateWorldEntityId = metadata.id;
+        mesh.userData.privateWorldEntityKind = metadata.kind;
+        if (registerEntityMesh) {
+          preview.entityMeshes.set(metadata.id, mesh);
+        }
+      }
+      registerPickableObject(mesh);
+      parent.add(mesh);
+    }
     applyRenderableVisibility(mesh, {
-      invisibleInPlay: authoredPrimitive?.invisible === true,
+      invisibleInPlay: primitiveSource?.invisible === true || authoredPrimitive?.invisible === true,
       runtimeVisible: options.runtimeVisible,
     });
     attachEmissionLight(
@@ -20812,12 +20930,14 @@ function updatePreviewFromSelection(options = {}) {
     if (isPanelPrimitive) {
       registerPreviewBillboard(preview, mesh, primitiveSource?.facing_mode ?? authoredPrimitive?.facing_mode);
     }
-    const effectColor = resolvedPrimitiveMaterial?.color || authoredPrimitive?.material?.color || "#ffb16a";
-    if (authoredPrimitive?.particle_effect) {
-      particleEffects.push(createParticleSystem(preview, primitiveId, authoredPrimitive.particle_effect, effectColor));
+    const effectColor = resolvedPrimitiveMaterial?.color || primitiveSource?.material?.color || authoredPrimitive?.material?.color || "#ffb16a";
+    const particleEffect = primitiveSource?.particle_effect ?? authoredPrimitive?.particle_effect;
+    const trailEffect = primitiveSource?.trail_effect ?? authoredPrimitive?.trail_effect;
+    if (particleEffect) {
+      particleEffects.push(createParticleSystem(preview, primitiveId, particleEffect, effectColor));
     }
-    if (authoredPrimitive?.trail_effect) {
-      particleEffects.push(createTrailSystem(preview, primitiveId, authoredPrimitive.trail_effect, effectColor));
+    if (trailEffect) {
+      particleEffects.push(createTrailSystem(preview, primitiveId, trailEffect, effectColor));
     }
     if (options.selected === true && mesh.material?.emissiveIntensity !== undefined) {
       mesh.material.emissiveIntensity = Math.max(Number(mesh.material.emissiveIntensity || 0), 0.3);

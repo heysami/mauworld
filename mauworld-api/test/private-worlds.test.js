@@ -264,6 +264,31 @@ test("normalizeSceneDoc preserves texture asset ids on materials", () => {
   assert.equal(scene.primitives[0].material.texture_preset, "none");
 });
 
+test("normalizeSceneDoc keeps primitive model skin asset ids and collects their linked assets", () => {
+  const scene = normalizeSceneDoc({
+    primitives: [
+      {
+        id: "crate",
+        asset_id: "asset_model_crate",
+        material: {
+          color: "#abcdef",
+          texture_asset_id: "asset_texture_crate",
+          emissive_intensity: 0.8,
+        },
+      },
+    ],
+  });
+
+  assert.equal(scene.primitives[0].asset_id, "asset_model_crate");
+  assert.equal(scene.primitives[0].material.color, "#abcdef");
+  assert.equal(scene.primitives[0].material.texture_asset_id, "asset_texture_crate");
+  assert.equal(scene.primitives[0].material.emissive_intensity, 0.8);
+  assert.deepEqual(
+    new Set(collectPrivateWorldAssetIds(scene)),
+    new Set(["asset_model_crate", "asset_texture_crate"]),
+  );
+});
+
 test("normalizeSceneDoc keeps player appearance asset ids and collects their linked assets", () => {
   const scene = normalizeSceneDoc({
     players: [
@@ -737,4 +762,29 @@ test("compileSceneDoc keeps model entities with bounds metadata and runtime coll
   assert.equal(compiled.runtime.dynamic_objects[0].asset_id, "asset_model_abc");
   assert.deepEqual(compiled.runtime.dynamic_objects[0].bounds, { x: 1.2, y: 3, z: 1.1 });
   assert.deepEqual(compiled.runtime.dynamic_objects[0].collider_scale, { x: 2.4, y: 4.5, z: 2.2 });
+});
+
+test("compileSceneDoc keeps primitive model skins attached to runtime dynamic objects", () => {
+  const compiled = compileSceneDoc({
+    primitives: [
+      {
+        id: "crate_skin",
+        asset_id: "asset_model_crate",
+        shape: "box",
+        position: { x: 1, y: 2, z: 3 },
+        scale: { x: 3, y: 2, z: 4 },
+        rigid_mode: "rigid",
+      },
+    ],
+  }, {
+    world_type: "room",
+    width: 40,
+    length: 20,
+    height: 10,
+  });
+
+  assert.equal(compiled.runtime.dynamic_objects.length, 1);
+  assert.equal(compiled.runtime.dynamic_objects[0].entity_kind, "primitive");
+  assert.equal(compiled.runtime.dynamic_objects[0].asset_id, "asset_model_crate");
+  assert.deepEqual(compiled.runtime.dynamic_objects[0].collider_scale, { x: 3, y: 2, z: 4 });
 });

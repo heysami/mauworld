@@ -1489,6 +1489,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     kind: "dynamic_object",
     id: entry.id,
     entity_kind: "primitive",
+    asset_id: entry.asset_id ?? null,
     shape: entry.shape,
     scale: cloneJson(entry.scale),
     collider_scale: cloneJson(entry.scale),
