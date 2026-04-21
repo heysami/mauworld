@@ -177,25 +177,6 @@ test("finds swept ground support when a platform rises into the player", () => {
   assert.ok(Math.abs(result.groundY - 2.18) < 0.0001);
 });
 
-test("finds support for a full one-voxel step when the climb window allows it", () => {
-  const result = resolvePlayerGroundSupport({
-    startPosition: { x: 0, y: 9.5, z: 0 },
-    desiredPosition: { x: 0, y: 9.5, z: 0 },
-    playerSize: { x: 3, y: 9, z: 3 },
-    blockers: [
-      {
-        position: { x: 0, y: 7.5, z: 0 },
-        size: { x: 5, y: 5, z: 5 },
-      },
-    ],
-    verticalTolerance: 5,
-  });
-
-  assert.equal(result.hasSupport, true);
-  assert.equal(result.surfaceY, 10);
-  assert.equal(result.groundY, 14.5);
-});
-
 test("finds tilted ground support at the sampled top-face height", () => {
   const result = resolvePlayerGroundSupport({
     startPosition: { x: 0, y: 4.707106781186548, z: 3 },

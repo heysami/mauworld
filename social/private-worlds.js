@@ -10236,13 +10236,6 @@ function getPrivatePlatformCarryRecoveryTolerance(playerHalf = {}, platformHalf 
   );
 }
 
-function getPrivatePlayerGroundStepTolerance(playerHalf = {}) {
-  return Math.max(
-    getPrivatePlatformCarryRecoveryTolerance(playerHalf),
-    PRIVATE_WORLD_BLOCK_UNIT,
-  );
-}
-
 function buildPrivateCollisionProbe(startPosition = {}, desiredPosition = {}, playerSize = {}) {
   const probePadding = PRIVATE_WORLD_BLOCK_UNIT * 2;
   const playerHalf = getHalfExtentsFromScale(playerSize);
@@ -10668,13 +10661,8 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     };
   }
   const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
-  const groundedRecoveryTolerance = getPrivatePlatformCarryRecoveryTolerance(playerHalf);
   const supportVerticalTolerance = prediction.onGround === true
-    ? (
-      options.allowGroundStepUp === true
-        ? getPrivatePlayerGroundStepTolerance(playerHalf)
-        : groundedRecoveryTolerance
-    )
+    ? getPrivatePlatformCarryRecoveryTolerance(playerHalf)
     : getPrivatePlatformCarryVerticalTolerance(playerHalf);
   const startPosition = options.startPosition ?? prediction.position;
   const desiredPosition = options.desiredPosition ?? prediction.position;
@@ -10688,7 +10676,7 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
   const activeCarryPlatformId = String(prediction.localCarryPlatformId ?? "").trim();
   const storedGroundY = Number(prediction.groundY);
   const baseGroundY = Number(prediction.baseGroundY);
-  const stableGroundTolerance = Math.max(0.08, groundedRecoveryTolerance * 0.5);
+  const stableGroundTolerance = Math.max(0.08, supportVerticalTolerance * 0.5);
   const allowStableGroundFallback = (
     !activeCarryPlatformId
     && Number.isFinite(storedGroundY)
@@ -11288,7 +11276,6 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     ? getLocalPossessedGroundSupport(prediction, {
       startPosition: frameStartPosition,
       desiredPosition: prediction.position,
-      allowGroundStepUp: intent.active,
     })
     : null;
   let finalGroundSupport = resolvedGroundSupport;
@@ -11323,7 +11310,6 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
       finalGroundSupport = getLocalPossessedGroundSupport(prediction, {
         startPosition: airborneStartPosition,
         desiredPosition: prediction.position,
-        allowGroundStepUp: intent.active,
       });
       const landingGroundY = Number(finalGroundSupport?.groundY);
       if (finalGroundSupport?.hasSupport === true && Number.isFinite(landingGroundY)) {
