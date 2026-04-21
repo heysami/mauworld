@@ -3347,47 +3347,75 @@ export class MauworldStore {
     );
 
     const [pillars, tagLayouts, postInstances, presenceRows, privateWorldMiniatures] = await Promise.all([
-      must(
-        this.serviceClient
-          .from("world_pillar_layouts")
-          .select("*")
-          .eq("world_snapshot_id", worldSnapshot.id)
-          .gte("cell_x", pillarCellRange.cellXMin)
-          .lte("cell_x", pillarCellRange.cellXMax)
-          .gte("cell_z", pillarCellRange.cellZMin)
-          .lte("cell_z", pillarCellRange.cellZMax),
-        "Could not load streamed world pillar layouts",
+      resolveSoftTimed(
+        () => must(
+          this.serviceClient
+            .from("world_pillar_layouts")
+            .select("*")
+            .eq("world_snapshot_id", worldSnapshot.id)
+            .gte("cell_x", pillarCellRange.cellXMin)
+            .lte("cell_x", pillarCellRange.cellXMax)
+            .gte("cell_z", pillarCellRange.cellZMin)
+            .lte("cell_z", pillarCellRange.cellZMax),
+          "Could not load streamed world pillar layouts",
+        ),
+        {
+          timeoutMs: 3000,
+          fallbackValue: [],
+          label: "public world stream pillars",
+        },
       ),
-      must(
-        this.serviceClient
-          .from("world_tag_layouts")
-          .select("*")
-          .eq("world_snapshot_id", worldSnapshot.id)
-          .gte("cell_x", tagCellRange.cellXMin)
-          .lte("cell_x", tagCellRange.cellXMax)
-          .gte("cell_z", tagCellRange.cellZMin)
-          .lte("cell_z", tagCellRange.cellZMax),
-        "Could not load streamed world tag layouts",
+      resolveSoftTimed(
+        () => must(
+          this.serviceClient
+            .from("world_tag_layouts")
+            .select("*")
+            .eq("world_snapshot_id", worldSnapshot.id)
+            .gte("cell_x", tagCellRange.cellXMin)
+            .lte("cell_x", tagCellRange.cellXMax)
+            .gte("cell_z", tagCellRange.cellZMin)
+            .lte("cell_z", tagCellRange.cellZMax),
+          "Could not load streamed world tag layouts",
+        ),
+        {
+          timeoutMs: 3000,
+          fallbackValue: [],
+          label: "public world stream tags",
+        },
       ),
-      must(
-        this.serviceClient
-          .from("world_post_instances")
-          .select("*")
-          .eq("world_snapshot_id", worldSnapshot.id)
-          .neq("display_tier", "hidden")
-          .gte("cell_x", cellXMin)
-          .lte("cell_x", cellXMax)
-          .gte("cell_z", cellZMin)
-          .lte("cell_z", cellZMax),
-        "Could not load streamed world post instances",
+      resolveSoftTimed(
+        () => must(
+          this.serviceClient
+            .from("world_post_instances")
+            .select("*")
+            .eq("world_snapshot_id", worldSnapshot.id)
+            .neq("display_tier", "hidden")
+            .gte("cell_x", cellXMin)
+            .lte("cell_x", cellXMax)
+            .gte("cell_z", cellZMin)
+            .lte("cell_z", cellZMax),
+          "Could not load streamed world post instances",
+        ),
+        {
+          timeoutMs: 3000,
+          fallbackValue: [],
+          label: "public world stream post instances",
+        },
       ),
-      must(
-        this.serviceClient
-          .from("live_presence_sessions")
-          .select("*")
-          .eq("world_snapshot_id", worldSnapshot.id)
-          .gt("expires_at", nowIso()),
-        "Could not load live presence sessions",
+      resolveSoftTimed(
+        () => must(
+          this.serviceClient
+            .from("live_presence_sessions")
+            .select("*")
+            .eq("world_snapshot_id", worldSnapshot.id)
+            .gt("expires_at", nowIso()),
+          "Could not load live presence sessions",
+        ),
+        {
+          timeoutMs: 1500,
+          fallbackValue: [],
+          label: "public world stream live presence",
+        },
       ),
       typeof this.listPrivateWorldMiniaturesForSnapshot === "function"
         ? resolveSoftTimed(
@@ -3410,33 +3438,54 @@ export class MauworldStore {
 
     const pillarDetails =
       pillars.length > 0
-        ? await must(
-            this.serviceClient
-              .from("pillars")
-              .select("*")
-              .in("id", dedupeStringList(pillars.map((row) => row.pillar_id))),
-            "Could not load streamed pillar details",
+        ? await resolveSoftTimed(
+            () => must(
+              this.serviceClient
+                .from("pillars")
+                .select("*")
+                .in("id", dedupeStringList(pillars.map((row) => row.pillar_id))),
+              "Could not load streamed pillar details",
+            ),
+            {
+              timeoutMs: 1500,
+              fallbackValue: [],
+              label: "public world stream pillar details",
+            },
           )
         : [];
     const tagDetails =
       tagLayouts.length > 0
-        ? await must(
-            this.serviceClient
-              .from("tags")
-              .select("*")
-              .in("id", dedupeStringList(tagLayouts.map((row) => row.tag_id))),
-            "Could not load streamed tag details",
+        ? await resolveSoftTimed(
+            () => must(
+              this.serviceClient
+                .from("tags")
+                .select("*")
+                .in("id", dedupeStringList(tagLayouts.map((row) => row.tag_id))),
+              "Could not load streamed tag details",
+            ),
+            {
+              timeoutMs: 1500,
+              fallbackValue: [],
+              label: "public world stream tag details",
+            },
           )
         : [];
     const hydratedPosts =
       postInstances.length > 0
         ? await this.hydratePosts(
-            await must(
-              this.serviceClient
-                .from("posts")
-                .select("*")
-                .in("id", dedupeStringList(postInstances.map((row) => row.post_id))),
-              "Could not load streamed post details",
+            await resolveSoftTimed(
+              () => must(
+                this.serviceClient
+                  .from("posts")
+                  .select("*")
+                  .in("id", dedupeStringList(postInstances.map((row) => row.post_id))),
+                "Could not load streamed post details",
+              ),
+              {
+                timeoutMs: 1500,
+                fallbackValue: [],
+                label: "public world stream post details",
+              },
             ),
           )
         : [];
@@ -3484,12 +3533,19 @@ export class MauworldStore {
     const installationIds = dedupeStringList(filteredPresence.map((row) => row.installation_id));
     const agents =
       installationIds.length > 0
-        ? await must(
-            this.serviceClient
-              .from("agent_installations")
-              .select("id, display_name, platform, host_name")
-              .in("id", installationIds),
-            "Could not load agent presence labels",
+        ? await resolveSoftTimed(
+            () => must(
+              this.serviceClient
+                .from("agent_installations")
+                .select("id, display_name, platform, host_name")
+                .in("id", installationIds),
+              "Could not load agent presence labels",
+            ),
+            {
+              timeoutMs: 1500,
+              fallbackValue: [],
+              label: "public world stream agent labels",
+            },
           )
         : [];
     const agentById = new Map(agents.map((row) => [row.id, row]));
