@@ -163,6 +163,15 @@ function createStubStore() {
         presence: [],
       };
     },
+    async streamCurrentWorldPrivateMiniatures(input = {}) {
+      return {
+        worldSnapshotId: "world_123",
+        organizationVersionId: "org_123",
+        cellRange: { cellXMin: -1, cellXMax: 1, cellZMin: -1, cellZMax: 1 },
+        requestedViewerSessionId: input.viewerSessionId ?? "",
+        miniatures: [],
+      };
+    },
     async searchWorld() {
       return {
         worldSnapshotId: "world_123",
@@ -516,6 +525,27 @@ test("public world stream forwards viewerSessionId for server-side miniature rou
 
   const response = await request(app)
     .get("/api/public/world/current/stream")
+    .query({
+      cell_x_min: -1,
+      cell_x_max: 1,
+      cell_z_min: -1,
+      cell_z_max: 1,
+      viewerSessionId: "viewer_123",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.requestedViewerSessionId, "viewer_123");
+});
+
+test("public world miniature stream forwards viewerSessionId for live player dots", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .get("/api/public/world/current/private-world-miniatures")
     .query({
       cell_x_min: -1,
       cell_x_max: 1,

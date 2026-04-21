@@ -3488,6 +3488,52 @@ export class MauworldStore {
     };
   }
 
+  async streamCurrentWorldPrivateMiniatures(input = {}) {
+    const { currentVersion, worldSnapshot } = await this.ensureCurrentWorldContext();
+    let cellXMin = clampInteger(input.cell_x_min, -2, -10000, 10000);
+    let cellXMax = clampInteger(input.cell_x_max, 2, -10000, 10000);
+    let cellZMin = clampInteger(input.cell_z_min, -2, -10000, 10000);
+    let cellZMax = clampInteger(input.cell_z_max, 2, -10000, 10000);
+    if (cellXMin > cellXMax) {
+      [cellXMin, cellXMax] = [cellXMax, cellXMin];
+    }
+    if (cellZMin > cellZMax) {
+      [cellZMin, cellZMax] = [cellZMax, cellZMin];
+    }
+    const miniatures =
+      typeof this.listPrivateWorldMiniaturesForSnapshot === "function"
+        ? await this.listPrivateWorldMiniaturesForSnapshot({
+            worldSnapshotId: worldSnapshot.id,
+            viewerSessionId: input.viewerSessionId,
+            cellXMin,
+            cellXMax,
+            cellZMin,
+            cellZMax,
+          })
+        : [];
+
+    return {
+      worldSnapshotId: worldSnapshot.id,
+      organizationVersionId: currentVersion.id,
+      cellRange: {
+        cellXMin,
+        cellXMax,
+        cellZMin,
+        cellZMax,
+      },
+      miniatures: miniatures.map((entry) => ({
+        id: entry.id,
+        world_id: entry.world_id,
+        creator_username: entry.creator_username,
+        scene_updated_at: entry.scene_updated_at ?? null,
+        lod_band: entry.lod_band ?? "far",
+        viewer_count: Number(entry.viewer_count ?? 0) || 0,
+        status: entry.status ?? "active",
+        visible_players: Array.isArray(entry.visible_players) ? entry.visible_players : [],
+      })),
+    };
+  }
+
   async searchWorld(input) {
     const { currentVersion, worldSnapshot } = await this.ensureCurrentWorldContext();
     const result = await this.queryPostsForSearch(input, {

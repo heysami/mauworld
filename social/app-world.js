@@ -146,6 +146,7 @@ elements.focusPieces = {
 const WORLD_API = {
   meta: "/public/world/current/meta",
   stream: "/public/world/current/stream",
+  privateWorldMiniatures: "/public/world/current/private-world-miniatures",
   search: "/public/world/search",
   privateWorldSearch: "/public/private-worlds",
   presence: "/public/world/current/presence",
@@ -258,6 +259,7 @@ const state = {
   currentCellKey: "",
   loading: true,
   streamLoading: false,
+  privateWorldMiniaturesLoading: false,
   searchLoading: false,
   searchSubmitted: false,
   liveShareQuery: "",
@@ -390,6 +392,7 @@ const sceneState = {
   browserScreenEntries: new Map(),
   browserAnchorEntries: new Map(),
   gameShareEntries: new Map(),
+  privateWorldMiniatureEntries: new Map(),
   clickable: [],
   snow: null,
   snowData: [],
@@ -1695,6 +1698,19 @@ function getPostCacheKey(entry) {
   return `${entry?.post_id ?? ""}:${entry?.tag_id ?? ""}`;
 }
 
+function getPrivateWorldMiniatureEntryId(entry = {}) {
+  return String(entry.id ?? "").trim();
+}
+
+function getPrivateWorldMiniatureStaticRank(entry = {}) {
+  const miniatureBandRank = {
+    far: 0,
+    mid: 1,
+    near: 2,
+  };
+  return Number(entry.static_lod_rank ?? miniatureBandRank[String(entry.lod_band ?? "far")] ?? 0);
+}
+
 function isVisibleWorldPost(entry) {
   return entry?.display_tier !== "hidden";
 }
@@ -1716,11 +1732,6 @@ function getTagRetainPadding() {
 }
 
 function mergeStreamIntoCache(streamPayload) {
-  const miniatureBandRank = {
-    far: 0,
-    mid: 1,
-    near: 2,
-  };
   for (const pillar of streamPayload.pillars ?? []) {
     state.worldCache.pillars.set(getPillarCacheKey(pillar), pillar);
   }
@@ -1731,7 +1742,7 @@ function mergeStreamIntoCache(streamPayload) {
     state.worldCache.posts.set(getPostCacheKey(post), post);
   }
   for (const miniature of streamPayload.privateWorldMiniatures ?? []) {
-    const key = String(miniature.id ?? "");
+    const key = getPrivateWorldMiniatureEntryId(miniature);
     const existing = state.worldCache.privateWorldMiniatures.get(key) ?? null;
     if (!existing) {
       state.worldCache.privateWorldMiniatures.set(key, miniature);
@@ -1739,8 +1750,8 @@ function mergeStreamIntoCache(streamPayload) {
     }
     const nextSceneUpdatedAt = String(miniature.scene_updated_at ?? "");
     const existingSceneUpdatedAt = String(existing.scene_updated_at ?? "");
-    const nextBandRank = miniatureBandRank[String(miniature.lod_band ?? "far")] ?? 0;
-    const existingStaticBandRank = Number(existing.static_lod_rank ?? miniatureBandRank[String(existing.lod_band ?? "far")] ?? 0);
+    const nextBandRank = getPrivateWorldMiniatureStaticRank(miniature);
+    const existingStaticBandRank = getPrivateWorldMiniatureStaticRank(existing);
     const shouldRefreshStatic =
       !existingSceneUpdatedAt
       || !nextSceneUpdatedAt
@@ -3952,17 +3963,19 @@ function disposeMaterial(material) {
 function clearGroup(group) {
   for (const child of [...group.children]) {
     group.remove(child);
-    child.traverse((node) => {
-      if (node.geometry) {
-        node.geometry.dispose();
-      }
-      if (Array.isArray(node.material)) {
-        node.material.forEach(disposeMaterial);
-      } else {
-        disposeMaterial(node.material);
-      }
-    });
+    disposeObjectTree(child);
   }
+}
+
+function disposeObjectTree(root) {
+  root?.traverse?.((node) => {
+    node.geometry?.dispose?.();
+    if (Array.isArray(node.material)) {
+      node.material.forEach(disposeMaterial);
+    } else {
+      disposeMaterial(node.material);
+    }
+  });
 }
 
 function showToast(message, durationMs = 3600) {
@@ -7032,6 +7045,133 @@ function getPrivateMiniaturePrimitiveGeometry(shape = "box") {
   return new THREE.BoxGeometry(1, 1, 1);
 }
 
+function createPrivateWorldMiniatureInteractionData(entry = {}) {
+  return {
+    world_id: entry.world_id,
+    creator_username: entry.creator_username,
+    name: entry.name,
+    about: entry.about,
+    world_type: entry.world_type,
+    template_size: entry.template_size,
+    viewer_count: entry.viewer_count,
+    lineage: entry.lineage,
+    active_instance: {
+      status: entry.status ?? "active",
+      viewer_count: entry.viewer_count,
+      anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
+      anchor_position: {
+        x: entry.anchor_position_x,
+        y: entry.anchor_position_y,
+        z: entry.anchor_position_z,
+      },
+      miniature: {
+        width: entry.miniature_width,
+        length: entry.miniature_length,
+        height: entry.miniature_height,
+      },
+    },
+  };
+}
+
+function getPrivateMiniaturePlayerKey(player = {}, index = 0) {
+  const playerId = String(player.player_entity_id ?? player.username ?? "").trim().toLowerCase();
+  return playerId || `player_${index}`;
+}
+
+function getPrivateMiniaturePlayerTargetPosition(animatedEntry, player = {}) {
+  const markerPosition = animatedEntry.mapPoint(player.position ?? {});
+  markerPosition.y += animatedEntry.playerDotLift;
+  return markerPosition;
+}
+
+function createPrivateMiniaturePlayerDot(animatedEntry, player = {}, key = "") {
+  const marker = new THREE.Group();
+  const outline = new THREE.Mesh(
+    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius, 12, 12),
+    new THREE.MeshBasicMaterial({
+      color: "#ffffff",
+      transparent: true,
+      opacity: 0.98,
+      toneMapped: false,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius * 0.8, 12, 12),
+    new THREE.MeshBasicMaterial({
+      color: "#ff1414",
+      toneMapped: false,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(animatedEntry.playerMarkerRadius * 1.26, 12, 12),
+    new THREE.MeshBasicMaterial({
+      color: "#ff2a2a",
+      transparent: true,
+      opacity: 0.14,
+      toneMapped: false,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
+  glow.renderOrder = 18;
+  outline.renderOrder = 19;
+  core.renderOrder = 20;
+  marker.add(glow);
+  marker.add(outline);
+  marker.add(core);
+  const targetPosition = getPrivateMiniaturePlayerTargetPosition(animatedEntry, player);
+  marker.position.copy(targetPosition);
+  animatedEntry.playerDots.add(marker);
+  const dotEntry = {
+    key,
+    group: marker,
+    currentPosition: targetPosition.clone(),
+    targetPosition,
+  };
+  animatedEntry.playerDotEntries.set(key, dotEntry);
+  return dotEntry;
+}
+
+function removePrivateMiniaturePlayerDot(animatedEntry, key = "") {
+  const dotEntry = animatedEntry?.playerDotEntries?.get(key);
+  if (!dotEntry) {
+    return;
+  }
+  dotEntry.group.parent?.remove(dotEntry.group);
+  disposeObjectTree(dotEntry.group);
+  animatedEntry.playerDotEntries.delete(key);
+}
+
+function syncPrivateMiniaturePlayerDots(animatedEntry, players = []) {
+  if (!animatedEntry?.playerDots) {
+    return;
+  }
+  const activeKeys = new Set();
+  players.forEach((player, index) => {
+    if (!player?.position) {
+      return;
+    }
+    const key = getPrivateMiniaturePlayerKey(player, index);
+    activeKeys.add(key);
+    const targetPosition = getPrivateMiniaturePlayerTargetPosition(animatedEntry, player);
+    const existingDot = animatedEntry.playerDotEntries.get(key);
+    if (existingDot) {
+      existingDot.targetPosition.copy(targetPosition);
+      return;
+    }
+    createPrivateMiniaturePlayerDot(animatedEntry, player, key);
+  });
+  for (const key of [...animatedEntry.playerDotEntries.keys()]) {
+    if (!activeKeys.has(key)) {
+      removePrivateMiniaturePlayerDot(animatedEntry, key);
+    }
+  }
+}
+
 function buildPrivateWorldMiniatureObject(entry) {
   const group = new THREE.Group();
   group.position.set(
@@ -7095,6 +7235,8 @@ function buildPrivateWorldMiniatureObject(entry) {
   group.add(silhouetteGroup);
   group.add(detailGroup);
   group.add(playerDots);
+  const playerMarkerRadius = clamp(longestSide * 0.03, 0.24, 0.38);
+  const playerDotLift = Math.max(playerMarkerRadius * 1.12, scale * 0.4);
 
   const labelWidth = clamp(12 + String(entry.name || "Private World").length * 0.24, 14, 24);
   const labelHeight = labelWidth * (160 / 768);
@@ -7224,36 +7366,11 @@ function buildPrivateWorldMiniatureObject(entry) {
     });
   }
 
-  for (const player of entry.visible_players ?? []) {
-    if (!player.position) {
-      continue;
-    }
-    const playerMarkerRadius = clamp(longestSide * 0.028, 0.22, 0.34);
-    const marker = new THREE.Group();
-    const outline = new THREE.Mesh(
-      new THREE.SphereGeometry(playerMarkerRadius, 12, 12),
-      new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.98, toneMapped: false }),
-    );
-    const core = new THREE.Mesh(
-      new THREE.SphereGeometry(playerMarkerRadius * 0.78, 12, 12),
-      new THREE.MeshBasicMaterial({ color: "#ff1414", toneMapped: false }),
-    );
-    const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(playerMarkerRadius * 1.24, 12, 12),
-      new THREE.MeshBasicMaterial({ color: "#ff2a2a", transparent: true, opacity: 0.1, toneMapped: false }),
-    );
-    marker.add(glow);
-    marker.add(outline);
-    marker.add(core);
-    marker.position.copy(mapPoint(player.position));
-    marker.position.y += Math.max(playerMarkerRadius * 0.35, scale * 0.14);
-    playerDots.add(marker);
-  }
-
   const nearDistance = clamp(46 + longestSide * 2.8, 54, 112);
   const midDistance = clamp(nearDistance * 2.2, 118, 250);
+  const interactionData = createPrivateWorldMiniatureInteractionData(entry);
   const animatedEntry = {
-    id: String(entry.id ?? ""),
+    id: getPrivateWorldMiniatureEntryId(entry),
     worldId: String(entry.world_id ?? ""),
     creatorUsername: String(entry.creator_username ?? "").trim().toLowerCase(),
     group,
@@ -7263,99 +7380,36 @@ function buildPrivateWorldMiniatureObject(entry) {
     silhouetteGroup,
     detailGroup,
     playerDots,
+    playerDotEntries: new Map(),
+    playerMarkerRadius,
+    playerDotLift,
+    mapPoint,
     nearDistance,
     midDistance,
     serverLodBand: entry.lod_band || "near",
+    sceneUpdatedAt: String(entry.scene_updated_at ?? ""),
+    staticLodRank: getPrivateWorldMiniatureStaticRank(entry),
     phase: Math.random() * Math.PI * 2,
     basePlate,
+    billboardMeshes: [label],
+    interactionData,
   };
+  syncPrivateMiniaturePlayerDots(animatedEntry, entry.visible_players ?? []);
   const clickablePayloads = [
     {
       type: "private-world-miniature",
       mesh: dome,
-      data: {
-        world_id: entry.world_id,
-        creator_username: entry.creator_username,
-        name: entry.name,
-        about: entry.about,
-        world_type: entry.world_type,
-        template_size: entry.template_size,
-        viewer_count: entry.viewer_count,
-        lineage: entry.lineage,
-        active_instance: {
-          status: entry.status ?? "active",
-          viewer_count: entry.viewer_count,
-          anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
-          anchor_position: {
-            x: entry.anchor_position_x,
-            y: entry.anchor_position_y,
-            z: entry.anchor_position_z,
-          },
-          miniature: {
-            width: entry.miniature_width,
-            length: entry.miniature_length,
-            height: entry.miniature_height,
-          },
-        },
-      },
+      data: interactionData,
     },
     {
       type: "private-world-miniature",
       mesh: basePlate,
-      data: {
-        world_id: entry.world_id,
-        creator_username: entry.creator_username,
-        name: entry.name,
-        about: entry.about,
-        world_type: entry.world_type,
-        template_size: entry.template_size,
-        viewer_count: entry.viewer_count,
-        lineage: entry.lineage,
-        active_instance: {
-          status: entry.status ?? "active",
-          viewer_count: entry.viewer_count,
-          anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
-          anchor_position: {
-            x: entry.anchor_position_x,
-            y: entry.anchor_position_y,
-            z: entry.anchor_position_z,
-          },
-          miniature: {
-            width: entry.miniature_width,
-            length: entry.miniature_length,
-            height: entry.miniature_height,
-          },
-        },
-      },
+      data: interactionData,
     },
     {
       type: "private-world-miniature",
       mesh: label,
-      data: {
-        world_id: entry.world_id,
-        creator_username: entry.creator_username,
-        name: entry.name,
-        about: entry.about,
-        world_type: entry.world_type,
-        template_size: entry.template_size,
-        viewer_count: entry.viewer_count,
-        lineage: entry.lineage,
-        active_instance: {
-          status: entry.status ?? "active",
-          viewer_count: entry.viewer_count,
-          anchor_world_snapshot_id: entry.anchor_world_snapshot_id,
-          anchor_position: {
-            x: entry.anchor_position_x,
-            y: entry.anchor_position_y,
-            z: entry.anchor_position_z,
-          },
-          miniature: {
-            width: entry.miniature_width,
-            length: entry.miniature_length,
-            height: entry.miniature_height,
-          },
-        },
-      },
+      data: interactionData,
     },
   ];
   sceneState.clickable.push(...clickablePayloads);
@@ -7364,7 +7418,98 @@ function buildPrivateWorldMiniatureObject(entry) {
   return animatedEntry;
 }
 
-function updatePrivateWorldMiniatures(elapsedSeconds) {
+function removePrivateWorldMiniatureObject(id = "") {
+  const key = String(id ?? "").trim();
+  if (!key) {
+    return;
+  }
+  const entry = sceneState.privateWorldMiniatureEntries.get(key);
+  if (!entry) {
+    return;
+  }
+  if (Array.isArray(entry.clickablePayloads) && entry.clickablePayloads.length > 0) {
+    const clickableSet = new Set(entry.clickablePayloads);
+    sceneState.clickable = sceneState.clickable.filter((payload) => !clickableSet.has(payload));
+  }
+  unregisterBillboardsInGroup(entry.group);
+  entry.group.parent?.remove(entry.group);
+  disposeObjectTree(entry.group);
+  sceneState.privateWorldMiniatureEntries.delete(key);
+  sceneState.animatedPrivateWorldMiniatures = sceneState.animatedPrivateWorldMiniatures.filter((candidate) => candidate !== entry);
+}
+
+function upsertPrivateWorldMiniatureObject(entry, options = {}) {
+  const key = getPrivateWorldMiniatureEntryId(entry);
+  if (!key) {
+    return null;
+  }
+  const existing = sceneState.privateWorldMiniatureEntries.get(key) ?? null;
+  const nextStaticRank = getPrivateWorldMiniatureStaticRank(entry);
+  const nextSceneUpdatedAt = String(entry.scene_updated_at ?? "");
+  const shouldRefreshStatic =
+    !existing
+    || !existing.sceneUpdatedAt
+    || !nextSceneUpdatedAt
+    || nextSceneUpdatedAt !== existing.sceneUpdatedAt
+    || nextStaticRank > Number(existing.staticLodRank ?? 0);
+  if (shouldRefreshStatic) {
+    if (existing) {
+      removePrivateWorldMiniatureObject(key);
+    }
+    const created = buildPrivateWorldMiniatureObject(entry);
+    sceneState.privateWorldMiniatures.add(created.group);
+    sceneState.privateWorldMiniatureEntries.set(key, created);
+    return created;
+  }
+  existing.worldId = String(entry.world_id ?? existing.worldId ?? "");
+  existing.creatorUsername = String(entry.creator_username ?? existing.creatorUsername ?? "").trim().toLowerCase();
+  existing.serverLodBand = entry.lod_band || existing.serverLodBand || "near";
+  existing.sceneUpdatedAt = nextSceneUpdatedAt || existing.sceneUpdatedAt;
+  existing.staticLodRank = nextStaticRank;
+  existing.interactionData = createPrivateWorldMiniatureInteractionData(entry);
+  existing.group.position.set(
+    Number(entry.anchor_position_x ?? 0) || 0,
+    Number(entry.anchor_position_y ?? 0) || 0,
+    Number(entry.anchor_position_z ?? 0) || 0,
+  );
+  if (Array.isArray(existing.clickablePayloads)) {
+    for (const payload of existing.clickablePayloads) {
+      payload.data = existing.interactionData;
+      if (options.reregister === true && !sceneState.clickable.includes(payload)) {
+        sceneState.clickable.push(payload);
+      }
+    }
+  }
+  if (options.reregister === true) {
+    for (const billboard of existing.billboardMeshes ?? []) {
+      registerBillboard(billboard);
+    }
+  }
+  syncPrivateMiniaturePlayerDots(existing, entry.visible_players ?? []);
+  return existing;
+}
+
+function syncPrivateWorldMiniatures(entries = [], options = {}) {
+  const ids = new Set();
+  for (const entry of entries) {
+    const key = getPrivateWorldMiniatureEntryId(entry);
+    if (!key) {
+      continue;
+    }
+    ids.add(key);
+    upsertPrivateWorldMiniatureObject(entry, options);
+  }
+  if (options.pruneMissing !== true) {
+    return;
+  }
+  for (const key of [...sceneState.privateWorldMiniatureEntries.keys()]) {
+    if (!ids.has(key)) {
+      removePrivateWorldMiniatureObject(key);
+    }
+  }
+}
+
+function updatePrivateWorldMiniatures(deltaSeconds, elapsedSeconds) {
   for (const entry of sceneState.animatedPrivateWorldMiniatures) {
     const distance = sceneState.camera.position.distanceTo(entry.group.position);
     const isNear = distance <= entry.nearDistance;
@@ -7392,6 +7537,11 @@ function updatePrivateWorldMiniatures(elapsedSeconds) {
     const pulse = 1 + Math.sin(elapsedSeconds * 0.8 + entry.phase) * 0.018;
     entry.dome.scale.y = entry.baseDomeScaleY * pulse;
     entry.label.scale.setScalar(isFocused ? 1.04 : 1);
+    const dotLerpAlpha = 1 - Math.exp(-Math.max(deltaSeconds, 1 / 240) * 24);
+    for (const dotEntry of entry.playerDotEntries.values()) {
+      dotEntry.currentPosition.lerp(dotEntry.targetPosition, dotLerpAlpha);
+      dotEntry.group.position.copy(dotEntry.currentPosition);
+    }
   }
 }
 
@@ -9915,7 +10065,6 @@ function rebuildScene(streamPayload) {
   sceneState.animatedTags = [];
   sceneState.animatedPresence = [];
   sceneState.animatedChatBubbleGhosts = [];
-  sceneState.animatedPrivateWorldMiniatures = [];
   sceneState.clickable = [];
   sceneState.presenceEntries = new Map();
 
@@ -9924,7 +10073,6 @@ function rebuildScene(streamPayload) {
   clearGroup(sceneState.tags);
   clearGroup(sceneState.posts);
   clearGroup(sceneState.presence);
-  clearGroup(sceneState.privateWorldMiniatures);
   unregisterBillboardsInGroup(sceneState.chatBubbleGhosts);
   clearGroup(sceneState.chatBubbleGhosts);
 
@@ -9942,10 +10090,10 @@ function rebuildScene(streamPayload) {
     const presenceEntry = buildPresenceObject(presence);
     sceneState.presence.add(presenceEntry.group);
   }
-  for (const miniature of streamPayload.privateWorldMiniatures ?? []) {
-    const miniatureEntry = buildPrivateWorldMiniatureObject(miniature);
-    sceneState.privateWorldMiniatures.add(miniatureEntry.group);
-  }
+  syncPrivateWorldMiniatures(streamPayload.privateWorldMiniatures ?? [], {
+    pruneMissing: true,
+    reregister: true,
+  });
   rebuildConnections(streamPayload.pillars, streamPayload.tags, streamPayload.postInstances);
   sceneState.visitorSystem?.syncAmbient(streamPayload.tags);
   syncExpandedTagState();
@@ -10690,6 +10838,90 @@ async function loadStreamForPosition(position, force = false) {
     showToast(error.message);
   } finally {
     state.streamLoading = false;
+  }
+}
+
+async function loadPrivateWorldMiniaturesLive() {
+  if (!state.meta || !state.activeCellWindow || state.privateWorldMiniaturesLoading) {
+    return;
+  }
+  const requestWindow = state.activeCellWindow;
+  state.privateWorldMiniaturesLoading = true;
+  try {
+    const payload = await fetchJson(WORLD_API.privateWorldMiniatures, {
+      cell_x_min: requestWindow.cell_x_min,
+      cell_x_max: requestWindow.cell_x_max,
+      cell_z_min: requestWindow.cell_z_min,
+      cell_z_max: requestWindow.cell_z_max,
+      viewerSessionId: state.viewerSessionId,
+    }, {
+      timeoutMs: 4000,
+    });
+    if (!state.activeCellWindow || state.activeCellWindow.key !== requestWindow.key) {
+      return;
+    }
+    const liveMiniatures = Array.isArray(payload.miniatures) ? payload.miniatures : [];
+    let requiresFullRefresh = false;
+    for (const miniature of liveMiniatures) {
+      const key = getPrivateWorldMiniatureEntryId(miniature);
+      const existing = state.worldCache.privateWorldMiniatures.get(key) ?? null;
+      if (!existing) {
+        requiresFullRefresh = true;
+        break;
+      }
+      const nextSceneUpdatedAt = String(miniature.scene_updated_at ?? "");
+      const existingSceneUpdatedAt = String(existing.scene_updated_at ?? "");
+      if (
+        !existingSceneUpdatedAt
+        || !nextSceneUpdatedAt
+        || nextSceneUpdatedAt !== existingSceneUpdatedAt
+        || getPrivateWorldMiniatureStaticRank(miniature) > getPrivateWorldMiniatureStaticRank(existing)
+      ) {
+        requiresFullRefresh = true;
+        break;
+      }
+    }
+    if (requiresFullRefresh) {
+      await loadStream(true);
+      return;
+    }
+    const liveKeys = new Set();
+    for (const miniature of liveMiniatures) {
+      const key = getPrivateWorldMiniatureEntryId(miniature);
+      if (!key) {
+        continue;
+      }
+      liveKeys.add(key);
+      const existing = state.worldCache.privateWorldMiniatures.get(key);
+      if (!existing) {
+        continue;
+      }
+      state.worldCache.privateWorldMiniatures.set(key, {
+        ...existing,
+        scene_updated_at: miniature.scene_updated_at ?? existing.scene_updated_at ?? null,
+        lod_band: miniature.lod_band ?? existing.lod_band ?? "far",
+        viewer_count: Number(miniature.viewer_count ?? existing.viewer_count ?? 0) || 0,
+        status: miniature.status ?? existing.status ?? "active",
+        visible_players: Array.isArray(miniature.visible_players) ? miniature.visible_players : [],
+      });
+    }
+    for (const [key, existing] of state.worldCache.privateWorldMiniatures.entries()) {
+      if (
+        isCellWithinWindow(existing.anchor_cell_x, existing.anchor_cell_z, requestWindow)
+        && !liveKeys.has(key)
+      ) {
+        state.worldCache.privateWorldMiniatures.delete(key);
+      }
+    }
+    state.stream = getCachedWorldPayload(getLivePresenceRows());
+    syncPrivateWorldMiniatures(state.stream.privateWorldMiniatures ?? [], {
+      pruneMissing: true,
+      reregister: false,
+    });
+  } catch (error) {
+    console.warn("Could not refresh private world miniatures", error);
+  } finally {
+    state.privateWorldMiniaturesLoading = false;
   }
 }
 
@@ -13518,7 +13750,7 @@ function animate() {
   updateMovement(deltaSeconds);
   updateSnow(deltaSeconds, elapsedSeconds);
   updateAnimatedObjects(deltaSeconds, elapsedSeconds);
-  updatePrivateWorldMiniatures(elapsedSeconds);
+  updatePrivateWorldMiniatures(deltaSeconds, elapsedSeconds);
   updateBrowserFocusTracking(deltaSeconds);
   renderBrowserFocusControls();
   updateFocusVeil();
@@ -13572,6 +13804,12 @@ async function bootstrapWorld() {
   window.setInterval(() => {
     loadStream().catch((error) => showToast(error.message));
   }, 5000);
+
+  window.setInterval(() => {
+    loadPrivateWorldMiniaturesLive().catch(() => {
+      // Errors are logged inside the live miniature refresher to avoid toast spam.
+    });
+  }, Math.round(1000 / 24));
 
   animate();
   setLoading(false);

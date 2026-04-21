@@ -233,6 +233,17 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     jsonOk(res, payload);
   }));
 
+  app.get("/api/public/world/current/private-world-miniatures", asyncRoute(async (req, res) => {
+    const payload = await store.streamCurrentWorldPrivateMiniatures({
+      cell_x_min: req.query.cell_x_min,
+      cell_x_max: req.query.cell_x_max,
+      cell_z_min: req.query.cell_z_min,
+      cell_z_max: req.query.cell_z_max,
+      viewerSessionId: req.query.viewerSessionId,
+    });
+    jsonOk(res, payload);
+  }));
+
   app.get("/api/public/world/search", asyncRoute(async (req, res) => {
     const payload = await store.searchWorld({
       q: req.query.q,
