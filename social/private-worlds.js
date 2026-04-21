@@ -10058,30 +10058,18 @@ function getPossessedOverworldCameraCenter(player = getPossessedRuntimePlayer() 
   return state.overworldCameraCenter;
 }
 
-function getPossessedOverworldPanOrientation(player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? {}) {
-  return getPlayerFixedTopDownOrientation(
-    player?.fixed_top_down_direction ?? "north",
-    player?.fixed_top_down_angle ?? 90,
-  );
-}
-
-function resolvePossessedOverworldPanTranslation(deltaRight = 0, deltaUp = 0, player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? {}) {
-  const orientation = getPossessedOverworldPanOrientation(player);
-  const determinant =
-    orientation.cameraRightVector.x * orientation.cameraUpVector.z
-    - orientation.cameraRightVector.z * orientation.cameraUpVector.x;
-  if (Math.abs(determinant) <= 0.000001) {
-    return orientation.rightVector.clone().multiplyScalar(deltaRight)
-      .add(orientation.planarForwardVector.clone().multiplyScalar(deltaUp));
+function getPossessedOverworldGroundPointAtClient(clientX = 0, clientY = 0, planeY = 0, preview = state.preview) {
+  const metrics = getPreviewPointerMetrics({ clientX, clientY });
+  if (!metrics || metrics.preview !== preview || !preview?.camera) {
+    return null;
   }
-  const worldX =
-    (deltaRight * orientation.cameraUpVector.z - deltaUp * orientation.cameraRightVector.z) / determinant;
-  const worldZ =
-    (orientation.cameraRightVector.x * deltaUp - orientation.cameraUpVector.x * deltaRight) / determinant;
-  return new THREE.Vector3(worldX, 0, worldZ);
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
+  preview.raycaster.setFromCamera(metrics.pointer, preview.camera);
+  const point = new THREE.Vector3();
+  return preview.raycaster.ray.intersectPlane(plane, point) ? point : null;
 }
 
-function panPossessedOverworldByScreenDelta(deltaX = 0, deltaY = 0, preview = state.preview) {
+function panPossessedOverworldByScreenDelta(previousClientX = 0, previousClientY = 0, clientX = 0, clientY = 0, preview = state.preview) {
   if (!preview?.camera?.isOrthographicCamera) {
     return false;
   }
@@ -10091,28 +10079,20 @@ function panPossessedOverworldByScreenDelta(deltaX = 0, deltaY = 0, preview = st
   if (!player || !prediction || !cameraCenter || !isDraggableOverworldCameraMode(prediction.cameraMode)) {
     return false;
   }
-  const viewport = getPreviewViewport(preview);
-  const viewportWidth = Math.max(1, Number(viewport?.width) || Number(preview.viewportWidth) || 1);
-  const viewportHeight = Math.max(1, Number(viewport?.height) || Number(preview.viewportHeight) || 1);
-  const windowWidth = Math.abs(Number(preview.camera.right ?? 0) - Number(preview.camera.left ?? 0));
-  const windowHeight = Math.abs(Number(preview.camera.top ?? 0) - Number(preview.camera.bottom ?? 0));
-  if (windowWidth <= 0.000001 || windowHeight <= 0.000001) {
+  const planeY = Number(player?.position?.y ?? cameraCenter.y) || cameraCenter.y || 0;
+  const previousPoint = getPossessedOverworldGroundPointAtClient(previousClientX, previousClientY, planeY, preview);
+  const currentPoint = getPossessedOverworldGroundPointAtClient(clientX, clientY, planeY, preview);
+  if (!previousPoint || !currentPoint) {
     return false;
   }
-  const worldUnitsPerPixelX = windowWidth / viewportWidth;
-  const worldUnitsPerPixelY = windowHeight / viewportHeight;
-  const translation = resolvePossessedOverworldPanTranslation(
-    deltaX * worldUnitsPerPixelX,
-    -deltaY * worldUnitsPerPixelY,
-    prediction,
-  );
+  const translation = previousPoint.clone().sub(currentPoint);
   if (translation.lengthSq() <= 0.000001) {
     return false;
   }
   const bounds = getPrivateWorldBounds(state.selectedWorld);
-  cameraCenter.x = clampNumber(cameraCenter.x - translation.x, cameraCenter.x, bounds.minX, bounds.maxX);
-  cameraCenter.z = clampNumber(cameraCenter.z - translation.z, cameraCenter.z, bounds.minZ, bounds.maxZ);
-  cameraCenter.y = Number(player?.position?.y ?? cameraCenter.y) || cameraCenter.y || 0;
+  cameraCenter.x = clampNumber(cameraCenter.x + translation.x, cameraCenter.x, bounds.minX, bounds.maxX);
+  cameraCenter.z = clampNumber(cameraCenter.z + translation.z, cameraCenter.z, bounds.minZ, bounds.maxZ);
+  cameraCenter.y = planeY;
   updatePossessedCamera(preview, 0);
   return true;
 }
@@ -18534,8 +18514,10 @@ function ensurePreview() {
     if (!privateInputState.pointerDown) {
       return;
     }
-    const deltaX = event.clientX - privateInputState.lastPointerX;
-    const deltaY = event.clientY - privateInputState.lastPointerY;
+    const previousPointerX = privateInputState.lastPointerX;
+    const previousPointerY = privateInputState.lastPointerY;
+    const deltaX = event.clientX - previousPointerX;
+    const deltaY = event.clientY - previousPointerY;
     privateInputState.dragDistance += Math.abs(deltaX) + Math.abs(deltaY);
     privateInputState.pointerMoved = privateInputState.dragDistance > 4;
     privateInputState.lastPointerX = event.clientX;
@@ -18544,7 +18526,13 @@ function ensurePreview() {
       && getLocalParticipant()?.join_role === "player"
       && isDraggableOverworldCameraMode(getActivePossessedCameraMode());
     if (draggableOverworldCamera) {
-      panPossessedOverworldByScreenDelta(deltaX, deltaY, state.preview);
+      panPossessedOverworldByScreenDelta(
+        previousPointerX,
+        previousPointerY,
+        event.clientX,
+        event.clientY,
+        state.preview,
+      );
       return;
     }
     if (isFixedTopDownCameraMode(getActivePossessedCameraMode())) {
