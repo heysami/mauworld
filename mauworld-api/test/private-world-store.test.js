@@ -340,16 +340,28 @@ test("public-world miniature payload keeps mid-range player dots and moving plat
                   position: { x: 1, y: 1, z: 0 },
                 },
               ],
-              moving_platforms: [
+            },
+            runtime: {
+              rules: [
                 {
-                  id: "primitive_platform",
-                  shape: "box",
-                  position: { x: 0, y: 0.5, z: 0 },
-                  rotation: { x: 0, y: 0, z: 0 },
-                  scale: { x: 4, y: 1, z: 4 },
-                  material: { color: "#00aaff" },
+                  id: "rule_move_platform",
+                  action: "move_platform",
+                  target_id: "primitive_platform",
                 },
               ],
+              resolved_scene_doc: {
+                primitives: [
+                  {
+                    id: "primitive_platform",
+                    shape: "box",
+                    position: { x: 0, y: 0.5, z: 0 },
+                    rotation: { x: 0, y: 0, z: 0 },
+                    scale: { x: 4, y: 1, z: 4 },
+                    physics: { carry_riders: true },
+                    material: { color: "#00aaff" },
+                  },
+                ],
+              },
             },
             stats: {},
           },
@@ -391,6 +403,7 @@ test("public-world miniature payload keeps mid-range player dots and moving plat
             position: { x: 5, y: 1, z: -1 },
             rotation: { x: 0, y: 0.4, z: 0 },
             scale: { x: 4, y: 1, z: 4 },
+            carry_riders: true,
             material: { color: "#55ddff" },
             visible: true,
           },

@@ -7207,23 +7207,25 @@ function buildPrivateWorldMiniatureObject(entry) {
     if (!player.position) {
       continue;
     }
+    const playerMarkerRadius = clamp(longestSide * 0.028, 0.22, 0.34);
     const marker = new THREE.Group();
     const outline = new THREE.Mesh(
-      new THREE.SphereGeometry(0.18, 12, 12),
-      new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.95 }),
+      new THREE.SphereGeometry(playerMarkerRadius, 12, 12),
+      new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.98 }),
     );
     const core = new THREE.Mesh(
-      new THREE.SphereGeometry(0.11, 12, 12),
+      new THREE.SphereGeometry(playerMarkerRadius * 0.62, 12, 12),
       new THREE.MeshBasicMaterial({ color: "#ff4f6d" }),
     );
     const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(0.26, 12, 12),
-      new THREE.MeshBasicMaterial({ color: "#ff4f6d", transparent: true, opacity: 0.18 }),
+      new THREE.SphereGeometry(playerMarkerRadius * 1.5, 12, 12),
+      new THREE.MeshBasicMaterial({ color: "#ff4f6d", transparent: true, opacity: 0.22 }),
     );
     marker.add(glow);
     marker.add(outline);
     marker.add(core);
     marker.position.copy(mapPoint(player.position));
+    marker.position.y += Math.max(playerMarkerRadius * 0.35, scale * 0.14);
     playerDots.add(marker);
   }
 

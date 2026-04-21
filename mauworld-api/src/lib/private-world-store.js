@@ -53,6 +53,28 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value ?? null));
 }
 
+function buildMiniatureMovingPlatformFallback(scene = {}) {
+  const compiledRuntime = scene?.compiled_doc?.runtime ?? {};
+  const resolvedSceneDoc = compiledRuntime.resolved_scene_doc ?? scene?.scene_doc ?? {};
+  const rules = compiledRuntime.rules ?? resolvedSceneDoc.rules ?? scene?.scene_doc?.rules ?? [];
+  const primitives = resolvedSceneDoc.primitives ?? scene?.scene_doc?.primitives ?? [];
+  const movingPlatformTargetIds = new Set(
+    rules
+      .filter((entry) => entry?.action === "move_platform" && entry?.target_id)
+      .map((entry) => entry.target_id),
+  );
+  return primitives
+    .filter((entry) => movingPlatformTargetIds.has(entry.id) || entry.physics?.carry_riders === true)
+    .map((entry) => ({
+      id: entry.id,
+      shape: entry.shape,
+      position: cloneJson(entry.position),
+      rotation: cloneJson(entry.rotation),
+      scale: cloneJson(entry.scale),
+      material: cloneJson(entry.material),
+    }));
+}
+
 function clampLimit(value, fallback = 20, max = 100) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -3017,6 +3039,9 @@ export function installPrivateWorldStore(MauworldStore) {
         : null;
       const lodBand = resolveMiniatureLodBand(row, viewerPresence);
       const compiledMiniature = cloneJson(scene.compiled_doc?.miniature ?? {});
+      const authoredMovingPlatforms = (compiledMiniature.moving_platforms?.length ?? 0) > 0
+        ? compiledMiniature.moving_platforms
+        : buildMiniatureMovingPlatformFallback(scene);
       const runtimeDynamicObjectsById = new Map(
         (runtimeSnapshot?.dynamic_objects ?? []).map((entry) => [entry.id, entry]),
       );
@@ -3040,25 +3065,36 @@ export function installPrivateWorldStore(MauworldStore) {
           };
         })
         .filter((entry) => entry.position);
-      const liveMovingPlatforms = (compiledMiniature.moving_platforms ?? [])
-        .map((entry) => {
-          const runtimeObject = runtimeDynamicObjectsById.get(entry.id) ?? null;
+      const authoredMovingPlatformById = new Map(
+        authoredMovingPlatforms.map((entry) => [entry.id, entry]),
+      );
+      const movingPlatformIds = new Set([
+        ...authoredMovingPlatforms.map((entry) => entry.id),
+        ...(runtimeSnapshot?.dynamic_objects ?? [])
+          .filter((entry) => entry.carry_riders === true)
+          .map((entry) => entry.id),
+      ]);
+      const liveMovingPlatforms = [...movingPlatformIds]
+        .map((platformId) => {
+          const authoredEntry = authoredMovingPlatformById.get(platformId) ?? null;
+          const runtimeObject = runtimeDynamicObjectsById.get(platformId) ?? null;
           if (runtimeObject?.visible === false) {
             return null;
           }
           return {
-            ...entry,
-            shape: runtimeObject?.shape ?? entry.shape ?? "box",
-            position: cloneJson(runtimeObject?.position ?? entry.position),
-            rotation: cloneJson(runtimeObject?.rotation ?? entry.rotation ?? { x: 0, y: 0, z: 0 }),
-            scale: cloneJson(runtimeObject?.scale ?? entry.scale),
+            id: platformId,
+            shape: runtimeObject?.shape ?? authoredEntry?.shape ?? "box",
+            position: cloneJson(runtimeObject?.position ?? authoredEntry?.position),
+            rotation: cloneJson(runtimeObject?.rotation ?? authoredEntry?.rotation ?? { x: 0, y: 0, z: 0 }),
+            scale: cloneJson(runtimeObject?.scale ?? authoredEntry?.scale ?? { x: 1, y: 1, z: 1 }),
             material: cloneJson(
               runtimeObject?.material_override
               ?? runtimeObject?.material
-              ?? entry.material,
+              ?? authoredEntry?.material,
             ),
           };
         })
+        .filter((entry) => entry?.position && entry?.scale)
         .filter(Boolean);
       const miniaturePayload = lodBand === "near"
         ? {
