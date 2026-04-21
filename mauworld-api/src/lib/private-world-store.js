@@ -3165,7 +3165,7 @@ export function installPrivateWorldStore(MauworldStore) {
           miniature: miniaturePayload,
           stats: cloneJson(scene.compiled_doc?.stats ?? {}),
         },
-        visible_players: lodBand === "far" ? [] : liveVisiblePlayers,
+        visible_players: lodBand === "near" ? liveVisiblePlayers : [],
       });
     }
     return miniatures;

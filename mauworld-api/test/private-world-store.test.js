@@ -281,7 +281,7 @@ test("private world detail prefers a synced runtime snapshot over a stale cached
   assert.equal(detail.world.active_instance.runtime.players[0].id, "fresh_player");
 });
 
-test("public-world miniature payload keeps mid-range player dots and moving platforms", async () => {
+test("public-world miniature payload hides mid-range player dots and keeps moving platforms", async () => {
   const freshIso = new Date().toISOString();
   const futureIso = new Date(Date.now() + 60_000).toISOString();
   const store = new FakeStore();
@@ -423,13 +423,7 @@ test("public-world miniature payload keeps mid-range player dots and moving plat
 
   assert.equal(miniatures.length, 1);
   assert.equal(miniatures[0].lod_band, "mid");
-  assert.deepEqual(miniatures[0].visible_players, [
-    {
-      player_entity_id: "player_one",
-      username: "maker",
-      position: { x: 3, y: 1.5, z: -2 },
-    },
-  ]);
+  assert.deepEqual(miniatures[0].visible_players, []);
   assert.equal(miniatures[0].compiled.miniature.moving_platforms.length, 1);
   assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].id, "primitive_platform");
   assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].shape, "box");

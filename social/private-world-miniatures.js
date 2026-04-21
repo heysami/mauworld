@@ -31,7 +31,7 @@ export function resolvePrivateWorldMiniatureRenderState({ serverLodBand = "far",
     showLabel: false,
     showSilhouette: effectiveBand === "mid",
     showDetail: effectiveBand === "near",
-    showPlayerDots: effectiveBand === "near" || effectiveBand === "mid",
+    showPlayerDots: effectiveBand === "near",
     domeOpacity: effectiveBand === "near" ? 0.12 : effectiveBand === "mid" ? 0.18 : 0.24,
   };
 }

@@ -42,7 +42,7 @@ import { renderScreenHtmlTexture } from "./screen-texture.js";
 import {
   isLivePrivateWorldInstanceStatus,
   resolvePrivateWorldMiniatureRenderState,
-} from "./private-world-miniatures.js?v=20260421mini1";
+} from "./private-world-miniatures.js?v=20260422mini8";
 import {
   createWorldGamesApi,
   createWorldGameLibrary,
