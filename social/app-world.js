@@ -7211,15 +7211,15 @@ function buildPrivateWorldMiniatureObject(entry) {
     const marker = new THREE.Group();
     const outline = new THREE.Mesh(
       new THREE.SphereGeometry(playerMarkerRadius, 12, 12),
-      new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.98 }),
+      new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.98, toneMapped: false }),
     );
     const core = new THREE.Mesh(
-      new THREE.SphereGeometry(playerMarkerRadius * 0.62, 12, 12),
-      new THREE.MeshBasicMaterial({ color: "#ff4f6d" }),
+      new THREE.SphereGeometry(playerMarkerRadius * 0.78, 12, 12),
+      new THREE.MeshBasicMaterial({ color: "#ff1414", toneMapped: false }),
     );
     const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(playerMarkerRadius * 1.5, 12, 12),
-      new THREE.MeshBasicMaterial({ color: "#ff4f6d", transparent: true, opacity: 0.22 }),
+      new THREE.SphereGeometry(playerMarkerRadius * 1.24, 12, 12),
+      new THREE.MeshBasicMaterial({ color: "#ff2a2a", transparent: true, opacity: 0.1, toneMapped: false }),
     );
     marker.add(glow);
     marker.add(outline);
