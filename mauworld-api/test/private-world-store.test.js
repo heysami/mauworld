@@ -55,6 +55,11 @@ function createQuery(rows = []) {
       result = result.filter((entry) => entry?.[column] <= value);
       return this;
     },
+    limit(count) {
+      const normalized = Math.max(0, Math.floor(Number(count) || 0));
+      result = normalized > 0 ? result.slice(0, normalized) : [];
+      return this;
+    },
     order(column, { ascending = true } = {}) {
       result = [...result].sort((left, right) => {
         if (left?.[column] === right?.[column]) {

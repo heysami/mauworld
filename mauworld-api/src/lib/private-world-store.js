@@ -20,6 +20,7 @@ import {
 
 const PRIVATE_WORLD_PARTICIPANT_STALE_MS = 30_000;
 const PUBLIC_PRIVATE_WORLD_VISIBLE_STATUSES = new Set(["active", "started"]);
+const MAX_PUBLIC_WORLD_MINIATURES = 24;
 
 function nowIso() {
   return new Date().toISOString();
@@ -2994,7 +2995,8 @@ export function installPrivateWorldStore(MauworldStore) {
         .gte("anchor_cell_x", input.cellXMin)
         .lte("anchor_cell_x", input.cellXMax)
         .gte("anchor_cell_z", input.cellZMin)
-        .lte("anchor_cell_z", input.cellZMax),
+        .lte("anchor_cell_z", input.cellZMax)
+        .limit(MAX_PUBLIC_WORLD_MINIATURES),
         "Could not load private world miniatures",
     );
     if (rows.length === 0) {
