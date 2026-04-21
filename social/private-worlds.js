@@ -42,9 +42,10 @@ import {
 } from "./private-world-browser.js";
 import {
   getRotatedCollisionHalfExtents,
+  sampleCollisionSupportSurface,
   resolvePlayerGroundSupport,
   resolvePlayerMovementAgainstBlockers,
-} from "./private-player-collision.mjs?v=20260421b";
+} from "./private-player-collision.mjs?v=20260421c";
 import { createBubbleTexture, updateMascotMotion } from "./world-visitors.js";
 import {
   createWorldGamesApi,
@@ -56,7 +57,7 @@ import {
   computeLocalInteractionVelocity,
   resolveContinuousMotionStateAgainstBlockers,
   stepContinuousMotionState,
-} from "./private-runtime-motion.mjs?v=20260420b";
+} from "./private-runtime-motion.mjs?v=20260421c";
 import { normalizePrivateInputKey } from "./private-input.mjs";
 
 const { mauworldApiUrl } = window.MauworldSocial;
@@ -10194,6 +10195,17 @@ function getPrivateCollisionSupportEnvelope(position = {}, size = {}, rotation =
   };
 }
 
+function samplePrivateCollisionSupportSurface(position = {}, size = {}, rotation = {}, samplePosition = {}, padding = {}) {
+  return sampleCollisionSupportSurface({
+    position,
+    size,
+    rotation,
+    samplePosition,
+    paddingX: Math.max(0, Number(padding?.x ?? 0) || 0),
+    paddingZ: Math.max(0, Number(padding?.z ?? 0) || 0),
+  });
+}
+
 function getPrivatePlatformCarryVerticalTolerance(playerHalf = {}, platformHalf = null) {
   const playerHalfY = Math.max(0, Number(playerHalf?.y ?? 0) || 0);
   const platformHalfY = Math.max(0, Number(platformHalf?.y ?? 0) || 0);
@@ -10446,8 +10458,21 @@ function getLocalCarryPlatformSupport(playerLike = null) {
     const envelope = getPrivateCollisionSupportEnvelope(motionSample.position, size, entry.rotation);
     const position = envelope.position;
     const half = envelope.half;
+    const supportSample = samplePrivateCollisionSupportSurface(
+      motionSample.position,
+      size,
+      entry.rotation,
+      playerPosition,
+      {
+        x: playerHalf.x + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER,
+        z: playerHalf.z + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER,
+      },
+    );
+    if (!supportSample) {
+      continue;
+    }
     const velocity = motionSample.velocity;
-    const platformTop = envelope.surfaceY;
+    const platformTop = supportSample.surfaceY;
     const verticalGap = playerBottom - platformTop;
     const verticalTolerance = playerLike?.onGround === true
       ? getPrivatePlatformCarryRecoveryTolerance(playerHalf, half)
@@ -10540,9 +10565,22 @@ function getRememberedCarryPlatformSupport(prediction = null) {
   if (Math.abs(relativeX) > limitX || Math.abs(relativeZ) > limitZ) {
     return null;
   }
+  const fallbackSupportSample = samplePrivateCollisionSupportSurface(
+    platformState.position,
+    platformState.size,
+    platformState.entry?.rotation,
+    {
+      x: platformState.position.x + relativeX,
+      z: platformState.position.z + relativeZ,
+    },
+    {
+      x: playerHalf.x + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER,
+      z: playerHalf.z + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER,
+    },
+  );
   const supportedPlayerY = Number.isFinite(Number(carryOffset?.y))
     ? (platformState.position.y + Number(carryOffset.y))
-    : (platformState.surfaceY + playerHalf.y);
+    : ((Number(fallbackSupportSample?.surfaceY ?? platformState.surfaceY) || platformState.surfaceY) + playerHalf.y);
   return {
     entry: platformState.entry,
     entryId: platformState.entryId,
@@ -10735,7 +10773,14 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
   const considerSurface = (position = {}, size = {}, rotation = {}, metadata = null) => {
     const envelope = getPrivateCollisionSupportEnvelope(position, size, rotation);
     const half = envelope.half;
-    const topY = envelope.surfaceY;
+    const supportSample = samplePrivateCollisionSupportSurface(position, size, rotation, playerPosition, {
+      x: playerHalf.x,
+      z: playerHalf.z,
+    });
+    if (!supportSample) {
+      return;
+    }
+    const topY = supportSample.surfaceY;
     const verticalTolerance = overlapRecovery
       ? getPrivatePlatformCarryRecoveryTolerance(playerHalf, half)
       : getPrivatePlatformCarryVerticalTolerance(playerHalf, half);
@@ -15241,6 +15286,113 @@ function installPrivateDebugTools() {
       } : null,
     };
   };
+  const summarizePrediction = (prediction = null) => prediction ? {
+    playerId: String(prediction.playerId ?? "").trim(),
+    position: {
+      x: Number(prediction.position?.x ?? 0) || 0,
+      y: Number(prediction.position?.y ?? 0) || 0,
+      z: Number(prediction.position?.z ?? 0) || 0,
+    },
+    velocity: {
+      x: Number(prediction.velocity?.x ?? 0) || 0,
+      y: Number(prediction.velocity?.y ?? 0) || 0,
+      z: Number(prediction.velocity?.z ?? 0) || 0,
+    },
+    onGround: prediction.onGround === true,
+    groundY: Number(prediction.groundY ?? Number.NaN),
+    baseGroundY: Number(prediction.baseGroundY ?? Number.NaN),
+    movementEnabled: prediction.movementEnabled !== false,
+    jumpEnabled: prediction.jumpEnabled === true,
+    localCarryPlatformId: String(prediction.localCarryPlatformId ?? "").trim(),
+    localCarryPlatformPosition: prediction.localCarryPlatformPosition ? {
+      x: Number(prediction.localCarryPlatformPosition.x ?? 0) || 0,
+      y: Number(prediction.localCarryPlatformPosition.y ?? 0) || 0,
+      z: Number(prediction.localCarryPlatformPosition.z ?? 0) || 0,
+    } : null,
+    localCarryPlatformOffset: prediction.localCarryPlatformOffset ? {
+      x: Number(prediction.localCarryPlatformOffset.x ?? 0) || 0,
+      y: Number(prediction.localCarryPlatformOffset.y ?? 0) || 0,
+      z: Number(prediction.localCarryPlatformOffset.z ?? 0) || 0,
+    } : null,
+  } : null;
+  const syncPredictionMesh = (prediction = null) => {
+    if (!prediction?.playerId) {
+      return;
+    }
+    const mesh = state.preview?.entityMeshes?.get(prediction.playerId);
+    if (!mesh) {
+      return;
+    }
+    mesh.position.set(
+      Number(prediction.position?.x ?? mesh.position.x) || 0,
+      Number(prediction.position?.y ?? mesh.position.y) || 0,
+      Number(prediction.position?.z ?? mesh.position.z) || 0,
+    );
+    mesh.rotation.set(
+      Number(prediction.rotation?.x ?? mesh.rotation.x) || 0,
+      Number(prediction.rotation?.y ?? mesh.rotation.y) || 0,
+      Number(prediction.rotation?.z ?? mesh.rotation.z) || 0,
+    );
+    mesh.scale.setScalar(Math.max(0.25, Number(prediction.scale ?? mesh.scale.x) || mesh.scale.x || 1));
+    const clampedY = clampRenderablePlayerToSupportSurface(mesh, prediction);
+    if (Number.isFinite(clampedY)) {
+      prediction.position.y = clampedY;
+      if (Number.isFinite(Number(prediction.groundY))) {
+        prediction.groundY = Math.max(Number(prediction.groundY), clampedY);
+      } else {
+        prediction.groundY = clampedY;
+      }
+    }
+    syncPrivatePlayerJumpShadow(mesh, prediction);
+  };
+  const resolveDebugEntitySupportSource = (entityId = "") => {
+    const resolvedEntityId = String(entityId ?? "").trim();
+    if (!resolvedEntityId) {
+      return null;
+    }
+    const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+    const runtimeEntry = (runtime?.dynamic_objects ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedEntityId) ?? null;
+    if (runtimeEntry) {
+      const kind = runtimeEntry?.entity_kind === "model" ? "model" : "primitive";
+      const motionSample = getPrivateDynamicEntryMotionSample(runtimeEntry);
+      return {
+        position: motionSample.position,
+        size: getPrivateCollisionEntrySize(kind, runtimeEntry),
+        rotation: runtimeEntry.rotation ?? { x: 0, y: 0, z: 0 },
+      };
+    }
+    let sceneDoc = null;
+    try {
+      sceneDoc = getRenderableSceneDoc();
+    } catch (_error) {
+      sceneDoc = null;
+    }
+    const voxel = (sceneDoc?.voxels ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedEntityId) ?? null;
+    if (voxel) {
+      return {
+        position: voxel.position,
+        size: getPrivateCollisionEntrySize("voxel", voxel),
+        rotation: voxel.rotation ?? { x: 0, y: 0, z: 0 },
+      };
+    }
+    const primitive = (sceneDoc?.primitives ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedEntityId) ?? null;
+    if (primitive) {
+      return {
+        position: primitive.position,
+        size: getPrivateCollisionEntrySize("primitive", primitive),
+        rotation: primitive.rotation ?? { x: 0, y: 0, z: 0 },
+      };
+    }
+    const model = (sceneDoc?.models ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedEntityId) ?? null;
+    if (model) {
+      return {
+        position: model.position,
+        size: getPrivateCollisionEntrySize("model", model),
+        rotation: model.rotation ?? { x: 0, y: 0, z: 0 },
+      };
+    }
+    return null;
+  };
   window.__mwPrivateDebug = {
     inspectPlayerClick(clientX, clientY) {
       return inspectProjectedPlayerHit({ clientX, clientY });
@@ -15271,6 +15423,98 @@ function installPrivateDebugTools() {
     getEntityPose(entityId) {
       return getDebugEntityPose(entityId);
     },
+    getPossessedPrediction() {
+      return summarizePrediction(getLocalPossessedPlayerPrediction());
+    },
+    setPossessedPredictionState(nextState = {}) {
+      const prediction = ensurePossessedPlayerPrediction();
+      if (!prediction) {
+        return null;
+      }
+      if (nextState?.position) {
+        prediction.position.x = Number(nextState.position.x ?? prediction.position.x) || 0;
+        prediction.position.y = Number(nextState.position.y ?? prediction.position.y) || 0;
+        prediction.position.z = Number(nextState.position.z ?? prediction.position.z) || 0;
+      }
+      if (nextState?.velocity) {
+        prediction.velocity.x = Number(nextState.velocity.x ?? prediction.velocity.x) || 0;
+        prediction.velocity.y = Number(nextState.velocity.y ?? prediction.velocity.y) || 0;
+        prediction.velocity.z = Number(nextState.velocity.z ?? prediction.velocity.z) || 0;
+      }
+      if (Object.hasOwn(nextState ?? {}, "groundY")) {
+        const nextGroundY = Number(nextState?.groundY);
+        prediction.groundY = Number.isFinite(nextGroundY) ? nextGroundY : Number.NaN;
+      }
+      if (Object.hasOwn(nextState ?? {}, "baseGroundY")) {
+        const nextBaseGroundY = Number(nextState?.baseGroundY);
+        prediction.baseGroundY = Number.isFinite(nextBaseGroundY) ? nextBaseGroundY : Number.NaN;
+      }
+      if (Object.hasOwn(nextState ?? {}, "onGround")) {
+        prediction.onGround = nextState?.onGround === true;
+      }
+      if (Object.hasOwn(nextState ?? {}, "localCarryPlatformId")) {
+        prediction.localCarryPlatformId = String(nextState?.localCarryPlatformId ?? "").trim();
+      }
+      if (Object.hasOwn(nextState ?? {}, "localCarryPlatformPosition")) {
+        prediction.localCarryPlatformPosition = nextState?.localCarryPlatformPosition ? {
+          x: Number(nextState.localCarryPlatformPosition.x ?? 0) || 0,
+          y: Number(nextState.localCarryPlatformPosition.y ?? 0) || 0,
+          z: Number(nextState.localCarryPlatformPosition.z ?? 0) || 0,
+        } : null;
+      }
+      if (Object.hasOwn(nextState ?? {}, "localCarryPlatformOffset")) {
+        prediction.localCarryPlatformOffset = nextState?.localCarryPlatformOffset ? {
+          x: Number(nextState.localCarryPlatformOffset.x ?? 0) || 0,
+          y: Number(nextState.localCarryPlatformOffset.y ?? 0) || 0,
+          z: Number(nextState.localCarryPlatformOffset.z ?? 0) || 0,
+        } : null;
+      }
+      syncPredictionMesh(prediction);
+      return summarizePrediction(prediction);
+    },
+    stepPossessedPrediction(frames = 1, deltaSeconds = 1 / 60) {
+      const frameCount = Math.max(1, Math.min(600, Math.round(Number(frames) || 1)));
+      const dt = clampNumber(deltaSeconds, 1 / 30, 0, 0.05);
+      let result = null;
+      for (let index = 0; index < frameCount; index += 1) {
+        result = getPossessedPreviewPlayer(state.preview, dt) ?? stepPossessedPlayerPrediction(dt);
+      }
+      return summarizePrediction(result ? ensurePossessedPlayerPrediction() : getLocalPossessedPlayerPrediction());
+    },
+    sampleEntitySupport(entityId, samplePosition = null, padding = null) {
+      const source = resolveDebugEntitySupportSource(entityId);
+      if (!source) {
+        return null;
+      }
+      const sample = samplePrivateCollisionSupportSurface(
+        source.position,
+        source.size,
+        source.rotation,
+        samplePosition ?? source.position,
+        padding ?? {},
+      );
+      if (!sample) {
+        return null;
+      }
+      return {
+        surfaceY: Number(sample.surfaceY ?? Number.NaN),
+        topCenter: sample.topCenter ? {
+          x: Number(sample.topCenter.x ?? 0) || 0,
+          y: Number(sample.topCenter.y ?? 0) || 0,
+          z: Number(sample.topCenter.z ?? 0) || 0,
+        } : null,
+        localPoint: sample.localPoint ? {
+          x: Number(sample.localPoint.x ?? 0) || 0,
+          y: Number(sample.localPoint.y ?? 0) || 0,
+          z: Number(sample.localPoint.z ?? 0) || 0,
+        } : null,
+        normal: sample.normal ? {
+          x: Number(sample.normal.x ?? 0) || 0,
+          y: Number(sample.normal.y ?? 0) || 0,
+          z: Number(sample.normal.z ?? 0) || 0,
+        } : null,
+      };
+    },
     describePlayerPlatform(playerId, platformId) {
       const resolvedPlayerId = String(playerId ?? "").trim();
       const resolvedPlatformId = String(platformId ?? "").trim();
@@ -15293,10 +15537,16 @@ function installPrivateDebugTools() {
       const playerRenderPosition = prediction?.position ?? playerPose?.render?.position ?? playerPose?.runtime?.position ?? null;
       const platformRenderPosition = platformPose?.render?.position ?? platformPose?.runtime?.position ?? null;
       const playerBottom = playerRenderPosition ? Number(playerRenderPosition.y ?? 0) - playerHalf.y : Number.NaN;
-      const platformEnvelope = platformRenderPosition && platformSize
-        ? getPrivateCollisionSupportEnvelope(platformRenderPosition, platformSize, runtimePlatform?.rotation)
+      const platformSupport = platformRenderPosition && platformSize && playerRenderPosition
+        ? samplePrivateCollisionSupportSurface(
+          platformRenderPosition,
+          platformSize,
+          runtimePlatform?.rotation,
+          playerRenderPosition,
+          { x: playerHalf.x, z: playerHalf.z },
+        )
         : null;
-      const platformTop = Number(platformEnvelope?.surfaceY ?? Number.NaN);
+      const platformTop = Number(platformSupport?.surfaceY ?? Number.NaN);
       return {
         mode: state.mode,
         joined: state.joined === true,

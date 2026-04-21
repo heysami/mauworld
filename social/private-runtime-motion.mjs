@@ -1,4 +1,4 @@
-import { resolvePlayerMovementAgainstBlockers } from "./private-player-collision.mjs?v=20260420c";
+import { resolvePlayerMovementAgainstBlockers } from "./private-player-collision.mjs?v=20260421c";
 
 function finiteNumber(value, fallback = 0) {
   const numeric = Number(value);

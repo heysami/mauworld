@@ -34,6 +34,72 @@ function buildAbsoluteRotationMatrix(rotation = {}) {
   };
 }
 
+function rotatePointByEuler(point = {}, rotation = {}) {
+  let x = finite(point.x, 0);
+  let y = finite(point.y, 0);
+  let z = finite(point.z, 0);
+  const rx = finite(rotation.x, 0);
+  const ry = finite(rotation.y, 0);
+  const rz = finite(rotation.z, 0);
+
+  const cosX = Math.cos(rx);
+  const sinX = Math.sin(rx);
+  const cosY = Math.cos(ry);
+  const sinY = Math.sin(ry);
+  const cosZ = Math.cos(rz);
+  const sinZ = Math.sin(rz);
+
+  let nextY = y * cosX - z * sinX;
+  let nextZ = y * sinX + z * cosX;
+  y = nextY;
+  z = nextZ;
+
+  let nextX = x * cosY + z * sinY;
+  nextZ = -x * sinY + z * cosY;
+  x = nextX;
+  z = nextZ;
+
+  nextX = x * cosZ - y * sinZ;
+  nextY = x * sinZ + y * cosZ;
+  x = nextX;
+  y = nextY;
+
+  return { x, y, z };
+}
+
+function inverseRotatePointByEuler(point = {}, rotation = {}) {
+  let x = finite(point.x, 0);
+  let y = finite(point.y, 0);
+  let z = finite(point.z, 0);
+  const rx = finite(rotation.x, 0);
+  const ry = finite(rotation.y, 0);
+  const rz = finite(rotation.z, 0);
+
+  const cosX = Math.cos(rx);
+  const sinX = Math.sin(rx);
+  const cosY = Math.cos(ry);
+  const sinY = Math.sin(ry);
+  const cosZ = Math.cos(rz);
+  const sinZ = Math.sin(rz);
+
+  let nextX = x * cosZ + y * sinZ;
+  let nextY = -x * sinZ + y * cosZ;
+  x = nextX;
+  y = nextY;
+
+  nextX = x * cosY - z * sinY;
+  let nextZ = x * sinY + z * cosY;
+  x = nextX;
+  z = nextZ;
+
+  nextY = y * cosX + z * sinX;
+  nextZ = -y * sinX + z * cosX;
+  y = nextY;
+  z = nextZ;
+
+  return { x, y, z };
+}
+
 export function getRotatedCollisionHalfExtents(size = {}, rotation = {}) {
   const half = halfExtents(size);
   const matrix = buildAbsoluteRotationMatrix(rotation);
@@ -41,6 +107,64 @@ export function getRotatedCollisionHalfExtents(size = {}, rotation = {}) {
     x: matrix.m11 * half.x + matrix.m12 * half.y + matrix.m13 * half.z,
     y: matrix.m21 * half.x + matrix.m22 * half.y + matrix.m23 * half.z,
     z: matrix.m31 * half.x + matrix.m32 * half.y + matrix.m33 * half.z,
+  };
+}
+
+export function sampleCollisionSupportSurface(input = {}) {
+  const position = {
+    x: finite(input.position?.x, 0),
+    y: finite(input.position?.y, 0),
+    z: finite(input.position?.z, 0),
+  };
+  const rotation = {
+    x: finite(input.rotation?.x, 0),
+    y: finite(input.rotation?.y, 0),
+    z: finite(input.rotation?.z, 0),
+  };
+  const half = halfExtents(input.size);
+  const paddingX = Math.max(0, finite(input.paddingX, 0));
+  const paddingZ = Math.max(0, finite(input.paddingZ, 0));
+  const samplePosition = {
+    x: finite(input.samplePosition?.x, position.x),
+    z: finite(input.samplePosition?.z, position.z),
+  };
+  const edgeTolerance = Math.max(0.0001, finite(input.edgeTolerance, 0.0001));
+  const surfaceTolerance = Math.max(edgeTolerance, finite(input.surfaceTolerance, 0.01));
+  const minNormalY = Math.max(0.0001, finite(input.minNormalY, 0.2));
+  const normal = rotatePointByEuler({ x: 0, y: 1, z: 0 }, rotation);
+  if (normal.y <= minNormalY) {
+    return null;
+  }
+  const topOffset = rotatePointByEuler({ x: 0, y: half.y, z: 0 }, rotation);
+  const topCenter = {
+    x: position.x + topOffset.x,
+    y: position.y + topOffset.y,
+    z: position.z + topOffset.z,
+  };
+  const surfaceY = topCenter.y
+    - ((normal.x * (samplePosition.x - topCenter.x)) + (normal.z * (samplePosition.z - topCenter.z))) / normal.y;
+  if (!Number.isFinite(surfaceY)) {
+    return null;
+  }
+  const localPoint = inverseRotatePointByEuler({
+    x: samplePosition.x - position.x,
+    y: surfaceY - position.y,
+    z: samplePosition.z - position.z,
+  }, rotation);
+  if (
+    Math.abs(localPoint.x) > half.x + paddingX + edgeTolerance
+    || Math.abs(localPoint.z) > half.z + paddingZ + edgeTolerance
+    || localPoint.y < half.y - surfaceTolerance
+    || localPoint.y > half.y + surfaceTolerance
+  ) {
+    return null;
+  }
+  return {
+    surfaceY,
+    half,
+    localPoint,
+    normal,
+    topCenter,
   };
 }
 
@@ -172,6 +296,8 @@ export function resolvePlayerGroundSupport(input = {}) {
         y: finite(blocker?.position?.y, 0),
         z: finite(blocker?.position?.z, 0),
       },
+      size: blocker?.size ?? {},
+      rotation: blocker?.rotation ?? {},
       half: getRotatedCollisionHalfExtents(blocker?.size ?? {}, blocker?.rotation ?? {}),
     }));
 
@@ -185,7 +311,19 @@ export function resolvePlayerGroundSupport(input = {}) {
     ) {
       continue;
     }
-    const topY = blocker.position.y + blocker.half.y;
+    const supportSample = sampleCollisionSupportSurface({
+      position: blocker.position,
+      size: blocker.size,
+      rotation: blocker.rotation,
+      samplePosition: desiredPosition,
+      paddingX: playerHalf.x,
+      paddingZ: playerHalf.z,
+      edgeTolerance: epsilon,
+    });
+    if (!supportSample) {
+      continue;
+    }
+    const topY = supportSample.surfaceY;
     if (topY < minBottom || topY > maxBottom) {
       continue;
     }

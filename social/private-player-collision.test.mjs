@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   getRotatedCollisionHalfExtents,
+  sampleCollisionSupportSurface,
   resolvePlayerGroundSupport,
   resolvePlayerMovementAgainstBlockers,
 } from "./private-player-collision.mjs";
@@ -87,6 +88,25 @@ test("computes a taller vertical envelope for a tilted support surface", () => {
   assert.ok(half.y < 4.4);
 });
 
+test("samples the top face height at the player's actual xz on a tilted support", () => {
+  const centerSample = sampleCollisionSupportSurface({
+    position: { x: 0, y: 0, z: 0 },
+    size: { x: 4, y: 1, z: 10 },
+    rotation: { x: -Math.PI / 4, y: 0, z: 0 },
+    samplePosition: { x: 0, z: 0 },
+  });
+  const farSample = sampleCollisionSupportSurface({
+    position: { x: 0, y: 0, z: 0 },
+    size: { x: 4, y: 1, z: 10 },
+    rotation: { x: -Math.PI / 4, y: 0, z: 0 },
+    samplePosition: { x: 0, z: 3 },
+  });
+
+  assert.ok(centerSample);
+  assert.ok(farSample);
+  assert.ok(farSample.surfaceY > centerSample.surfaceY + 2.5);
+});
+
 test("pushes a body back out when it starts slightly embedded in a wall", () => {
   const result = resolvePlayerMovementAgainstBlockers({
     startPosition: { x: 1.7, y: 1, z: 0 },
@@ -155,4 +175,24 @@ test("finds swept ground support when a platform rises into the player", () => {
 
   assert.equal(result.hasSupport, true);
   assert.ok(Math.abs(result.groundY - 2.18) < 0.0001);
+});
+
+test("finds tilted ground support at the sampled top-face height", () => {
+  const result = resolvePlayerGroundSupport({
+    startPosition: { x: 0, y: 4.707106781186548, z: 3 },
+    desiredPosition: { x: 0, y: 4.707106781186548, z: 3 },
+    playerSize: { x: 1, y: 2, z: 1 },
+    blockers: [
+      {
+        position: { x: 0, y: 0, z: 0 },
+        size: { x: 4, y: 1, z: 10 },
+        rotation: { x: -Math.PI / 4, y: 0, z: 0 },
+      },
+    ],
+    verticalTolerance: 0.4,
+  });
+
+  assert.equal(result.hasSupport, true);
+  assert.ok(Math.abs(result.surfaceY - 3.707106781186547) < 0.001);
+  assert.ok(Math.abs(result.groundY - 4.707106781186547) < 0.001);
 });
