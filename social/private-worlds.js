@@ -10669,13 +10669,14 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
   }
   const playerHalf = getHalfExtentsFromScale(getPrivatePlayerCollisionSize(prediction.scale));
   const groundedRecoveryTolerance = getPrivatePlatformCarryRecoveryTolerance(playerHalf);
-  const supportVerticalTolerance = prediction.onGround === true
-    ? (
-      options.allowGroundStepUp === true
-        ? getPrivatePlayerGroundStepTolerance(playerHalf)
-        : groundedRecoveryTolerance
-    )
-    : getPrivatePlatformCarryVerticalTolerance(playerHalf);
+  const supportVerticalToleranceOverride = Number(options?.verticalToleranceOverride);
+  const supportVerticalTolerance = Number.isFinite(supportVerticalToleranceOverride)
+    ? Math.max(0.0001, supportVerticalToleranceOverride)
+    : (
+      prediction.onGround === true
+        ? groundedRecoveryTolerance
+        : getPrivatePlatformCarryVerticalTolerance(playerHalf)
+    );
   const startPosition = options.startPosition ?? prediction.position;
   const desiredPosition = options.desiredPosition ?? prediction.position;
   const supportResult = resolvePlayerGroundSupport({
@@ -10688,12 +10689,16 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
   const activeCarryPlatformId = String(prediction.localCarryPlatformId ?? "").trim();
   const storedGroundY = Number(prediction.groundY);
   const baseGroundY = Number(prediction.baseGroundY);
+  const allowStableGroundFallbackOption = options.allowStableGroundFallback !== false;
   const stableGroundTolerance = Math.max(0.08, groundedRecoveryTolerance * 0.5);
   const allowStableGroundFallback = (
-    !activeCarryPlatformId
-    && Number.isFinite(storedGroundY)
-    && Number.isFinite(baseGroundY)
-    && Math.abs(storedGroundY - baseGroundY) <= stableGroundTolerance
+    allowStableGroundFallbackOption
+    && (
+      !activeCarryPlatformId
+      && Number.isFinite(storedGroundY)
+      && Number.isFinite(baseGroundY)
+      && Math.abs(storedGroundY - baseGroundY) <= stableGroundTolerance
+    )
   );
   let carrySupport = null;
   let groundY = Number.NaN;
@@ -10760,6 +10765,77 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
     groundY,
     velocityY,
     carrySupport,
+  };
+}
+
+function tryStepUpPossessedPlayer(prediction = null, options = {}) {
+  if (!prediction || !isPrivateCollisionModeRigid(prediction.bodyMode)) {
+    return null;
+  }
+  const startPosition = options.startPosition ?? prediction.position;
+  const desiredPosition = options.desiredPosition ?? prediction.position;
+  const playerSize = getPrivatePlayerCollisionSize(prediction.scale);
+  const playerHalf = getHalfExtentsFromScale(playerSize);
+  const currentGroundY = Number(options.currentGroundY ?? prediction.groundY);
+  if (!Number.isFinite(currentGroundY)) {
+    return null;
+  }
+  const stepTolerance = getPrivatePlayerGroundStepTolerance(playerHalf);
+  const raisedSupport = getLocalPossessedGroundSupport(prediction, {
+    startPosition: {
+      x: Number(startPosition?.x ?? prediction.position?.x ?? 0) || 0,
+      y: currentGroundY,
+      z: Number(startPosition?.z ?? prediction.position?.z ?? 0) || 0,
+    },
+    desiredPosition: {
+      x: Number(desiredPosition?.x ?? prediction.position?.x ?? 0) || 0,
+      y: currentGroundY,
+      z: Number(desiredPosition?.z ?? prediction.position?.z ?? 0) || 0,
+    },
+    verticalToleranceOverride: stepTolerance,
+    allowStableGroundFallback: false,
+  });
+  const targetGroundY = Number(raisedSupport?.groundY);
+  if (!raisedSupport?.hasSupport || !Number.isFinite(targetGroundY)) {
+    return null;
+  }
+  const rise = targetGroundY - currentGroundY;
+  if (rise <= 0.05 || rise > stepTolerance + 0.0001) {
+    return null;
+  }
+  const raisedStart = {
+    x: Number(startPosition?.x ?? prediction.position?.x ?? 0) || 0,
+    y: targetGroundY,
+    z: Number(startPosition?.z ?? prediction.position?.z ?? 0) || 0,
+  };
+  const raisedDesired = {
+    x: Number(desiredPosition?.x ?? prediction.position?.x ?? 0) || 0,
+    y: targetGroundY,
+    z: Number(desiredPosition?.z ?? prediction.position?.z ?? 0) || 0,
+  };
+  const raisedCollision = resolvePlayerMovementAgainstBlockers({
+    startPosition: raisedStart,
+    desiredPosition: raisedDesired,
+    playerSize,
+    blockers: getPrivatePossessedCollisionBlockers({
+      ...prediction,
+      position: raisedStart,
+    }, raisedDesired),
+  });
+  if (
+    Math.abs(Number(raisedCollision?.position?.x ?? raisedDesired.x) - raisedDesired.x) > 0.001
+    || Math.abs(Number(raisedCollision?.position?.z ?? raisedDesired.z) - raisedDesired.z) > 0.001
+  ) {
+    return null;
+  }
+  return {
+    position: {
+      x: raisedDesired.x,
+      y: targetGroundY,
+      z: raisedDesired.z,
+    },
+    groundSupport: raisedSupport,
+    rise,
   };
 }
 
@@ -11235,6 +11311,28 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     });
     prediction.position.x = collision.position.x;
     prediction.position.z = collision.position.z;
+    const stepUpResult = (
+      prediction.onGround === true
+      && !preJumpLocalJumpActive
+      && intent.active
+      && (collision.blockedAxes?.x || collision.blockedAxes?.z)
+    )
+      ? tryStepUpPossessedPlayer(prediction, {
+        startPosition: frameStartPosition,
+        desiredPosition,
+        currentGroundY: prediction.groundY,
+      })
+      : null;
+    if (stepUpResult?.position) {
+      prediction.position.x = Number(stepUpResult.position.x ?? prediction.position.x) || 0;
+      prediction.position.y = Number(stepUpResult.position.y ?? prediction.position.y) || 0;
+      prediction.position.z = Number(stepUpResult.position.z ?? prediction.position.z) || 0;
+      prediction.groundY = Number(stepUpResult.groundSupport?.groundY ?? prediction.position.y);
+      prediction.velocity.y = Number.isFinite(Number(stepUpResult.groundSupport?.velocityY))
+        ? Number(stepUpResult.groundSupport.velocityY)
+        : 0;
+      prediction.onGround = true;
+    }
   } else {
     prediction.position.x = desiredPosition.x;
     prediction.position.z = desiredPosition.z;
@@ -11288,7 +11386,6 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
     ? getLocalPossessedGroundSupport(prediction, {
       startPosition: frameStartPosition,
       desiredPosition: prediction.position,
-      allowGroundStepUp: intent.active,
     })
     : null;
   let finalGroundSupport = resolvedGroundSupport;
@@ -11323,7 +11420,6 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
       finalGroundSupport = getLocalPossessedGroundSupport(prediction, {
         startPosition: airborneStartPosition,
         desiredPosition: prediction.position,
-        allowGroundStepUp: intent.active,
       });
       const landingGroundY = Number(finalGroundSupport?.groundY);
       if (finalGroundSupport?.hasSupport === true && Number.isFinite(landingGroundY)) {
