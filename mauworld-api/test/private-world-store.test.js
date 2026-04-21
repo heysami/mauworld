@@ -433,8 +433,9 @@ test("public-world miniature payload keeps mid-range player dots and moving plat
   assert.equal(miniatures[0].compiled.miniature.moving_platforms.length, 1);
   assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].id, "primitive_platform");
   assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].shape, "box");
-  assert.deepEqual(miniatures[0].compiled.miniature.moving_platforms[0].position, { x: 5, y: 1, z: -1 });
-  assert.deepEqual(miniatures[0].compiled.miniature.moving_platforms[0].rotation, { x: 0, y: 0.4, z: 0 });
+  assert.deepEqual(miniatures[0].compiled.miniature.moving_platforms[0].position, { x: 0, y: 0.5, z: 0 });
+  assert.deepEqual(miniatures[0].compiled.miniature.moving_platforms[0].rotation, { x: 0, y: 0, z: 0 });
   assert.deepEqual(miniatures[0].compiled.miniature.moving_platforms[0].scale, { x: 4, y: 1, z: 4 });
   assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].material.color, "#8c94a1");
+  assert.equal(miniatures[0].scene_updated_at, null);
 });

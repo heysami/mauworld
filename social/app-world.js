@@ -1716,6 +1716,11 @@ function getTagRetainPadding() {
 }
 
 function mergeStreamIntoCache(streamPayload) {
+  const miniatureBandRank = {
+    far: 0,
+    mid: 1,
+    near: 2,
+  };
   for (const pillar of streamPayload.pillars ?? []) {
     state.worldCache.pillars.set(getPillarCacheKey(pillar), pillar);
   }
@@ -1726,7 +1731,27 @@ function mergeStreamIntoCache(streamPayload) {
     state.worldCache.posts.set(getPostCacheKey(post), post);
   }
   for (const miniature of streamPayload.privateWorldMiniatures ?? []) {
-    state.worldCache.privateWorldMiniatures.set(String(miniature.id ?? ""), miniature);
+    const key = String(miniature.id ?? "");
+    const existing = state.worldCache.privateWorldMiniatures.get(key) ?? null;
+    if (!existing) {
+      state.worldCache.privateWorldMiniatures.set(key, miniature);
+      continue;
+    }
+    const nextSceneUpdatedAt = String(miniature.scene_updated_at ?? "");
+    const existingSceneUpdatedAt = String(existing.scene_updated_at ?? "");
+    const nextBandRank = miniatureBandRank[String(miniature.lod_band ?? "far")] ?? 0;
+    const existingStaticBandRank = Number(existing.static_lod_rank ?? miniatureBandRank[String(existing.lod_band ?? "far")] ?? 0);
+    const shouldRefreshStatic =
+      !existingSceneUpdatedAt
+      || !nextSceneUpdatedAt
+      || nextSceneUpdatedAt !== existingSceneUpdatedAt
+      || nextBandRank > existingStaticBandRank;
+    state.worldCache.privateWorldMiniatures.set(key, {
+      ...existing,
+      ...miniature,
+      compiled: shouldRefreshStatic ? miniature.compiled : existing.compiled,
+      static_lod_rank: shouldRefreshStatic ? nextBandRank : existingStaticBandRank,
+    });
   }
 }
 
@@ -6964,10 +6989,6 @@ function getPrivateMiniatureSourceBounds(entry = {}) {
   for (const screen of compiled.screens ?? []) {
     includePoint(screen.position, screen.scale);
   }
-  for (const player of [...(compiled.players ?? []), ...(entry.visible_players ?? [])]) {
-    includePoint(player.position, { x: 0.8, y: 1.2, z: 0.8 });
-  }
-
   if (!Number.isFinite(bounds.minX)) {
     return {
       centerX: 0,

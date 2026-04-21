@@ -3083,14 +3083,14 @@ export function installPrivateWorldStore(MauworldStore) {
           }
           return {
             id: platformId,
-            shape: runtimeObject?.shape ?? authoredEntry?.shape ?? "box",
-            position: cloneJson(runtimeObject?.position ?? authoredEntry?.position),
-            rotation: cloneJson(runtimeObject?.rotation ?? authoredEntry?.rotation ?? { x: 0, y: 0, z: 0 }),
-            scale: cloneJson(runtimeObject?.scale ?? authoredEntry?.scale ?? { x: 1, y: 1, z: 1 }),
+            shape: authoredEntry?.shape ?? runtimeObject?.shape ?? "box",
+            position: cloneJson(authoredEntry?.position ?? runtimeObject?.position),
+            rotation: cloneJson(authoredEntry?.rotation ?? runtimeObject?.rotation ?? { x: 0, y: 0, z: 0 }),
+            scale: cloneJson(authoredEntry?.scale ?? runtimeObject?.scale ?? { x: 1, y: 1, z: 1 }),
             material: cloneJson(
-              runtimeObject?.material_override
-              ?? runtimeObject?.material
-              ?? authoredEntry?.material,
+              authoredEntry?.material
+              ?? runtimeObject?.material_override
+              ?? runtimeObject?.material,
             ),
           };
         })
@@ -3145,6 +3145,7 @@ export function installPrivateWorldStore(MauworldStore) {
         miniature_width: row.miniature_width,
         miniature_length: row.miniature_length,
         miniature_height: row.miniature_height,
+        scene_updated_at: scene.updated_at ?? null,
         status: row.status,
         viewer_count: participants.length,
         lineage: {
