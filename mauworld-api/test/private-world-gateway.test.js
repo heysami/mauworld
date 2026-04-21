@@ -66,7 +66,7 @@ function createGateway(storeOverrides = {}) {
   return gateway;
 }
 
-test("private world chat uses full text nearby and placeholders at distance", () => {
+test("private world chat uses full text nearby and placeholders at distance", async () => {
   const gateway = createGateway();
   const sender = createClient({
     viewerSessionId: "profile:sender",
@@ -87,7 +87,7 @@ test("private world chat uses full text nearby and placeholders at distance", ()
   gateway.clients.add(nearby);
   gateway.clients.add(far);
 
-  gateway.handleChatSend(sender, { text: "hello there" });
+  await gateway.handleChatSend(sender, { text: "hello there" });
 
   assert.equal(sender.socket.sent.at(-1)?.type, "chat:event");
   assert.equal(sender.socket.sent.at(-1)?.mode, "full");
@@ -147,6 +147,61 @@ test("private world browser audience rebalances to nearby subscribers only", asy
     far.socket.sent.some((message) => message.type === "browser:unsubscribe" && message.sessionId === session.sessionId),
     true,
   );
+});
+
+test("private world nearby share uses the shared interaction max recipients setting", async () => {
+  const gateway = createGateway({
+    async getSettings() {
+      return {
+        world_interaction_max_recipients: 2,
+      };
+    },
+  });
+  const host = createClient({
+    viewerSessionId: "profile:host",
+    displayName: "host",
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const nearbyA = createClient({
+    viewerSessionId: "profile:nearby-a",
+    displayName: "nearby-a",
+    position: { x: 8, y: 0, z: 0 },
+  });
+  const nearbyB = createClient({
+    viewerSessionId: "profile:nearby-b",
+    displayName: "nearby-b",
+    position: { x: 12, y: 0, z: 0 },
+  });
+  const nearbyC = createClient({
+    viewerSessionId: "profile:nearby-c",
+    displayName: "nearby-c",
+    position: { x: 16, y: 0, z: 0 },
+  });
+  gateway.clients.add(host);
+  gateway.clients.add(nearbyA);
+  gateway.clients.add(nearbyB);
+  gateway.clients.add(nearbyC);
+
+  const session = {
+    id: "browser_session_capped",
+    sessionId: "browser_session_capped",
+    hostSessionId: host.viewerSessionId,
+    worldSnapshotId: host.browserWorldKey,
+    subscribers: new Set([host.viewerSessionId]),
+    viewerCount: 0,
+    maxViewers: 20,
+    status: "ready",
+  };
+  gateway.browserManager.listSessionsForWorld = () => [session];
+  gateway.browserManager.getSession = () => session;
+
+  await gateway.rebalanceBrowserSessions(host.browserWorldKey);
+
+  assert.equal(session.maxViewers, 2);
+  assert.equal(session.subscribers.has(host.viewerSessionId), true);
+  assert.equal(session.subscribers.has(nearbyA.viewerSessionId), true);
+  assert.equal(session.subscribers.has(nearbyB.viewerSessionId), true);
+  assert.equal(session.subscribers.has(nearbyC.viewerSessionId), false);
 });
 
 test("private world presence updates refresh participant heartbeat in the store", async () => {

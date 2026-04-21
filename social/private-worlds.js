@@ -40,6 +40,7 @@ import {
   buildPrivateWorldBrowserResultsMarkup,
   getPrivateWorldBrowserKey,
 } from "./private-world-browser.js";
+import { DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS } from "./interaction-defaults.js";
 import {
   getRotatedCollisionHalfExtents,
   sampleCollisionSupportSurface,
@@ -7160,7 +7161,10 @@ function renderPrivateGameShareGroupSummary() {
     .filter((entry) => entry.sessionId);
   const hostName = getPrivateGameHostName(anchorSession);
   const viewerCount = Math.max(0, Number(anchorSession?.viewer_count ?? anchorSession?.viewerCount) || 0);
-  const maxViewers = Math.max(1, Number(anchorSession?.max_viewers ?? anchorSession?.maxViewers) || PRIVATE_WORLD_MAX_RECIPIENTS);
+  const maxViewers = Math.max(
+    1,
+    Number(anchorSession?.max_viewers ?? anchorSession?.maxViewers) || DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS,
+  );
   const canKickMembers = Boolean(
     localSession
     && isPrivateGameOriginSession(localSession)
@@ -13644,7 +13648,7 @@ function getPrivateBrowserSessionMaxViewers(session = {}) {
   if (Number.isFinite(value) && value > 0) {
     return Math.max(1, Math.floor(value));
   }
-  return 20;
+  return DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS;
 }
 
 function getPrivateBrowserSessionRole(session = {}) {

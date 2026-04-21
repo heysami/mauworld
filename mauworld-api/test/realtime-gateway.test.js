@@ -170,6 +170,51 @@ test("presence snapshot normalizes browser session payloads for late joiners", a
   await gateway.dispose();
 });
 
+test("public world guests can send bubble chat with nearby full text and distant placeholders", async () => {
+  const gateway = createGateway();
+  gateway.getInteractionSettings = async () => ({
+    chatMaxChars: 160,
+    chatTtlSeconds: 8,
+    chatDetailRadius: 180,
+    interactionMaxRecipients: 20,
+  });
+  const guest = createClient({
+    viewerSessionId: "viewer_guest",
+    isGuest: true,
+    profile: null,
+    authUser: null,
+    position: { x: 0, y: 0, z: 0 },
+  });
+  const nearby = createClient({
+    viewerSessionId: "viewer_nearby",
+    position: { x: 16, y: 0, z: 0 },
+  });
+  const far = createClient({
+    viewerSessionId: "viewer_far",
+    position: { x: 400, y: 0, z: 0 },
+  });
+  gateway.clients.set(guest.viewerSessionId, guest);
+  gateway.clients.set(nearby.viewerSessionId, nearby);
+  gateway.clients.set(far.viewerSessionId, far);
+  gateway.getWorldMemberIds("world_current").add(guest.viewerSessionId);
+  gateway.getWorldMemberIds("world_current").add(nearby.viewerSessionId);
+  gateway.getWorldMemberIds("world_current").add(far.viewerSessionId);
+
+  await gateway.handleChatSend(guest, { text: "hello there" });
+
+  assert.equal(guest.socket.sent.at(-1)?.type, "chat:event");
+  assert.equal(guest.socket.sent.at(-1)?.mode, "full");
+  assert.equal(guest.socket.sent.at(-1)?.text, "hello there");
+  assert.equal(nearby.socket.sent.at(-1)?.type, "chat:event");
+  assert.equal(nearby.socket.sent.at(-1)?.mode, "full");
+  assert.equal(nearby.socket.sent.at(-1)?.text, "hello there");
+  assert.equal(far.socket.sent.at(-1)?.type, "chat:event");
+  assert.equal(far.socket.sent.at(-1)?.mode, "placeholder");
+  assert.equal(far.socket.sent.at(-1)?.text, "...");
+
+  await gateway.dispose();
+});
+
 test("public game share starts, opens, and relays player actions to the host", async () => {
   const gateway = createGateway();
   gateway.store = {

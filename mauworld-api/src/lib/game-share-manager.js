@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { HttpError } from "./http.js";
+import { DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS } from "../../../social/interaction-defaults.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -142,7 +143,7 @@ function normalizeGameSessionSummary(sessionLike = {}) {
       : 0;
   const maxViewers = Number.isFinite(Number(sessionLike.max_viewers ?? sessionLike.maxViewers))
     ? Math.max(1, Math.floor(Number(sessionLike.max_viewers ?? sessionLike.maxViewers)))
-    : 20;
+    : DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS;
   const anchorSessionId = getGameAnchorSessionId(sessionLike);
   const anchorHostSessionId = getGameAnchorHostSessionId(sessionLike);
   const rawSeats = Array.isArray(sessionLike.seats) ? sessionLike.seats : [];
@@ -251,7 +252,7 @@ export class GameShareManager {
       authoritative_state: null,
       latest_preview: null,
       opened_viewer_session_ids: new Set([hostViewerSessionId]),
-      max_viewers: clampInteger(input.maxViewers, 20, 1, 99),
+      max_viewers: clampInteger(input.maxViewers, DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS, 1, 99),
       created_at: createdAt,
       updated_at: createdAt,
     };

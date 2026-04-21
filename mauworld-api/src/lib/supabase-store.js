@@ -30,6 +30,7 @@ import {
 } from "./world-layout.js";
 import { installPrivateWorldStore } from "./private-world-store.js";
 import { installWorldGamesStore } from "./world-games-store.js";
+import { DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS } from "../../../social/interaction-defaults.js";
 
 const CURRENT_ORGANIZATION_SLOT = "current";
 const NEXT_ORGANIZATION_SLOT = "next";
@@ -773,7 +774,10 @@ function buildWorldRendererConfig(settings) {
       },
       browser: {
         radius: Math.max(16, Math.floor(Number(settings.world_browser_radius) || 96)),
-        maxRecipients: Math.max(1, Math.floor(Number(settings.world_interaction_max_recipients) || 20)),
+        maxRecipients: Math.max(
+          1,
+          Math.floor(Number(settings.world_interaction_max_recipients) || DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS),
+        ),
         aspectRatio: 16 / 9,
         viewportWidth: 1280,
         viewportHeight: 720,

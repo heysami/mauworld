@@ -37,6 +37,7 @@ import {
   getSharedBrowserScreenOffsetY,
 } from "./world-overhead-layout.js";
 import { buildPrivateWorldBrowserResultsMarkup } from "./private-world-browser.js";
+import { DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS } from "./interaction-defaults.js";
 import { createWorldRealtimeClient } from "./world-realtime.js?v=20260419kick1";
 import { renderScreenHtmlTexture } from "./screen-texture.js";
 import {
@@ -186,7 +187,8 @@ const WORLD_STREAM = {
   fogMultiplier: 2.4,
 };
 
-const PRIVATE_WORLD_MINIATURE_LIVE_POLL_MS = 250;
+const PRIVATE_WORLD_MINIATURE_FAST_POLL_MS = Math.round(1000 / 24);
+const PRIVATE_WORLD_MINIATURE_IDLE_POLL_MS = 250;
 
 const WORLD_STYLE = {
   background: "#fbfcff",
@@ -207,7 +209,7 @@ const INTERACTION_DEFAULTS = {
   chatTtlSeconds: 8,
   chatDetailRadius: 180,
   browserRadius: SHARED_BROWSER_SHARE_LAYOUT.radius,
-  maxRecipients: 20,
+  maxRecipients: DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS,
   browserAspectRatio: SHARED_BROWSER_SHARE_LAYOUT.aspectRatio,
   browserViewportWidth: 960,
   browserViewportHeight: 540,
@@ -268,6 +270,7 @@ const state = {
   focusAnimation: null,
   lastPresenceAt: 0,
   lastStreamCheckAt: 0,
+  lastPrivateWorldMiniaturePollAt: 0,
   initialViewFramed: false,
   viewerSessionId: "",
   publicAuthModeKey: "guest",
@@ -10937,6 +10940,31 @@ async function loadPrivateWorldMiniaturesLive() {
   }
 }
 
+function shouldUseFastPrivateWorldMiniaturePolling() {
+  if (!sceneState.camera || sceneState.animatedPrivateWorldMiniatures.length === 0) {
+    return false;
+  }
+  for (const entry of sceneState.animatedPrivateWorldMiniatures) {
+    const distance = sceneState.camera.position.distanceTo(entry.group.position);
+    const isNear = distance <= entry.nearDistance;
+    const isMid = distance > entry.nearDistance && distance <= entry.midDistance;
+    const renderState = resolvePrivateWorldMiniatureRenderState({
+      serverLodBand: entry.serverLodBand,
+      distanceBand: isNear ? "near" : isMid ? "mid" : "far",
+    });
+    if (renderState.showPlayerDots) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getPrivateWorldMiniaturePollIntervalMs() {
+  return shouldUseFastPrivateWorldMiniaturePolling()
+    ? PRIVATE_WORLD_MINIATURE_FAST_POLL_MS
+    : PRIVATE_WORLD_MINIATURE_IDLE_POLL_MS;
+}
+
 async function runSearch() {
   if (state.searchLoading) {
     return;
@@ -13763,6 +13791,12 @@ function animate() {
     state.lastStreamCheckAt = now;
     loadStream().catch((error) => showToast(error.message));
   }
+  if (now - state.lastPrivateWorldMiniaturePollAt >= getPrivateWorldMiniaturePollIntervalMs()) {
+    state.lastPrivateWorldMiniaturePollAt = now;
+    loadPrivateWorldMiniaturesLive().catch(() => {
+      // Errors are logged inside the live miniature refresher to avoid toast spam.
+    });
+  }
 
   sceneState.renderer.render(sceneState.scene, sceneState.camera);
   window.requestAnimationFrame(animate);
@@ -13805,12 +13839,6 @@ async function bootstrapWorld() {
   window.setInterval(() => {
     loadStream().catch((error) => showToast(error.message));
   }, 5000);
-
-  window.setInterval(() => {
-    loadPrivateWorldMiniaturesLive().catch(() => {
-      // Errors are logged inside the live miniature refresher to avoid toast spam.
-    });
-  }, PRIVATE_WORLD_MINIATURE_LIVE_POLL_MS);
 
   animate();
   setLoading(false);

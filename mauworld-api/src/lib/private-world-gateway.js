@@ -12,14 +12,18 @@ import {
   isPersistentVoiceSession,
   isWithinRadius,
 } from "./browser-share-groups.js";
-import { checkChatRateLimit, sanitizeChatText, selectNearestRecipients } from "./realtime-state.js";
+import {
+  checkChatRateLimit,
+  normalizeInteractionSettings,
+  sanitizeChatText,
+  selectNearestRecipients,
+} from "./realtime-state.js";
 
 const PRIVATE_WORLD_REALTIME_PATH = "/api/ws/private/worlds";
 const PRIVATE_WORLD_CHAT_MAX_CHARS = 160;
 const PRIVATE_WORLD_CHAT_TTL_SECONDS = 8;
 const PRIVATE_WORLD_CHAT_DETAIL_RADIUS = 180;
 const PRIVATE_WORLD_BROWSER_RADIUS = 96;
-const PRIVATE_WORLD_MAX_RECIPIENTS = 20;
 const PRIVATE_WORLD_PARTICIPANT_HEARTBEAT_MS = 5_000;
 
 function buildBaseUrl(publicBaseUrl) {
@@ -126,6 +130,10 @@ export class PrivateWorldGateway {
     this.pendingShareJoinRequests = new Map();
     this.approvedShareJoins = new Map();
     this.voiceJoinOffers = new Map();
+    this.interactionSettings = {
+      expiresAt: 0,
+      value: normalizeInteractionSettings(),
+    };
     this.browserManager = new BrowserSessionManager({
       allowedHosts: options.config?.sharedBrowserAllowedHosts,
       viewport: {
@@ -152,6 +160,31 @@ export class PrivateWorldGateway {
     this.unsubscribe = this.store?.subscribePrivateWorldEvents?.((event) => {
       void this.broadcastStoreEvent(event);
     }) ?? null;
+  }
+
+  async getInteractionSettings(force = false) {
+    if (!force && this.interactionSettings.expiresAt > Date.now()) {
+      return this.interactionSettings.value;
+    }
+    if (typeof this.store?.getSettings !== "function") {
+      return this.interactionSettings.value;
+    }
+    const settings = await this.store.getSettings().catch(() => null);
+    const value = normalizeInteractionSettings(settings ?? {});
+    this.interactionSettings = {
+      value,
+      expiresAt: Date.now() + 15000,
+    };
+    return value;
+  }
+
+  getResolvedInteractionMaxRecipients(interactionSettings = null) {
+    return Math.max(
+      1,
+      Number(interactionSettings?.interactionMaxRecipients)
+      || Number(this.interactionSettings.value?.interactionMaxRecipients)
+      || 1,
+    );
   }
 
   install(server) {
@@ -332,7 +365,7 @@ export class PrivateWorldGateway {
       return;
     }
     if (type === "chat:send") {
-      this.handleChatSend(client, message);
+      await this.handleChatSend(client, message);
       return;
     }
     if (type === "presence:update") {
@@ -751,8 +784,12 @@ export class PrivateWorldGateway {
     }
   }
 
-  sessionHasCapacity(session) {
-    const maxViewers = Math.max(1, Number(session?.maxViewers) || PRIVATE_WORLD_MAX_RECIPIENTS);
+  sessionHasCapacity(session, interactionSettings = null) {
+    const maxViewers = Math.max(
+      1,
+      Number(session?.maxViewers)
+      || this.getResolvedInteractionMaxRecipients(interactionSettings),
+    );
     const viewerCount = session?.subscribers instanceof Set
       ? Math.max(0, session.subscribers.size - 1)
       : Math.max(0, Number(session?.viewerCount) || 0);
@@ -795,7 +832,10 @@ export class PrivateWorldGateway {
       title: session.game?.title || "Nearby game",
       shareKind: "game",
       viewerCount: session.viewer_count,
-      maxViewers: session.max_viewers,
+      maxViewers: Math.max(
+        1,
+        Number(session.max_viewers ?? session.maxViewers) || this.getResolvedInteractionMaxRecipients(),
+      ),
       listedLive: session.listed_live !== false,
       groupRole: session.group_role || "origin",
     };
@@ -843,7 +883,7 @@ export class PrivateWorldGateway {
     };
   }
 
-  getSessionAudienceRecipients(session, worldClients) {
+  getSessionAudienceRecipients(session, worldClients, interactionSettings = null) {
     const hostClient = this.getSessionHostClient(session);
     if (!hostClient) {
       return new Set([String(session?.hostSessionId ?? "").trim()].filter(Boolean));
@@ -861,11 +901,15 @@ export class PrivateWorldGateway {
           position: positionFromPrivateClient(entry),
         })),
         radius: PRIVATE_WORLD_BROWSER_RADIUS,
-        maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+        maxRecipients: this.getResolvedInteractionMaxRecipients(interactionSettings),
       }),
     );
     recipients.add(hostClient.viewerSessionId);
-    const suppressedRecipients = this.getStandalonePersistentVoiceSuppressedRecipients(session, worldClients);
+    const suppressedRecipients = this.getStandalonePersistentVoiceSuppressedRecipients(
+      session,
+      worldClients,
+      interactionSettings,
+    );
     if (suppressedRecipients && suppressedRecipients.size > 0) {
       for (const viewerSessionId of suppressedRecipients) {
         if (viewerSessionId === hostClient.viewerSessionId) {
@@ -877,7 +921,7 @@ export class PrivateWorldGateway {
     return recipients;
   }
 
-  getStandalonePersistentVoiceSuppressedRecipients(session, worldClients) {
+  getStandalonePersistentVoiceSuppressedRecipients(session, worldClients, interactionSettings = null) {
     if (!isPersistentVoiceSession(session) || isJoinedPersistentVoiceSession(session)) {
       return null;
     }
@@ -914,14 +958,14 @@ export class PrivateWorldGateway {
           position: positionFromPrivateClient(entry),
         })),
         radius: PRIVATE_WORLD_BROWSER_RADIUS,
-        maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+        maxRecipients: this.getResolvedInteractionMaxRecipients(interactionSettings),
       }),
     );
     recipients.add(anchorHostClient.viewerSessionId);
     return recipients;
   }
 
-  getGameSessionAudienceRecipients(session, worldClients) {
+  getGameSessionAudienceRecipients(session, worldClients, interactionSettings = null) {
     const hostClient = this.getGameSessionHostClient(session);
     if (!hostClient) {
       return new Set([String(session?.host_viewer_session_id ?? "").trim()].filter(Boolean));
@@ -941,7 +985,7 @@ export class PrivateWorldGateway {
           position: positionFromPrivateClient(entry),
         })),
         radius: PRIVATE_WORLD_BROWSER_RADIUS,
-        maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+        maxRecipients: this.getResolvedInteractionMaxRecipients(interactionSettings),
       }),
     );
     recipients.add(hostClient.viewerSessionId);
@@ -1002,7 +1046,10 @@ export class PrivateWorldGateway {
       ...session,
       sessionId: sessionId || session.sessionId,
       viewerCount: Math.max(0, [...subscribers].filter((viewerSessionId) => viewerSessionId !== session.hostSessionId).length),
-      maxViewers: Math.max(1, Number(rawSession.maxViewers) || 20),
+      maxViewers: Math.max(
+        1,
+        Number(rawSession.maxViewers) || this.getResolvedInteractionMaxRecipients(),
+      ),
     };
   }
 
@@ -1130,6 +1177,7 @@ export class PrivateWorldGateway {
       return;
     }
     try {
+      await this.getInteractionSettings();
       let groupRole = "origin";
       let anchorSession = null;
       const existingGameSession = this.getHostedGameSession(client.viewerSessionId, client.browserWorldKey);
@@ -1193,7 +1241,7 @@ export class PrivateWorldGateway {
         movementLocked: groupRole === "origin",
         anchorSessionId: anchorSession?.id ?? anchorSession?.session_id ?? "",
         anchorHostSessionId: anchorSession?.host_viewer_session_id ?? anchorSession?.hostViewerSessionId ?? "",
-        maxViewers: PRIVATE_WORLD_MAX_RECIPIENTS,
+        maxViewers: this.getResolvedInteractionMaxRecipients(),
         game: payload.game,
       });
       if (groupRole === "member" && anchorSession) {
@@ -1413,7 +1461,7 @@ export class PrivateWorldGateway {
     }
   }
 
-  handleChatSend(client, message) {
+  async handleChatSend(client, message) {
     if (!client?.profile) {
       sendJson(client, {
         type: "chat:error",
@@ -1437,6 +1485,7 @@ export class PrivateWorldGateway {
       });
       return;
     }
+    await this.getInteractionSettings();
     const worldClients = this.getWorldClients(client.worldId, client.creatorUsername);
     const fullRecipients = new Set(
       selectNearestRecipients({
@@ -1447,7 +1496,7 @@ export class PrivateWorldGateway {
           position: positionFromPrivateClient(entry),
         })),
         radius: PRIVATE_WORLD_CHAT_DETAIL_RADIUS,
-        maxRecipients: PRIVATE_WORLD_MAX_RECIPIENTS,
+        maxRecipients: this.getResolvedInteractionMaxRecipients(),
       }),
     );
     fullRecipients.add(client.viewerSessionId);
@@ -1470,6 +1519,7 @@ export class PrivateWorldGateway {
     if (!client?.profile) {
       return;
     }
+    await this.getInteractionSettings();
     const requestedAnchorSessionId = String(message.anchorSessionId ?? "").trim();
     const requestedAnchorHostSessionId = String(message.anchorHostSessionId ?? "").trim();
     const shareKind = String(message.shareKind ?? "screen").trim().toLowerCase();
@@ -1629,6 +1679,7 @@ export class PrivateWorldGateway {
     if (!requesterClient) {
       return;
     }
+    await this.getInteractionSettings();
     const approved = message.approved === true
       && (isGameAnchor
         ? this.isClientWithinGameAnchorRadius(requesterClient, anchorSession)
@@ -2150,6 +2201,7 @@ export class PrivateWorldGateway {
       return;
     }
     try {
+      await this.getInteractionSettings();
       const sessionMode = String(message.mode ?? "").trim() === "display-share" ? "display-share" : "remote-browser";
       const shareKind = String(message.shareKind ?? "screen").trim().toLowerCase();
       const displaySessionSlot = this.getDisplaySessionSlot(shareKind);
@@ -2401,6 +2453,7 @@ export class PrivateWorldGateway {
   }
 
   async updatePersistentVoiceOffers(browserWorldKey) {
+    const interactionSettings = await this.getInteractionSettings();
     const sessions = this.browserManager.listSessionsForWorld(browserWorldKey);
     for (const session of sessions) {
       if (!isPersistentVoiceSession(session)) {
@@ -2445,7 +2498,7 @@ export class PrivateWorldGateway {
       }
 
       const nearestOrigin = this.getNearestOriginSessionForClient(hostClient, browserWorldKey);
-      if (!nearestOrigin || !this.sessionHasCapacity(nearestOrigin)) {
+      if (!nearestOrigin || !this.sessionHasCapacity(nearestOrigin, interactionSettings)) {
         continue;
       }
       const currentOffer = this.voiceJoinOffers.get(sessionId);
@@ -2473,6 +2526,7 @@ export class PrivateWorldGateway {
   }
 
   async rebalanceBrowserSessions(browserWorldKey) {
+    const interactionSettings = await this.getInteractionSettings();
     await this.updatePersistentVoiceOffers(browserWorldKey);
     const worldClients = this.getBrowserWorldClients(browserWorldKey);
     for (const session of this.browserManager.listSessionsForWorld(browserWorldKey)) {
@@ -2488,14 +2542,14 @@ export class PrivateWorldGateway {
           continue;
         }
       }
-      const fullRecipients = this.getSessionAudienceRecipients(session, worldClients);
+      const fullRecipients = this.getSessionAudienceRecipients(session, worldClients, interactionSettings);
       const previousRecipients = new Set(session.subscribers ?? []);
       session.subscribers = fullRecipients;
       const recipientsChanged =
         previousRecipients.size !== fullRecipients.size
         || [...fullRecipients].some((viewerSessionId) => !previousRecipients.has(viewerSessionId));
       const nextViewerCount = Math.max(0, fullRecipients.size - 1);
-      const nextMaxViewers = PRIVATE_WORLD_MAX_RECIPIENTS;
+      const nextMaxViewers = this.getResolvedInteractionMaxRecipients(interactionSettings);
       const countsChanged =
         Number(session.viewerCount ?? -1) !== nextViewerCount
         || Number(session.maxViewers ?? -1) !== nextMaxViewers;
@@ -2563,6 +2617,7 @@ export class PrivateWorldGateway {
   }
 
   async rebalanceGameSessions(browserWorldKey) {
+    const interactionSettings = await this.getInteractionSettings();
     const worldClients = this.getBrowserWorldClients(browserWorldKey);
     for (const session of this.gameShares.listSessionsForBinding(browserWorldKey)) {
       const hostClient = this.getGameSessionHostClient(session);
@@ -2581,7 +2636,7 @@ export class PrivateWorldGateway {
           continue;
         }
       }
-      const fullRecipients = this.getGameSessionAudienceRecipients(session, worldClients);
+      const fullRecipients = this.getGameSessionAudienceRecipients(session, worldClients, interactionSettings);
       const previousRecipients = new Set(session.preview_subscribers ?? []);
       session.preview_subscribers = fullRecipients;
       const subscribePayload = this.buildGameSubscriptionPayload(session, true);

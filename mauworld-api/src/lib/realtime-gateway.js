@@ -708,7 +708,8 @@ export class RealtimeGateway {
       1,
       Number(session?.maxViewers)
       || Number(interactionSettings?.interactionMaxRecipients)
-      || 20,
+      || Number(this.interactionSettings.value?.interactionMaxRecipients)
+      || 1,
     );
     const viewerCount = session?.subscribers instanceof Set
       ? Math.max(0, session.subscribers.size - 1)
@@ -797,7 +798,12 @@ export class RealtimeGateway {
 
   selectBrowserRecipients(hostClient, candidates, interactionSettings, anchorPosition = null) {
     const senderPosition = anchorPosition ?? hostClient?.position ?? null;
-    const maxRecipients = Math.max(1, interactionSettings?.interactionMaxRecipients ?? 20);
+    const maxRecipients = Math.max(
+      1,
+      Number(interactionSettings?.interactionMaxRecipients)
+      || Number(this.interactionSettings.value?.interactionMaxRecipients)
+      || 1,
+    );
     const signedInCandidates = candidates.filter((entry) => !entry?.isGuest);
     const guestCandidates = candidates.filter((entry) => entry?.isGuest);
     const recipients = new Set(
@@ -967,8 +973,8 @@ export class RealtimeGateway {
         Math.floor(Number(
           interactionSettings?.interactionMaxRecipients
           ?? this.interactionSettings.value?.interactionMaxRecipients
-          ?? 20,
-        ) || 20),
+          ?? 1,
+        ) || 1),
       );
     return {
       ...session,
@@ -1042,13 +1048,6 @@ export class RealtimeGateway {
 
   async handleChatSend(client, message) {
     if (!client.worldSnapshotId) {
-      return;
-    }
-    if (client.isGuest) {
-      sendJson(client, {
-        type: "chat:error",
-        message: "Sign in to chat nearby.",
-      });
       return;
     }
     const interactionSettings = await this.getInteractionSettings();
