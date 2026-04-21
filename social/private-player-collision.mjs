@@ -1,3 +1,5 @@
+// See /Users/samiaji/Documents/Mauworld/guide/private-world-physics.md before
+// changing support sampling or blocker resolution behavior for occupied players.
 function finite(value, fallback = 0) {
   return Number.isFinite(Number(value)) ? Number(value) : fallback;
 }

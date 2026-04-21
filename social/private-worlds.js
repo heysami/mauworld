@@ -60,6 +60,9 @@ import {
 } from "./private-runtime-motion.mjs?v=20260421c";
 import { normalizePrivateInputKey } from "./private-input.mjs";
 
+// Private-world physics contract: keep occupied-player support, landing, overlap
+// prevention, and moving-platform carry client-local. See
+// /Users/samiaji/Documents/Mauworld/guide/private-world-physics.md before changing it.
 const { mauworldApiUrl } = window.MauworldSocial;
 
 const AI_REASONING_STORAGE_KEY = "mauworldPrivateWorldAiReasoning";
