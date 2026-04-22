@@ -4320,21 +4320,6 @@ function syncPrivateCameraToFollowTarget(preview = state.preview) {
   state.viewerCameraPosition.copy(camera.position);
 }
 
-function deleteByPath(target, path) {
-  const segments = String(path ?? "").split(".").filter(Boolean);
-  if (!segments.length) {
-    return;
-  }
-  let cursor = target;
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    cursor = cursor?.[segments[index]];
-    if (!cursor || typeof cursor !== "object") {
-      return;
-    }
-  }
-  delete cursor[segments[segments.length - 1]];
-}
-
 function describeVector3(input = {}) {
   return `${Number(input.x ?? 0).toFixed(1)}, ${Number(input.y ?? 0).toFixed(1)}, ${Number(input.z ?? 0).toFixed(1)}`;
 }
