@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css?v=20260419kick1" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260422logicissues1" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260422aidialoglayout1" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -397,46 +397,58 @@
       <div class="world-browser-backdrop" data-private-browser-backdrop aria-hidden="true"></div>
       <div class="pw-ai-dialog-backdrop" data-ai-dialog-backdrop hidden></div>
       <aside class="pw-ai-dialog" data-ai-dialog hidden aria-label="AI brainstorm">
-        <div class="pw-drawer__head">
-          <div>
-            <p class="pw-drawer__eyebrow">AI Builder</p>
-            <h2 data-ai-dialog-title>AI brainstorm</h2>
-            <p class="pw-launcher-section__copy" data-ai-dialog-note>Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.</p>
+        <aside class="pw-ai-dialog__sidebar" aria-label="Brainstorm threads">
+          <div class="pw-ai-dialog__sidebarhead">
+            <div>
+              <p class="pw-drawer__eyebrow">AI Builder</p>
+              <h2>Threads</h2>
+              <p class="pw-launcher-section__copy">Keep separate brainstorms on the left, then work the selected one on the right.</p>
+            </div>
+            <button type="button" class="is-muted" data-ai-dialog-new-thread>New thread</button>
           </div>
-          <button type="button" class="pw-drawer__close" data-ai-dialog-close>Close</button>
-        </div>
-
-        <div class="pw-ai-dialog__threadbar">
           <div class="pw-ai-dialog__threadlist" data-ai-dialog-thread-list aria-label="Brainstorm threads"></div>
-          <button type="button" class="is-muted" data-ai-dialog-new-thread>New thread</button>
-        </div>
+        </aside>
 
-        <div class="pw-ai-dialog__thread" data-ai-dialog-thread></div>
-        <p class="pw-status pw-ai-dialog__status" data-ai-dialog-status aria-live="polite"></p>
-
-        <label class="pw-ai-dialog__composer">
-          <span>Your message</span>
-          <textarea
-            data-ai-dialog-input
-            rows="4"
-            placeholder="Describe what you want, what matters, and what can be assumed."
-          ></textarea>
-        </label>
-
-        <div class="pw-inline-actions pw-ai-dialog__actions">
-          <button type="button" class="is-muted" data-ai-dialog-send>Ask AI</button>
-          <button type="button" data-ai-dialog-generate>Generate final</button>
-          <button type="button" class="is-muted" data-ai-dialog-apply hidden>Apply result</button>
-        </div>
-
-        <section class="pw-panel pw-panel--compact pw-ai-dialog__result" data-ai-dialog-result-panel hidden>
-          <div class="pw-panel__header">
-            <h3 data-ai-dialog-result-title>Generated result</h3>
+        <section class="pw-ai-dialog__main">
+          <div class="pw-drawer__head pw-ai-dialog__mainhead">
+            <div>
+              <p class="pw-drawer__eyebrow">Selected thread</p>
+              <h2 data-ai-dialog-title>AI brainstorm</h2>
+              <p class="pw-launcher-section__copy" data-ai-dialog-note>Start with a brief, let the AI surface assumptions and questions first, then generate when it is ready.</p>
+            </div>
+            <button type="button" class="pw-drawer__close" data-ai-dialog-close>Close</button>
           </div>
-          <label>
-            <span>Result</span>
-            <textarea data-ai-dialog-result rows="12" spellcheck="false"></textarea>
-          </label>
+
+          <p class="pw-status pw-ai-dialog__status" data-ai-dialog-status aria-live="polite"></p>
+
+          <div class="pw-ai-dialog__thread" data-ai-dialog-thread></div>
+
+          <section class="pw-panel pw-panel--compact pw-ai-dialog__result" data-ai-dialog-result-panel hidden>
+            <div class="pw-panel__header">
+              <h3 data-ai-dialog-result-title>Generated result</h3>
+            </div>
+            <label>
+              <span>Result</span>
+              <textarea data-ai-dialog-result rows="12" spellcheck="false"></textarea>
+            </label>
+          </section>
+
+          <div class="pw-ai-dialog__composer-shell">
+            <label class="pw-ai-dialog__composer">
+              <span>Your message</span>
+              <textarea
+                data-ai-dialog-input
+                rows="4"
+                placeholder="Describe what you want, what matters, and what can be assumed."
+              ></textarea>
+            </label>
+
+            <div class="pw-inline-actions pw-ai-dialog__actions">
+              <button type="button" class="is-muted" data-ai-dialog-send>Ask AI</button>
+              <button type="button" data-ai-dialog-generate>Generate final</button>
+              <button type="button" class="is-muted" data-ai-dialog-apply hidden>Apply result</button>
+            </div>
+          </div>
         </section>
       </aside>
 
