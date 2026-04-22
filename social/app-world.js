@@ -48,7 +48,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260422gamelibraryrollback1";
+} from "./world-games-ui.js?v=20260422gamelibrarythreads1";
 
 const { fetchJson, formatRelativeTime, mauworldApiUrl } = window.MauworldSocial;
 
