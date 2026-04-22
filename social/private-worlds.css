@@ -1805,7 +1805,7 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
 
 .pw-ai-dialog__main {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   gap: 14px;
   min-height: 0;
   padding: 18px 20px 18px 18px;
@@ -1818,13 +1818,57 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
   border-bottom: 1px solid rgba(93, 109, 186, 0.12);
 }
 
+.pw-ai-dialog__tabs {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding-bottom: 6px;
+}
+
+.pw-ai-dialog__tab {
+  appearance: none;
+  border: 1px solid rgba(93, 109, 186, 0.16);
+  border-radius: 999px;
+  background: rgba(247, 249, 255, 0.84);
+  color: var(--pw-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 9px 14px;
+  transition: border-color 180ms ease, background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.pw-ai-dialog__tab:hover:not(:disabled) {
+  border-color: rgba(61, 87, 182, 0.24);
+  color: var(--pw-ink);
+  transform: translate3d(0, -1px, 0);
+}
+
+.pw-ai-dialog__tab.is-active {
+  border-color: rgba(61, 87, 182, 0.28);
+  background: rgba(236, 242, 255, 0.96);
+  color: rgba(61, 87, 182, 0.96);
+}
+
+.pw-ai-dialog__panes {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pw-ai-dialog__pane {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  padding-right: 6px;
+}
+
 .pw-ai-dialog__thread {
   display: grid;
   gap: 12px;
   align-content: start;
-  overflow: auto;
   min-height: 0;
-  padding-right: 6px;
 }
 
 .pw-ai-dialog__empty,
@@ -1880,6 +1924,19 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
 .pw-ai-dialog__result {
   display: grid;
   gap: 10px;
+  min-height: 100%;
+  align-content: start;
+}
+
+.pw-ai-dialog__result label {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+}
+
+.pw-ai-dialog__result textarea {
+  min-height: min(48dvh, 420px);
+  resize: vertical;
 }
 
 .pw-ai-dialog__composer-shell {
@@ -1941,6 +1998,11 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
 
   .pw-ai-dialog__main {
     padding: 16px;
+  }
+
+  .pw-ai-dialog__tabs {
+    overflow: auto;
+    padding-bottom: 2px;
   }
 }
 

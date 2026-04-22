@@ -785,6 +785,7 @@ const elements = {
   aiDialogClose: document.querySelector("[data-ai-dialog-close]"),
   aiDialogTitle: document.querySelector("[data-ai-dialog-title]"),
   aiDialogNote: document.querySelector("[data-ai-dialog-note]"),
+  aiDialogTabs: document.querySelector("[data-ai-dialog-tabs]"),
   aiDialogThreadList: document.querySelector("[data-ai-dialog-thread-list]"),
   aiDialogThread: document.querySelector("[data-ai-dialog-thread]"),
   aiDialogStatus: document.querySelector("[data-ai-dialog-status]"),
@@ -1052,6 +1053,7 @@ function createEmptyAiDialogState() {
     title: "AI brainstorm",
     note: "Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.",
     applyLabel: "",
+    activePane: "conversation",
     activeThreadId: "",
     threads: [],
     status: "",
@@ -5357,10 +5359,41 @@ function setAiDialogStatus(text = "", tone = "") {
   state.aiDialog.statusTone = String(tone ?? "");
 }
 
+function getAiDialogResultTabLabel(dialog = state.aiDialog) {
+  if (dialog.artifactType === "screen_html") {
+    return "Generated HTML";
+  }
+  if (dialog.artifactType === "texture") {
+    return "Generated texture";
+  }
+  if (dialog.artifactType === "3d_model") {
+    return "Generated model";
+  }
+  return "Generated script";
+}
+
+function setAiDialogPane(pane = "conversation", options = {}) {
+  const normalizedPane = String(pane ?? "conversation").trim().toLowerCase() === "result" ? "result" : "conversation";
+  if (normalizedPane === "result" && !String(getActiveAiDialogThread()?.result ?? "").trim()) {
+    return false;
+  }
+  state.aiDialog.activePane = normalizedPane;
+  if (options.persist !== false) {
+    persistAiDialogThreadState();
+  }
+  renderAiDialog();
+  return true;
+}
+
 function renderAiDialog() {
   const dialog = state.aiDialog;
   const threads = ensureAiDialogThreads(dialog);
   const activeThread = getActiveAiDialogThread(dialog);
+  const hasResult = Boolean(activeThread.result);
+  if (dialog.activePane === "result" && !hasResult) {
+    dialog.activePane = "conversation";
+  }
+  const activePane = dialog.activePane === "result" && hasResult ? "result" : "conversation";
   if (elements.aiDialogBackdrop) {
     elements.aiDialogBackdrop.hidden = !dialog.open;
   }
@@ -5423,6 +5456,22 @@ function renderAiDialog() {
   if (elements.aiDialogGenerate) {
     elements.aiDialogGenerate.disabled = !dialog.open || dialog.busy || !canGenerate || !state.selectedWorld || !state.session;
   }
+  if (elements.aiDialogTabs) {
+    const tabButtons = [...elements.aiDialogTabs.querySelectorAll("[data-ai-dialog-tab]")];
+    for (const button of tabButtons) {
+      const pane = button.getAttribute("data-ai-dialog-tab");
+      const isResultTab = pane === "result";
+      const enabled = pane === "conversation" || hasResult;
+      const isSelected = pane === activePane;
+      button.classList.toggle("is-active", isSelected);
+      button.setAttribute("aria-selected", isSelected ? "true" : "false");
+      button.disabled = !enabled;
+      button.hidden = isResultTab && !hasResult;
+      if (isResultTab) {
+        button.textContent = getAiDialogResultTabLabel(dialog);
+      }
+    }
+  }
   if (elements.aiDialogApply) {
     const canApplyAsset = dialog.artifactType === "texture" || dialog.artifactType === "3d_model";
     const canApply = canApplyAsset
@@ -5435,7 +5484,7 @@ function renderAiDialog() {
     }
   }
   if (elements.aiDialogResultPanel) {
-    elements.aiDialogResultPanel.hidden = !activeThread.result;
+    elements.aiDialogResultPanel.hidden = !hasResult;
   }
   if (elements.aiDialogResultTitle) {
     elements.aiDialogResultTitle.textContent =
@@ -5452,6 +5501,12 @@ function renderAiDialog() {
   }
   if (elements.aiDialogResult) {
     elements.aiDialogResult.disabled = !dialog.open || dialog.busy;
+  }
+  if (elements.aiDialog) {
+    const panes = [...elements.aiDialog.querySelectorAll("[data-ai-dialog-pane]")];
+    for (const pane of panes) {
+      pane.hidden = pane.getAttribute("data-ai-dialog-pane") !== activePane;
+    }
   }
 }
 
@@ -5664,6 +5719,10 @@ function selectAiDialogThread(threadId = "") {
     return false;
   }
   state.aiDialog.activeThreadId = normalizedThreadId;
+  const nextThread = threads.find((thread) => thread.id === normalizedThreadId) ?? null;
+  if (!String(nextThread?.result ?? "").trim()) {
+    state.aiDialog.activePane = "conversation";
+  }
   setAiDialogStatus("", "");
   persistAiDialogThreadState();
   renderAiDialog();
@@ -5678,6 +5737,7 @@ function createAiDialogThread(options = {}) {
   const threads = ensureAiDialogThreads(state.aiDialog);
   threads.push(thread);
   state.aiDialog.activeThreadId = thread.id;
+  state.aiDialog.activePane = "conversation";
   setAiDialogStatus(options.status ?? "Started a fresh brainstorm thread.", "success");
   persistAiDialogThreadState();
   renderAiDialog();
@@ -6021,6 +6081,7 @@ async function generateAiDialogResult() {
       } else {
         finalStatusMessage = applyOutcome.message;
       }
+      state.aiDialog.activePane = "result";
     } else {
       const generatedText = await generateAi(kind, {
         objective: request.objective,
@@ -6050,6 +6111,7 @@ async function generateAiDialogResult() {
       } else {
         finalStatusMessage = applyOutcome.message;
       }
+      state.aiDialog.activePane = "result";
       if (applyOutcome.focusScript) {
         focusSelectedScriptFunctionBody();
       }
@@ -26495,6 +26557,13 @@ function bindEvents() {
     activeThread.result = event.target.value;
     touchAiDialogThread(activeThread);
     persistAiDialogThreadState();
+  });
+  elements.aiDialogTabs?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-ai-dialog-tab]");
+    if (!button) {
+      return;
+    }
+    setAiDialogPane(button.getAttribute("data-ai-dialog-tab"));
   });
   elements.generateHtml.addEventListener("click", () => {
     openWorldAiDialog("html");

@@ -14,7 +14,7 @@
     />
     <link rel="stylesheet" href="/social/styles.css" />
     <link rel="stylesheet" href="/social/world.css?v=20260419kick1" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260422aidialoglayout1" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260422aidialogtabs1" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -421,17 +421,28 @@
 
           <p class="pw-status pw-ai-dialog__status" data-ai-dialog-status aria-live="polite"></p>
 
-          <div class="pw-ai-dialog__thread" data-ai-dialog-thread></div>
+          <div class="pw-ai-dialog__tabs" data-ai-dialog-tabs role="tablist" aria-label="AI thread detail views">
+            <button type="button" class="pw-ai-dialog__tab is-active" data-ai-dialog-tab="conversation" role="tab" aria-selected="true">Conversation</button>
+            <button type="button" class="pw-ai-dialog__tab" data-ai-dialog-tab="result" role="tab" aria-selected="false">Generated script</button>
+          </div>
 
-          <section class="pw-panel pw-panel--compact pw-ai-dialog__result" data-ai-dialog-result-panel hidden>
-            <div class="pw-panel__header">
-              <h3 data-ai-dialog-result-title>Generated result</h3>
-            </div>
-            <label>
-              <span>Result</span>
-              <textarea data-ai-dialog-result rows="12" spellcheck="false"></textarea>
-            </label>
-          </section>
+          <div class="pw-ai-dialog__panes">
+            <section class="pw-ai-dialog__pane pw-ai-dialog__pane--conversation" data-ai-dialog-pane="conversation" role="tabpanel">
+              <div class="pw-ai-dialog__thread" data-ai-dialog-thread></div>
+            </section>
+
+            <section class="pw-ai-dialog__pane pw-ai-dialog__pane--result" data-ai-dialog-pane="result" role="tabpanel" hidden>
+              <section class="pw-panel pw-panel--compact pw-ai-dialog__result" data-ai-dialog-result-panel hidden>
+                <div class="pw-panel__header">
+                  <h3 data-ai-dialog-result-title>Generated result</h3>
+                </div>
+                <label>
+                  <span>Result</span>
+                  <textarea data-ai-dialog-result rows="12" spellcheck="false"></textarea>
+                </label>
+              </section>
+            </section>
+          </div>
 
           <div class="pw-ai-dialog__composer-shell">
             <label class="pw-ai-dialog__composer">
@@ -960,6 +971,6 @@
         }
       }
     </script>
-    <script type="module" src="/social/private-worlds.js?v=20260422groupprefab3"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260422aidialogtabs1"></script>
   </body>
 </html>
