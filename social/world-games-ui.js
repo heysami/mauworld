@@ -1301,12 +1301,11 @@ export function createWorldGameLibrary(options = {}) {
     : [createEmptyThread()];
   const state = {
     open: false,
+    screen: "library",
     loading: false,
     generating: false,
     aiBusy: false,
     updating: false,
-    activePanel: "thread",
-    activeThreadPane: "conversation",
     status: "",
     games: [],
     selectedGameId: "",
@@ -1316,6 +1315,7 @@ export function createWorldGameLibrary(options = {}) {
     aiStatusTone: "",
     threads: initialThreads,
     activeThreadId: clipText(readStorage(activeThreadStorageKey, ""), 80),
+    activeThreadPane: "conversation",
   };
   if (!state.threads.some((thread) => thread.id === state.activeThreadId)) {
     state.activeThreadId = state.threads[0].id;
@@ -1326,21 +1326,25 @@ export function createWorldGameLibrary(options = {}) {
   overlay.hidden = true;
   overlay.innerHTML = `
     <div class="mw-game-modal__backdrop" data-game-library-close></div>
-    <div class="mw-game-modal__dialog" role="dialog" aria-modal="true" aria-label="Saved Mauworld games">
+    <div class="mw-game-modal__dialog" role="dialog" aria-modal="true" aria-label="Mauworld game tools">
       <div class="mw-game-modal__header">
         <div class="mw-game-modal__heading">
-          <span class="mw-game-modal__eyebrow">Saved games</span>
-          <h2>Game library</h2>
-          <p>Generate, save, and share nearby from one place.</p>
+          <span class="mw-game-modal__eyebrow" data-game-library-eyebrow>Saved games</span>
+          <h2 data-game-library-title>Game library</h2>
+          <p data-game-library-copy>Generate, save, and share nearby from one place.</p>
         </div>
-        <button type="button" class="mw-game-modal__close" data-game-library-close aria-label="Close game library">Close</button>
+        <div class="mw-game-modal__header-actions">
+          <button type="button" data-game-library-open-builder>Generate new game</button>
+          <button type="button" class="is-muted" data-game-library-open-library hidden>Saved games</button>
+          <button type="button" class="mw-game-modal__close" data-game-library-close aria-label="Close game library">Close</button>
+        </div>
       </div>
-      <div class="mw-game-library">
-        <section class="mw-game-library__column mw-game-library__column--sidebar">
+      <div class="mw-game-library" data-game-library-screen="library">
+        <section class="mw-game-library__column mw-game-library__column--list">
           <div class="mw-game-library__toolbar">
             <div class="mw-game-library__toolbar-copy">
-              <strong>Library</strong>
-              <span>Saved games and AI threads</span>
+              <strong>Your games</strong>
+              <span>HTML game packages</span>
             </div>
             <div class="mw-game-library__toolbar-actions">
               <button type="button" class="is-muted" data-game-library-import-button>Import</button>
@@ -1348,31 +1352,28 @@ export function createWorldGameLibrary(options = {}) {
             </div>
           </div>
           <div class="mw-game-library__status" data-game-library-status></div>
-          <div class="mw-game-library__sidebar">
-            <section class="mw-game-library__nav-section">
-              <div class="mw-game-library__nav-head">
-                <div class="mw-game-library__toolbar-copy">
-                  <strong>AI threads</strong>
-                  <span>Keep separate brainstorms on the left and use the selected one on the right.</span>
-                </div>
-                <button type="button" class="is-muted" data-game-generator-new-thread>New thread</button>
-              </div>
-              <div class="mw-game-library__nav-list" data-game-generator-thread-list></div>
-            </section>
-            <section class="mw-game-library__nav-section">
-              <div class="mw-game-library__nav-head">
-                <div class="mw-game-library__toolbar-copy">
-                  <strong>Saved games</strong>
-                  <span>Generated nearby-share packages ready to open, download, or share.</span>
-                </div>
-              </div>
-              <div class="mw-game-library__nav-list" data-game-library-list></div>
-            </section>
-          </div>
+          <div class="mw-game-library__list" data-game-library-list></div>
           <input type="file" data-game-library-import-file accept=".json,.mauworld-game.json,application/json" hidden />
         </section>
+        <section class="mw-game-library__column mw-game-library__column--detail">
+          <div class="mw-game-library__detail" data-game-library-detail></div>
+        </section>
+      </div>
+      <div class="mw-game-library" data-game-library-screen="builder" hidden>
+        <section class="mw-game-library__column mw-game-library__column--sidebar">
+          <div class="mw-game-library__nav-section">
+            <div class="mw-game-library__nav-head">
+              <div class="mw-game-library__toolbar-copy">
+                <strong>Threads</strong>
+                <span>Keep separate brainstorms on the left, then generate from the selected one on the right.</span>
+              </div>
+              <button type="button" class="is-muted" data-game-generator-new-thread>New thread</button>
+            </div>
+            <div class="mw-game-library__nav-list" data-game-generator-thread-list></div>
+          </div>
+        </section>
         <section class="mw-game-library__column mw-game-library__column--content">
-          <div class="mw-game-library__content" data-game-library-content></div>
+          <div class="mw-game-library__content" data-game-builder-content></div>
         </section>
       </div>
     </div>
@@ -1381,22 +1382,30 @@ export function createWorldGameLibrary(options = {}) {
 
   const elements = {
     overlay,
+    headerEyebrow: overlay.querySelector("[data-game-library-eyebrow]"),
+    headerTitle: overlay.querySelector("[data-game-library-title]"),
+    headerCopy: overlay.querySelector("[data-game-library-copy]"),
+    openBuilder: overlay.querySelector("[data-game-library-open-builder]"),
+    openLibrary: overlay.querySelector("[data-game-library-open-library]"),
+    libraryScreen: overlay.querySelector('[data-game-library-screen="library"]'),
+    builderScreen: overlay.querySelector('[data-game-library-screen="builder"]'),
     status: overlay.querySelector("[data-game-library-status]"),
     list: overlay.querySelector("[data-game-library-list]"),
-    content: overlay.querySelector("[data-game-library-content]"),
+    detail: overlay.querySelector("[data-game-library-detail]"),
+    refresh: overlay.querySelector("[data-game-library-refresh]"),
+    importButton: overlay.querySelector("[data-game-library-import-button]"),
+    importFile: overlay.querySelector("[data-game-library-import-file]"),
+    threadList: overlay.querySelector("[data-game-generator-thread-list]"),
+    builderContent: overlay.querySelector("[data-game-builder-content]"),
+    newThread: overlay.querySelector("[data-game-generator-new-thread]"),
     form: null,
     prompt: null,
     apiKey: null,
     model: null,
     send: null,
     submit: null,
-    refresh: overlay.querySelector("[data-game-library-refresh]"),
-    importButton: overlay.querySelector("[data-game-library-import-button]"),
-    importFile: overlay.querySelector("[data-game-library-import-file]"),
-    threadList: overlay.querySelector("[data-game-generator-thread-list]"),
     thread: null,
     generatorStatus: null,
-    newThread: overlay.querySelector("[data-game-generator-new-thread]"),
   };
 
   function ensureThreads() {
@@ -1440,7 +1449,6 @@ export function createWorldGameLibrary(options = {}) {
       return;
     }
     state.activeThreadId = normalizedThreadId;
-    state.activePanel = "thread";
     state.activeThreadPane = "conversation";
     persistDraftState();
   }
@@ -1492,23 +1500,6 @@ export function createWorldGameLibrary(options = {}) {
     return "New thread";
   }
 
-  function canGenerateFinal() {
-    return getActiveThread().messages.some((entry) => entry.role === "assistant");
-  }
-
-  function syncThreadComposerState() {
-    const busy = state.aiBusy || state.generating || state.updating;
-    const hasInput = Boolean(String(getActiveThread().input ?? "").trim());
-    if (elements.send) {
-      elements.send.disabled = busy || !hasInput;
-      elements.send.textContent = state.aiBusy ? "Asking..." : "Ask AI";
-    }
-    if (elements.submit) {
-      elements.submit.disabled = busy || !canGenerateFinal() || hasInput;
-      elements.submit.textContent = state.generating ? "Generating..." : "Generate final";
-    }
-  }
-
   function getThreadTitle(thread = {}, index = 0) {
     return clipText(
       thread.generatedGameTitle
@@ -1519,13 +1510,16 @@ export function createWorldGameLibrary(options = {}) {
     ) || `New thread ${index + 1}`;
   }
 
+  function canGenerateFinal() {
+    return getActiveThread().messages.some((entry) => entry.role === "assistant");
+  }
+
   function getSelectedGame() {
     return state.games.find((game) => String(game?.id ?? "") === state.selectedGameId) ?? null;
   }
 
   function setSelectedGame(gameId = "") {
     state.selectedGameId = String(gameId ?? "").trim();
-    state.activePanel = "game";
     options.onSelect?.(getSelectedGame());
   }
 
@@ -1560,49 +1554,51 @@ export function createWorldGameLibrary(options = {}) {
     state.aiStatusTone = String(tone ?? "");
   }
 
-  function renderSidebar() {
+  function syncBuilderComposerState() {
     const busy = state.aiBusy || state.generating || state.updating;
-    if (elements.threadList) {
-      const threads = getSortedThreads();
-      elements.threadList.innerHTML = threads.length
-        ? threads.map((thread, index) => {
-          const isActive = state.activePanel === "thread" && thread.id === state.activeThreadId;
-          const hasDraftContent = Boolean((Array.isArray(thread.messages) ? thread.messages.length : 0) || String(thread.input ?? "").trim());
-          const label = thread.generatedGameId
-            ? "final ready"
-            : (hasDraftContent ? "draft" : "new");
-          const preview = thread.messages.length
-            ? getThreadPreview(thread)
-            : (String(thread.input ?? "").trim() ? getThreadPreview(thread) : "Start a new nearby game idea.");
-          return `
-            <div class="mw-game-library__nav-row">
-              <button
-                type="button"
-                class="mw-game-library__item mw-game-library__item--thread ${isActive ? "is-active" : ""}"
-                data-game-generator-thread-select="${escapeHtml(thread.id)}"
-                ${busy ? "disabled" : ""}
-              >
-                <span class="mw-game-library__item-kicker">${escapeHtml(label)}</span>
-                <strong>${escapeHtml(getThreadTitle(thread, index))}</strong>
-                <span>${escapeHtml(preview)}</span>
-                <span class="mw-game-library__meta">${escapeHtml(getThreadSummary(thread).replace(/\n+/g, " · "))}</span>
-              </button>
-              <button
-                type="button"
-                class="is-muted mw-game-library__item-delete"
-                data-game-generator-thread-delete="${escapeHtml(thread.id)}"
-                ${busy || threads.length <= 1 ? "disabled" : ""}
-              >Delete</button>
-            </div>
-          `;
-        }).join("")
-        : `
-          <div class="mw-game-library__empty">
-            <strong>No drafts yet</strong>
-            <p>Create a new draft in the sidebar and the conversation will open here.</p>
-          </div>
-        `;
+    const hasInput = Boolean(String(getActiveThread().input ?? "").trim());
+    if (elements.send) {
+      elements.send.disabled = busy || !hasInput;
+      elements.send.textContent = state.aiBusy ? "Asking..." : "Ask AI";
     }
+    if (elements.submit) {
+      elements.submit.disabled = busy || !canGenerateFinal() || hasInput;
+      elements.submit.textContent = state.generating ? "Generating..." : "Generate final";
+    }
+  }
+
+  function renderHeader() {
+    if (state.screen === "builder") {
+      elements.headerEyebrow.textContent = "AI Builder";
+      elements.headerTitle.textContent = "Generate a new game";
+      elements.headerCopy.textContent = "New game generation lives here only. Saved games stay in the library screen.";
+      elements.openBuilder.hidden = true;
+      elements.openBuilder.disabled = state.aiBusy || state.generating || state.updating;
+      elements.openLibrary.hidden = false;
+    } else {
+      elements.headerEyebrow.textContent = "Saved games";
+      elements.headerTitle.textContent = "Game library";
+      elements.headerCopy.textContent = "Saved games, imports, and package details live here. New generation opens separately.";
+      elements.openBuilder.hidden = false;
+      elements.openBuilder.disabled = state.aiBusy || state.generating || state.updating;
+      elements.openLibrary.hidden = true;
+    }
+    elements.openLibrary.disabled = state.aiBusy || state.generating || state.updating;
+  }
+
+  function renderLibraryStatus() {
+    if (!elements.status) {
+      return;
+    }
+    elements.status.textContent = state.status || "";
+    if (state.status) {
+      elements.status.dataset.state = getStatusTone();
+    } else {
+      delete elements.status.dataset.state;
+    }
+  }
+
+  function renderList() {
     if (!elements.list) {
       return;
     }
@@ -1610,20 +1606,19 @@ export function createWorldGameLibrary(options = {}) {
       elements.list.innerHTML = `
         <div class="mw-game-library__empty">
           <strong>No saved games yet</strong>
-          <p>Generate one from an AI thread and it will show up here.</p>
+          <p>Generate one from the separate AI builder and it will show up here.</p>
         </div>
       `;
       return;
     }
     elements.list.innerHTML = state.games.map((game) => {
-      const selected = state.activePanel === "game" && state.selectedGameId === game.id;
+      const selected = state.selectedGameId === game.id;
       return `
         <button
           type="button"
           class="mw-game-library__item ${selected ? "is-active" : ""}"
           data-game-library-id="${escapeHtml(game.id)}"
         >
-          <span class="mw-game-library__item-kicker">saved game</span>
           <strong>${escapeHtml(getGameTitle(game))}</strong>
           <span>${escapeHtml(getGameDescription(game) || getMultiplayerModeLabel(game.manifest))}</span>
           <span class="mw-game-library__meta">${escapeHtml(getMultiplayerModeLabel(game.manifest))} · ${escapeHtml(getPlayerCountLabel(game.manifest))}</span>
@@ -1638,101 +1633,79 @@ export function createWorldGameLibrary(options = {}) {
     }
   }
 
-  function renderStatus() {
-    if (!elements.status) {
-      return;
-    }
-    elements.status.textContent = state.status || "";
-    if (state.status) {
-      elements.status.dataset.state = getStatusTone();
-    } else {
-      delete elements.status.dataset.state;
-    }
-  }
-
-  function renderGameContent() {
+  function renderDetail() {
     const game = getSelectedGame();
-    if (!elements.content) {
+    if (!elements.detail) {
       return;
     }
-    elements.form = null;
-    elements.prompt = null;
-    elements.apiKey = null;
-    elements.model = null;
-    elements.send = null;
-    elements.submit = null;
-    elements.thread = null;
-    elements.generatorStatus = null;
     if (!game) {
-      elements.content.innerHTML = `
+      elements.detail.innerHTML = `
         <div class="mw-game-library__empty">
-          <strong>Select a saved game or a thread</strong>
-          <p>Saved games open their package details here. AI threads open their conversation workspace here.</p>
+          <strong>Select a saved game</strong>
+          <p>Or open the separate AI builder to generate a new one.</p>
         </div>
       `;
       return;
     }
     const assetEntries = getWorldGameAssetEntries(game);
-    elements.content.innerHTML = `
-      <div class="mw-game-library__detail">
-        <div class="mw-game-library__detail-head">
-          <div class="mw-game-library__detail-copy">
-            <span class="mw-game-library__badge">Ready to share</span>
-            <h3>${escapeHtml(getGameTitle(game))}</h3>
-            <p>${escapeHtml(getGameDescription(game) || "No description yet.")}</p>
-          </div>
-          <div class="mw-game-library__detail-actions">
-            <button type="button" class="is-muted" data-game-library-download>Download Package</button>
-            <button type="button" data-game-library-share>Share Nearby</button>
-          </div>
+    elements.detail.innerHTML = `
+      <div class="mw-game-library__detail-head">
+        <div class="mw-game-library__detail-copy">
+          <span class="mw-game-library__badge">Ready to share</span>
+          <h3>${escapeHtml(getGameTitle(game))}</h3>
+          <p>${escapeHtml(getGameDescription(game) || "No description yet.")}</p>
         </div>
-        <div class="mw-game-library__detail-meta">
-          <span>${escapeHtml(getMultiplayerModeLabel(game.manifest))}</span>
-          <span>${escapeHtml(getPlayerCountLabel(game.manifest))}</span>
-          <span>${game.manifest?.allow_viewers === false ? "Players only" : "Viewers allowed"}</span>
-          <span>${assetEntries.length} packaged asset${assetEntries.length === 1 ? "" : "s"}</span>
+        <div class="mw-game-library__detail-actions">
+          <button type="button" class="is-muted" data-game-library-download>Download Package</button>
+          <button type="button" data-game-library-share>Share Nearby</button>
         </div>
-        <div class="mw-game-library__assets">
-          <div class="mw-game-library__assets-head">
-            <div class="mw-game-library__toolbar-copy">
-              <strong>Package assets</strong>
-              <span>Replace or download resources without rewriting the game HTML.</span>
-            </div>
-            <button type="button" class="is-muted" data-game-library-asset-add ${state.updating ? "disabled" : ""}>Add asset</button>
+      </div>
+      <div class="mw-game-library__detail-meta">
+        <span>${escapeHtml(getMultiplayerModeLabel(game.manifest))}</span>
+        <span>${escapeHtml(getPlayerCountLabel(game.manifest))}</span>
+        <span>${game.manifest?.allow_viewers === false ? "Players only" : "Viewers allowed"}</span>
+        <span>${assetEntries.length} packaged asset${assetEntries.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="mw-game-library__assets">
+        <div class="mw-game-library__assets-head">
+          <div class="mw-game-library__toolbar-copy">
+            <strong>Package assets</strong>
+            <span>Replace or download resources without rewriting the game HTML.</span>
           </div>
-          ${assetEntries.length ? `
-            <div class="mw-game-library__asset-list">
-              ${assetEntries.map((asset) => `
-                <div class="mw-game-library__asset-item">
-                  <div class="mw-game-library__asset-copy">
-                    <strong>${escapeHtml(asset.id)}</strong>
-                    <span>${escapeHtml(asset.kind)} · ${escapeHtml(asset.mime_type || "application/octet-stream")} · ${Math.max(1, Math.round((asset.size_bytes ?? 0) / 1024))} KB</span>
-                  </div>
-                  <div class="mw-game-library__asset-actions">
-                    <button type="button" class="is-muted" data-game-library-asset-download="${escapeHtml(asset.id)}">Download</button>
-                    <button type="button" class="is-muted" data-game-library-asset-replace="${escapeHtml(asset.id)}" ${state.updating ? "disabled" : ""}>Replace</button>
-                  </div>
+          <button type="button" class="is-muted" data-game-library-asset-add ${state.updating ? "disabled" : ""}>Add asset</button>
+        </div>
+        ${assetEntries.length ? `
+          <div class="mw-game-library__asset-list">
+            ${assetEntries.map((asset) => `
+              <div class="mw-game-library__asset-item">
+                <div class="mw-game-library__asset-copy">
+                  <strong>${escapeHtml(asset.id)}</strong>
+                  <span>${escapeHtml(asset.kind)} · ${escapeHtml(asset.mime_type || "application/octet-stream")} · ${Math.max(1, Math.round((asset.size_bytes ?? 0) / 1024))} KB</span>
                 </div>
-              `).join("")}
-            </div>
-          ` : `
-            <div class="mw-game-library__empty">
-              <strong>No packaged assets yet</strong>
-              <p>The HTML can still work as a single-file app, but package assets let you swap icons, images, and model files separately.</p>
-            </div>
-          `}
-          <input type="file" data-game-library-asset-file hidden />
-        </div>
+                <div class="mw-game-library__asset-actions">
+                  <button type="button" class="is-muted" data-game-library-asset-download="${escapeHtml(asset.id)}">Download</button>
+                  <button type="button" class="is-muted" data-game-library-asset-replace="${escapeHtml(asset.id)}" ${state.updating ? "disabled" : ""}>Replace</button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `
+          <div class="mw-game-library__empty">
+            <strong>No packaged assets yet</strong>
+            <p>The HTML can still work as a single-file app, but package assets let you swap icons, images, and model files separately.</p>
+          </div>
+        `}
+        <input type="file" data-game-library-asset-file hidden />
       </div>
     `;
     const selectedGame = getSelectedGame();
-    elements.content.querySelector("[data-game-library-share]")?.addEventListener("click", () => {
+    elements.detail.querySelector("[data-game-library-share]")?.addEventListener("click", () => {
       if (!selectedGame) {
         return;
       }
       options.onShare?.(selectedGame);
     });
-    elements.content.querySelector("[data-game-library-download]")?.addEventListener("click", () => {
+    elements.detail.querySelector("[data-game-library-download]")?.addEventListener("click", () => {
       if (!selectedGame) {
         return;
       }
@@ -1742,7 +1715,7 @@ export function createWorldGameLibrary(options = {}) {
         new Blob([JSON.stringify(packagePayload, null, 2)], { type: "application/json" }),
       );
     });
-    const assetFileInput = elements.content.querySelector("[data-game-library-asset-file]");
+    const assetFileInput = elements.detail.querySelector("[data-game-library-asset-file]");
     assetFileInput?.addEventListener("change", async () => {
       const selectedFile = assetFileInput.files?.[0];
       const assetId = String(assetFileInput.dataset.assetId ?? "").trim();
@@ -1771,10 +1744,10 @@ export function createWorldGameLibrary(options = {}) {
           manifest: selectedGame.manifest,
           package: nextPackage,
         });
-        state.activePanel = "game";
         await refresh({ selectGameId: payload?.game?.id ?? selectedGame.id });
         state.status = `Updated asset "${normalizedAssetId}".`;
         setGeneratorStatus(`Updated ${normalizedAssetId}.`, "success");
+        options.onSelect?.(getSelectedGame());
       } catch (error) {
         state.status = error?.message || "Could not update the game asset.";
         setGeneratorStatus(error?.message || "Could not update the game asset.", "error");
@@ -1784,7 +1757,7 @@ export function createWorldGameLibrary(options = {}) {
         render();
       }
     });
-    elements.content.querySelector("[data-game-library-asset-add]")?.addEventListener("click", () => {
+    elements.detail.querySelector("[data-game-library-asset-add]")?.addEventListener("click", () => {
       if (!assetFileInput || state.updating) {
         return;
       }
@@ -1797,7 +1770,7 @@ export function createWorldGameLibrary(options = {}) {
       assetFileInput.dataset.assetId = requestedId;
       assetFileInput.click();
     });
-    for (const button of elements.content.querySelectorAll("[data-game-library-asset-download]")) {
+    for (const button of elements.detail.querySelectorAll("[data-game-library-asset-download]")) {
       button.addEventListener("click", () => {
         if (!selectedGame) {
           return;
@@ -1810,7 +1783,7 @@ export function createWorldGameLibrary(options = {}) {
         downloadBlob(asset.file_name || `${asset.id}`, dataUrlToBlob(asset.data_url));
       });
     }
-    for (const button of elements.content.querySelectorAll("[data-game-library-asset-replace]")) {
+    for (const button of elements.detail.querySelectorAll("[data-game-library-asset-replace]")) {
       button.addEventListener("click", () => {
         if (!assetFileInput || state.updating) {
           return;
@@ -1821,29 +1794,75 @@ export function createWorldGameLibrary(options = {}) {
     }
   }
 
-  function renderThreadContent() {
+  function renderBuilderSidebar() {
+    if (!elements.threadList) {
+      return;
+    }
+    const busy = state.aiBusy || state.generating || state.updating;
+    const threads = getSortedThreads();
+    elements.threadList.innerHTML = threads.length
+      ? threads.map((thread, index) => {
+        const isActive = thread.id === state.activeThreadId;
+        const hasDraftContent = Boolean((Array.isArray(thread.messages) ? thread.messages.length : 0) || String(thread.input ?? "").trim());
+        const label = thread.generatedGameId
+          ? "final ready"
+          : (hasDraftContent ? "draft" : "new");
+        const preview = thread.messages.length
+          ? getThreadPreview(thread)
+          : (String(thread.input ?? "").trim() ? getThreadPreview(thread) : "Start a new nearby game idea.");
+        return `
+          <div class="mw-game-library__nav-row">
+            <button
+              type="button"
+              class="mw-game-library__item mw-game-library__item--thread ${isActive ? "is-active" : ""}"
+              data-game-generator-thread-select="${escapeHtml(thread.id)}"
+              ${busy ? "disabled" : ""}
+            >
+              <span class="mw-game-library__item-kicker">${escapeHtml(label)}</span>
+              <strong>${escapeHtml(getThreadTitle(thread, index))}</strong>
+              <span>${escapeHtml(preview)}</span>
+              <span class="mw-game-library__meta">${escapeHtml(getThreadSummary(thread).replace(/\n+/g, " · "))}</span>
+            </button>
+            <button
+              type="button"
+              class="is-muted mw-game-library__item-delete"
+              data-game-generator-thread-delete="${escapeHtml(thread.id)}"
+              ${busy || threads.length <= 1 ? "disabled" : ""}
+            >Delete</button>
+          </div>
+        `;
+      }).join("")
+      : `
+        <div class="mw-game-library__empty">
+          <strong>No drafts yet</strong>
+          <p>Create a new draft and the full generation workspace will open on the right.</p>
+        </div>
+      `;
+  }
+
+  function renderBuilderContent() {
     const activeThread = getActiveThread();
     const threadIndex = Math.max(0, getSortedThreads().findIndex((thread) => thread.id === activeThread.id));
     const busy = state.aiBusy || state.generating || state.updating;
     const generatedGame = getThreadGeneratedGame(activeThread);
     const activePane = state.activeThreadPane === "result" && generatedGame ? "result" : "conversation";
-    if (!elements.content) {
+    if (!elements.builderContent) {
       return;
     }
-    elements.content.innerHTML = `
+    elements.builderContent.innerHTML = `
       <div class="mw-game-thread">
         <div class="mw-game-thread__head">
           <div class="mw-game-generator__copy">
             <span class="mw-game-modal__eyebrow">Selected thread</span>
             <h3>${escapeHtml(getThreadTitle(activeThread, threadIndex))}</h3>
-            <span>Discuss the rules, seats, asset package, and nearby-share flow here. When it feels right, generate the final game package from this thread.</span>
+            <span>Discuss the rules, seats, asset package, and nearby-share flow here. Generate the final game only when this thread is ready.</span>
           </div>
           <div class="mw-game-thread__actions">
             ${generatedGame ? '<button type="button" class="is-muted" data-game-thread-open-game>Open saved game</button>' : ""}
           </div>
         </div>
         <div class="mw-game-generator__status" data-game-generator-status ${state.aiStatus ? `data-state="${escapeHtml(getGeneratorStatusTone())}"` : ""}>${escapeHtml(state.aiStatus || "")}</div>
-        <div class="mw-game-thread__tabs" role="tablist" aria-label="AI thread detail views">
+        <div class="mw-game-thread__tabs" role="tablist" aria-label="Game AI thread detail views">
           <button type="button" class="mw-game-thread__tab ${activePane === "conversation" ? "is-active" : ""}" data-game-thread-pane="conversation" role="tab" aria-selected="${activePane === "conversation" ? "true" : "false"}">Conversation</button>
           <button type="button" class="mw-game-thread__tab ${activePane === "result" ? "is-active" : ""}" data-game-thread-pane="result" role="tab" aria-selected="${activePane === "result" ? "true" : "false"}" ${generatedGame ? "" : "hidden disabled"}>Generated game</button>
         </div>
@@ -1860,7 +1879,7 @@ export function createWorldGameLibrary(options = {}) {
                 : `
                   <div class="mw-game-library__empty">
                     <strong>Start a discussion</strong>
-                    <p>Talk through the rules, asset package, seat setup, and UI direction before you generate the final game.</p>
+                    <p>Talk through the rules, asset package, seat setup, and UI direction here before you generate the final game.</p>
                   </div>
                 `}
             </div>
@@ -1871,7 +1890,7 @@ export function createWorldGameLibrary(options = {}) {
                 <span class="mw-game-library__badge">Generated</span>
                 <div class="mw-game-thread__result-copy">
                   <strong>${escapeHtml(getGameTitle(generatedGame))}</strong>
-                  <span>This draft produced a saved game package. Open it from here or keep refining the thread and generate a fresh version later.</span>
+                  <span>This thread produced a saved game package. Open it in the saved-games screen or keep refining this thread and generate a new version later.</span>
                 </div>
                 <div class="mw-game-thread__result-actions">
                   <button type="button" class="is-muted" data-game-thread-open-game>Open saved game</button>
@@ -1880,7 +1899,7 @@ export function createWorldGameLibrary(options = {}) {
             ` : `
               <div class="mw-game-library__empty">
                 <strong>No generated game yet</strong>
-                <p>Keep the conversation going, then generate the final package when the draft feels ready.</p>
+                <p>Keep the conversation going here, then generate the final package when the thread feels ready.</p>
               </div>
             `}
           </section>
@@ -1908,24 +1927,25 @@ export function createWorldGameLibrary(options = {}) {
         </form>
       </div>
     `;
-    elements.form = elements.content.querySelector("[data-game-generator-form]");
-    elements.prompt = elements.content.querySelector("[data-game-generator-prompt]");
-    elements.apiKey = elements.content.querySelector("[data-game-generator-key]");
-    elements.model = elements.content.querySelector("[data-game-generator-model]");
-    elements.send = elements.content.querySelector("[data-game-generator-send]");
-    elements.submit = elements.content.querySelector("[data-game-generator-submit]");
-    elements.thread = elements.content.querySelector("[data-game-generator-thread]");
-    elements.generatorStatus = elements.content.querySelector("[data-game-generator-status]");
-    for (const button of elements.content.querySelectorAll("[data-game-thread-open-game]")) {
+    elements.form = elements.builderContent.querySelector("[data-game-generator-form]");
+    elements.prompt = elements.builderContent.querySelector("[data-game-generator-prompt]");
+    elements.apiKey = elements.builderContent.querySelector("[data-game-generator-key]");
+    elements.model = elements.builderContent.querySelector("[data-game-generator-model]");
+    elements.send = elements.builderContent.querySelector("[data-game-generator-send]");
+    elements.submit = elements.builderContent.querySelector("[data-game-generator-submit]");
+    elements.thread = elements.builderContent.querySelector("[data-game-generator-thread]");
+    elements.generatorStatus = elements.builderContent.querySelector("[data-game-generator-status]");
+    for (const button of elements.builderContent.querySelectorAll("[data-game-thread-open-game]")) {
       button.addEventListener("click", () => {
         if (!generatedGame) {
           return;
         }
         setSelectedGame(generatedGame.id);
+        state.screen = "library";
         render();
       });
     }
-    for (const button of elements.content.querySelectorAll("[data-game-thread-pane]")) {
+    for (const button of elements.builderContent.querySelectorAll("[data-game-thread-pane]")) {
       button.addEventListener("click", () => {
         if (setActiveThreadPane(button.getAttribute("data-game-thread-pane") || "conversation")) {
           render();
@@ -1939,8 +1959,8 @@ export function createWorldGameLibrary(options = {}) {
       const thread = getActiveThread();
       thread.input = elements.prompt.value || "";
       touchThread(thread);
-      renderSidebar();
-      syncThreadComposerState();
+      renderBuilderSidebar();
+      syncBuilderComposerState();
     });
     elements.prompt?.addEventListener("keydown", (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -1953,32 +1973,30 @@ export function createWorldGameLibrary(options = {}) {
     elements.form?.addEventListener("submit", (event) => {
       void handleGenerate(event);
     });
-    syncThreadComposerState();
-  }
-
-  function renderContent() {
-    if (!elements.content) {
-      return;
-    }
-    if (state.activePanel === "game" && getSelectedGame()) {
-      renderGameContent();
-      return;
-    }
-    state.activePanel = "thread";
-    renderThreadContent();
+    syncBuilderComposerState();
   }
 
   function render() {
     overlay.hidden = !state.open;
     document.body.classList.toggle("has-mw-game-modal", state.open);
-    renderStatus();
-    renderSidebar();
-    renderContent();
+    if (elements.libraryScreen) {
+      elements.libraryScreen.hidden = state.screen !== "library";
+    }
+    if (elements.builderScreen) {
+      elements.builderScreen.hidden = state.screen !== "builder";
+    }
+    renderHeader();
+    renderLibraryStatus();
+    renderList();
+    renderDetail();
+    renderBuilderSidebar();
+    renderBuilderContent();
+    const busy = state.loading === true || state.aiBusy || state.generating || state.updating;
     if (elements.refresh) {
-      elements.refresh.disabled = state.loading === true || state.aiBusy || state.generating || state.updating;
+      elements.refresh.disabled = busy;
     }
     if (elements.importButton) {
-      elements.importButton.disabled = state.loading === true || state.aiBusy || state.generating || state.updating;
+      elements.importButton.disabled = busy;
     }
     if (elements.newThread) {
       elements.newThread.disabled = state.aiBusy || state.generating || state.updating;
@@ -1995,19 +2013,13 @@ export function createWorldGameLibrary(options = {}) {
     try {
       const payload = await api.listGames(optionsInput.limit ?? 60);
       state.games = Array.isArray(payload?.games) ? payload.games : [];
-      if (optionsInput.selectGameId) {
-        state.activePanel = "game";
-      }
       const preferredId = String(optionsInput.selectGameId ?? state.selectedGameId ?? "").trim();
       const hasPreferred = state.games.some((game) => game.id === preferredId);
       state.selectedGameId = hasPreferred
         ? preferredId
         : (state.games[0]?.id ?? "");
-      if (state.activePanel === "game" && !state.selectedGameId) {
-        state.activePanel = "thread";
-      }
       state.status = state.games.length === 0 ? "Generate your first game to share it nearby." : "";
-      if (state.activePanel === "game") {
+      if (state.screen === "library") {
         options.onSelect?.(getSelectedGame());
       }
       return state.games;
@@ -2027,12 +2039,18 @@ export function createWorldGameLibrary(options = {}) {
       const activeThread = getActiveThread();
       activeThread.input = String(config.prompt);
       touchThread(activeThread);
-      state.activePanel = "thread";
+      state.screen = "builder";
       state.activeThreadPane = "conversation";
+    } else if (config.mode === "builder") {
+      state.screen = "builder";
+    } else {
+      state.screen = "library";
     }
     if (config.selectGameId) {
       state.selectedGameId = String(config.selectGameId);
-      state.activePanel = "game";
+      if (state.screen !== "builder") {
+        state.screen = "library";
+      }
     }
     render();
     await onceAnimationFrame();
@@ -2052,8 +2070,8 @@ export function createWorldGameLibrary(options = {}) {
     }
     const activeThread = getActiveThread();
     const prompt = clipText(activeThread.input ?? "", 4000);
-    const apiKey = String(elements.apiKey?.value ?? "").trim();
-    const model = clipText(elements.model?.value ?? "", 80) || "gpt-5.4-mini";
+    const apiKey = String(elements.apiKey?.value ?? state.apiKey ?? "").trim();
+    const model = clipText(elements.model?.value ?? state.model ?? "", 80) || "gpt-5.4-mini";
     if (!prompt) {
       setGeneratorStatus("Add a message before sending it to AI.", "error");
       render();
@@ -2112,8 +2130,8 @@ export function createWorldGameLibrary(options = {}) {
     }
     const activeThread = getActiveThread();
     const unsentInput = clipText(activeThread.input ?? "", 4000);
-    const apiKey = String(elements.apiKey?.value ?? "").trim();
-    const model = clipText(elements.model?.value ?? "", 80) || "gpt-5.4-mini";
+    const apiKey = String(elements.apiKey?.value ?? state.apiKey ?? "").trim();
+    const model = clipText(elements.model?.value ?? state.model ?? "", 80) || "gpt-5.4-mini";
     if (unsentInput) {
       setGeneratorStatus("Send your latest revision to AI first, then generate the final game.", "error");
       render();
@@ -2150,7 +2168,6 @@ export function createWorldGameLibrary(options = {}) {
         state.selectedGameId = payload.game.id;
       }
       await refresh({ selectGameId: payload?.game?.id ?? state.selectedGameId });
-      state.activePanel = "thread";
       state.activeThreadPane = "result";
       state.status = payload?.game ? `"${getGameTitle(payload.game)}" is ready.` : "Game generated.";
       setGeneratorStatus(payload?.game ? `Generated "${getGameTitle(payload.game)}".` : "Game generated.", "success");
@@ -2178,6 +2195,7 @@ export function createWorldGameLibrary(options = {}) {
       });
       await refresh({ selectGameId: payload?.game?.id ?? state.selectedGameId });
       state.status = payload?.game ? `"${getGameTitle(payload.game)}" was imported.` : "Game package imported.";
+      options.onSelect?.(getSelectedGame());
     } catch (error) {
       state.status = error?.message || "Could not import the game package.";
     } finally {
@@ -2198,10 +2216,22 @@ export function createWorldGameLibrary(options = {}) {
       close();
     }
   });
+  elements.openBuilder?.addEventListener("click", () => {
+    if (state.aiBusy || state.generating || state.updating) {
+      return;
+    }
+    state.screen = "builder";
+    render();
+  });
+  elements.openLibrary?.addEventListener("click", () => {
+    if (state.aiBusy || state.generating || state.updating) {
+      return;
+    }
+    state.screen = "library";
+    render();
+  });
   elements.refresh?.addEventListener("click", () => {
-    void refresh({
-      selectGameId: state.activePanel === "game" ? state.selectedGameId : "",
-    });
+    void refresh({ selectGameId: state.selectedGameId });
   });
   elements.importButton?.addEventListener("click", () => {
     elements.importFile?.click();
@@ -2263,6 +2293,12 @@ export function createWorldGameLibrary(options = {}) {
     open,
     close,
     refresh,
+    openBuilder(config = {}) {
+      return open({
+        ...config,
+        mode: "builder",
+      });
+    },
     getGames() {
       return state.games.slice();
     },
@@ -2277,7 +2313,6 @@ export function createWorldGameLibrary(options = {}) {
       }
       state.games = [game, ...state.games.filter((entry) => entry.id !== game.id)];
       state.selectedGameId = game.id;
-      state.activePanel = "game";
       state.status = `"${getGameTitle(game)}" was added to your library.`;
       options.onSelect?.(getSelectedGame());
       render();

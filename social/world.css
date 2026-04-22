@@ -1870,6 +1870,13 @@ body.is-world-loading .world-panel {
   gap: 4px;
 }
 
+.mw-game-modal__header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+}
+
 .mw-game-modal__header h2,
 .mw-game-shell__header h2 {
   margin: 0;
@@ -1888,6 +1895,7 @@ body.is-world-loading .world-panel {
 }
 
 .mw-game-modal__close,
+.mw-game-modal__header-actions button,
 .mw-game-library__toolbar button,
 .mw-game-library__nav-head button,
 .mw-game-shell__actions button,
@@ -1917,6 +1925,7 @@ body.is-world-loading .world-panel {
 }
 
 .mw-game-modal__close.is-muted,
+.mw-game-modal__header-actions .is-muted,
 .mw-game-library__toolbar .is-muted,
 .mw-game-shell__actions .is-muted,
 .mw-game-library__detail-actions .is-muted,
@@ -1929,6 +1938,8 @@ body.is-world-loading .world-panel {
 
 .mw-game-modal__close:hover,
 .mw-game-modal__close:focus-visible,
+.mw-game-modal__header-actions button:hover,
+.mw-game-modal__header-actions button:focus-visible,
 .mw-game-library__toolbar button:hover,
 .mw-game-library__toolbar button:focus-visible,
 .mw-game-library__nav-head button:hover,
@@ -1959,6 +1970,7 @@ body.is-world-loading .world-panel {
 }
 
 .mw-game-modal__close:disabled,
+.mw-game-modal__header-actions button:disabled,
 .mw-game-library__toolbar button:disabled,
 .mw-game-library__nav-head button:disabled,
 .mw-game-shell__actions button:disabled,
@@ -1993,9 +2005,18 @@ body.is-world-loading .world-panel {
   background: linear-gradient(180deg, rgba(249, 251, 255, 0.92) 0%, rgba(255, 255, 255, 0.82) 100%);
 }
 
+.mw-game-library__column--list {
+  border-right: 1px solid var(--world-line);
+  background: linear-gradient(180deg, rgba(249, 251, 255, 0.92) 0%, rgba(255, 255, 255, 0.82) 100%);
+}
+
 .mw-game-library__column--content {
   background: rgba(255, 255, 255, 0.72);
   overflow: hidden;
+}
+
+.mw-game-library__column--detail {
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .mw-game-library__toolbar,
@@ -2080,6 +2101,11 @@ body.is-world-loading .world-panel {
 .mw-game-library__list {
   display: grid;
   gap: 10px;
+}
+
+.mw-game-library__list {
+  max-height: calc(76vh - 120px);
+  overflow: auto;
 }
 
 .mw-game-library__nav-row {
@@ -3113,7 +3139,8 @@ body.is-world-loading .world-panel {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .mw-game-library__column--sidebar {
+  .mw-game-library__column--sidebar,
+  .mw-game-library__column--list {
     border-right: 0;
     border-bottom: 1px solid var(--world-line);
   }
