@@ -8800,8 +8800,8 @@ async function runRefreshAuthState() {
     renderProfile();
     renderAccessSection();
     renderSessionSummary();
-    await loadAssets();
     await loadWorlds();
+    void loadAssets();
     const launch = getLaunchRequest();
     const launcherIntent = getLauncherIntent();
     const hasLaunchRequest = Boolean(launch.worldId && launch.creatorUsername);
@@ -21291,7 +21291,10 @@ function getPossessedPreviewPlayer(preview = state.preview, deltaSeconds = 0) {
 }
 
 function updatePreviewFromSelection(options = {}) {
-  const preview = ensurePreview();
+  if (state.selectedWorld == null && state.preview == null) {
+    return;
+  }
+  const preview = state.preview ?? ensurePreview();
   if (!preview) {
     return;
   }
@@ -25253,7 +25256,6 @@ async function init() {
   }
   renderSessionSummary();
   renderAccessSection();
-  ensurePreview();
   setLauncherTab(getPreferredLauncherTab());
   setMode(state.mode);
   privateBrowserShareFeature.setSelectedMode(state.browserShareMode);

@@ -438,3 +438,141 @@ test("public-world miniature payload hides mid-range player dots and keeps movin
   assert.equal(miniatures[0].compiled.miniature.moving_platforms[0].material.color, "#8c94a1");
   assert.equal(miniatures[0].scene_updated_at, null);
 });
+
+test("listPrivateWorlds returns lightweight summaries without loading scene content", async () => {
+  const freshIso = new Date().toISOString();
+  const queriedTables = [];
+  const store = new FakeStore();
+  store.serviceClient = {
+    from(table) {
+      queriedTables.push(table);
+      const tables = {
+        private_world_collaborators: [{
+          world_id: "world_row",
+          profile_id: "profile_creator",
+          role: "creator",
+        }],
+        private_worlds: [{
+          id: "world_row",
+          world_id: "mw_world",
+          creator_profile_id: "profile_creator",
+          world_type: "room",
+          template_size: "medium",
+          width: 40,
+          length: 30,
+          height: 20,
+          name: "Fast Summary World",
+          about: "Only the launcher needs this.",
+          search_text: "fast summary world",
+          max_viewers: 12,
+          max_players: 4,
+          created_at: freshIso,
+          updated_at: freshIso,
+          imported_by_profile_id: null,
+        }],
+        user_profiles: [{
+          id: "profile_creator",
+          auth_user_id: "auth_creator",
+          username: "maker",
+          display_name: "Maker",
+        }],
+        private_world_active_instances: [{
+          id: "instance_live",
+          world_id: "world_row",
+          status: "started",
+          active_scene_id: "scene_main",
+          anchor_world_snapshot_id: "snapshot_public",
+          anchor_position_x: 10,
+          anchor_position_y: 0,
+          anchor_position_z: -4,
+          miniature_width: 16,
+          miniature_length: 12,
+          miniature_height: 8,
+        }],
+        private_world_participants: [{
+          instance_id: "instance_live",
+          last_seen_at: freshIso,
+          visible_to_others: true,
+        }],
+      };
+      return createQuery(tables[table] ?? []);
+    },
+  };
+
+  const result = await store.listPrivateWorlds({
+    id: "profile_creator",
+    username: "maker",
+  });
+
+  assert.equal(result.worlds.length, 1);
+  assert.equal(result.worlds[0].name, "Fast Summary World");
+  assert.equal(result.worlds[0].creator.username, "maker");
+  assert.equal(result.worlds[0].permissions.can_edit, true);
+  assert.equal(result.worlds[0].active_instance.viewer_count, 1);
+  assert.equal("scenes" in result.worlds[0], false);
+  assert.equal("prefabs" in result.worlds[0], false);
+  assert.equal(queriedTables.includes("private_world_scenes"), false);
+  assert.equal(queriedTables.includes("private_world_prefabs"), false);
+});
+
+test("verifyUserAccessToken dedupes concurrent work and reuses a short-lived cache", async () => {
+  let getUserCalls = 0;
+  let profileLookupCalls = 0;
+  const store = new FakeStore();
+  store.serviceClient = {
+    auth: {
+      async getUser(token) {
+        getUserCalls += 1;
+        assert.equal(token, "header.eyJleHAiOjk5OTk5OTk5OTl9.signature");
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return {
+          data: {
+            user: {
+              id: "auth_creator",
+              email: "maker@example.com",
+            },
+          },
+          error: null,
+        };
+      },
+    },
+    from(table) {
+      assert.equal(table, "user_profiles");
+      return {
+        select() {
+          return this;
+        },
+        eq(column, value) {
+          assert.equal(column, "auth_user_id");
+          assert.equal(value, "auth_creator");
+          return this;
+        },
+        maybeSingle() {
+          profileLookupCalls += 1;
+          return Promise.resolve({
+            data: {
+              id: "profile_creator",
+              auth_user_id: "auth_creator",
+              username: "maker",
+              display_name: "Maker",
+            },
+            error: null,
+          });
+        },
+      };
+    },
+  };
+
+  const token = "header.eyJleHAiOjk5OTk5OTk5OTl9.signature";
+  const [first, second] = await Promise.all([
+    store.verifyUserAccessToken(token),
+    store.verifyUserAccessToken(token),
+  ]);
+  const third = await store.verifyUserAccessToken(token);
+
+  assert.equal(first.user.id, "auth_creator");
+  assert.equal(second.profile.username, "maker");
+  assert.equal(third.profile.display_name, "Maker");
+  assert.equal(getUserCalls, 1);
+  assert.equal(profileLookupCalls, 1);
+});

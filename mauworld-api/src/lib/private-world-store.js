@@ -21,6 +21,7 @@ import {
 const PRIVATE_WORLD_PARTICIPANT_STALE_MS = 30_000;
 const PUBLIC_PRIVATE_WORLD_VISIBLE_STATUSES = new Set(["active", "started"]);
 const MAX_PUBLIC_WORLD_MINIATURES = 24;
+const VERIFIED_USER_ACCESS_TOKEN_CACHE_TTL_MS = 30_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -799,6 +800,67 @@ function createPermissionSummary({ collaboratorRole = null, requesterProfileId =
   };
 }
 
+function parseJwtPayload(token = "") {
+  const normalized = String(token ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+  const parts = normalized.split(".");
+  if (parts.length < 2) {
+    return null;
+  }
+  try {
+    return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function resolveVerifiedUserAccessTokenExpiry(token = "") {
+  const nowMs = Date.now();
+  const fallbackExpiryMs = nowMs + VERIFIED_USER_ACCESS_TOKEN_CACHE_TTL_MS;
+  const payload = parseJwtPayload(token);
+  const tokenExpiryMs = Number(payload?.exp) > 0 ? Number(payload.exp) * 1000 : 0;
+  if (!tokenExpiryMs) {
+    return fallbackExpiryMs;
+  }
+  return Math.max(nowMs + 1000, Math.min(fallbackExpiryMs, tokenExpiryMs - 1000));
+}
+
+function getVerifiedUserAccessTokenCache(store) {
+  store.__verifiedUserAccessTokenCache = store.__verifiedUserAccessTokenCache ?? new Map();
+  const nowMs = Date.now();
+  for (const [token, entry] of store.__verifiedUserAccessTokenCache.entries()) {
+    if (!entry || Number(entry.expiresAt) <= nowMs) {
+      store.__verifiedUserAccessTokenCache.delete(token);
+    }
+  }
+  return store.__verifiedUserAccessTokenCache;
+}
+
+function getVerifiedUserAccessTokenInflight(store) {
+  store.__verifiedUserAccessTokenInflight = store.__verifiedUserAccessTokenInflight ?? new Map();
+  return store.__verifiedUserAccessTokenInflight;
+}
+
+function invalidateVerifiedUserAccessTokenCache(store, predicate) {
+  const cache = getVerifiedUserAccessTokenCache(store);
+  for (const [token, entry] of cache.entries()) {
+    if (predicate(entry?.verified ?? null)) {
+      cache.delete(token);
+    }
+  }
+}
+
+function invalidateVerifiedUserAccessTokenCacheByAuthUserId(store, authUserId = "") {
+  const normalizedAuthUserId = String(authUserId ?? "").trim();
+  if (!normalizedAuthUserId) {
+    return;
+  }
+  invalidateVerifiedUserAccessTokenCache(store, (verified) =>
+    String(verified?.user?.id ?? "").trim() === normalizedAuthUserId);
+}
+
 async function loadProfilesByIds(store, profileIds = []) {
   const ids = dedupe(profileIds);
   if (ids.length === 0) {
@@ -1179,12 +1241,6 @@ async function buildWorldDetail(store, {
         ?? store.privateWorldRuntime?.getSnapshotByWorldRef?.(world.world_id, creator.username)
       )
     : null;
-  const isImported = Boolean(
-    world.imported_at
-    || world.origin_world_id
-    || world.origin_creator_username
-    || world.origin_world_name,
-  );
 
   return {
     world: {
@@ -1207,14 +1263,7 @@ async function buildWorldDetail(store, {
         display_name: creator.display_name,
       },
       permissions,
-      lineage: {
-        is_imported: isImported,
-        origin_world_id: isImported ? (world.origin_world_id ?? world.world_id) : null,
-        origin_creator_username: isImported ? (world.origin_creator_username ?? creator.username) : null,
-        origin_world_name: isImported ? (world.origin_world_name ?? world.name) : null,
-        imported_at: isImported ? (world.imported_at ?? null) : null,
-        imported_by_username: null,
-      },
+      lineage: buildWorldLineage(world, creator),
       collaborators: collaborators.map(serializeCollaborator),
       scenes: scenes.map(serializeScene),
       prefabs: prefabs.map(serializePrefab),
@@ -1320,6 +1369,80 @@ function findParticipantActor(participants = [], { profile = null, guestSessionI
   return participants.find((row) => row.guest_session_id === sessionId) ?? null;
 }
 
+function buildWorldLineage(world, creator, importedByUsername = null) {
+  const isImported = Boolean(
+    world?.imported_at
+    || world?.origin_world_id
+    || world?.origin_creator_username
+    || world?.origin_world_name,
+  );
+  return {
+    is_imported: isImported,
+    origin_world_id: isImported ? (world.origin_world_id ?? world.world_id) : null,
+    origin_creator_username: isImported ? (world.origin_creator_username ?? creator?.username ?? null) : null,
+    origin_world_name: isImported ? (world.origin_world_name ?? world.name) : null,
+    imported_at: isImported ? (world.imported_at ?? null) : null,
+    imported_by_username: importedByUsername ?? null,
+  };
+}
+
+function serializeWorldSummary({
+  world,
+  creator,
+  permissions,
+  activeInstance = null,
+  viewerCount = 0,
+  importedByUsername = null,
+} = {}) {
+  return {
+    id: world.id,
+    world_id: world.world_id,
+    world_type: world.world_type,
+    template_size: world.template_size,
+    width: world.width,
+    length: world.length,
+    height: world.height,
+    name: world.name,
+    about: world.about,
+    max_viewers: world.max_viewers,
+    max_players: world.max_players,
+    created_at: world.created_at,
+    updated_at: world.updated_at,
+    creator: creator
+      ? {
+          id: creator.id,
+          username: creator.username,
+          display_name: creator.display_name,
+        }
+      : {
+          id: null,
+          username: null,
+          display_name: null,
+        },
+    permissions,
+    lineage: buildWorldLineage(world, creator, importedByUsername),
+    active_instance: activeInstance
+      ? {
+          id: activeInstance.id,
+          status: activeInstance.status,
+          active_scene_id: activeInstance.active_scene_id,
+          anchor_world_snapshot_id: activeInstance.anchor_world_snapshot_id,
+          anchor_position: {
+            x: activeInstance.anchor_position_x,
+            y: activeInstance.anchor_position_y,
+            z: activeInstance.anchor_position_z,
+          },
+          miniature: {
+            width: activeInstance.miniature_width,
+            length: activeInstance.miniature_length,
+            height: activeInstance.miniature_height,
+          },
+          viewer_count: viewerCount,
+        }
+      : null,
+  };
+}
+
 export function installPrivateWorldStore(MauworldStore) {
   MauworldStore.prototype.subscribePrivateWorldEvents = function subscribePrivateWorldEvents(listener) {
     this.__privateWorldSubscribers = this.__privateWorldSubscribers ?? new Set();
@@ -1345,19 +1468,42 @@ export function installPrivateWorldStore(MauworldStore) {
     if (!token) {
       throw new HttpError(401, "Missing bearer token");
     }
-    const { data, error } = await this.serviceClient.auth.getUser(token);
-    if (error || !data?.user?.id) {
-      throw new HttpError(401, "Invalid bearer token");
+    const cache = getVerifiedUserAccessTokenCache(this);
+    const cached = cache.get(token);
+    if (cached && Number(cached.expiresAt) > Date.now()) {
+      return cached.verified;
     }
-    const profile = await ensureUserProfile(this, data.user);
-    return {
-      user: data.user,
-      profile,
-    };
+    const inflight = getVerifiedUserAccessTokenInflight(this);
+    if (inflight.has(token)) {
+      return await inflight.get(token);
+    }
+    const verificationPromise = (async () => {
+      const { data, error } = await this.serviceClient.auth.getUser(token);
+      if (error || !data?.user?.id) {
+        throw new HttpError(401, "Invalid bearer token");
+      }
+      const profile = await ensureUserProfile(this, data.user);
+      const verified = {
+        user: data.user,
+        profile,
+      };
+      cache.set(token, {
+        verified,
+        expiresAt: resolveVerifiedUserAccessTokenExpiry(token),
+      });
+      return verified;
+    })();
+    inflight.set(token, verificationPromise);
+    try {
+      return await verificationPromise;
+    } finally {
+      inflight.delete(token);
+    }
   };
 
   MauworldStore.prototype.upsertUserProfile = async function upsertUserProfile(user, input = {}) {
     const profile = await ensureUserProfile(this, user, input);
+    invalidateVerifiedUserAccessTokenCacheByAuthUserId(this, user?.id);
     return {
       profile,
     };
@@ -1473,18 +1619,37 @@ export function installPrivateWorldStore(MauworldStore) {
       .filter((row) => !query || String(row.search_text ?? "").includes(query))
       .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())
       .slice(0, clampLimit(input.limit, 30, 100));
+    const collaboratorRoleByWorldId = new Map(collaboratorRows.map((row) => [row.world_id, row.role]));
+    const activeInstancesByWorldId = await loadActiveInstancesForWorldIds(this, filtered.map((row) => row.id));
+    const participantCounts = await loadParticipantCountsForInstanceIds(
+      this,
+      [...activeInstancesByWorldId.values()].map((row) => row.id),
+      { nowMs: Date.now() },
+    );
+    const importedByProfiles = await loadProfilesByIds(
+      this,
+      filtered.map((row) => row.imported_by_profile_id).filter(Boolean),
+    );
     return {
-      worlds: await Promise.all(filtered.map(async (row) => {
-        const creator = creatorProfiles.get(row.creator_profile_id);
-        const detail = await buildWorldDetail(this, {
+      worlds: filtered.map((row) => {
+        const creator = creatorProfiles.get(row.creator_profile_id) ?? null;
+        const collaboratorRole = row.creator_profile_id === profile.id
+          ? "creator"
+          : collaboratorRoleByWorldId.get(row.id) ?? null;
+        const permissions = createPermissionSummary({
+          collaboratorRole,
+          requesterProfileId: profile.id,
+        }, row);
+        const activeInstance = activeInstancesByWorldId.get(row.id) ?? null;
+        return serializeWorldSummary({
           world: row,
           creator,
-          requesterProfile: profile,
-          includeContent: false,
+          permissions,
+          activeInstance,
+          viewerCount: activeInstance ? (participantCounts.get(activeInstance.id) ?? 0) : 0,
+          importedByUsername: importedByProfiles.get(row.imported_by_profile_id)?.username ?? null,
         });
-        detail.world.lineage.imported_by_username = await loadImportedByUsername(this, row);
-        return detail.world;
-      })),
+      }),
     };
   };
 
@@ -1679,7 +1844,11 @@ export function installPrivateWorldStore(MauworldStore) {
       includeContent: input.includeContent === true,
       allowGuest: input.allowGuest === true,
     });
-    detail.world.lineage.imported_by_username = await loadImportedByUsername(this, world);
+    detail.world.lineage = buildWorldLineage(
+      world,
+      creator,
+      await loadImportedByUsername(this, world),
+    );
     return detail;
   };
 
