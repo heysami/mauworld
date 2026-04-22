@@ -1661,6 +1661,11 @@ body.private-worlds-body.is-world-menu-open .pw-world-menu {
   display: none !important;
 }
 
+.pw-ai-dialog[hidden],
+.pw-ai-dialog [hidden] {
+  display: none !important;
+}
+
 .pw-ai-dialog {
   position: fixed;
   top: 18px;
