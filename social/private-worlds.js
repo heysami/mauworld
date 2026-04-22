@@ -9410,6 +9410,10 @@ function buildMaterializedLogicFunctionId(moduleKind = "", targetId = "scene") {
   return `scriptfn_system_${moduleToken}_${targetToken}`;
 }
 
+function isMaterializedLogicFunctionId(value = "") {
+  return String(value ?? "").trim().toLowerCase().startsWith("scriptfn_system_");
+}
+
 function getPlayerLogicModuleLabel(sceneDoc = {}, playerId = "") {
   const normalizedPlayerId = String(playerId ?? "").trim();
   const player = Array.isArray(sceneDoc?.players)
@@ -9544,25 +9548,56 @@ function materializeSceneLogicFunctions(sceneDoc = {}, currentScriptDsl = "") {
     entityAliases: buildPrivateScriptDslEntityAliasMap(sceneDoc),
   });
   const functions = parseScriptFunctionLibrary(scriptDslText);
-  const parsedFunctions = compile.functions ?? [];
+  const desiredModules = buildDesiredMaterializedLogicModules(sceneDoc, compile.script_config);
+  const desiredSystemIds = new Set(
+    desiredModules.map((moduleConfig) => buildMaterializedLogicFunctionId(moduleConfig.module_kind, moduleConfig.target_id)),
+  );
+  let changed = false;
+  for (let index = functions.length - 1; index >= 0; index -= 1) {
+    const entry = functions[index];
+    if (!isMaterializedLogicFunctionId(entry?.id) || desiredSystemIds.has(String(entry?.id ?? "").trim())) {
+      continue;
+    }
+    functions.splice(index, 1);
+    changed = true;
+  }
+  const reparsedFunctions = parseSharedPrivateWorldScriptFunctions(serializeScriptFunctionLibrary(functions));
   const moduleIndexByKey = new Map();
-  for (const [index, parsedEntry] of parsedFunctions.entries()) {
+  for (const [index, parsedEntry] of reparsedFunctions.entries()) {
     if (!parsedEntry?.module_kind || !parsedEntry?.target_id) {
       continue;
     }
     moduleIndexByKey.set(`${parsedEntry.module_kind}::${parsedEntry.target_id}`, index);
   }
-  let changed = false;
-  for (const moduleConfig of buildDesiredMaterializedLogicModules(sceneDoc, compile.script_config)) {
+  const functionIndexById = new Map(functions.map((entry, index) => [String(entry?.id ?? "").trim(), index]));
+  for (const moduleConfig of desiredModules) {
     const moduleKey = `${moduleConfig.module_kind}::${moduleConfig.target_id}`;
     const existingIndex = moduleIndexByKey.get(moduleKey);
+    const expectedId = buildMaterializedLogicFunctionId(moduleConfig.module_kind, moduleConfig.target_id);
+    const expectedName = buildMaterializedLogicFunctionName(moduleConfig.module_kind, moduleConfig.target_id, sceneDoc);
     if (Number.isInteger(existingIndex) && functions[existingIndex]) {
-      changed = appendMissingModuleDirectiveSurface(functions[existingIndex], parsedFunctions[existingIndex], moduleConfig) || changed;
+      const existingEntry = functions[existingIndex];
+      if (existingEntry.id === expectedId && existingEntry.name !== expectedName) {
+        existingEntry.name = expectedName;
+        changed = true;
+      }
+      changed = appendMissingModuleDirectiveSurface(existingEntry, reparsedFunctions[existingIndex], moduleConfig) || changed;
+      continue;
+    }
+    const existingSystemIndex = functionIndexById.get(expectedId);
+    if (Number.isInteger(existingSystemIndex) && functions[existingSystemIndex]) {
+      const nextBody = serializePrivateWorldModuleFunctionBody(moduleConfig);
+      const existingEntry = functions[existingSystemIndex];
+      if (existingEntry.name !== expectedName || existingEntry.body !== nextBody) {
+        existingEntry.name = expectedName;
+        existingEntry.body = nextBody;
+        changed = true;
+      }
       continue;
     }
     functions.push(normalizeScriptFunctionEntry({
-      id: buildMaterializedLogicFunctionId(moduleConfig.module_kind, moduleConfig.target_id),
-      name: buildMaterializedLogicFunctionName(moduleConfig.module_kind, moduleConfig.target_id, sceneDoc),
+      id: expectedId,
+      name: expectedName,
       body: serializePrivateWorldModuleFunctionBody(moduleConfig),
     }, functions.length));
     changed = true;
@@ -23449,6 +23484,9 @@ function mutateSceneDoc(mutator, options = {}) {
   mutator(sceneDoc);
   if (elements.sceneForm?.elements.scriptDsl) {
     sceneDoc.script_dsl = String(elements.sceneForm.elements.scriptDsl.value || sceneDoc.script_dsl || "").trim();
+    if (isEditor() && state.mode === "build") {
+      sceneDoc.script_dsl = materializeSceneLogicFunctions(sceneDoc, sceneDoc.script_dsl).scriptDslText;
+    }
   }
   const sceneDocText = JSON.stringify(sceneDoc, null, 2);
   elements.sceneForm.elements.sceneDoc.value = sceneDocText;
