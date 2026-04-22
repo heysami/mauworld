@@ -10179,7 +10179,7 @@ async function uploadPrivateSoundAsset(file, options = {}) {
   const payload = await apiFetch("/private/assets/upload-sound", {
     method: "POST",
     body: {
-      name: options.name ?? file.name.replace(/\.[^.]+$/, "") || "Sound Asset",
+      name: (options.name ?? file.name.replace(/\.[^.]+$/, "")) || "Sound Asset",
       file_name: file.name || "sound-asset.mp3",
       content_type: file.type || "audio/mpeg",
       data_url: dataUrl,
@@ -10218,7 +10218,7 @@ async function uploadPrivateVideoTextureAsset(file, options = {}) {
   const payload = await apiFetch("/private/assets/upload-video-texture", {
     method: "POST",
     body: {
-      name: options.name ?? file.name.replace(/\.[^.]+$/, "") || "Video Texture",
+      name: (options.name ?? file.name.replace(/\.[^.]+$/, "")) || "Video Texture",
       file_name: file.name || "video-texture.mp4",
       content_type: file.type || "video/mp4",
       data_url: dataUrl,
