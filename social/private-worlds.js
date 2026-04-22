@@ -1036,6 +1036,7 @@ function createEmptyAiDialogThread() {
     messages: [],
     input: "",
     result: "",
+    awaitingValidationClarification: false,
     generatedAsset: null,
     createdAt: now,
     updatedAt: now,
@@ -5246,6 +5247,7 @@ function cloneAiDialogThread(thread = {}) {
     messages: cloneAiDialogMessages(thread.messages),
     input: String(thread?.input ?? ""),
     result: String(thread?.result ?? ""),
+    awaitingValidationClarification: thread?.awaitingValidationClarification === true,
     generatedAsset: thread.generatedAsset ? deepClone(thread.generatedAsset) : null,
     createdAt,
     updatedAt,
@@ -5328,6 +5330,9 @@ function getAiDialogThreadPreview(thread = {}) {
 function getAiDialogThreadSummary(thread = {}) {
   const turnCount = Array.isArray(thread.messages) ? thread.messages.length : 0;
   const turnLabel = `${turnCount} message${turnCount === 1 ? "" : "s"}`;
+  if (thread.awaitingValidationClarification === true) {
+    return `${turnLabel} · needs reply\n${getAiDialogThreadPreview(thread)}`;
+  }
   if (thread.generatedAsset?.id) {
     return `${turnLabel} · asset ready\n${getAiDialogThreadPreview(thread)}`;
   }
@@ -5489,7 +5494,8 @@ function renderAiDialog() {
   if (elements.aiDialogNewThread) {
     elements.aiDialogNewThread.disabled = !dialog.open || dialog.busy || !state.selectedWorld || !state.session;
   }
-  const canGenerate = activeThread.messages.some((entry) => entry.role === "assistant");
+  const canGenerate = activeThread.messages.some((entry) => entry.role === "assistant")
+    && activeThread.awaitingValidationClarification !== true;
   if (elements.aiDialogGenerate) {
     elements.aiDialogGenerate.disabled = !dialog.open || dialog.busy || !canGenerate || !state.selectedWorld || !state.session;
   }
@@ -5513,7 +5519,7 @@ function renderAiDialog() {
     const canApplyAsset = dialog.artifactType === "texture" || dialog.artifactType === "3d_model";
     const canApply = canApplyAsset
       ? Boolean(activeThread.generatedAsset) && dialog.targetKind !== "world"
-      : Boolean(activeThread.result) && dialog.targetKind !== "world";
+      : Boolean(activeThread.result) && dialog.targetKind !== "world" && activeThread.awaitingValidationClarification !== true;
     elements.aiDialogApply.hidden = !canApply;
     elements.aiDialogApply.disabled = !canApply || dialog.busy;
     if (canApply) {
@@ -5528,7 +5534,7 @@ function renderAiDialog() {
       dialog.artifactType === "screen_html"
         ? "Generated HTML"
         : dialog.artifactType === "world_script"
-          ? "Generated script"
+          ? (activeThread.awaitingValidationClarification === true ? "Generated script draft" : "Generated script")
           : dialog.artifactType === "texture"
             ? "Generated texture asset"
             : "Generated model asset";
@@ -5851,6 +5857,7 @@ async function sendAiDialogMessage(seedText = "") {
   activeThread.messages = nextMessages;
   activeThread.input = "";
   activeThread.result = "";
+  activeThread.awaitingValidationClarification = false;
   activeThread.generatedAsset = null;
   touchAiDialogThread(activeThread);
   state.aiDialog.busy = true;
@@ -6134,6 +6141,22 @@ async function generateAiDialogResult() {
       });
       activeThread.result = String(generatedText ?? "").trim();
       activeThread.generatedAsset = null;
+      activeThread.awaitingValidationClarification = false;
+      if (kind === "script") {
+        const validation = buildAiDialogScriptValidationResult(activeThread.result);
+        activeThread.result = validation.normalizedBody;
+        if (!validation.ok) {
+          state.aiDialog.busy = false;
+          if (validation.requiresUserClarification !== true) {
+            setAiDialogStatus(validation.diagnostics[0]?.message || "The generated script could not be validated.", "error");
+            persistAiDialogThreadState();
+            renderAiDialog();
+            return;
+          }
+          handleAiDialogInvalidScriptResult(validation, activeThread);
+          return;
+        }
+      }
       touchAiDialogThread(activeThread);
       const applyOutcome = applyAiDialogTextToTarget(activeThread.result);
       if (applyOutcome.appliedResult) {
@@ -6175,7 +6198,21 @@ function applyAiDialogResult() {
   if (state.aiDialog.artifactType === "texture" || state.aiDialog.artifactType === "3d_model") {
     applyOutcome = applyAiDialogAssetToTarget(activeThread.generatedAsset);
   } else {
-    applyOutcome = applyAiDialogTextToTarget(result);
+    const validation = buildAiDialogScriptValidationResult(result);
+    if (!validation.ok) {
+      activeThread.result = validation.normalizedBody;
+      if (validation.requiresUserClarification !== true) {
+        setAiDialogStatus(validation.diagnostics[0]?.message || "The generated script could not be validated.", "error");
+        persistAiDialogThreadState();
+        renderAiDialog();
+        return;
+      }
+      handleAiDialogInvalidScriptResult(validation, activeThread);
+      return;
+    }
+    activeThread.result = validation.normalizedBody;
+    activeThread.awaitingValidationClarification = false;
+    applyOutcome = applyAiDialogTextToTarget(activeThread.result);
     if (applyOutcome.appliedResult) {
       activeThread.result = applyOutcome.appliedResult;
     }
@@ -10828,6 +10865,196 @@ function normalizeGeneratedScriptBody(value = "") {
     .filter((line) => !SCRIPT_FUNCTION_HEADER_RE.test(line.trim()))
     .join("\n")
     .trim();
+}
+
+function shouldValidateAiDialogScriptResult(dialog = state.aiDialog) {
+  return dialog?.artifactType === "world_script"
+    && (dialog?.targetKind === "script_function" || dialog?.targetKind === "new_script_function");
+}
+
+function buildAiDialogScriptValidationResult(result = "", dialog = state.aiDialog) {
+  const normalizedBody = normalizeGeneratedScriptBody(result);
+  if (!shouldValidateAiDialogScriptResult(dialog)) {
+    return {
+      ok: true,
+      normalizedBody,
+      diagnostics: [],
+      targetId: "",
+      functionName: "",
+      requiresUserClarification: false,
+    };
+  }
+  const functions = getSceneScriptFunctions().map((entry, index) => normalizeScriptFunctionEntry(entry, index));
+  let targetEntry = null;
+  if (dialog.targetKind === "script_function") {
+    targetEntry = functions.find((entry) => entry.id === dialog.targetId) ?? null;
+    if (!targetEntry) {
+      return {
+        ok: false,
+        normalizedBody,
+        diagnostics: [{ line: 0, message: "That logic function is no longer available." }],
+        targetId: String(dialog.targetId ?? "").trim(),
+        functionName: "",
+        requiresUserClarification: false,
+      };
+    }
+    targetEntry.body = normalizedBody;
+  } else {
+    targetEntry = functions.find((entry) => entry.id === dialog.createdScriptFunctionId) ?? null;
+    if (targetEntry) {
+      targetEntry.body = normalizedBody;
+    } else {
+      const nextEntry = normalizeScriptFunctionEntry({
+        id: createScriptFunctionId("generated_logic_preview"),
+        name: buildScriptTemplateFunctionName(functions, "Generated Function"),
+        body: normalizedBody,
+      }, functions.length);
+      functions.push(nextEntry);
+      targetEntry = nextEntry;
+    }
+  }
+  const diagnostics = buildSceneScriptFunctionDiagnostics(
+    getSceneDocForLogicValidation(),
+    serializeScriptFunctionLibrary(functions),
+  ).get(String(targetEntry?.id ?? "").trim()) ?? [];
+  return {
+    ok: diagnostics.length === 0,
+    normalizedBody,
+    diagnostics,
+    targetId: String(targetEntry?.id ?? "").trim(),
+    functionName: String(targetEntry?.name ?? "").trim(),
+    requiresUserClarification: diagnostics.length > 0,
+  };
+}
+
+function buildAiDialogScriptValidationQuestions(diagnostics = []) {
+  const questions = [];
+  const pushQuestion = (text = "") => {
+    const normalized = String(text ?? "").trim();
+    if (!normalized || questions.includes(normalized)) {
+      return;
+    }
+    questions.push(normalized);
+  };
+  for (const issue of Array.isArray(diagnostics) ? diagnostics : []) {
+    const message = String(issue?.message ?? "").trim();
+    if (!message) {
+      continue;
+    }
+    let match = message.match(/Rule references missing (?:source|target|payload target|particle|text) `([^`]+)`\./i);
+    if (match) {
+      pushQuestion(`Which exact scene id should replace \`${match[1]}\`? Please reply with the id you want this logic to use.`);
+      continue;
+    }
+    match = message.match(/Target `([^`]+)` no longer exists in this scene\./i);
+    if (match) {
+      pushQuestion(`Which exact scene id should this function target instead of \`${match[1]}\`?`);
+      continue;
+    }
+    match = message.match(/Module `([^`]+)` can only target players\./i);
+    if (match) {
+      pushQuestion(`Should this module target a player instead? If yes, which player id should it use?`);
+      continue;
+    }
+    match = message.match(/Parameter `([^`]+)` is not supported by module `([^`]+)`\./i);
+    if (match) {
+      pushQuestion(`The module \`${match[2]}\` does not support \`${match[1]}\`. What exact behavior do you want there instead?`);
+      continue;
+    }
+    match = message.match(/Binding `([^`]+)` is not supported by module `([^`]+)`\./i);
+    if (match) {
+      pushQuestion(`Which supported input binding should replace \`${match[1]}\` for module \`${match[2]}\`?`);
+      continue;
+    }
+    match = message.match(/Parameter `([^`]+)` expects true or false\./i);
+    if (match) {
+      pushQuestion(`What true/false value should \`${match[1]}\` use?`);
+      continue;
+    }
+    match = message.match(/Parameter `([^`]+)` expects a numeric value\./i);
+    if (match) {
+      pushQuestion(`What numeric value should \`${match[1]}\` use?`);
+      continue;
+    }
+    match = message.match(/Parameter `([^`]+)` must stay between ([^ ]+) and ([^ .]+)\./i);
+    if (match) {
+      pushQuestion(`What value should \`${match[1]}\` use between ${match[2]} and ${match[3]}?`);
+      continue;
+    }
+    match = message.match(/Parameter `([^`]+)` must be one of: (.+)\./i);
+    if (match) {
+      pushQuestion(`Which option should \`${match[1]}\` use: ${match[2]}?`);
+      continue;
+    }
+    match = message.match(/Parameter `([^`]+)` expects a vector/i);
+    if (match) {
+      pushQuestion(`What vector should \`${match[1]}\` use? Please reply like \`(x,y,z)\`.`);
+      continue;
+    }
+    match = message.match(/Unsupported action: (.+)$/i);
+    if (match) {
+      pushQuestion(`That action is not supported. What supported Mauworld action should this rule use instead?`);
+      continue;
+    }
+    match = message.match(/Unsupported trigger: (.+)$/i);
+    if (match) {
+      pushQuestion(`What supported trigger should start this rule instead?`);
+      continue;
+    }
+    match = message.match(/Action `([^`]+)` cannot target `([^`]+)` because it is a (.+)\./i);
+    if (match) {
+      pushQuestion(`Which valid target should action \`${match[1]}\` control instead of \`${match[2]}\`?`);
+      continue;
+    }
+    if (/Expected `trigger -> action`/i.test(message)) {
+      pushQuestion("What trigger and action should this rule use? Please describe the exact behavior you want.");
+      continue;
+    }
+  }
+  if (!questions.length) {
+    pushQuestion("Please clarify the exact target ids, supported action or module, and any missing values you want so I can regenerate this cleanly.");
+  }
+  return questions.slice(0, 4);
+}
+
+function buildAiDialogScriptValidationFollowUp(validation = {}) {
+  const diagnostics = Array.isArray(validation?.diagnostics) ? validation.diagnostics.filter(Boolean) : [];
+  const issueLines = diagnostics.slice(0, 6).map((issue) =>
+    `- ${issue.line > 0 ? `Line ${issue.line}: ` : ""}${String(issue.message ?? "").trim()}`);
+  const questions = buildAiDialogScriptValidationQuestions(diagnostics);
+  return [
+    "I couldn't apply that final script yet because it still fails scene-logic validation.",
+    "I kept the current script draft on the Generated script tab, but I did not apply it to the function.",
+    "",
+    "What still needs clarification:",
+    ...(issueLines.length ? issueLines : ["- The generated script still needs more detail before it can compile cleanly."]),
+    "",
+    "Please reply with:",
+    ...questions.map((question) => `- ${question}`),
+  ].join("\n");
+}
+
+function handleAiDialogInvalidScriptResult(validation = {}, activeThread = getActiveAiDialogThread()) {
+  const followUpText = buildAiDialogScriptValidationFollowUp(validation);
+  const lastMessage = activeThread.messages.at(-1) ?? null;
+  if (lastMessage?.role !== "assistant" || lastMessage?.text !== followUpText) {
+    activeThread.messages = [...activeThread.messages, { role: "assistant", text: followUpText }];
+  }
+  activeThread.awaitingValidationClarification = true;
+  touchAiDialogThread(activeThread);
+  state.aiDialog.activePane = "conversation";
+  const issueCount = Array.isArray(validation?.diagnostics) ? validation.diagnostics.length : 0;
+  setAiDialogStatus(
+    issueCount > 0
+      ? `The generated script still has ${issueCount} issue${issueCount === 1 ? "" : "s"}. I asked follow-up questions instead of applying it.`
+      : "The generated script still needs clarification before it can be applied.",
+    "error",
+  );
+  persistAiDialogThreadState();
+  renderAiDialog();
+  window.setTimeout(() => {
+    elements.aiDialogInput?.focus?.();
+  }, 0);
 }
 
 function buildScriptTemplateFunctionName(functions = [], baseName = "Logic Function") {
@@ -26593,8 +26820,15 @@ function bindEvents() {
   elements.aiDialogResult?.addEventListener("input", (event) => {
     const activeThread = getActiveAiDialogThread();
     activeThread.result = event.target.value;
+    const shouldRefresh = activeThread.awaitingValidationClarification === true;
+    if (shouldRefresh) {
+      activeThread.awaitingValidationClarification = false;
+    }
     touchAiDialogThread(activeThread);
     persistAiDialogThreadState();
+    if (shouldRefresh) {
+      renderAiDialog();
+    }
   });
   elements.aiDialogTabs?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-ai-dialog-tab]");
