@@ -8689,14 +8689,9 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
       elements.panelBrowserShareTitle.value = "";
     }
   }
-  renderPrivateShareJoinRequests();
-  renderPrivateGameShareGroupSummary();
-  updatePrivateVoicePanel();
-  renderPrivateVoiceJoinOffers();
-  renderPrivateVoiceJoinRequests();
 
   if (!state.selectedWorld) {
-    setPrivateBrowserStatus("Open a world to share games.");
+    setPrivateBrowserStatus("Open a world to share nearby.");
     updatePrivateBrowserSummary({
       state: "offline",
       badge: "Offline",
@@ -8704,12 +8699,12 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
       hint: "Open a world first.",
     });
   } else if (!state.session) {
-    setPrivateBrowserStatus("Sign in to save or share games.");
+    setPrivateBrowserStatus("Sign in to generate, save, or share games nearby.");
     updatePrivateBrowserSummary({
-      state: "offline",
-      badge: "Signed out",
-      current: "Sign in to go live",
-      hint: "Signed-in participants can generate, save, and share HTML games.",
+      state: "idle",
+      badge: "Guest",
+      current: "Game sharing is off for guests",
+      hint: "Log in to build or share simple HTML games nearby.",
     });
   } else if (pendingShareJoinRequest) {
     const hostName = getPrivateGameHostName(joinTarget ?? {});
@@ -8727,12 +8722,13 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
         : "Once approved, sharing your game keeps it attached to this nearby group without creating another live row.",
     });
   } else if (state.pendingGameShareGameId) {
-    setPrivateBrowserStatus("Starting your game share...");
+    const pendingGame = selectedGame && selectedGame.id === state.pendingGameShareGameId ? selectedGame : null;
+    setPrivateBrowserStatus(`Starting ${getPrivateSavedGameTitle(pendingGame ?? {}, "your game")} nearby...`);
     updatePrivateBrowserSummary({
       state: "starting",
       badge: "Starting",
-      current: "Starting your game",
-      hint: "The host window opens as soon as the world socket confirms the share.",
+      current: pendingGame ? `Starting ${getPrivateSavedGameTitle(pendingGame)}` : "Starting your game",
+      hint: "The host window opens as soon as the share session is ready.",
     });
   } else if (localGameSession) {
     const seatedPlayers = normalizePrivateGameSeats(localGameSession).filter((seat) => seat.viewer_session_id).length;
@@ -8740,8 +8736,8 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
     const memberShare = isPrivateGameMemberSession(localGameSession);
     setPrivateBrowserStatus(
       localGameSession.started
-        ? (memberShare ? "Your game match is live inside this nearby group." : "Your game match is live in this world.")
-        : (memberShare ? "Your game lobby is open inside this nearby group." : "Your game lobby is open in this world."),
+        ? (memberShare ? "Your game match is live inside this nearby group." : "Your game match is live nearby.")
+        : (memberShare ? "Your game lobby is open inside this nearby group." : "Your game lobby is open nearby."),
     );
     updatePrivateBrowserSummary({
       state: "live",
@@ -8771,12 +8767,12 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
       hint: "Share it nearby, or open the library to generate something new.",
     });
   } else {
-    setPrivateBrowserStatus("Pick or generate a game to share in this world.");
+    setPrivateBrowserStatus("Pick or generate a game to share nearby.");
     updatePrivateBrowserSummary({
       state: "idle",
       badge: "Library",
       current: "No game selected",
-      hint: "Open the library to choose a saved game or generate one with your local AI key.",
+      hint: "Open the game library to choose, generate, import, or package a nearby game.",
     });
   }
 
@@ -8836,9 +8832,14 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
         : joinMode && selectedGame
           ? "Share Game to add this packaged game inside the nearby group once the host approves."
       : selectedGame
-        ? `${getPrivateSavedGameTitle(selectedGame)} is ready to share in this world.`
+        ? `${getPrivateSavedGameTitle(selectedGame)} is ready to share nearby.`
         : "Open the game library to choose, generate, import, or package a nearby game.";
   }
+  renderPrivateShareJoinRequests();
+  renderPrivateGameShareGroupSummary();
+  updatePrivateVoicePanel();
+  renderPrivateVoiceJoinOffers();
+  renderPrivateVoiceJoinRequests();
 }
 
 function updatePrivateBrowserPanel() {
