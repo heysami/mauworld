@@ -1290,6 +1290,11 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   background: rgba(255, 90, 122, 0.1);
 }
 
+.pw-script-card.has-issues {
+  border-color: rgba(255, 184, 77, 0.42);
+  background: rgba(255, 184, 77, 0.08);
+}
+
 .pw-prefab-card__head {
   display: flex;
   align-items: flex-start;
@@ -1302,6 +1307,14 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+}
+
+.pw-script-card__badges {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .pw-prefab-card__title {
@@ -1342,6 +1355,12 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
   white-space: nowrap;
 }
 
+.pw-script-card__badge.is-warning {
+  border-color: rgba(255, 184, 77, 0.4);
+  color: #8a5a00;
+  background: rgba(255, 184, 77, 0.18);
+}
+
 .pw-prefab-card.is-armed .pw-prefab-card__badge {
   border-color: rgba(45, 216, 255, 0.34);
   color: var(--pw-text);
@@ -1373,6 +1392,27 @@ body.private-worlds-body.is-create-world-dialog-open .pw-launcher__views > .pw-l
 .pw-script-editor__fields {
   display: grid;
   gap: 12px;
+}
+
+.pw-script-editor__status {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 184, 77, 0.4);
+  border-radius: 8px;
+  background: rgba(255, 184, 77, 0.14);
+  color: #5c3d00;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.pw-script-editor__status strong {
+  font-size: 0.84rem;
+}
+
+.pw-script-editor__status ul {
+  margin: 0;
+  padding-left: 18px;
 }
 
 .pw-script-editor__meta,

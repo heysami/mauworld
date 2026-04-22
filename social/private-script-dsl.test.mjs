@@ -153,3 +153,32 @@ test("serializes materialized module functions with the broader editable surface
   assert.match(body, /@set deceleration 18/);
   assert.match(body, /@set gravity_scale 1\.2/);
 });
+
+test("reports invalid module params, bindings, and stale targets as errors", () => {
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[stale]: Stale Controls
+@module playmode.wasd_jump
+@target player_missing
+@set rocket_speed 22
+@bind fly_key q
+@set move_speed 99999
+
+# function[rules]: Rules
+scene_start -> apply_force to crate_missing direction facing strength 12
+  `, {
+    sceneDoc: {
+      players: [{ id: "player_one" }],
+      primitives: [{ id: "crate_one" }],
+    },
+    entityAliases: new Map([
+      ["player_one", "player_one"],
+      ["crate_one", "crate_one"],
+    ]),
+  });
+
+  assert.ok(compiled.errors.some((entry) => String(entry.message).includes("Target `player_missing` no longer exists")));
+  assert.ok(compiled.errors.some((entry) => String(entry.message).includes("Parameter `rocket_speed` is not supported")));
+  assert.ok(compiled.errors.some((entry) => String(entry.message).includes("Binding `fly_key` is not supported")));
+  assert.ok(compiled.errors.some((entry) => String(entry.message).includes("Parameter `move_speed` must stay between")));
+  assert.equal(compiled.rules[0].source_line_number, 1);
+});

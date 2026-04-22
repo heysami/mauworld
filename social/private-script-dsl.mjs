@@ -682,6 +682,7 @@ export function buildImplicitPrivateWorldScriptConfig(sceneDoc = {}) {
 
 function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
   const aliasMap = options.entityAliases instanceof Map ? options.entityAliases : new Map();
+  const entityIds = new Set(aliasMap.values());
   const normalizedEntry = normalizeScriptFunctionEntry(entry, index);
   const rawLines = String(normalizedEntry.body ?? "").replace(/\r\n/g, "\n").split("\n");
   const comments = [];
@@ -691,6 +692,8 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
   let moduleKind = "";
   let targetId = "";
   let targetScope = "";
+  let targetRawValue = "";
+  let targetLineNumber = 0;
   let enabled = null;
   const params = {};
   const bindings = {};
@@ -713,9 +716,15 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     }
     const directiveTokens = tokenizeDslSegment(trimmed.slice(1));
     const directive = String(directiveTokens.shift() ?? "").trim().toLowerCase();
+    const name = String(directiveTokens[0] ?? "").trim().toLowerCase();
+    const rawValue = directive === "set" || directive === "bind"
+      ? String(directiveTokens.slice(1).join(" ") ?? "").trim()
+      : String(directiveTokens.join(" ") ?? "").trim();
     const rest = directiveTokens.join(" ").trim();
     directives.push({
       directive,
+      name,
+      raw_value: rawValue,
       value: rest,
       lineNumber: lineIndex + 1,
     });
@@ -729,6 +738,8 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
       continue;
     }
     if (directive === "target") {
+      targetRawValue = rest;
+      targetLineNumber = lineIndex + 1;
       if (rest.toLowerCase() === "scene") {
         targetId = "scene";
         targetScope = "scene";
@@ -754,7 +765,12 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
       }
       const parsedValue = parseDirectiveValue(param, valueText);
       if (parsedValue == null || parsedValue === "") {
-        errors.push({ line: lineIndex + 1, message: `Directive \`@set ${param}\` requires a value.` });
+        errors.push({
+          line: lineIndex + 1,
+          message: valueText
+            ? `Directive \`@set ${param}\` has an invalid value.`
+            : `Directive \`@set ${param}\` requires a value.`,
+        });
         continue;
       }
       params[param] = parsedValue;
@@ -789,6 +805,61 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     errors.push({ line: 1, message: `Module \`${moduleKind}\` requires an explicit player target.` });
   }
 
+  if (moduleKind) {
+    const definition = getModuleDefinition(moduleKind);
+    for (const directive of directives) {
+      if (directive.directive === "set") {
+        const paramDefinition = getModuleParamDefinition(moduleKind, directive.name);
+        if (!paramDefinition) {
+          errors.push({ line: directive.lineNumber, message: `Parameter \`${directive.name || "(empty)"}\` is not supported by module \`${moduleKind}\`.` });
+          continue;
+        }
+        const rawValue = String(directive.raw_value ?? "").trim();
+        if (paramDefinition.type === "boolean") {
+          const normalized = rawValue.toLowerCase();
+          if (!["true", "false", "yes", "no", "on", "off", "1", "0"].includes(normalized)) {
+            errors.push({ line: directive.lineNumber, message: `Parameter \`${directive.name}\` expects true or false.` });
+          }
+        } else if (paramDefinition.type === "enum") {
+          const normalized = normalizeEnumToken(rawValue);
+          if (!paramDefinition.values.includes(normalized)) {
+            errors.push({ line: directive.lineNumber, message: `Parameter \`${directive.name}\` must be one of: ${paramDefinition.values.join(", ")}.` });
+          }
+        } else if (paramDefinition.type === "number" || paramDefinition.type === "integer") {
+          const numericValue = Number(rawValue);
+          if (!Number.isFinite(numericValue)) {
+            errors.push({ line: directive.lineNumber, message: `Parameter \`${directive.name}\` expects a numeric value.` });
+          } else if (
+            (Number.isFinite(paramDefinition.min) && numericValue < paramDefinition.min)
+            || (Number.isFinite(paramDefinition.max) && numericValue > paramDefinition.max)
+          ) {
+            errors.push({
+              line: directive.lineNumber,
+              message: `Parameter \`${directive.name}\` must stay between ${paramDefinition.min} and ${paramDefinition.max}.`,
+            });
+          }
+        } else if (paramDefinition.type === "vector3") {
+          const vector = parseDirectiveVectorValue(rawValue);
+          if (!vector) {
+            errors.push({ line: directive.lineNumber, message: `Parameter \`${directive.name}\` expects a vector like (0,-9.8,0).` });
+          }
+        }
+      } else if (directive.directive === "bind") {
+        const bindingDefinition = getModuleBindingDefinition(moduleKind, directive.name);
+        if (!bindingDefinition) {
+          errors.push({ line: directive.lineNumber, message: `Binding \`${directive.name || "(empty)"}\` is not supported by module \`${moduleKind}\`.` });
+        }
+      }
+    }
+  }
+
+  if (moduleKind && targetScope === "entity" && targetId && !entityIds.has(targetId)) {
+    errors.push({
+      line: targetLineNumber || 1,
+      message: `Target \`${targetRawValue || targetId}\` no longer exists in this scene.`,
+    });
+  }
+
   return {
     ...normalizedEntry,
     module_kind: moduleKind,
@@ -807,11 +878,17 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
 function compileRuleLine(line = "", index = 0, options = {}) {
   const aliasMap = options.entityAliases instanceof Map ? options.entityAliases : new Map();
   const functionEntry = options.functionEntry ?? null;
+  const buildRuleError = (message = "") => ({
+    line: Number(options.lineNumber ?? index + 1) || (index + 1),
+    message,
+    function_id: functionEntry?.id ?? null,
+    function_name: functionEntry?.name ?? null,
+  });
   const [rawTrigger, rawAction] = String(line ?? "").split(/\s*->\s*/);
   if (!rawTrigger || !rawAction) {
     return {
       rule: null,
-      errors: [{ line: index + 1, message: "Expected `trigger -> action`" }],
+      errors: [buildRuleError("Expected `trigger -> action`")],
     };
   }
   const triggerTokens = tokenizeDslSegment(rawTrigger);
@@ -821,13 +898,13 @@ function compileRuleLine(line = "", index = 0, options = {}) {
   if (!ALLOWED_RULE_TRIGGERS.has(trigger)) {
     return {
       rule: null,
-      errors: [{ line: index + 1, message: `Unsupported trigger: ${trigger || "(empty)"}` }],
+      errors: [buildRuleError(`Unsupported trigger: ${trigger || "(empty)"}`)],
     };
   }
   if (!ALLOWED_RULE_ACTIONS.has(action)) {
     return {
       rule: null,
-      errors: [{ line: index + 1, message: `Unsupported action: ${action || "(empty)"}` }],
+      errors: [buildRuleError(`Unsupported action: ${action || "(empty)"}`)],
     };
   }
 
@@ -835,6 +912,7 @@ function compileRuleLine(line = "", index = 0, options = {}) {
     id: `rule_dsl_${index + 1}`,
     trigger,
     action,
+    source_line_number: Number(options.lineNumber ?? index + 1) || (index + 1),
     source_id: null,
     target_id: null,
     key: null,
@@ -1259,6 +1337,7 @@ export function compilePrivateWorldScriptDsl(input, options = {}) {
       const compiled = compileRuleLine(ruleLine.line, ruleIndex, {
         entityAliases: options.entityAliases,
         functionEntry,
+        lineNumber: ruleLine.lineNumber,
       });
       errors.push(...compiled.errors);
       if (compiled.rule) {

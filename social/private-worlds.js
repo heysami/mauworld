@@ -69,7 +69,7 @@ import {
   parseScriptFunctionLibrary as parseSharedScriptFunctionLibrary,
   serializePrivateWorldModuleFunctionBody,
   serializeScriptFunctionLibrary as serializeSharedScriptFunctionLibrary,
-} from "./private-script-dsl.mjs?v=20260422logicedit1";
+} from "./private-script-dsl.mjs?v=20260422logicissues1";
 
 // Private-world physics contract: keep occupied-player support, landing, overlap
 // prevention, and moving-platform carry client-local. See
@@ -731,6 +731,7 @@ const elements = {
   scriptFunctionEmpty: document.querySelector("[data-script-function-empty]"),
   scriptFunctionFields: document.querySelector("[data-script-function-fields]"),
   scriptFunctionName: document.querySelector("[data-script-function-name]"),
+  scriptFunctionStatus: document.querySelector("[data-script-function-status]"),
   scriptFunctionMeta: document.querySelector("[data-script-function-meta]"),
   scriptFunctionBody: document.querySelector("[data-script-function-body]"),
   scriptFunctionPrompt: document.querySelector("[data-script-function-prompt]"),
@@ -9410,10 +9411,6 @@ function buildMaterializedLogicFunctionId(moduleKind = "", targetId = "scene") {
   return `scriptfn_system_${moduleToken}_${targetToken}`;
 }
 
-function isMaterializedLogicFunctionId(value = "") {
-  return String(value ?? "").trim().toLowerCase().startsWith("scriptfn_system_");
-}
-
 function getPlayerLogicModuleLabel(sceneDoc = {}, playerId = "") {
   const normalizedPlayerId = String(playerId ?? "").trim();
   const player = Array.isArray(sceneDoc?.players)
@@ -9549,18 +9546,7 @@ function materializeSceneLogicFunctions(sceneDoc = {}, currentScriptDsl = "") {
   });
   const functions = parseScriptFunctionLibrary(scriptDslText);
   const desiredModules = buildDesiredMaterializedLogicModules(sceneDoc, compile.script_config);
-  const desiredSystemIds = new Set(
-    desiredModules.map((moduleConfig) => buildMaterializedLogicFunctionId(moduleConfig.module_kind, moduleConfig.target_id)),
-  );
   let changed = false;
-  for (let index = functions.length - 1; index >= 0; index -= 1) {
-    const entry = functions[index];
-    if (!isMaterializedLogicFunctionId(entry?.id) || desiredSystemIds.has(String(entry?.id ?? "").trim())) {
-      continue;
-    }
-    functions.splice(index, 1);
-    changed = true;
-  }
   const reparsedFunctions = parseSharedPrivateWorldScriptFunctions(serializeScriptFunctionLibrary(functions));
   const moduleIndexByKey = new Map();
   for (const [index, parsedEntry] of reparsedFunctions.entries()) {
@@ -9640,18 +9626,114 @@ function getSceneScriptFunctions() {
   return parseScriptFunctionLibrary(elements.sceneForm?.elements?.scriptDsl?.value || "");
 }
 
+function getSceneDocForLogicValidation() {
+  try {
+    return parseSceneTextarea();
+  } catch (_error) {
+    return getSelectedScene()?.scene_doc ?? buildEmptySceneDoc();
+  }
+}
+
+function pushScriptFunctionDiagnostic(map, functionId = "", issue = {}) {
+  const normalizedFunctionId = String(functionId ?? "").trim();
+  if (!normalizedFunctionId) {
+    return;
+  }
+  if (!map.has(normalizedFunctionId)) {
+    map.set(normalizedFunctionId, []);
+  }
+  const issues = map.get(normalizedFunctionId);
+  const normalizedIssue = {
+    line: Number(issue.line ?? 0) || 0,
+    message: String(issue.message ?? "").trim(),
+  };
+  if (!normalizedIssue.message) {
+    return;
+  }
+  if (issues.some((entry) => entry.line === normalizedIssue.line && entry.message === normalizedIssue.message)) {
+    return;
+  }
+  issues.push(normalizedIssue);
+}
+
+function buildSceneScriptFunctionDiagnostics(sceneDoc = {}, scriptDslText = "") {
+  const aliasMap = buildPrivateScriptDslEntityAliasMap(sceneDoc);
+  const entityIds = new Set(aliasMap.values());
+  const compile = compileSharedPrivateWorldScriptDsl(scriptDslText, {
+    sceneDoc,
+    entityAliases: aliasMap,
+  });
+  const issuesByFunctionId = new Map();
+  for (const error of compile.errors ?? []) {
+    const functionId = String(error?.function_id ?? "").trim();
+    if (!functionId) {
+      continue;
+    }
+    pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, error);
+  }
+  for (const functionEntry of compile.functions ?? []) {
+    for (const error of functionEntry?.errors ?? []) {
+      pushScriptFunctionDiagnostic(issuesByFunctionId, functionEntry.id, error);
+    }
+  }
+  for (const rule of compile.rules ?? []) {
+    const functionId = String(rule?.function_id ?? "").trim();
+    const line = Number(rule?.source_line_number ?? 0) || 0;
+    if (rule?.source_id && !entityIds.has(rule.source_id)) {
+      pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
+        line,
+        message: `Rule references missing source \`${rule.source_id}\`.`,
+      });
+    }
+    if (rule?.target_id && !entityIds.has(rule.target_id)) {
+      pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
+        line,
+        message: `Rule references missing target \`${rule.target_id}\`.`,
+      });
+    }
+    if (rule?.payload?.target_id && !entityIds.has(rule.payload.target_id)) {
+      pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
+        line,
+        message: `Rule references missing payload target \`${rule.payload.target_id}\`.`,
+      });
+    }
+    if (rule?.payload?.particle_id && !entityIds.has(rule.payload.particle_id)) {
+      pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
+        line,
+        message: `Rule references missing particle \`${rule.payload.particle_id}\`.`,
+      });
+    }
+    if (rule?.payload?.text_id && !entityIds.has(rule.payload.text_id)) {
+      pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
+        line,
+        message: `Rule references missing text \`${rule.payload.text_id}\`.`,
+      });
+    }
+  }
+  for (const issues of issuesByFunctionId.values()) {
+    issues.sort((left, right) => {
+      if (left.line !== right.line) {
+        return left.line - right.line;
+      }
+      return left.message.localeCompare(right.message);
+    });
+  }
+  return issuesByFunctionId;
+}
+
 function parseScriptFunctionEntryMetadata(entry = {}) {
   const serialized = serializeScriptFunctionLibrary([normalizeScriptFunctionEntry(entry, 0)]);
   return parseSharedPrivateWorldScriptFunctions(serialized)[0] ?? normalizeScriptFunctionEntry(entry, 0);
 }
 
-function buildScriptFunctionSummary(entry = {}) {
+function buildScriptFunctionSummary(entry = {}, diagnostics = []) {
   const parsedEntry = parseScriptFunctionEntryMetadata(entry);
   const ruleLines = Array.isArray(parsedEntry.ruleLines)
     ? parsedEntry.ruleLines.map((line) => String(line?.line ?? "").trim()).filter(Boolean)
     : [];
   const moduleKind = String(parsedEntry.module_kind ?? "").trim();
   const targetId = String(parsedEntry.target_id ?? "").trim();
+  const issues = Array.isArray(diagnostics) ? diagnostics.filter(Boolean) : [];
   const primaryParams = [
     ...Object.entries(parsedEntry.params ?? {}).slice(0, 2).map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(",") : typeof value === "object" ? JSON.stringify(value) : value}`),
     ...Object.entries(parsedEntry.bindings ?? {}).slice(0, 1).map(([key, value]) => `${key}=${value}`),
@@ -9667,7 +9749,11 @@ function buildScriptFunctionSummary(entry = {}) {
     lineCount: ruleLines.length,
     moduleKind,
     targetId,
-    preview: modulePreview || ruleLines[0] || "No rules yet",
+    issueCount: issues.length,
+    issuePreview: issues[0]?.message || "",
+    preview: issues.length > 0
+      ? `${issues.length} issue${issues.length === 1 ? "" : "s"} · ${issues[0]?.message || ""}`
+      : (modulePreview || ruleLines[0] || "No rules yet"),
   };
 }
 
@@ -9716,6 +9802,11 @@ function renderSceneLogicLibrary() {
   const hasScene = Boolean(scene);
   const canEdit = hasScene && isEditor() && state.mode === "build";
   const functions = getSceneScriptFunctions();
+  const sceneDocForValidation = getSceneDocForLogicValidation();
+  const diagnosticsByFunctionId = buildSceneScriptFunctionDiagnostics(
+    sceneDocForValidation,
+    String(elements.sceneForm?.elements?.scriptDsl?.value ?? sceneDocForValidation?.script_dsl ?? ""),
+  );
   const normalizedQuery = String(state.scriptFunctionQuery ?? "").trim().toLowerCase();
   const visibleFunctions = functions.filter((entry) => {
     const haystack = [entry.name, entry.body].join(" ").toLowerCase();
@@ -9764,16 +9855,20 @@ function renderSceneLogicLibrary() {
       elements.scriptFunctionSearchHint.textContent = `${visibleFunctions.length} function${visibleFunctions.length === 1 ? "" : "s"} in this scene. Click one to edit, or generate into the current selection.`;
     }
     elements.scriptFunctionList.innerHTML = visibleFunctions.map((entry, index) => {
-      const summary = buildScriptFunctionSummary(entry);
+      const diagnostics = diagnosticsByFunctionId.get(entry.id) ?? [];
+      const summary = buildScriptFunctionSummary(entry, diagnostics);
       const isSelected = selectedFunction?.id === entry.id;
       return `
-        <article class="pw-script-card ${isSelected ? "is-active" : ""}" data-script-function-id="${htmlEscape(entry.id)}">
+        <article class="pw-script-card ${isSelected ? "is-active" : ""} ${summary.issueCount > 0 ? "has-issues" : ""}" data-script-function-id="${htmlEscape(entry.id)}">
           <div class="pw-script-card__head">
             <div class="pw-script-card__title">
               <strong>${htmlEscape(entry.name)}</strong>
               <span>${htmlEscape(summary.moduleKind ? `${summary.moduleKind}${summary.lineCount ? ` · ${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}` : ""}` : `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}`)}</span>
             </div>
-            <span class="pw-script-card__badge">${isSelected ? "editing" : `f${index + 1}`}</span>
+            <div class="pw-script-card__badges">
+              ${summary.issueCount > 0 ? `<span class="pw-script-card__badge is-warning">${htmlEscape(`${summary.issueCount} issue${summary.issueCount === 1 ? "" : "s"}`)}</span>` : ""}
+              <span class="pw-script-card__badge">${isSelected ? "editing" : `f${index + 1}`}</span>
+            </div>
           </div>
           <p>${htmlEscape(summary.preview)}</p>
         </article>
@@ -9807,12 +9902,17 @@ function renderSceneLogicLibrary() {
     if (elements.scriptFunctionMeta) {
       elements.scriptFunctionMeta.textContent = "";
     }
+    if (elements.scriptFunctionStatus) {
+      elements.scriptFunctionStatus.hidden = true;
+      elements.scriptFunctionStatus.innerHTML = "";
+    }
     if (elements.scriptFunctionPrompt) {
       elements.scriptFunctionPrompt.disabled = true;
     }
     return;
   }
-  const summary = buildScriptFunctionSummary(editorFunction);
+  const diagnostics = diagnosticsByFunctionId.get(editorFunction.id) ?? [];
+  const summary = buildScriptFunctionSummary(editorFunction, diagnostics);
   if (elements.scriptFunctionName) {
     elements.scriptFunctionName.disabled = !canEdit;
     if (elements.scriptFunctionName.value !== editorFunction.name) {
@@ -9828,10 +9928,25 @@ function renderSceneLogicLibrary() {
   if (elements.scriptFunctionPrompt) {
     elements.scriptFunctionPrompt.disabled = !canEdit || !state.session;
   }
+  if (elements.scriptFunctionStatus) {
+    if (diagnostics.length > 0) {
+      elements.scriptFunctionStatus.hidden = false;
+      elements.scriptFunctionStatus.innerHTML = `
+        <strong>${htmlEscape(`${diagnostics.length} issue${diagnostics.length === 1 ? "" : "s"} to fix`)}</strong>
+        <ul>
+          ${diagnostics.slice(0, 8).map((issue) => `<li>${htmlEscape(issue.line > 0 ? `Line ${issue.line}: ${issue.message}` : issue.message)}</li>`).join("")}
+        </ul>
+      `;
+    } else {
+      elements.scriptFunctionStatus.hidden = true;
+      elements.scriptFunctionStatus.innerHTML = "";
+    }
+  }
   if (elements.scriptFunctionMeta) {
     elements.scriptFunctionMeta.textContent = [
       summary.moduleKind ? `module ${summary.moduleKind}${summary.targetId ? ` → ${summary.targetId}` : ""}` : `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}`,
       summary.moduleKind && summary.lineCount ? `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}` : "",
+      diagnostics.length > 0 ? `${diagnostics.length} issue${diagnostics.length === 1 ? "" : "s"}` : "",
       "comments are okay",
       "saved as one scene script behind the scenes",
     ].filter(Boolean).join(" · ");
