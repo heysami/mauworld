@@ -1670,6 +1670,8 @@ body.private-worlds-body.is-world-menu-open .pw-world-menu {
   max-height: calc(100dvh - 36px);
   overflow: hidden;
   grid-template-columns: minmax(252px, 292px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
   gap: 0;
   padding: 0;
   transform: translate3d(-50%, 18px, 0);
@@ -1694,7 +1696,9 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
   align-items: start;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   padding: 18px 16px;
   border-right: 1px solid rgba(93, 109, 186, 0.14);
   background:
