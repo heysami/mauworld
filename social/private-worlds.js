@@ -1048,6 +1048,7 @@ function createEmptyAiDialogState() {
     artifactType: "screen_html",
     targetKind: "world",
     targetId: "",
+    createdScriptFunctionId: "",
     title: "AI brainstorm",
     note: "Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.",
     applyLabel: "",
@@ -5463,9 +5464,12 @@ function closeAiDialog(options = {}) {
   renderAiDialog();
 }
 
-function buildSceneLogicAiObjective(prompt, selectedFunction = ensureSelectedScriptFunction()) {
+function buildSceneLogicAiObjective(prompt, options = {}) {
+  const selectedFunction = options.selectedFunction ?? null;
+  const createNewFunction = options.createNewFunction === true;
   return [
     String(prompt ?? "").trim(),
+    createNewFunction ? "Create a brand new scene logic function instead of rewriting the currently selected function." : "",
     selectedFunction?.name ? `Target function name: ${selectedFunction.name}.` : "",
     "This should end up as one self-contained Mauworld modular logic function using directives, comments, and rule lines when helpful.",
     "Keep the editable @set and @bind surface visible instead of hiding defaults behind implicit behavior.",
@@ -5534,9 +5538,27 @@ function getAiDialogTargetContext(dialog = state.aiDialog) {
     return {
       valid: Boolean(selectedFunction),
       error: selectedFunction ? "" : "That logic function is no longer available.",
-      objective: buildSceneLogicAiObjective(elements.scriptFunctionPrompt?.value ?? "", selectedFunction),
+      objective: buildSceneLogicAiObjective(elements.scriptFunctionPrompt?.value ?? "", {
+        selectedFunction,
+      }),
       targetLabel: selectedFunction?.name ? `Logic function ${selectedFunction.name}` : "Scene logic function",
       currentArtifact: selectedFunction?.body || "",
+      viewportSummary: "",
+      entityContext: buildSceneLogicEntityContext(),
+    };
+  }
+  if (dialog.targetKind === "new_script_function") {
+    const createdFunction = getSceneScriptFunctions().find((entry) => entry.id === dialog.createdScriptFunctionId) ?? null;
+    const hasScene = Boolean(getSelectedScene());
+    return {
+      valid: hasScene,
+      error: hasScene ? "" : "That scene is no longer available.",
+      objective: buildSceneLogicAiObjective(elements.scriptFunctionPrompt?.value ?? "", {
+        selectedFunction: createdFunction,
+        createNewFunction: !createdFunction,
+      }),
+      targetLabel: createdFunction?.name ? `Logic function ${createdFunction.name}` : "New scene logic function",
+      currentArtifact: createdFunction?.body || "",
       viewportSummary: "",
       entityContext: buildSceneLogicEntityContext(),
     };
@@ -5865,6 +5887,46 @@ function applyAiDialogTextToTarget(result = "") {
       appliedResult: normalizedBody,
       focusScript: true,
       message: "Applied to the function.",
+    };
+  }
+  if (state.aiDialog.targetKind === "new_script_function") {
+    let applied = false;
+    let createdEntry = null;
+    let updatedExisting = false;
+    const normalizedBody = normalizeGeneratedScriptBody(normalizedResult);
+    mutateSceneScriptFunctions((functions) => {
+      const existingTarget = functions.find((entry) => entry.id === state.aiDialog.createdScriptFunctionId) ?? null;
+      if (existingTarget) {
+        existingTarget.body = normalizedBody;
+        createdEntry = existingTarget;
+        updatedExisting = true;
+      } else {
+        const nextEntry = normalizeScriptFunctionEntry({
+          id: createScriptFunctionId("generated_logic"),
+          name: buildScriptTemplateFunctionName(functions, "Generated Function"),
+          body: normalizedBody,
+        }, functions.length);
+        functions.push(nextEntry);
+        createdEntry = nextEntry;
+        state.aiDialog.createdScriptFunctionId = nextEntry.id;
+      }
+      state.aiDialog.applyLabel = "Apply to function";
+      state.aiDialog.title = `Brainstorm ${createdEntry?.name || "Generated Function"}`;
+      state.selectedScriptFunctionId = createdEntry?.id || "";
+      applied = true;
+    });
+    if (!applied || !createdEntry) {
+      return {
+        ok: false,
+        error: "Could not create the new logic function.",
+      };
+    }
+    return {
+      ok: true,
+      applied: true,
+      appliedResult: normalizedBody,
+      focusScript: true,
+      message: updatedExisting ? "Applied to the generated function." : "Created a new function and applied the script.",
     };
   }
   if (elements.aiOutput) {
@@ -10533,7 +10595,7 @@ function renderSceneLogicLibrary() {
     }
   } else {
     if (elements.scriptFunctionSearchHint) {
-      elements.scriptFunctionSearchHint.textContent = `${visibleFunctions.length} function${visibleFunctions.length === 1 ? "" : "s"} in this scene. Click one to edit, or generate into the current selection.`;
+      elements.scriptFunctionSearchHint.textContent = `${visibleFunctions.length} function${visibleFunctions.length === 1 ? "" : "s"} in this scene. Click one to edit, use Generate to create a new function, or use Brainstorm with AI below to revise the current selection.`;
     }
     elements.scriptFunctionList.innerHTML = visibleFunctions.map((entry, index) => {
       const diagnostics = diagnosticsByFunctionId.get(entry.id) ?? [];
@@ -25472,12 +25534,17 @@ function openWorldAiDialog(kind = "html") {
   });
 }
 
-function openSceneLogicAiDialog() {
+function openSceneLogicAiDialog(options = {}) {
   if (!state.selectedWorld || !isEditor() || state.mode !== "build") {
     return false;
   }
-  let selectedFunction = ensureSelectedScriptFunction();
-  if (!selectedFunction) {
+  const createNewFunction = options.createNewFunction === true;
+  if (createNewFunction && !getSelectedScene()) {
+    setStatus("Open a scene before generating scene logic.");
+    return false;
+  }
+  let selectedFunction = createNewFunction ? null : ensureSelectedScriptFunction();
+  if (!createNewFunction && !selectedFunction) {
     mutateSceneScriptFunctions((functions) => {
       const inserted = functions.length > 0
         ? [normalizeScriptFunctionEntry({
@@ -25493,17 +25560,20 @@ function openSceneLogicAiDialog() {
     });
     selectedFunction = ensureSelectedScriptFunction();
   }
-  if (!selectedFunction) {
+  if (!createNewFunction && !selectedFunction) {
     setStatus("Create or select a function first.");
     return false;
   }
   openAiDialog({
     artifactType: "world_script",
-    targetKind: "script_function",
-    targetId: selectedFunction.id,
-    title: `Brainstorm ${selectedFunction.name}`,
-    note: "Let the AI shape assumptions and questions first. Generate only when this function feels settled.",
-    applyLabel: "Apply to function",
+    targetKind: createNewFunction ? "new_script_function" : "script_function",
+    targetId: createNewFunction ? (state.selectedSceneId || getSelectedScene()?.id || "scene") : selectedFunction.id,
+    createdScriptFunctionId: "",
+    title: createNewFunction ? "Brainstorm New Logic Function" : `Brainstorm ${selectedFunction.name}`,
+    note: createNewFunction
+      ? "Let the AI shape a brand new function. Generate when the thread feels ready, then it will be created as a new scene logic function."
+      : "Let the AI shape assumptions and questions first. Generate only when this function feels settled.",
+    applyLabel: createNewFunction ? "Apply to new function" : "Apply to function",
     seedPrompt: String(elements.scriptFunctionPrompt?.value ?? "").trim(),
   });
   return true;
@@ -26073,7 +26143,7 @@ function bindEvents() {
     focusSelectedScriptFunctionBody();
   });
   elements.scriptFunctionOpenGenerate?.addEventListener("click", () => {
-    openSceneLogicAiDialog();
+    openSceneLogicAiDialog({ createNewFunction: true });
   });
   elements.scriptFunctionDelete?.addEventListener("click", () => {
     mutateSceneScriptFunctions((functions) => {
