@@ -84,6 +84,65 @@ function getPlayerControlConfig(runtime = {}, player = {}) {
   return getRuntimeScriptConfig(runtime)?.player_controls?.[playerId] ?? null;
 }
 
+function getPlayerCameraBehaviorConfig(runtime = {}, player = {}) {
+  const playerId = String(player?.id ?? "").trim();
+  if (!playerId) {
+    return null;
+  }
+  return getRuntimeScriptConfig(runtime)?.camera_behaviors?.[playerId] ?? null;
+}
+
+function getPlayerBindingToken(runtime = {}, player = {}, bindingName = "", fallback = "") {
+  const normalizedBinding = String(bindingName ?? "").trim().toLowerCase();
+  if (!normalizedBinding) {
+    return String(fallback ?? "").trim().toLowerCase();
+  }
+  const controlBinding = getPlayerControlConfig(runtime, player)?.bindings?.[normalizedBinding];
+  if (controlBinding) {
+    return String(controlBinding).trim().toLowerCase();
+  }
+  const cameraBehaviors = getPlayerCameraBehaviorConfig(runtime, player);
+  if (cameraBehaviors?.overworld_drag_pan?.bindings?.[normalizedBinding]) {
+    return String(cameraBehaviors.overworld_drag_pan.bindings[normalizedBinding]).trim().toLowerCase();
+  }
+  if (cameraBehaviors?.face_mouse_orthogonal?.bindings?.[normalizedBinding]) {
+    return String(cameraBehaviors.face_mouse_orthogonal.bindings[normalizedBinding]).trim().toLowerCase();
+  }
+  return String(fallback ?? "").trim().toLowerCase();
+}
+
+function getMovementBindingAliases(bindingName = "", resolvedToken = "") {
+  const normalizedBinding = String(bindingName ?? "").trim().toLowerCase();
+  const normalizedToken = String(resolvedToken ?? "").trim().toLowerCase();
+  if (normalizedBinding === "move_forward_key" && normalizedToken === "w") {
+    return ["arrowup"];
+  }
+  if (normalizedBinding === "move_back_key" && normalizedToken === "s") {
+    return ["arrowdown"];
+  }
+  if (normalizedBinding === "move_left_key" && normalizedToken === "a") {
+    return ["arrowleft"];
+  }
+  if (normalizedBinding === "move_right_key" && normalizedToken === "d") {
+    return ["arrowright"];
+  }
+  return [];
+}
+
+function isBindingPressed(pressedKeys, bindingName = "", resolvedToken = "") {
+  const pressed = pressedKeys instanceof Set ? pressedKeys : new Set();
+  const normalizedToken = String(resolvedToken ?? "").trim().toLowerCase();
+  if (normalizedToken && pressed.has(normalizedToken)) {
+    return true;
+  }
+  for (const alias of getMovementBindingAliases(bindingName, normalizedToken)) {
+    if (pressed.has(alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function getPlayerMoveSpeed(runtime = {}, player = {}) {
   return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.move_speed, PLAYER_MOVE_SPEED));
 }
@@ -99,23 +158,57 @@ function getPlayerAcceleration(runtime = {}, player = {}) {
   return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.acceleration, PLAYER_ACCELERATION));
 }
 
+function getPlayerDeceleration(runtime = {}, player = {}) {
+  return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.deceleration, getPlayerAcceleration(runtime, player)));
+}
+
+function getPlayerAirControl(runtime = {}, player = {}) {
+  return clampNumber(mustFinite(getPlayerControlConfig(runtime, player)?.params?.air_control, 0.72), 0, 1);
+}
+
 function getPlayerJumpHeight(runtime = {}, player = {}) {
   return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.jump_height, PLAYER_JUMP_HEIGHT));
 }
 
+function getPlayerGravityScale(runtime = {}, player = {}) {
+  return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.gravity_scale, 1));
+}
+
+function getPlayerJumpBufferMs(runtime = {}, player = {}) {
+  return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.jump_buffer_ms, PLAYER_JUMP_BUFFER_MS));
+}
+
+function getPlayerMaxFallSpeed(runtime = {}, player = {}) {
+  return Math.max(0, mustFinite(getPlayerControlConfig(runtime, player)?.params?.max_fall_speed, Infinity));
+}
+
 function getPlayerJumpVelocity(runtime = {}, player = {}) {
-  const gravityMagnitude = Math.abs(mustFinite(runtime?.gravity?.y, -9.8));
+  const gravityMagnitude = Math.abs(mustFinite(runtime?.gravity?.y, -9.8)) * getPlayerGravityScale(runtime, player);
   return Math.sqrt(Math.max(0, gravityMagnitude * 2 * getPlayerJumpHeight(runtime, player)));
 }
 
+function getPlayerMoveForwardBinding(runtime = {}, player = {}) {
+  return getPlayerBindingToken(runtime, player, "move_forward_key", "w") || "w";
+}
+
+function getPlayerMoveBackBinding(runtime = {}, player = {}) {
+  return getPlayerBindingToken(runtime, player, "move_back_key", "s") || "s";
+}
+
+function getPlayerMoveLeftBinding(runtime = {}, player = {}) {
+  return getPlayerBindingToken(runtime, player, "move_left_key", "a") || "a";
+}
+
+function getPlayerMoveRightBinding(runtime = {}, player = {}) {
+  return getPlayerBindingToken(runtime, player, "move_right_key", "d") || "d";
+}
+
 function getPlayerJumpBinding(runtime = {}, player = {}) {
-  const binding = String(getPlayerControlConfig(runtime, player)?.bindings?.jump_key ?? "space").trim().toLowerCase();
-  return binding || "space";
+  return getPlayerBindingToken(runtime, player, "jump_key", "space") || "space";
 }
 
 function getPlayerSprintBinding(runtime = {}, player = {}) {
-  const binding = String(getPlayerControlConfig(runtime, player)?.bindings?.sprint_key ?? "shift").trim().toLowerCase();
-  return binding || "shift";
+  return getPlayerBindingToken(runtime, player, "sprint_key", "shift") || "shift";
 }
 
 function getHeadingForwardVector(headingY = 0) {
@@ -553,14 +646,14 @@ function getPlatformCarryVerticalTolerance(riderState, platformState) {
 function getPlayerDesiredPlanarMovement(runtime, player) {
   const pressed = player?.pressedKeys instanceof Set ? player.pressedKeys : new Set();
   const movementEnabled = isPlayerMovementEnabled(runtime, player);
-  const left = pressed.has("a") || pressed.has("arrowleft");
-  const right = pressed.has("d") || pressed.has("arrowright");
-  const forward = pressed.has("w") || pressed.has("arrowup");
-  const backward = pressed.has("s") || pressed.has("arrowdown");
-  const sprint = movementEnabled && pressed.has(getPlayerSprintBinding(runtime, player));
+  const left = isBindingPressed(pressed, "move_left_key", getPlayerMoveLeftBinding(runtime, player));
+  const right = isBindingPressed(pressed, "move_right_key", getPlayerMoveRightBinding(runtime, player));
+  const forward = isBindingPressed(pressed, "move_forward_key", getPlayerMoveForwardBinding(runtime, player));
+  const backward = isBindingPressed(pressed, "move_back_key", getPlayerMoveBackBinding(runtime, player));
+  const sprint = movementEnabled && isBindingPressed(pressed, "sprint_key", getPlayerSprintBinding(runtime, player));
   const desired = movementEnabled
     ? (player?.usesLookHeading === true
-      ? getRelativePlayerMovement(player, pressed)
+      ? getRelativePlayerMovement(runtime, player, pressed)
       : normalizePlanarVector(
         Number(right) - Number(left),
         Number(backward) - Number(forward),
@@ -1252,12 +1345,12 @@ function setPlayerLookHeading(player, headingY) {
   return true;
 }
 
-function getRelativePlayerMovement(player, pressedKeys = player?.pressedKeys) {
+function getRelativePlayerMovement(runtime = {}, player, pressedKeys = player?.pressedKeys) {
   const pressed = pressedKeys instanceof Set ? pressedKeys : new Set();
-  const left = pressed.has("a") || pressed.has("arrowleft");
-  const right = pressed.has("d") || pressed.has("arrowright");
-  const forward = pressed.has("w") || pressed.has("arrowup");
-  const backward = pressed.has("s") || pressed.has("arrowdown");
+  const left = isBindingPressed(pressed, "move_left_key", getPlayerMoveLeftBinding(runtime, player));
+  const right = isBindingPressed(pressed, "move_right_key", getPlayerMoveRightBinding(runtime, player));
+  const forward = isBindingPressed(pressed, "move_forward_key", getPlayerMoveForwardBinding(runtime, player));
+  const backward = isBindingPressed(pressed, "move_back_key", getPlayerMoveBackBinding(runtime, player));
   const headingY = mustFinite(player?.rotation?.y, 0);
   const forwardAmount = Number(forward) - Number(backward);
   const strafeAmount = Number(right) - Number(left);
@@ -1278,11 +1371,14 @@ function isPlayerMovementToggleCameraMode(cameraMode = "third_person") {
 }
 
 function isPlayerMovementEnabled(runtime = {}, player = {}) {
+  const controlConfig = getPlayerControlConfig(runtime, player);
+  if (controlConfig) {
+    return controlConfig.enabled !== false;
+  }
   if (!isPlayerMovementToggleCameraMode(player?.camera_mode)) {
     return true;
   }
-  const controlConfig = getPlayerControlConfig(runtime, player);
-  return controlConfig ? controlConfig.enabled !== false : player?.movement_enabled !== false;
+  return player?.movement_enabled !== false;
 }
 
 function isPlayerJumpEnabled(runtime = {}, player = {}) {
@@ -1325,12 +1421,13 @@ function primeQueuedPlayerJump(runtime, player, nowMs = mustFinite(runtime?.elap
     return false;
   }
   const body = runtime.physics?.playerBodies?.get(player.id) ?? null;
+  const jumpBufferMs = getPlayerJumpBufferMs(runtime, player);
   if (!body) {
-    player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + PLAYER_JUMP_BUFFER_MS);
+    player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + jumpBufferMs);
     return false;
   }
   if (player.body_mode === "ghost") {
-    player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + PLAYER_JUMP_BUFFER_MS);
+    player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + jumpBufferMs);
     player.onGround = isGhostPlayerGrounded(player);
     if (!player.onGround) {
       player.sleeping = false;
@@ -1349,7 +1446,7 @@ function primeQueuedPlayerJump(runtime, player, nowMs = mustFinite(runtime?.elap
     body.wakeUp?.();
     return true;
   }
-  player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + PLAYER_JUMP_BUFFER_MS);
+  player.jumpBufferedUntilMs = Math.max(mustFinite(player.jumpBufferedUntilMs, 0), nowMs + jumpBufferMs);
   player.onGround = raycastPlayerGround(runtime, player);
   if (!player.onGround) {
     player.sleeping = false;
@@ -1384,22 +1481,23 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
 
   const pressed = player.pressedKeys;
   const movementEnabled = isPlayerMovementEnabled(runtime, player);
-  const left = pressed.has("a") || pressed.has("arrowleft");
-  const right = pressed.has("d") || pressed.has("arrowright");
-  const forward = pressed.has("w") || pressed.has("arrowup");
-  const backward = pressed.has("s") || pressed.has("arrowdown");
-  const sprint = movementEnabled && pressed.has(getPlayerSprintBinding(runtime, player));
+  const left = isBindingPressed(pressed, "move_left_key", getPlayerMoveLeftBinding(runtime, player));
+  const right = isBindingPressed(pressed, "move_right_key", getPlayerMoveRightBinding(runtime, player));
+  const forward = isBindingPressed(pressed, "move_forward_key", getPlayerMoveForwardBinding(runtime, player));
+  const backward = isBindingPressed(pressed, "move_back_key", getPlayerMoveBackBinding(runtime, player));
+  const sprint = movementEnabled && isBindingPressed(pressed, "sprint_key", getPlayerSprintBinding(runtime, player));
   const nowMs = mustFinite(runtime?.elapsedMs, 0);
   const jumpBinding = getPlayerJumpBinding(runtime, player);
+  const jumpBufferMs = getPlayerJumpBufferMs(runtime, player);
   const jumpEdge = isPlayerJumpEnabled(runtime, player) && inputEdges.some((entry) => entry.key === jumpBinding && entry.state === "down");
   if (jumpEdge) {
-    player.jumpBufferedUntilMs = nowMs + PLAYER_JUMP_BUFFER_MS;
+    player.jumpBufferedUntilMs = nowMs + jumpBufferMs;
   } else if (mustFinite(player.jumpBufferedUntilMs, 0) < nowMs) {
     player.jumpBufferedUntilMs = 0;
   }
   const desired = movementEnabled
     ? (player.usesLookHeading === true
-    ? getRelativePlayerMovement(player, pressed)
+    ? getRelativePlayerMovement(runtime, player, pressed)
     : normalizePlanarVector(
       Number(right) - Number(left),
       Number(backward) - Number(forward),
@@ -1411,7 +1509,8 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
 
   if (player.body_mode === "ghost") {
     const speed = sprint ? getPlayerSprintSpeed(runtime, player) : getPlayerMoveSpeed(runtime, player);
-    const gravity = Math.abs(mustFinite(runtime?.gravity?.y, -9.8));
+    const gravity = Math.abs(mustFinite(runtime?.gravity?.y, -9.8)) * getPlayerGravityScale(runtime, player);
+    const maxFallSpeed = getPlayerMaxFallSpeed(runtime, player);
     const groundY = getGhostPlayerGroundY(player);
     const currentVelocity = vec3(player.velocity);
     let nextVelocityY = currentVelocity.y;
@@ -1421,6 +1520,9 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
       player.jumpBufferedUntilMs = 0;
     } else {
       nextVelocityY -= gravity * deltaSeconds;
+      if (Number.isFinite(maxFallSpeed)) {
+        nextVelocityY = Math.max(-maxFallSpeed, nextVelocityY);
+      }
     }
     let nextPositionY = player.position.y + nextVelocityY * deltaSeconds;
     if (nextPositionY <= groundY) {
@@ -1453,7 +1555,11 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
   const currentVelocity = vec3(body.linvel(), player.velocity);
   const targetVelocityX = desired.x * speed;
   const targetVelocityZ = desired.z * speed;
-  const blend = clampNumber(getPlayerAcceleration(runtime, player) * deltaSeconds, 0, 1);
+  const controlBlend = desired.x || desired.z
+    ? getPlayerAcceleration(runtime, player)
+    : getPlayerDeceleration(runtime, player);
+  const airControl = player.onGround ? 1 : getPlayerAirControl(runtime, player);
+  const blend = clampNumber(controlBlend * deltaSeconds * airControl, 0, 1);
   const nextVelocity = {
     x: currentVelocity.x + (targetVelocityX - currentVelocity.x) * blend,
     y: currentVelocity.y,
@@ -2027,6 +2133,17 @@ function executeMatchingRules(simulation, trigger, predicate = () => true, conte
   }
 }
 
+function doesRuleKeyMatchInput(simulation, rule = {}, edgeKey = "", actorPlayer = null) {
+  const normalizedEdgeKey = String(edgeKey ?? "").trim().toLowerCase();
+  if (!rule?.key) {
+    return true;
+  }
+  if (rule.key_binding_ref && actorPlayer) {
+    return getPlayerBindingToken(simulation, actorPlayer, rule.key_binding_ref, "") === normalizedEdgeKey;
+  }
+  return String(rule.key).trim().toLowerCase() === normalizedEdgeKey;
+}
+
 export function stepPrivateWorldSimulation(simulation, options = {}) {
   const deltaSeconds = clampNumber(mustFinite(options.deltaMs, DEFAULT_TICK_MS) / 1000, 0.001, MAX_DELTA_SECONDS);
   const inputEdgesByPlayerId = new Map();
@@ -2101,7 +2218,7 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
         simulation,
         "key_press",
         (rule) => (
-          (!rule.key || String(rule.key).toLowerCase() === edge.key)
+          doesRuleKeyMatchInput(simulation, rule, edge.key, player)
           && (!rule.source_id || rule.source_id === player.id)
         ),
         { actorPlayer: player },

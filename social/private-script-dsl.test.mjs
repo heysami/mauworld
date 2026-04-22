@@ -5,6 +5,7 @@ import {
   buildImplicitPrivateWorldScriptConfig,
   compilePrivateWorldScriptDsl,
   parsePrivateWorldScriptFunctions,
+  serializePrivateWorldModuleFunctionBody,
 } from "./private-script-dsl.mjs";
 
 test("parses modular function directives and emits script config", () => {
@@ -24,17 +25,37 @@ test("parses modular function directives and emits script config", () => {
 @module playmode.wasd_jump
 @target player_one
 @enabled true
+@bind move_forward_key i
+@bind move_back_key k
+@bind move_left_key j
+@bind move_right_key l
 @set jump_enabled true
 @set jump_height 18
+@set gravity_scale 1.4
+@set deceleration 18
 @bind jump_key mouse_right
+@bind fire_key mouse_left
+
+# function[camera]: Camera
+@module camera.overworld_drag_pan
+@target player_one
+@set drag_sensitivity 1.5
+@bind drag_button mouse_middle
+
+# function[face]: Face
+@module behavior.face_mouse_orthogonal
+@target player_one
+@set enabled true
+@set snap_mode 8_way
 
 # function[gravity]: Gravity
 @module physics.world
 @target scene
 @set gravity (0,-12,0)
+@set default_friction 0.55
 
 # function[force]: Force
-key_press key mouse_left from player_one -> apply_force to crate direction facing strength 8
+key_press key fire_key from player_one -> apply_force to crate direction facing strength 8
   `;
 
   const parsedFunctions = parsePrivateWorldScriptFunctions(source, {
@@ -52,15 +73,26 @@ key_press key mouse_left from player_one -> apply_force to crate direction facin
   });
 
   assert.equal(parsedFunctions[0].module_kind, "playmode.wasd_jump");
-  assert.equal(parsedFunctions[1].target_id, "scene");
+  assert.equal(parsedFunctions[3].target_id, "scene");
+  assert.equal(compiled.script_config.player_controls.player_one.bindings.move_forward_key, "i");
+  assert.equal(compiled.script_config.player_controls.player_one.bindings.fire_key, "mouse_left");
   assert.equal(compiled.script_config.player_controls.player_one.bindings.jump_key, "mouse_right");
+  assert.equal(compiled.script_config.player_controls.player_one.params.deceleration, 18);
+  assert.equal(compiled.script_config.player_controls.player_one.params.gravity_scale, 1.4);
   assert.equal(compiled.script_config.player_controls.player_one.params.jump_enabled, true);
   assert.equal(compiled.script_config.player_controls.player_one.params.jump_height, 18);
+  assert.equal(compiled.script_config.camera_behaviors.player_one.overworld_drag_pan.params.drag_sensitivity, 1.5);
+  assert.equal(compiled.script_config.camera_behaviors.player_one.overworld_drag_pan.bindings.drag_button, "mouse_middle");
+  assert.equal(compiled.script_config.camera_behaviors.player_one.face_mouse_orthogonal.params.snap_mode, "8_way");
   assert.deepEqual(compiled.script_config.world_physics.params.gravity, { x: 0, y: -12, z: 0 });
+  assert.equal(compiled.script_config.world_physics.params.default_friction, 0.55);
+  assert.equal(compiled.rules[0].key_binding_ref, "fire_key");
   assert.equal(compiled.rules[0].payload.force_direction, "player_facing");
   assert.equal(compiled.rules[0].payload.force_magnitude, 8);
   assert.ok(compiled.script_config.action_metadata.input_tokens.includes("mouse_left"));
   assert.ok(compiled.script_config.action_metadata.input_tokens.includes("mouse_right"));
+  assert.ok(compiled.script_config.action_metadata.input_tokens.includes("i"));
+  assert.ok(compiled.script_config.action_metadata.input_tokens.includes("mouse_middle"));
 });
 
 test("commented placeholder functions stay non-running", () => {
@@ -88,7 +120,36 @@ test("implicit defaults preserve legacy player and scene settings", () => {
   });
 
   assert.equal(config.player_controls.player_one.enabled, false);
+  assert.equal(config.player_controls.player_one.bindings.move_forward_key, "w");
+  assert.equal(config.player_controls.player_one.bindings.fire_key, "mouse_left");
+  assert.equal(config.player_controls.player_one.params.deceleration > 0, true);
   assert.equal(config.player_controls.player_one.params.jump_enabled, true);
   assert.equal(config.camera_behaviors.player_one.overworld_drag_pan.enabled, true);
   assert.deepEqual(config.world_physics.params.gravity, { x: 0, y: -7, z: 0 });
+});
+
+test("serializes materialized module functions with the broader editable surface", () => {
+  const body = serializePrivateWorldModuleFunctionBody({
+    module_kind: "playmode.wasd_jump",
+    target_id: "player_one",
+    enabled: true,
+    params: {
+      move_speed: 22,
+      deceleration: 18,
+      gravity_scale: 1.2,
+      jump_enabled: true,
+      jump_height: 20,
+    },
+    bindings: {
+      move_forward_key: "i",
+      jump_key: "mouse_right",
+      fire_key: "mouse_left",
+    },
+  });
+
+  assert.match(body, /@module playmode\.wasd_jump/);
+  assert.match(body, /@bind move_forward_key i/);
+  assert.match(body, /@bind fire_key mouse_left/);
+  assert.match(body, /@set deceleration 18/);
+  assert.match(body, /@set gravity_scale 1\.2/);
 });

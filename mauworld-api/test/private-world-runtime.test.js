@@ -126,6 +126,61 @@ test("runtime step applies player input and moves occupied players", () => {
   assert.ok(snapshot.players[0].position.z < before);
 });
 
+test("runtime honors remapped movement bindings from the control script", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 1, z: 0 },
+      scale: 1,
+      body_mode: "rigid",
+      camera_mode: "third_person",
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    particles: [],
+    rules: [],
+    script_dsl: `
+# function[controls]: Controls
+@module playmode.wasd_jump
+@target player_one
+@bind move_forward_key i
+@bind move_back_key k
+@bind move_left_key j
+@bind move_right_key l
+    `,
+  };
+  const simulation = buildSimulation({ sceneDoc });
+  const playerId = simulation.runtime.players[0].id;
+  const before = simulation.runtime.players[0].position.z;
+
+  for (let index = 0; index < 8; index += 1) {
+    stepPrivateWorldSimulation(simulation.runtime, {
+      deltaMs: 50,
+      pendingInputs: index === 0 ? [{ playerId, key: "i", state: "down" }] : [],
+    });
+  }
+
+  assert.ok(simulation.runtime.players[0].position.z < before);
+
+  const fallbackSimulation = buildSimulation({ sceneDoc });
+  const fallbackPlayerId = fallbackSimulation.runtime.players[0].id;
+  const fallbackBefore = fallbackSimulation.runtime.players[0].position.z;
+  for (let index = 0; index < 8; index += 1) {
+    stepPrivateWorldSimulation(fallbackSimulation.runtime, {
+      deltaMs: 50,
+      pendingInputs: index === 0 ? [{ playerId: fallbackPlayerId, key: "w", state: "down" }] : [],
+    });
+  }
+
+  assert.ok(fallbackSimulation.runtime.players[0].position.z >= fallbackBefore - 0.0001);
+});
+
 test("runtime buffers an initial jump press until a grounded occupied player settles", () => {
   const simulation = buildSimulation({
     sceneDoc: {
@@ -201,6 +256,72 @@ test("runtime lets occupied ghost players jump with space", () => {
   assert.equal(player.onGround, false);
   assert.ok(player.velocity.y > 30);
   assert.ok(player.position.y > 4.5);
+});
+
+test("runtime resolves key_press binding refs like fire_key against player bindings", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [{
+      id: "crate_one",
+      shape: "box",
+      position: { x: 0, y: 4, z: -4 },
+      scale: { x: 2, y: 2, z: 2 },
+      rotation: { x: 0, y: 0, z: 0 },
+      material: { color: "#88aadd", texture_preset: "none" },
+      rigid_mode: "rigid",
+      physics: { gravity_scale: 1, restitution: 0, friction: 0.4, mass: 1 },
+    }],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 4.5, z: 0 },
+      scale: 5,
+      body_mode: "ghost",
+      camera_mode: "third_person",
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    particles: [],
+    rules: [],
+    script_dsl: `
+# function[controls]: Controls
+@module playmode.wasd_jump
+@target player_one
+@bind fire_key mouse_right
+
+# function[force]: Force
+key_press key fire_key from player_one -> apply_force to primitive_crate-one direction facing strength 8
+    `,
+  };
+  const compiled = compileSceneDoc(sceneDoc, {
+    world_type: "room",
+    width: 40,
+    length: 30,
+    height: 12,
+  });
+  const sceneRow = {
+    id: "scene_runtime",
+    name: "Runtime Scene",
+    scene_doc: sceneDoc,
+    compiled_doc: compiled,
+  };
+  const simulation = buildSimulation({
+    sceneRow,
+    scenes: [sceneRow],
+  });
+  const player = simulation.runtime.players[0];
+  const crate = simulation.runtime.dynamicObjects[0];
+
+  player.rotation.y = 0;
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 16,
+    pendingInputs: [{ playerId: player.id, key: "mouse_right", state: "down" }],
+  });
+
+  assert.ok(Math.abs(crate.velocity.z) > 0.01 || Math.abs(crate.velocity.x) > 0.01);
 });
 
 test("active worlds keep player movement and dynamic physics live before scene start", () => {

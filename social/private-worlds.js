@@ -61,13 +61,15 @@ import {
 } from "./private-runtime-motion.mjs?v=20260421c";
 import { normalizePrivateInputKey } from "./private-input.mjs";
 import {
+  PRIVATE_WORLD_MODULE_DEFINITIONS,
   SCRIPT_FUNCTION_HEADER_RE as PRIVATE_SCRIPT_FUNCTION_HEADER_RE,
   compilePrivateWorldScriptDsl as compileSharedPrivateWorldScriptDsl,
   normalizeScriptFunctionEntry as normalizeSharedScriptFunctionEntry,
   parsePrivateWorldScriptFunctions as parseSharedPrivateWorldScriptFunctions,
   parseScriptFunctionLibrary as parseSharedScriptFunctionLibrary,
+  serializePrivateWorldModuleFunctionBody,
   serializeScriptFunctionLibrary as serializeSharedScriptFunctionLibrary,
-} from "./private-script-dsl.mjs?v=20260422a";
+} from "./private-script-dsl.mjs?v=20260422logicedit1";
 
 // Private-world physics contract: keep occupied-player support, landing, overlap
 // prevention, and moving-platform carry client-local. See
@@ -4178,7 +4180,26 @@ function releaseHeldRuntimeKeys(options = {}) {
 }
 
 function isRuntimeMovementInputKey(key = "") {
-  return RUNTIME_MOVEMENT_INPUT_KEYS.has(String(key ?? "").trim().toLowerCase());
+  const normalized = String(key ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? null;
+  const movementTokens = [
+    ["move_forward_key", getPlayerMoveForwardBinding(player)],
+    ["move_back_key", getPlayerMoveBackBinding(player)],
+    ["move_left_key", getPlayerMoveLeftBinding(player)],
+    ["move_right_key", getPlayerMoveRightBinding(player)],
+  ];
+  for (const [bindingName, token] of movementTokens) {
+    if (normalized === token) {
+      return true;
+    }
+    if (getMovementBindingAliases(bindingName, token).includes(normalized)) {
+      return true;
+    }
+  }
+  return RUNTIME_MOVEMENT_INPUT_KEYS.has(normalized);
 }
 
 function getPrivateCameraMovementBasis(preview = state.preview) {
@@ -5262,6 +5283,7 @@ function buildSceneLogicAiObjective(prompt, selectedFunction = ensureSelectedScr
     String(prompt ?? "").trim(),
     selectedFunction?.name ? `Target function name: ${selectedFunction.name}.` : "",
     "This should end up as one self-contained Mauworld modular logic function using directives, comments, and rule lines when helpful.",
+    "Keep the editable @set and @bind surface visible instead of hiding defaults behind implicit behavior.",
   ]
     .filter(Boolean)
     .join(" ");
@@ -9332,68 +9354,234 @@ function createScriptFunctionId(seed = "") {
 
 const DEFAULT_LOGIC_SCRIPT_TEMPLATES = [
   {
-    name: "Player WASD + Jump",
+    id: "starter_apply_force_facing",
+    name: "Starter · Apply Force In Facing Direction",
     body: `
-# Uncomment and retarget this function for the player you want to control.
-# @module playmode.wasd_jump
-# @target player_1
-# @enabled true
-# @set move_speed 21.585
-# @set sprint_speed 28.06
-# @set acceleration 26
-# @set jump_enabled true
-# @set jump_height 62.5
-# @bind jump_key space
-# @bind sprint_key shift
-    `.trim(),
-  },
-  {
-    name: "Overworld Drag Pan",
-    body: `
-# Uncomment to let an overworld player drag the camera to pan around the map.
-# @module camera.overworld_drag_pan
-# @target player_1
-# @enabled true
-# @set drag_enabled true
-# @set clamp_to_world true
-# @bind drag_button mouse_left
-    `.trim(),
-  },
-  {
-    name: "Orthogonal Face Mouse",
-    body: `
-# Uncomment to make an orthogonal player face the mouse cursor.
-# @module behavior.face_mouse_orthogonal
-# @target player_1
-# @enabled true
-    `.trim(),
-  },
-  {
-    name: "World Gravity",
-    body: `
-# Uncomment to override scene gravity for scripted jumping.
-# @module physics.world
-# @target scene
-# @enabled true
-# @set gravity (0,-9.8,0)
-    `.trim(),
-  },
-  {
-    name: "Apply Force In Facing Direction",
-    body: `
-# Uncomment and replace the target id and trigger token.
+# Replace the player id, object id, and key or mouse token.
+# You can keep your actual key in the control function above by changing @bind fire_key or @bind alt_fire_key.
+# Supported live rule syntax today:
 # key_press key mouse_left from player_1 -> apply_force to primitive_1 direction facing strength 12
+# Parameter ideas to customize when you replace this starter:
+# strength 12
+# upward_bonus 0
+# force_mode impulse
+# space world
+# cooldown_ms 250
+# affect_mass true
+# key_press key fire_key from player_1 -> apply_force to primitive_1 direction facing strength 12
     `.trim(),
   },
   {
-    name: "Launch Bullet Placeholder",
+    id: "starter_launch_bullet_placeholder",
+    name: "Starter · Launch Bullet Placeholder",
     body: `
 # Placeholder only: projectile spawning is not implemented yet.
-# Uncomment and replace this with your real bullet-spawn script once that action exists.
-# key_press key mouse_left from player_1 -> launch_bullet to projectile_spawn
+# Replace the item ids, prefab names, and timings once a real projectile action exists.
+# Parameter ideas to customize later:
+# projectile_prefab bullet_basic
+# spawn_offset (0,0,1)
+# speed 30
+# max_speed 42
+# gravity_scale 0
+# lifetime_ms 1600
+# cooldown_ms 200
+# burst_count 1
+# spread_deg 0
+# bounces 0
+# bounciness 0
+# friction 0
+# pierce_count 0
+# friendly_fire false
+# key_press key fire_key from player_1 -> launch_bullet to projectile_spawn
     `.trim(),
   },
 ];
+
+const MATERIALIZED_LOGIC_MODULE_ORDER = [
+  "physics.world",
+  "playmode.wasd_jump",
+  "camera.overworld_drag_pan",
+  "behavior.face_mouse_orthogonal",
+];
+
+function buildMaterializedLogicFunctionId(moduleKind = "", targetId = "scene") {
+  const moduleToken = slugToken(moduleKind) || "module";
+  const targetToken = slugToken(targetId || "scene") || "scene";
+  return `scriptfn_system_${moduleToken}_${targetToken}`;
+}
+
+function getPlayerLogicModuleLabel(sceneDoc = {}, playerId = "") {
+  const normalizedPlayerId = String(playerId ?? "").trim();
+  const player = Array.isArray(sceneDoc?.players)
+    ? sceneDoc.players.find((entry) => String(entry?.id ?? "").trim() === normalizedPlayerId)
+    : null;
+  return String(player?.label ?? normalizedPlayerId).trim() || normalizedPlayerId;
+}
+
+function buildMaterializedLogicFunctionName(moduleKind = "", targetId = "", sceneDoc = {}) {
+  const playerLabel = getPlayerLogicModuleLabel(sceneDoc, targetId);
+  if (moduleKind === "physics.world") {
+    return "World Physics";
+  }
+  if (moduleKind === "playmode.wasd_jump") {
+    return `Player Controls · ${playerLabel}`;
+  }
+  if (moduleKind === "camera.overworld_drag_pan") {
+    return `Overworld Drag Pan · ${playerLabel}`;
+  }
+  if (moduleKind === "behavior.face_mouse_orthogonal") {
+    return `Face Mouse Orthogonal · ${playerLabel}`;
+  }
+  return `${moduleKind} · ${targetId || "scene"}`;
+}
+
+function buildDesiredMaterializedLogicModules(sceneDoc = {}, scriptConfig = null) {
+  const modules = [];
+  if (scriptConfig?.world_physics) {
+    modules.push({
+      module_kind: "physics.world",
+      target_id: "scene",
+      ...scriptConfig.world_physics,
+    });
+  }
+  for (const player of sceneDoc?.players ?? []) {
+    const playerId = String(player?.id ?? "").trim();
+    if (!playerId) {
+      continue;
+    }
+    const control = scriptConfig?.player_controls?.[playerId];
+    if (control) {
+      modules.push({
+        module_kind: "playmode.wasd_jump",
+        target_id: playerId,
+        ...control,
+      });
+    }
+    const behaviors = scriptConfig?.camera_behaviors?.[playerId] ?? null;
+    if (behaviors?.overworld_drag_pan) {
+      modules.push({
+        module_kind: "camera.overworld_drag_pan",
+        target_id: playerId,
+        ...behaviors.overworld_drag_pan,
+      });
+    }
+    if (behaviors?.face_mouse_orthogonal) {
+      modules.push({
+        module_kind: "behavior.face_mouse_orthogonal",
+        target_id: playerId,
+        ...behaviors.face_mouse_orthogonal,
+      });
+    }
+  }
+  const order = new Map(MATERIALIZED_LOGIC_MODULE_ORDER.map((value, index) => [value, index]));
+  return modules.sort((left, right) => {
+    const leftOrder = order.get(left.module_kind) ?? 999;
+    const rightOrder = order.get(right.module_kind) ?? 999;
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    return String(left.target_id ?? "").localeCompare(String(right.target_id ?? ""));
+  });
+}
+
+function appendMissingModuleDirectiveSurface(entry = {}, parsedEntry = {}, moduleConfig = {}) {
+  const moduleKind = String(parsedEntry?.module_kind ?? moduleConfig?.module_kind ?? "").trim().toLowerCase();
+  const definition = PRIVATE_WORLD_MODULE_DEFINITIONS[moduleKind] ?? null;
+  if (!definition) {
+    return false;
+  }
+  const existingBody = String(entry?.body ?? "").replace(/\s+$/g, "");
+  const extraLines = [];
+  const existingDirectiveSet = new Set((parsedEntry?.directives ?? []).map((directive) => directive.directive));
+  const existingParamSet = new Set(Object.keys(parsedEntry?.params ?? {}));
+  const existingBindingSet = new Set(Object.keys(parsedEntry?.bindings ?? {}));
+  if (!existingDirectiveSet.has("enabled")) {
+    extraLines.push(`@enabled ${moduleConfig?.enabled !== false ? "true" : "false"}`);
+  }
+  for (const binding of definition.bindings ?? []) {
+    if (existingBindingSet.has(binding.name)) {
+      continue;
+    }
+    const value = String(moduleConfig?.bindings?.[binding.name] ?? "").trim();
+    if (value) {
+      extraLines.push(`@bind ${binding.name} ${value}`);
+    }
+  }
+  for (const param of definition.params ?? []) {
+    if (existingParamSet.has(param.name)) {
+      continue;
+    }
+    if (!Object.hasOwn(moduleConfig?.params ?? {}, param.name)) {
+      continue;
+    }
+    extraLines.push(`@set ${param.name} ${String(serializePrivateWorldModuleFunctionBody({
+      module_kind: moduleKind,
+      target_id: moduleConfig?.target_id ?? parsedEntry?.target_id ?? "",
+      enabled: moduleConfig?.enabled,
+      params: { [param.name]: moduleConfig.params[param.name] },
+      bindings: {},
+    }).split("\n").find((line) => line.startsWith(`@set ${param.name} `)) ?? "").replace(`@set ${param.name} `, "")}`);
+  }
+  if (!extraLines.length) {
+    return false;
+  }
+  entry.body = [existingBody, extraLines.join("\n")].filter(Boolean).join("\n");
+  return true;
+}
+
+function buildStarterLogicFunctionEntry(template = {}, functions = []) {
+  return normalizeScriptFunctionEntry({
+    id: String(template.id ?? "").trim() || createScriptFunctionId(template.name || "logic"),
+    name: buildScriptTemplateFunctionName(functions, template.name || "Logic Function"),
+    body: String(template.body ?? "").trim(),
+  }, functions.length);
+}
+
+function materializeSceneLogicFunctions(sceneDoc = {}, currentScriptDsl = "") {
+  const scriptDslText = String(currentScriptDsl ?? sceneDoc?.script_dsl ?? "").trim();
+  const compile = compileSharedPrivateWorldScriptDsl(scriptDslText, {
+    sceneDoc,
+    entityAliases: buildPrivateScriptDslEntityAliasMap(sceneDoc),
+  });
+  const functions = parseScriptFunctionLibrary(scriptDslText);
+  const parsedFunctions = compile.functions ?? [];
+  const moduleIndexByKey = new Map();
+  for (const [index, parsedEntry] of parsedFunctions.entries()) {
+    if (!parsedEntry?.module_kind || !parsedEntry?.target_id) {
+      continue;
+    }
+    moduleIndexByKey.set(`${parsedEntry.module_kind}::${parsedEntry.target_id}`, index);
+  }
+  let changed = false;
+  for (const moduleConfig of buildDesiredMaterializedLogicModules(sceneDoc, compile.script_config)) {
+    const moduleKey = `${moduleConfig.module_kind}::${moduleConfig.target_id}`;
+    const existingIndex = moduleIndexByKey.get(moduleKey);
+    if (Number.isInteger(existingIndex) && functions[existingIndex]) {
+      changed = appendMissingModuleDirectiveSurface(functions[existingIndex], parsedFunctions[existingIndex], moduleConfig) || changed;
+      continue;
+    }
+    functions.push(normalizeScriptFunctionEntry({
+      id: buildMaterializedLogicFunctionId(moduleConfig.module_kind, moduleConfig.target_id),
+      name: buildMaterializedLogicFunctionName(moduleConfig.module_kind, moduleConfig.target_id, sceneDoc),
+      body: serializePrivateWorldModuleFunctionBody(moduleConfig),
+    }, functions.length));
+    changed = true;
+  }
+  for (const template of DEFAULT_LOGIC_SCRIPT_TEMPLATES) {
+    const existing = functions.find((entry) => entry.id === template.id || entry.name === template.name);
+    if (existing) {
+      continue;
+    }
+    functions.push(buildStarterLogicFunctionEntry(template, functions));
+    changed = true;
+  }
+  const nextScriptDsl = changed ? serializeScriptFunctionLibrary(functions) : scriptDslText;
+  return {
+    changed,
+    functions,
+    scriptDslText: nextScriptDsl,
+  };
+}
 
 function normalizeScriptFunctionEntry(entry = {}, index = 0) {
   const normalized = normalizeSharedScriptFunctionEntry(entry, index);
@@ -9451,11 +9639,7 @@ function buildScriptFunctionSummary(entry = {}) {
 function appendDefaultLogicScriptTemplates(functions = []) {
   const inserted = [];
   for (const template of DEFAULT_LOGIC_SCRIPT_TEMPLATES) {
-    const nextEntry = normalizeScriptFunctionEntry({
-      id: createScriptFunctionId(template.name || "logic"),
-      name: buildScriptTemplateFunctionName(functions, template.name || "Logic Function"),
-      body: String(template.body ?? "").trim(),
-    }, functions.length);
+    const nextEntry = buildStarterLogicFunctionEntry(template, functions);
     functions.push(nextEntry);
     inserted.push(nextEntry);
   }
@@ -9999,8 +10183,70 @@ function getPlayerScriptCameraBehaviors(player = null, options = {}) {
   return getActivePrivateWorldScriptConfig(options)?.camera_behaviors?.[playerId] ?? null;
 }
 
+function getPlayerBindingToken(player = null, bindingName = "", fallback = "", options = {}) {
+  const normalizedBinding = String(bindingName ?? "").trim().toLowerCase();
+  if (!normalizedBinding) {
+    return String(fallback ?? "").trim().toLowerCase();
+  }
+  const controlBinding = getPlayerScriptControlConfig(player, options)?.bindings?.[normalizedBinding];
+  if (controlBinding) {
+    return String(controlBinding).trim().toLowerCase();
+  }
+  const cameraBehaviors = getPlayerScriptCameraBehaviors(player, options);
+  if (cameraBehaviors?.overworld_drag_pan?.bindings?.[normalizedBinding]) {
+    return String(cameraBehaviors.overworld_drag_pan.bindings[normalizedBinding]).trim().toLowerCase();
+  }
+  if (cameraBehaviors?.face_mouse_orthogonal?.bindings?.[normalizedBinding]) {
+    return String(cameraBehaviors.face_mouse_orthogonal.bindings[normalizedBinding]).trim().toLowerCase();
+  }
+  return String(fallback ?? "").trim().toLowerCase();
+}
+
+function getMovementBindingAliases(bindingName = "", resolvedToken = "") {
+  const normalizedBinding = String(bindingName ?? "").trim().toLowerCase();
+  const normalizedToken = String(resolvedToken ?? "").trim().toLowerCase();
+  if (normalizedBinding === "move_forward_key" && normalizedToken === "w") {
+    return ["arrowup"];
+  }
+  if (normalizedBinding === "move_back_key" && normalizedToken === "s") {
+    return ["arrowdown"];
+  }
+  if (normalizedBinding === "move_left_key" && normalizedToken === "a") {
+    return ["arrowleft"];
+  }
+  if (normalizedBinding === "move_right_key" && normalizedToken === "d") {
+    return ["arrowright"];
+  }
+  return [];
+}
+
+function isBindingPressed(pressedKeys = state.pressedRuntimeKeys, bindingName = "", resolvedToken = "") {
+  const pressed = pressedKeys instanceof Set ? pressedKeys : new Set();
+  const normalizedToken = String(resolvedToken ?? "").trim().toLowerCase();
+  if (normalizedToken && pressed.has(normalizedToken)) {
+    return true;
+  }
+  for (const alias of getMovementBindingAliases(bindingName, normalizedToken)) {
+    if (pressed.has(alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function getPrivateWorldGravityMagnitude(scriptConfig = getActivePrivateWorldScriptConfig()) {
   return Math.abs(Number(scriptConfig?.world_physics?.params?.gravity?.y ?? PRIVATE_PLAYER_RUNTIME.gravity) || PRIVATE_PLAYER_RUNTIME.gravity);
+}
+
+function getPlayerGravityScale(player = null, options = {}) {
+  return Math.max(
+    0,
+    Number(getPlayerScriptControlConfig(player, options)?.params?.gravity_scale ?? 1) || 1,
+  );
+}
+
+function getPlayerGravityMagnitude(player = null, options = {}) {
+  return getPrivateWorldGravityMagnitude(options.scriptConfig) * getPlayerGravityScale(player, options);
 }
 
 function getPlayerMoveSpeed(player = null, options = {}) {
@@ -10024,6 +10270,22 @@ function getPlayerAcceleration(player = null, options = {}) {
   );
 }
 
+function getPlayerDeceleration(player = null, options = {}) {
+  return Math.max(
+    0,
+    Number(getPlayerScriptControlConfig(player, options)?.params?.deceleration ?? getPlayerAcceleration(player, options)) || getPlayerAcceleration(player, options),
+  );
+}
+
+function getPlayerAirControl(player = null, options = {}) {
+  return clampNumber(
+    Number(getPlayerScriptControlConfig(player, options)?.params?.air_control ?? 0.72) || 0.72,
+    0.72,
+    0,
+    1,
+  );
+}
+
 function getPlayerJumpHeight(player = null, options = {}) {
   const fallbackJumpHeight = 12.5 * PRIVATE_WORLD_BLOCK_UNIT;
   return Math.max(
@@ -10032,16 +10294,37 @@ function getPlayerJumpHeight(player = null, options = {}) {
   );
 }
 
+function getPlayerMaxFallSpeed(player = null, options = {}) {
+  const rawValue = Number(getPlayerScriptControlConfig(player, options)?.params?.max_fall_speed);
+  return Number.isFinite(rawValue) ? Math.max(0, rawValue) : Infinity;
+}
+
 function getPlayerJumpVelocity(player = null, options = {}) {
-  return Math.sqrt(Math.max(0, getPrivateWorldGravityMagnitude(options.scriptConfig) * 2 * getPlayerJumpHeight(player, options)));
+  return Math.sqrt(Math.max(0, getPlayerGravityMagnitude(player, options) * 2 * getPlayerJumpHeight(player, options)));
+}
+
+function getPlayerMoveForwardBinding(player = null, options = {}) {
+  return getPlayerBindingToken(player, "move_forward_key", "w", options) || "w";
+}
+
+function getPlayerMoveBackBinding(player = null, options = {}) {
+  return getPlayerBindingToken(player, "move_back_key", "s", options) || "s";
+}
+
+function getPlayerMoveLeftBinding(player = null, options = {}) {
+  return getPlayerBindingToken(player, "move_left_key", "a", options) || "a";
+}
+
+function getPlayerMoveRightBinding(player = null, options = {}) {
+  return getPlayerBindingToken(player, "move_right_key", "d", options) || "d";
 }
 
 function getPlayerJumpBinding(player = null, options = {}) {
-  return String(getPlayerScriptControlConfig(player, options)?.bindings?.jump_key ?? "space").trim().toLowerCase() || "space";
+  return getPlayerBindingToken(player, "jump_key", "space", options) || "space";
 }
 
 function getPlayerSprintBinding(player = null, options = {}) {
-  return String(getPlayerScriptControlConfig(player, options)?.bindings?.sprint_key ?? "shift").trim().toLowerCase() || "shift";
+  return getPlayerBindingToken(player, "sprint_key", "shift", options) || "shift";
 }
 
 function getPlayerOverworldDragPanConfig(player = null, options = {}) {
@@ -10066,7 +10349,30 @@ function shouldClampPlayerOverworldPanToWorld(player = null, options = {}) {
 }
 
 function getPlayerOverworldDragButton(player = null, options = {}) {
-  return String(getPlayerOverworldDragPanConfig(player, options)?.bindings?.drag_button ?? "mouse_left").trim().toLowerCase() || "mouse_left";
+  return getPlayerBindingToken(player, "drag_button", "mouse_left", options) || "mouse_left";
+}
+
+function getPlayerOverworldPanSpeed(player = null, options = {}) {
+  return Math.max(0, Number(getPlayerOverworldDragPanConfig(player, options)?.params?.pan_speed ?? 1) || 1);
+}
+
+function getPlayerOverworldDragSensitivity(player = null, options = {}) {
+  return Math.max(0, Number(getPlayerOverworldDragPanConfig(player, options)?.params?.drag_sensitivity ?? 1) || 1);
+}
+
+function getPlayerOverworldZoomSpeed(player = null, options = {}) {
+  return Math.max(0, Number(getPlayerOverworldDragPanConfig(player, options)?.params?.zoom_speed ?? 1) || 1);
+}
+
+function getPlayerOverworldZoomMin(player = null, options = {}) {
+  return Math.max(0, Number(getPlayerOverworldDragPanConfig(player, options)?.params?.zoom_min ?? PRIVATE_PLAYER_VIEW.minRadius) || PRIVATE_PLAYER_VIEW.minRadius);
+}
+
+function getPlayerOverworldZoomMax(player = null, options = {}) {
+  return Math.max(
+    getPlayerOverworldZoomMin(player, options),
+    Number(getPlayerOverworldDragPanConfig(player, options)?.params?.zoom_max ?? PRIVATE_PLAYER_VIEW.maxRadius) || PRIVATE_PLAYER_VIEW.maxRadius,
+  );
 }
 
 function isPlayerFaceMouseOrthogonalEnabled(player = null, options = {}) {
@@ -10081,6 +10387,18 @@ function isPlayerFaceMouseOrthogonalEnabled(player = null, options = {}) {
   return config.enabled !== false && config.params?.enabled !== false;
 }
 
+function getPlayerFaceMouseSnapMode(player = null, options = {}) {
+  return String(getPlayerScriptCameraBehaviors(player, options)?.face_mouse_orthogonal?.params?.snap_mode ?? "4_way").trim().toLowerCase() || "4_way";
+}
+
+function getPlayerFaceMouseTurnSmoothing(player = null, options = {}) {
+  return Math.max(0, Number(getPlayerScriptCameraBehaviors(player, options)?.face_mouse_orthogonal?.params?.turn_smoothing ?? 0) || 0);
+}
+
+function getPlayerFaceMouseDeadzonePx(player = null, options = {}) {
+  return Math.max(0, Number(getPlayerScriptCameraBehaviors(player, options)?.face_mouse_orthogonal?.params?.deadzone_px ?? 8) || 8);
+}
+
 function getTrackedRuntimeInputTokens() {
   const tokens = new Set(RUNTIME_INPUT_KEYS);
   const actionTokens = getActivePrivateWorldScriptConfig()?.action_metadata?.input_tokens ?? [];
@@ -10092,9 +10410,14 @@ function getTrackedRuntimeInputTokens() {
   }
   const player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? null;
   if (player) {
-    tokens.add(getPlayerJumpBinding(player));
-    tokens.add(getPlayerSprintBinding(player));
-    tokens.add(getPlayerOverworldDragButton(player));
+    const controlBindings = Object.values(getPlayerScriptControlConfig(player)?.bindings ?? {});
+    const cameraBindings = Object.values(getPlayerScriptCameraBehaviors(player)?.overworld_drag_pan?.bindings ?? {});
+    for (const token of [...controlBindings, ...cameraBindings]) {
+      const normalized = normalizePrivateInputKey({ key: token, code: token });
+      if (normalized) {
+        tokens.add(normalized);
+      }
+    }
   }
   return tokens;
 }
@@ -10109,15 +10432,16 @@ function getRuntimePointerToken(event = {}) {
 }
 
 function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
-  const left = pressedKeys.has("a") || pressedKeys.has("arrowleft");
-  const right = pressedKeys.has("d") || pressedKeys.has("arrowright");
-  const forward = pressedKeys.has("w") || pressedKeys.has("arrowup");
-  const backward = pressedKeys.has("s") || pressedKeys.has("arrowdown");
   const movementEnabled = isActivePossessedPlayerMovementEnabled();
+  const player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? null;
+  const left = isBindingPressed(pressedKeys, "move_left_key", getPlayerMoveLeftBinding(player));
+  const right = isBindingPressed(pressedKeys, "move_right_key", getPlayerMoveRightBinding(player));
+  const forward = isBindingPressed(pressedKeys, "move_forward_key", getPlayerMoveForwardBinding(player));
+  const backward = isBindingPressed(pressedKeys, "move_back_key", getPlayerMoveBackBinding(player));
   const cameraMode = getActivePossessedCameraMode();
   const orthogonalCamera = isOrthogonalCameraMode(cameraMode);
   const faceMouseOrthogonal = orthogonalCamera
-    && isPlayerFaceMouseOrthogonalEnabled(getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? null);
+    && isPlayerFaceMouseOrthogonalEnabled(player);
   const orthogonalOrientation = orthogonalCamera
     ? getPlayerFixedTopDownOrientation(getActivePossessedFixedTopDownDirection())
     : null;
@@ -10126,7 +10450,7 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
     : orthogonalCamera
     ? orthogonalOrientation.headingY
     : normalizeAngle(privateInputState.yaw);
-  if (isPlayerOverworldDragPanEnabled(getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? null)) {
+  if (isPlayerOverworldDragPanEnabled(player)) {
     return {
       x: 0,
       z: 0,
@@ -10160,7 +10484,7 @@ function buildRuntimeMovementIntent(pressedKeys = state.pressedRuntimeKeys) {
     headingY,
     active: movementEnabled && length > 0.000001,
     sprint: movementEnabled
-      && pressedKeys.has(getPlayerSprintBinding(getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? null))
+      && isBindingPressed(pressedKeys, "sprint_key", getPlayerSprintBinding(player))
       && length > 0.000001,
   };
 }
@@ -10285,13 +10609,13 @@ function normalizePlayerJumpEnabled(value = false) {
 }
 
 function isPlayerMovementEnabled(player = {}) {
-  const cameraMode = normalizePlayerCameraMode(player?.camera_mode ?? player?.cameraMode ?? "third_person");
-  if (!isPlayerMovementToggleCameraMode(cameraMode)) {
-    return true;
-  }
   const controlConfig = getPlayerScriptControlConfig(player);
   if (controlConfig) {
     return controlConfig.enabled !== false;
+  }
+  const cameraMode = normalizePlayerCameraMode(player?.camera_mode ?? player?.cameraMode ?? "third_person");
+  if (!isPlayerMovementToggleCameraMode(cameraMode)) {
+    return true;
   }
   return normalizePlayerMovementEnabled(player?.movement_enabled ?? player?.movementEnabled ?? true);
 }
@@ -10524,7 +10848,9 @@ function panPossessedOverworldByScreenDelta(previousClientX = 0, previousClientY
   if (!previousPoint || !currentPoint) {
     return false;
   }
-  const translation = previousPoint.clone().sub(currentPoint);
+  const sensitivity = getPlayerOverworldDragSensitivity(player ?? prediction);
+  const panSpeed = getPlayerOverworldPanSpeed(player ?? prediction);
+  const translation = previousPoint.clone().sub(currentPoint).multiplyScalar(sensitivity * panSpeed);
   if (translation.lengthSq() <= 0.000001) {
     return false;
   }
@@ -10564,10 +10890,23 @@ function updatePossessedFaceMouseFromPointer(pointerSource, preview = state.prev
   }
   const deltaX = point.x - playerX;
   const deltaZ = point.z - playerZ;
-  if (Math.hypot(deltaX, deltaZ) <= 0.0001) {
+  const deadzonePx = getPlayerFaceMouseDeadzonePx(player);
+  const pointerDeltaX = Number(metrics.canvasX ?? 0) - Number(metrics.viewport?.x ?? 0) - Number((metrics.viewport?.width ?? 0) / 2);
+  const pointerDeltaY = Number(metrics.canvasY ?? 0) - Number(metrics.viewport?.y ?? 0) - Number((metrics.viewport?.height ?? 0) / 2);
+  if (Math.hypot(deltaX, deltaZ) <= 0.0001 || Math.hypot(pointerDeltaX, pointerDeltaY) <= deadzonePx) {
     return false;
   }
-  privateInputState.yaw = normalizeAngle(Math.atan2(-deltaX, -deltaZ));
+  let nextYaw = normalizeAngle(Math.atan2(-deltaX, -deltaZ));
+  const snapMode = getPlayerFaceMouseSnapMode(player);
+  if (snapMode === "4_way") {
+    nextYaw = normalizeAngle(Math.round(nextYaw / (Math.PI / 2)) * (Math.PI / 2));
+  } else if (snapMode === "8_way") {
+    nextYaw = normalizeAngle(Math.round(nextYaw / (Math.PI / 4)) * (Math.PI / 4));
+  }
+  const smoothing = getPlayerFaceMouseTurnSmoothing(player);
+  privateInputState.yaw = smoothing > 0
+    ? normalizeAngle(THREE.MathUtils.lerp(privateInputState.yaw, nextYaw, clampNumber(smoothing * 0.12, 0.12, 0, 1)))
+    : nextYaw;
   if (state.predictedPossessedPlayer?.rotation) {
     state.predictedPossessedPlayer.rotation.y = privateInputState.yaw;
   }
@@ -11721,8 +12060,11 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const moveSpeed = getPlayerMoveSpeed(runtimePlayer, { scriptConfig });
   const sprintSpeed = getPlayerSprintSpeed(runtimePlayer, { scriptConfig });
   const acceleration = getPlayerAcceleration(runtimePlayer, { scriptConfig });
+  const deceleration = getPlayerDeceleration(runtimePlayer, { scriptConfig });
+  const airControl = getPlayerAirControl(runtimePlayer, { scriptConfig });
   const jumpVelocity = getPlayerJumpVelocity(runtimePlayer, { scriptConfig });
-  const gravity = getPrivateWorldGravityMagnitude(scriptConfig);
+  const gravity = getPlayerGravityMagnitude(runtimePlayer, { scriptConfig });
+  const maxFallSpeed = getPlayerMaxFallSpeed(runtimePlayer, { scriptConfig });
   const dt = clampNumber(deltaSeconds, 1 / 60, 0, 0.05);
   if (dt <= 0) {
     return prediction;
@@ -11742,7 +12084,9 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   const speed = intent.sprint
     ? sprintSpeed
     : moveSpeed;
-  const blend = clampNumber(acceleration * dt, 1, 0, 1);
+  const controlBlend = intent.active ? acceleration : deceleration;
+  const controlScale = prediction.onGround ? 1 : airControl;
+  const blend = clampNumber(controlBlend * dt * controlScale, 1, 0, 1);
   prediction.velocity.x += (intent.x * speed - prediction.velocity.x) * blend;
   prediction.velocity.z += (intent.z * speed - prediction.velocity.z) * blend;
   const preJumpLocalJumpActive = prediction.localJumpUntilMs > now
@@ -11820,6 +12164,9 @@ function stepPossessedPlayerPrediction(deltaSeconds = 0) {
   if (!rigidBodyMode) {
     if (!prediction.onGround || Math.abs(Number(prediction.velocity.y ?? 0) || 0) >= 0.05) {
       prediction.velocity.y -= gravity * dt;
+      if (Number.isFinite(maxFallSpeed)) {
+        prediction.velocity.y = Math.max(-maxFallSpeed, prediction.velocity.y);
+      }
       prediction.position.y += prediction.velocity.y * dt;
       const groundY = Number(prediction.groundY ?? prediction.position.y);
       if (prediction.position.y <= groundY) {
@@ -12146,6 +12493,21 @@ function renderSceneEditor() {
     sceneDocForControls = JSON.parse(elements.sceneForm.elements.sceneDoc.value || "{}");
   } catch (_error) {
     sceneDocForControls = scene?.scene_doc ?? buildEmptySceneDoc();
+  }
+  sceneDocForControls.script_dsl = String(elements.sceneForm.elements.scriptDsl.value || sceneDocForControls?.script_dsl || "");
+  if (scene && canEdit && buildMode) {
+    const materialized = materializeSceneLogicFunctions(sceneDocForControls, sceneDocForControls.script_dsl);
+    if (materialized.changed) {
+      sceneDocForControls.script_dsl = materialized.scriptDslText;
+      const sceneDocText = JSON.stringify(sceneDocForControls, null, 2);
+      elements.sceneForm.elements.scriptDsl.value = materialized.scriptDslText;
+      elements.sceneForm.elements.sceneDoc.value = sceneDocText;
+      rememberSceneDraft({
+        sceneId,
+        sceneDocText,
+        scriptDslText: materialized.scriptDslText,
+      });
+    }
   }
   if (elements.sceneSwitchButton) {
     const canSwitchScene = Boolean(scene) && canEdit && buildMode && !isFocusedSceneActive;
@@ -19350,6 +19712,17 @@ function ensurePreview() {
     }
     event.preventDefault();
     if (getPossessedRuntimePlayer()) {
+      const player = getPossessedRuntimePlayer() ?? state.predictedPossessedPlayer ?? null;
+      const zoomSpeed = getPlayerOverworldZoomSpeed(player);
+      const zoomMin = getPlayerOverworldZoomMin(player);
+      const zoomMax = getPlayerOverworldZoomMax(player);
+      state.cameraRadius = clampNumber(
+        state.cameraRadius + event.deltaY * PRIVATE_CAMERA.wheelFactor * zoomSpeed,
+        state.cameraRadius,
+        zoomMin,
+        zoomMax,
+      );
+      syncPrivateCameraToFollowTarget(state.preview);
       return;
     }
     const rig = getPrivateViewerRigConfig();

@@ -6,10 +6,50 @@ const PRIVATE_WORLD_BLOCK_UNIT = 5;
 const DEFAULT_PLAYER_MOVE_SPEED = 4.317 * PRIVATE_WORLD_BLOCK_UNIT;
 const DEFAULT_PLAYER_SPRINT_SPEED = 5.612 * PRIVATE_WORLD_BLOCK_UNIT;
 const DEFAULT_PLAYER_ACCELERATION = 26;
+const DEFAULT_PLAYER_DECELERATION = 22;
+const DEFAULT_PLAYER_AIR_CONTROL = 0.72;
+const DEFAULT_PLAYER_GROUND_FRICTION = 0.8;
+const DEFAULT_PLAYER_BRAKING_FRICTION = 0.92;
+const DEFAULT_PLAYER_TURN_SPEED = 14;
 const DEFAULT_PLAYER_JUMP_HEIGHT = 12.5 * PRIVATE_WORLD_BLOCK_UNIT;
+const DEFAULT_PLAYER_JUMP_COUNT = 1;
+const DEFAULT_PLAYER_JUMP_BUFFER_MS = 160;
+const DEFAULT_PLAYER_COYOTE_TIME_MS = 100;
+const DEFAULT_PLAYER_GRAVITY_SCALE = 1;
+const DEFAULT_PLAYER_MAX_FALL_SPEED = 80;
+const DEFAULT_PLAYER_SLIDE_ON_CEILING = true;
+const DEFAULT_PLAYER_SLOPE_LIMIT_DEG = 46;
+const DEFAULT_PLAYER_STEP_HEIGHT = 2.4;
+const DEFAULT_PLAYER_FLOOR_SNAP_LENGTH = 0.3;
+const DEFAULT_PLAYER_SAFE_MARGIN = 0.08;
+const DEFAULT_PLAYER_CARRY_RIDERS = false;
+const DEFAULT_PLAYER_PLATFORM_LEAVE_BEHAVIOR = "inherit";
+const DEFAULT_PLAYER_INHERIT_PLATFORM_VELOCITY = true;
+const DEFAULT_PLAYER_MOVE_FORWARD_KEY = "w";
+const DEFAULT_PLAYER_MOVE_BACK_KEY = "s";
+const DEFAULT_PLAYER_MOVE_LEFT_KEY = "a";
+const DEFAULT_PLAYER_MOVE_RIGHT_KEY = "d";
 const DEFAULT_PLAYER_JUMP_KEY = "space";
 const DEFAULT_PLAYER_SPRINT_KEY = "shift";
+const DEFAULT_PLAYER_INTERACT_KEY = "e";
+const DEFAULT_PLAYER_FIRE_KEY = "mouse_left";
+const DEFAULT_PLAYER_ALT_FIRE_KEY = "mouse_right";
 const DEFAULT_DRAG_BUTTON = "mouse_left";
+const DEFAULT_DRAG_PAN_SPEED = 1;
+const DEFAULT_DRAG_SENSITIVITY = 1;
+const DEFAULT_DRAG_ZOOM_SPEED = 1;
+const DEFAULT_DRAG_ZOOM_MIN = 16;
+const DEFAULT_DRAG_ZOOM_MAX = 110;
+const DEFAULT_DRAG_EDGE_PAN_SPEED = 0;
+const DEFAULT_DRAG_SMOOTH_TIME = 0;
+const DEFAULT_FACE_MOUSE_SNAP_MODE = "4_way";
+const DEFAULT_FACE_MOUSE_TURN_SMOOTHING = 0;
+const DEFAULT_FACE_MOUSE_ROTATE_BODY = true;
+const DEFAULT_FACE_MOUSE_ROTATE_WEAPON_ONLY = false;
+const DEFAULT_FACE_MOUSE_DEADZONE_PX = 8;
+const DEFAULT_WORLD_FRICTION = 0.4;
+const DEFAULT_WORLD_RESTITUTION = 0;
+const DEFAULT_WORLD_TERMINAL_VELOCITY = 120;
 
 const ALLOWED_RULE_TRIGGERS = new Set([
   "zone_enter",
@@ -38,6 +78,114 @@ const MODULE_KINDS = new Set([
   "behavior.face_mouse_orthogonal",
   "physics.world",
 ]);
+
+const PRIVATE_WORLD_MODULE_DEFINITION_DATA = {
+  "playmode.wasd_jump": {
+    scope: "player",
+    params: [
+      { name: "move_speed", type: "number", min: 0, max: 4096 },
+      { name: "sprint_speed", type: "number", min: 0, max: 4096 },
+      { name: "acceleration", type: "number", min: 0, max: 4096 },
+      { name: "deceleration", type: "number", min: 0, max: 4096 },
+      { name: "air_control", type: "number", min: 0, max: 1 },
+      { name: "ground_friction", type: "number", min: 0, max: 16 },
+      { name: "braking_friction", type: "number", min: 0, max: 16 },
+      { name: "turn_speed", type: "number", min: 0, max: 128 },
+      { name: "jump_enabled", type: "boolean" },
+      { name: "jump_height", type: "number", min: 0, max: 4096 },
+      { name: "jump_count", type: "integer", min: 1, max: 8 },
+      { name: "jump_buffer_ms", type: "integer", min: 0, max: 5000 },
+      { name: "coyote_time_ms", type: "integer", min: 0, max: 5000 },
+      { name: "gravity_scale", type: "number", min: 0, max: 20 },
+      { name: "max_fall_speed", type: "number", min: 0, max: 4096 },
+      { name: "slide_on_ceiling", type: "boolean" },
+      { name: "slope_limit_deg", type: "number", min: 0, max: 89 },
+      { name: "step_height", type: "number", min: 0, max: 256 },
+      { name: "floor_snap_length", type: "number", min: 0, max: 256 },
+      { name: "safe_margin", type: "number", min: 0, max: 8 },
+      { name: "collider_height", type: "number", min: 0.1, max: 512 },
+      { name: "collider_radius", type: "number", min: 0.05, max: 256 },
+      { name: "carry_riders", type: "boolean" },
+      { name: "platform_leave_behavior", type: "enum", values: ["inherit", "drop", "cancel"] },
+      { name: "inherit_platform_velocity", type: "boolean" },
+    ],
+    bindings: [
+      { name: "move_forward_key", type: "input" },
+      { name: "move_back_key", type: "input" },
+      { name: "move_left_key", type: "input" },
+      { name: "move_right_key", type: "input" },
+      { name: "jump_key", type: "input" },
+      { name: "sprint_key", type: "input" },
+      { name: "interact_key", type: "input" },
+      { name: "fire_key", type: "input" },
+      { name: "alt_fire_key", type: "input" },
+    ],
+  },
+  "camera.overworld_drag_pan": {
+    scope: "player",
+    params: [
+      { name: "drag_enabled", type: "boolean" },
+      { name: "pan_speed", type: "number", min: 0, max: 64 },
+      { name: "drag_sensitivity", type: "number", min: 0, max: 32 },
+      { name: "clamp_to_world", type: "boolean" },
+      { name: "zoom_speed", type: "number", min: 0, max: 32 },
+      { name: "zoom_min", type: "number", min: 0, max: 4096 },
+      { name: "zoom_max", type: "number", min: 0, max: 4096 },
+      { name: "edge_pan_speed", type: "number", min: 0, max: 64 },
+      { name: "smooth_time", type: "number", min: 0, max: 10 },
+    ],
+    bindings: [
+      { name: "drag_button", type: "input" },
+    ],
+  },
+  "behavior.face_mouse_orthogonal": {
+    scope: "player",
+    params: [
+      { name: "enabled", type: "boolean" },
+      { name: "snap_mode", type: "enum", values: ["free", "4_way", "8_way"] },
+      { name: "turn_smoothing", type: "number", min: 0, max: 16 },
+      { name: "rotate_body", type: "boolean" },
+      { name: "rotate_weapon_only", type: "boolean" },
+      { name: "deadzone_px", type: "number", min: 0, max: 4096 },
+    ],
+    bindings: [],
+  },
+  "physics.world": {
+    scope: "scene",
+    params: [
+      { name: "gravity", type: "vector3", min: -256, max: 256 },
+      { name: "default_friction", type: "number", min: 0, max: 16 },
+      { name: "default_restitution", type: "number", min: 0, max: 4 },
+      { name: "terminal_velocity", type: "number", min: 0, max: 4096 },
+    ],
+    bindings: [],
+  },
+};
+
+export const PRIVATE_WORLD_MODULE_DEFINITIONS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(PRIVATE_WORLD_MODULE_DEFINITION_DATA).map(([moduleKind, definition]) => [
+      moduleKind,
+      Object.freeze({
+        scope: definition.scope,
+        params: Object.freeze(definition.params.map((entry) => Object.freeze({ ...entry }))),
+        bindings: Object.freeze(definition.bindings.map((entry) => Object.freeze({ ...entry }))),
+      }),
+    ]),
+  ),
+);
+
+const PRIVATE_WORLD_PARAM_DEFINITION_MAP = new Map(
+  Object.values(PRIVATE_WORLD_MODULE_DEFINITION_DATA)
+    .flatMap((definition) => definition.params)
+    .map((entry) => [entry.name, entry]),
+);
+
+const PRIVATE_WORLD_BINDING_DEFINITION_MAP = new Map(
+  Object.values(PRIVATE_WORLD_MODULE_DEFINITION_DATA)
+    .flatMap((definition) => definition.bindings)
+    .map((entry) => [entry.name, entry]),
+);
 
 function finiteNumber(value, fallback = 0) {
   const numeric = Number(value);
@@ -134,6 +282,218 @@ function normalizePrivateInputToken(value = "") {
   return normalized || String(value ?? "").trim().toLowerCase();
 }
 
+function normalizeEnumToken(value = "") {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function getModuleDefinition(moduleKind = "") {
+  return PRIVATE_WORLD_MODULE_DEFINITION_DATA[String(moduleKind ?? "").trim().toLowerCase()] ?? null;
+}
+
+function getModuleParamDefinition(moduleKind = "", param = "") {
+  return getModuleDefinition(moduleKind)?.params?.find((entry) => entry.name === param) ?? null;
+}
+
+function getModuleBindingDefinition(moduleKind = "", binding = "") {
+  return getModuleDefinition(moduleKind)?.bindings?.find((entry) => entry.name === binding) ?? null;
+}
+
+function getPlayerColliderDefaults(player = {}) {
+  const scale = Math.max(0.25, finiteNumber(player?.scale, PRIVATE_WORLD_BLOCK_UNIT));
+  return {
+    collider_height: Number((1.8 * scale).toFixed(4)),
+    collider_radius: Number(((0.6 * scale) / 2).toFixed(4)),
+  };
+}
+
+function buildDefaultPlayerControlParams(player = {}) {
+  const colliderDefaults = getPlayerColliderDefaults(player);
+  return {
+    move_speed: DEFAULT_PLAYER_MOVE_SPEED,
+    sprint_speed: DEFAULT_PLAYER_SPRINT_SPEED,
+    acceleration: DEFAULT_PLAYER_ACCELERATION,
+    deceleration: DEFAULT_PLAYER_DECELERATION,
+    air_control: DEFAULT_PLAYER_AIR_CONTROL,
+    ground_friction: DEFAULT_PLAYER_GROUND_FRICTION,
+    braking_friction: DEFAULT_PLAYER_BRAKING_FRICTION,
+    turn_speed: DEFAULT_PLAYER_TURN_SPEED,
+    jump_enabled: player.jump_enabled === true,
+    jump_height: DEFAULT_PLAYER_JUMP_HEIGHT,
+    jump_count: DEFAULT_PLAYER_JUMP_COUNT,
+    jump_buffer_ms: DEFAULT_PLAYER_JUMP_BUFFER_MS,
+    coyote_time_ms: DEFAULT_PLAYER_COYOTE_TIME_MS,
+    gravity_scale: DEFAULT_PLAYER_GRAVITY_SCALE,
+    max_fall_speed: DEFAULT_PLAYER_MAX_FALL_SPEED,
+    slide_on_ceiling: DEFAULT_PLAYER_SLIDE_ON_CEILING,
+    slope_limit_deg: DEFAULT_PLAYER_SLOPE_LIMIT_DEG,
+    step_height: DEFAULT_PLAYER_STEP_HEIGHT,
+    floor_snap_length: DEFAULT_PLAYER_FLOOR_SNAP_LENGTH,
+    safe_margin: DEFAULT_PLAYER_SAFE_MARGIN,
+    collider_height: colliderDefaults.collider_height,
+    collider_radius: colliderDefaults.collider_radius,
+    carry_riders: DEFAULT_PLAYER_CARRY_RIDERS,
+    platform_leave_behavior: DEFAULT_PLAYER_PLATFORM_LEAVE_BEHAVIOR,
+    inherit_platform_velocity: DEFAULT_PLAYER_INHERIT_PLATFORM_VELOCITY,
+  };
+}
+
+function buildDefaultPlayerControlBindings() {
+  return {
+    move_forward_key: DEFAULT_PLAYER_MOVE_FORWARD_KEY,
+    move_back_key: DEFAULT_PLAYER_MOVE_BACK_KEY,
+    move_left_key: DEFAULT_PLAYER_MOVE_LEFT_KEY,
+    move_right_key: DEFAULT_PLAYER_MOVE_RIGHT_KEY,
+    jump_key: DEFAULT_PLAYER_JUMP_KEY,
+    sprint_key: DEFAULT_PLAYER_SPRINT_KEY,
+    interact_key: DEFAULT_PLAYER_INTERACT_KEY,
+    fire_key: DEFAULT_PLAYER_FIRE_KEY,
+    alt_fire_key: DEFAULT_PLAYER_ALT_FIRE_KEY,
+  };
+}
+
+function buildDefaultOverworldDragParams() {
+  return {
+    drag_enabled: true,
+    pan_speed: DEFAULT_DRAG_PAN_SPEED,
+    drag_sensitivity: DEFAULT_DRAG_SENSITIVITY,
+    clamp_to_world: true,
+    zoom_speed: DEFAULT_DRAG_ZOOM_SPEED,
+    zoom_min: DEFAULT_DRAG_ZOOM_MIN,
+    zoom_max: DEFAULT_DRAG_ZOOM_MAX,
+    edge_pan_speed: DEFAULT_DRAG_EDGE_PAN_SPEED,
+    smooth_time: DEFAULT_DRAG_SMOOTH_TIME,
+  };
+}
+
+function buildDefaultFaceMouseParams() {
+  return {
+    enabled: false,
+    snap_mode: DEFAULT_FACE_MOUSE_SNAP_MODE,
+    turn_smoothing: DEFAULT_FACE_MOUSE_TURN_SMOOTHING,
+    rotate_body: DEFAULT_FACE_MOUSE_ROTATE_BODY,
+    rotate_weapon_only: DEFAULT_FACE_MOUSE_ROTATE_WEAPON_ONLY,
+    deadzone_px: DEFAULT_FACE_MOUSE_DEADZONE_PX,
+  };
+}
+
+function buildDefaultWorldPhysicsParams(sceneDoc = {}) {
+  return {
+    gravity: sanitizeVector3(sceneDoc?.settings?.gravity, { x: 0, y: -9.8, z: 0 }, { min: -40, max: 40 }),
+    default_friction: DEFAULT_WORLD_FRICTION,
+    default_restitution: DEFAULT_WORLD_RESTITUTION,
+    terminal_velocity: DEFAULT_WORLD_TERMINAL_VELOCITY,
+  };
+}
+
+function formatDslScalarValue(value) {
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
+  }
+  return String(value ?? "").trim();
+}
+
+function formatDslDirectiveValue(param = "", value = null) {
+  if (value == null) {
+    return "";
+  }
+  const definition = PRIVATE_WORLD_PARAM_DEFINITION_MAP.get(String(param ?? "").trim().toLowerCase()) ?? null;
+  if (definition?.type === "vector3") {
+    const vector = sanitizeVector3(value);
+    return `(${formatDslScalarValue(vector.x)},${formatDslScalarValue(vector.y)},${formatDslScalarValue(vector.z)})`;
+  }
+  return formatDslScalarValue(value);
+}
+
+function sanitizeModuleParamValue(moduleKind = "", param = "", value, fallback = null) {
+  const definition = getModuleParamDefinition(moduleKind, param);
+  if (!definition) {
+    return value ?? fallback;
+  }
+  if (definition.type === "boolean") {
+    return parseDirectiveBooleanValue(value, Boolean(fallback));
+  }
+  if (definition.type === "vector3") {
+    const limits = {
+      min: Number.isFinite(definition.min) ? definition.min : -4096,
+      max: Number.isFinite(definition.max) ? definition.max : 4096,
+    };
+    return sanitizeVector3(value, fallback ?? { x: 0, y: 0, z: 0 }, limits);
+  }
+  if (definition.type === "enum") {
+    const normalized = normalizeEnumToken(value);
+    return definition.values.includes(normalized)
+      ? normalized
+      : (definition.values.includes(normalizeEnumToken(fallback)) ? normalizeEnumToken(fallback) : definition.values[0]);
+  }
+  if (definition.type === "integer") {
+    return clampInteger(
+      value,
+      finiteNumber(fallback, definition.min ?? 0),
+      Number.isFinite(definition.min) ? definition.min : -4096,
+      Number.isFinite(definition.max) ? definition.max : 4096,
+    );
+  }
+  if (definition.type === "number") {
+    return clampNumber(
+      value,
+      finiteNumber(fallback, definition.min ?? 0),
+      Number.isFinite(definition.min) ? definition.min : -4096,
+      Number.isFinite(definition.max) ? definition.max : 4096,
+    );
+  }
+  return String(value ?? fallback ?? "").trim();
+}
+
+function sanitizeModuleBindingValue(moduleKind = "", binding = "", value, fallback = "") {
+  const definition = getModuleBindingDefinition(moduleKind, binding);
+  if (!definition || definition.type !== "input") {
+    return String(value ?? fallback ?? "").trim();
+  }
+  return normalizePrivateInputToken(value) || normalizePrivateInputToken(fallback) || "";
+}
+
+function listModuleParams(moduleKind = "") {
+  return getModuleDefinition(moduleKind)?.params ?? [];
+}
+
+function listModuleBindings(moduleKind = "") {
+  return getModuleDefinition(moduleKind)?.bindings ?? [];
+}
+
+export function serializePrivateWorldModuleFunctionBody(moduleConfig = {}) {
+  const moduleKind = normalizeModuleKind(moduleConfig?.module_kind ?? moduleConfig?.moduleKind ?? "");
+  if (!moduleKind) {
+    return "";
+  }
+  const targetId = String(moduleConfig?.target_id ?? moduleConfig?.targetId ?? "").trim() || (moduleKind === "physics.world" ? "scene" : "");
+  const enabled = moduleConfig?.enabled !== false;
+  const lines = [
+    `@module ${moduleKind}`,
+    targetId ? `@target ${targetId}` : "",
+    `@enabled ${enabled ? "true" : "false"}`,
+  ].filter(Boolean);
+  for (const definition of listModuleBindings(moduleKind)) {
+    const rawValue = moduleConfig?.bindings?.[definition.name];
+    const value = sanitizeModuleBindingValue(moduleKind, definition.name, rawValue, "");
+    if (!value) {
+      continue;
+    }
+    lines.push(`@bind ${definition.name} ${value}`);
+  }
+  for (const definition of listModuleParams(moduleKind)) {
+    const fallback = null;
+    const value = sanitizeModuleParamValue(moduleKind, definition.name, moduleConfig?.params?.[definition.name], fallback);
+    lines.push(`@set ${definition.name} ${formatDslDirectiveValue(definition.name, value)}`);
+  }
+  return lines.join("\n").trim();
+}
+
 function resolveEntityAlias(aliasMap, value) {
   const raw = String(value ?? "").trim();
   if (!raw) {
@@ -217,11 +577,22 @@ function parseDirectiveValue(param = "", rawValue = "") {
   if (!normalizedParam) {
     return rawValue;
   }
-  if (normalizedParam === "gravity") {
+  const definition = PRIVATE_WORLD_PARAM_DEFINITION_MAP.get(normalizedParam);
+  if (definition?.type === "vector3" || normalizedParam === "gravity") {
     return parseDirectiveVectorValue(rawValue);
   }
-  if (normalizedParam === "jump_enabled" || normalizedParam === "drag_enabled" || normalizedParam === "clamp_to_world") {
+  if (definition?.type === "boolean") {
     return parseDirectiveBooleanValue(rawValue, true);
+  }
+  if (definition?.type === "enum") {
+    return normalizeEnumToken(rawValue);
+  }
+  if (definition?.type === "number" || definition?.type === "integer") {
+    const numericValue = Number(rawValue);
+    if (Number.isFinite(numericValue)) {
+      return definition.type === "integer" ? Math.round(numericValue) : numericValue;
+    }
+    return null;
   }
   if (normalizedParam.endsWith("_key") || normalizedParam.endsWith("_button")) {
     return normalizePrivateInputToken(rawValue);
@@ -242,17 +613,8 @@ function buildImplicitPlayerControl(player = {}) {
     target_id: playerId,
     module_kind: "playmode.wasd_jump",
     enabled: player.movement_enabled !== false,
-    params: {
-      move_speed: DEFAULT_PLAYER_MOVE_SPEED,
-      sprint_speed: DEFAULT_PLAYER_SPRINT_SPEED,
-      acceleration: DEFAULT_PLAYER_ACCELERATION,
-      jump_enabled: player.jump_enabled === true,
-      jump_height: DEFAULT_PLAYER_JUMP_HEIGHT,
-    },
-    bindings: {
-      jump_key: DEFAULT_PLAYER_JUMP_KEY,
-      sprint_key: DEFAULT_PLAYER_SPRINT_KEY,
-    },
+    params: buildDefaultPlayerControlParams(player),
+    bindings: buildDefaultPlayerControlBindings(player),
   };
 }
 
@@ -266,10 +628,7 @@ function buildImplicitCameraBehaviors(player = {}) {
       target_id: playerId,
       module_kind: "camera.overworld_drag_pan",
       enabled: String(player.camera_mode ?? "").trim().toLowerCase() === "overworld",
-      params: {
-        drag_enabled: true,
-        clamp_to_world: true,
-      },
+      params: buildDefaultOverworldDragParams(player),
       bindings: {
         drag_button: DEFAULT_DRAG_BUTTON,
       },
@@ -278,9 +637,7 @@ function buildImplicitCameraBehaviors(player = {}) {
       target_id: playerId,
       module_kind: "behavior.face_mouse_orthogonal",
       enabled: false,
-      params: {
-        enabled: false,
-      },
+      params: buildDefaultFaceMouseParams(player),
       bindings: {},
     },
   };
@@ -309,9 +666,7 @@ export function buildImplicitPrivateWorldScriptConfig(sceneDoc = {}) {
       module_kind: "physics.world",
       target_id: "scene",
       enabled: true,
-      params: {
-        gravity: sanitizeVector3(sceneDoc?.settings?.gravity, { x: 0, y: -9.8, z: 0 }, { min: -40, max: 40 }),
-      },
+      params: buildDefaultWorldPhysicsParams(sceneDoc),
       bindings: {},
     },
     player_controls: playerControls,
@@ -483,6 +838,7 @@ function compileRuleLine(line = "", index = 0, options = {}) {
     source_id: null,
     target_id: null,
     key: null,
+    key_binding_ref: null,
     delay_ms: 0,
     payload: {},
     function_id: functionEntry?.id ?? null,
@@ -496,7 +852,13 @@ function compileRuleLine(line = "", index = 0, options = {}) {
       rule.source_id = resolveEntityAlias(aliasMap, next);
       tokenIndex += 1;
     } else if (token === "key" && next) {
-      rule.key = normalizePrivateInputToken(next);
+      const bindingRef = String(next ?? "").trim().toLowerCase();
+      if (PRIVATE_WORLD_BINDING_DEFINITION_MAP.has(bindingRef)) {
+        rule.key = bindingRef;
+        rule.key_binding_ref = bindingRef;
+      } else {
+        rule.key = normalizePrivateInputToken(next);
+      }
       tokenIndex += 1;
     } else if (token === "after" && next) {
       const match = String(next).match(/^([-0-9.]+)(ms|s)?$/i);
@@ -607,7 +969,12 @@ function applyPlayerControlModule(scriptConfig, functionEntry) {
   if (!playerId) {
     return;
   }
-  const existing = scriptConfig.player_controls[playerId] ?? buildImplicitPlayerControl({ id: playerId, jump_enabled: false, movement_enabled: true });
+  const existing = scriptConfig.player_controls[playerId] ?? buildImplicitPlayerControl({
+    id: playerId,
+    jump_enabled: false,
+    movement_enabled: true,
+    scale: PRIVATE_WORLD_BLOCK_UNIT,
+  });
   const next = {
     ...existing,
     target_id: playerId,
@@ -620,26 +987,27 @@ function applyPlayerControlModule(scriptConfig, functionEntry) {
       ...cloneJson(existing.bindings),
     },
   };
-  if (Object.hasOwn(functionEntry.params, "move_speed")) {
-    next.params.move_speed = Math.max(0, finiteNumber(functionEntry.params.move_speed, next.params.move_speed));
+  for (const definition of listModuleParams("playmode.wasd_jump")) {
+    if (!Object.hasOwn(functionEntry.params, definition.name)) {
+      continue;
+    }
+    next.params[definition.name] = sanitizeModuleParamValue(
+      "playmode.wasd_jump",
+      definition.name,
+      functionEntry.params[definition.name],
+      next.params[definition.name],
+    );
   }
-  if (Object.hasOwn(functionEntry.params, "sprint_speed")) {
-    next.params.sprint_speed = Math.max(0, finiteNumber(functionEntry.params.sprint_speed, next.params.sprint_speed));
-  }
-  if (Object.hasOwn(functionEntry.params, "acceleration")) {
-    next.params.acceleration = Math.max(0, finiteNumber(functionEntry.params.acceleration, next.params.acceleration));
-  }
-  if (Object.hasOwn(functionEntry.params, "jump_enabled")) {
-    next.params.jump_enabled = functionEntry.params.jump_enabled === true;
-  }
-  if (Object.hasOwn(functionEntry.params, "jump_height")) {
-    next.params.jump_height = Math.max(0, finiteNumber(functionEntry.params.jump_height, next.params.jump_height));
-  }
-  if (functionEntry.bindings.jump_key) {
-    next.bindings.jump_key = functionEntry.bindings.jump_key;
-  }
-  if (functionEntry.bindings.sprint_key) {
-    next.bindings.sprint_key = functionEntry.bindings.sprint_key;
+  for (const definition of listModuleBindings("playmode.wasd_jump")) {
+    if (!Object.hasOwn(functionEntry.bindings, definition.name)) {
+      continue;
+    }
+    next.bindings[definition.name] = sanitizeModuleBindingValue(
+      "playmode.wasd_jump",
+      definition.name,
+      functionEntry.bindings[definition.name],
+      next.bindings[definition.name],
+    );
   }
   scriptConfig.player_controls[playerId] = next;
 }
@@ -689,14 +1057,27 @@ function applyCameraBehaviorModule(scriptConfig, functionEntry) {
         ...cloneJson(existing.bindings),
       },
     };
-    if (Object.hasOwn(functionEntry.params, "drag_enabled")) {
-      next.params.drag_enabled = functionEntry.params.drag_enabled === true;
+    for (const definition of listModuleParams("camera.overworld_drag_pan")) {
+      if (!Object.hasOwn(functionEntry.params, definition.name)) {
+        continue;
+      }
+      next.params[definition.name] = sanitizeModuleParamValue(
+        "camera.overworld_drag_pan",
+        definition.name,
+        functionEntry.params[definition.name],
+        next.params[definition.name],
+      );
     }
-    if (Object.hasOwn(functionEntry.params, "clamp_to_world")) {
-      next.params.clamp_to_world = functionEntry.params.clamp_to_world !== false;
-    }
-    if (functionEntry.bindings.drag_button) {
-      next.bindings.drag_button = functionEntry.bindings.drag_button;
+    for (const definition of listModuleBindings("camera.overworld_drag_pan")) {
+      if (!Object.hasOwn(functionEntry.bindings, definition.name)) {
+        continue;
+      }
+      next.bindings[definition.name] = sanitizeModuleBindingValue(
+        "camera.overworld_drag_pan",
+        definition.name,
+        functionEntry.bindings[definition.name],
+        next.bindings[definition.name],
+      );
     }
     behaviors.overworld_drag_pan = next;
     return;
@@ -714,7 +1095,7 @@ function applyCameraBehaviorModule(scriptConfig, functionEntry) {
     const nextEnabled = functionEntry.enabled == null
       ? (Object.hasOwn(functionEntry.params, "enabled") ? functionEntry.params.enabled === true : existing.enabled)
       : functionEntry.enabled === true;
-    behaviors.face_mouse_orthogonal = {
+    const next = {
       ...existing,
       enabled: nextEnabled,
       params: {
@@ -725,6 +1106,19 @@ function applyCameraBehaviorModule(scriptConfig, functionEntry) {
         ...cloneJson(existing.bindings),
       },
     };
+    for (const definition of listModuleParams("behavior.face_mouse_orthogonal")) {
+      if (!Object.hasOwn(functionEntry.params, definition.name)) {
+        continue;
+      }
+      next.params[definition.name] = sanitizeModuleParamValue(
+        "behavior.face_mouse_orthogonal",
+        definition.name,
+        functionEntry.params[definition.name],
+        next.params[definition.name],
+      );
+    }
+    next.params.enabled = next.enabled;
+    behaviors.face_mouse_orthogonal = next;
   }
 }
 
@@ -740,8 +1134,16 @@ function applyWorldPhysicsModule(scriptConfig, functionEntry) {
       ...cloneJson(existing.bindings),
     },
   };
-  if (functionEntry.params.gravity) {
-    next.params.gravity = sanitizeVector3(functionEntry.params.gravity, next.params.gravity, { min: -40, max: 40 });
+  for (const definition of listModuleParams("physics.world")) {
+    if (!Object.hasOwn(functionEntry.params, definition.name)) {
+      continue;
+    }
+    next.params[definition.name] = sanitizeModuleParamValue(
+      "physics.world",
+      definition.name,
+      functionEntry.params[definition.name],
+      next.params[definition.name],
+    );
   }
   scriptConfig.world_physics = next;
 }
@@ -752,14 +1154,17 @@ function collectActionMetadata(rules = [], scriptConfig = null) {
   const directionalForceRuleIds = [];
   for (const rule of rules) {
     if (rule?.trigger === "key_press" && rule?.key) {
-      const normalizedKey = normalizePrivateInputToken(rule.key);
-      if (normalizedKey) {
+      const normalizedKey = rule.key_binding_ref
+        ? String(rule.key_binding_ref).trim().toLowerCase()
+        : normalizePrivateInputToken(rule.key);
+      if (normalizedKey && !rule.key_binding_ref) {
         inputTokens.add(normalizedKey);
       }
       keyTriggers.push({
         rule_id: rule.id,
         function_id: rule.function_id ?? null,
         key: normalizedKey,
+        key_binding_ref: rule.key_binding_ref ?? null,
         action: rule.action,
         target_id: rule.target_id ?? null,
       });
@@ -770,18 +1175,23 @@ function collectActionMetadata(rules = [], scriptConfig = null) {
   }
   if (scriptConfig?.player_controls) {
     for (const entry of Object.values(scriptConfig.player_controls)) {
-      if (entry?.bindings?.jump_key) {
-        inputTokens.add(normalizePrivateInputToken(entry.bindings.jump_key));
-      }
-      if (entry?.bindings?.sprint_key) {
-        inputTokens.add(normalizePrivateInputToken(entry.bindings.sprint_key));
+      for (const value of Object.values(entry?.bindings ?? {})) {
+        const normalized = normalizePrivateInputToken(value);
+        if (normalized) {
+          inputTokens.add(normalized);
+        }
       }
     }
   }
   if (scriptConfig?.camera_behaviors) {
     for (const behaviors of Object.values(scriptConfig.camera_behaviors)) {
-      if (behaviors?.overworld_drag_pan?.bindings?.drag_button) {
-        inputTokens.add(normalizePrivateInputToken(behaviors.overworld_drag_pan.bindings.drag_button));
+      for (const behavior of Object.values(behaviors ?? {})) {
+        for (const value of Object.values(behavior?.bindings ?? {})) {
+          const normalized = normalizePrivateInputToken(value);
+          if (normalized) {
+            inputTokens.add(normalized);
+          }
+        }
       }
     }
   }
