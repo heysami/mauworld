@@ -5359,6 +5359,30 @@ function setAiDialogStatus(text = "", tone = "") {
   state.aiDialog.statusTone = String(tone ?? "");
 }
 
+function getCreatedAiDialogScriptFunction(dialog = state.aiDialog) {
+  if (dialog.targetKind !== "new_script_function") {
+    return null;
+  }
+  const createdId = String(dialog.createdScriptFunctionId ?? "").trim();
+  if (!createdId) {
+    return null;
+  }
+  return getSceneScriptFunctions().find((entry) => entry.id === createdId) ?? null;
+}
+
+function getAiDialogNoteText(dialog = state.aiDialog) {
+  const baseNote = dialog.note
+    || "Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.";
+  if (dialog.targetKind !== "new_script_function") {
+    return baseNote;
+  }
+  const createdFunction = getCreatedAiDialogScriptFunction(dialog);
+  if (createdFunction?.name) {
+    return `${baseNote} This thread updates ${createdFunction.name}, not the currently selected function.`;
+  }
+  return `${baseNote} This thread creates a brand new function and does not overwrite the currently selected one.`;
+}
+
 function getAiDialogResultTabLabel(dialog = state.aiDialog) {
   if (dialog.artifactType === "screen_html") {
     return "Generated HTML";
@@ -5370,6 +5394,20 @@ function getAiDialogResultTabLabel(dialog = state.aiDialog) {
     return "Generated model";
   }
   return "Generated script";
+}
+
+function getAiDialogApplyButtonLabel(dialog = state.aiDialog, activeThread = getActiveAiDialogThread(dialog)) {
+  if (dialog.targetKind === "new_script_function") {
+    const createdFunction = getCreatedAiDialogScriptFunction(dialog);
+    return createdFunction?.name
+      ? `Update ${createdFunction.name}`
+      : "Create new function";
+  }
+  if (dialog.targetKind === "script_function") {
+    return "Apply to selected function";
+  }
+  const canApplyAsset = dialog.artifactType === "texture" || dialog.artifactType === "3d_model";
+  return dialog.applyLabel || (canApplyAsset ? "Apply asset" : "Apply result");
 }
 
 function setAiDialogPane(pane = "conversation", options = {}) {
@@ -5404,8 +5442,7 @@ function renderAiDialog() {
     elements.aiDialogTitle.textContent = dialog.title || "AI brainstorm";
   }
   if (elements.aiDialogNote) {
-    elements.aiDialogNote.textContent = dialog.note
-      || "Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.";
+    elements.aiDialogNote.textContent = getAiDialogNoteText(dialog);
   }
   if (elements.aiDialogThreadList) {
     elements.aiDialogThreadList.innerHTML = threads.map((thread, index) => {
@@ -5480,7 +5517,7 @@ function renderAiDialog() {
     elements.aiDialogApply.hidden = !canApply;
     elements.aiDialogApply.disabled = !canApply || dialog.busy;
     if (canApply) {
-      elements.aiDialogApply.textContent = dialog.applyLabel || (canApplyAsset ? "Apply asset" : "Apply result");
+      elements.aiDialogApply.textContent = getAiDialogApplyButtonLabel(dialog, activeThread);
     }
   }
   if (elements.aiDialogResultPanel) {
@@ -5970,7 +6007,6 @@ function applyAiDialogTextToTarget(result = "") {
         createdEntry = nextEntry;
         state.aiDialog.createdScriptFunctionId = nextEntry.id;
       }
-      state.aiDialog.applyLabel = "Apply to function";
       state.aiDialog.title = `Brainstorm ${createdEntry?.name || "Generated Function"}`;
       state.selectedScriptFunctionId = createdEntry?.id || "";
       applied = true;
@@ -5986,7 +6022,9 @@ function applyAiDialogTextToTarget(result = "") {
       applied: true,
       appliedResult: normalizedBody,
       focusScript: true,
-      message: updatedExisting ? "Applied to the generated function." : "Created a new function and applied the script.",
+      message: updatedExisting
+        ? `Updated ${createdEntry?.name || "the generated function"}.`
+        : `Created ${createdEntry?.name || "a new function"} and applied the script.`,
     };
   }
   if (elements.aiOutput) {
@@ -25635,7 +25673,7 @@ function openSceneLogicAiDialog(options = {}) {
     note: createNewFunction
       ? "Let the AI shape a brand new function. Generate when the thread feels ready, then it will be created as a new scene logic function."
       : "Let the AI shape assumptions and questions first. Generate only when this function feels settled.",
-    applyLabel: createNewFunction ? "Apply to new function" : "Apply to function",
+    applyLabel: createNewFunction ? "Create new function" : "Apply to selected function",
     seedPrompt: String(elements.scriptFunctionPrompt?.value ?? "").trim(),
   });
   return true;
