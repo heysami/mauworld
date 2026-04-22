@@ -375,6 +375,7 @@ function sanitizeMaterial(input = {}, fallbackColor = "#c8d0d8") {
 function sanitizeVoxelEntry(entry = {}, index = 0, options = {}) {
   return {
     id: ensureEntityId("voxel", entry.id || `voxel-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
     position: sanitizeVector3(entry.position, { x: 0, y: 0, z: 0 }),
     scale: sanitizeScale3(entry.scale, { x: 1, y: 1, z: 1 }),
     material: sanitizeMaterial(entry.material, "#c0c4ca"),
@@ -389,6 +390,7 @@ function sanitizePrimitiveEntry(entry = {}, index = 0, options = {}) {
   const shape = String(entry.shape ?? "box").trim().toLowerCase();
   return {
     id: ensureEntityId("primitive", entry.id || `primitive-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
     asset_id: String(entry.asset_id ?? entry.assetId ?? entry.model_asset_id ?? entry.modelAssetId ?? "").trim() || null,
     shape: ALLOWED_PRIMITIVE_SHAPES.has(shape) ? shape : "box",
     position: sanitizeVector3(entry.position, { x: 0, y: 1, z: 0 }),
@@ -410,6 +412,7 @@ function sanitizePrimitiveEntry(entry = {}, index = 0, options = {}) {
 function sanitizePanelEntry(entry = {}, index = 0, options = {}) {
   return {
     id: ensureEntityId("panel", entry.id || `panel-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
     label: String(entry.label ?? `Panel ${index + 1}`).trim().slice(0, 80) || `Panel ${index + 1}`,
     position: sanitizeVector3(entry.position, { x: 0, y: 2, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
@@ -424,6 +427,7 @@ function sanitizePanelEntry(entry = {}, index = 0, options = {}) {
 function sanitizeModelEntry(entry = {}, index = 0, options = {}) {
   return {
     id: ensureEntityId("model", entry.id || `model-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
     asset_id: String(entry.asset_id ?? entry.assetId ?? entry.model_asset_id ?? entry.modelAssetId ?? "").trim() || null,
     label: String(entry.label ?? `Model ${index + 1}`).trim().slice(0, 80) || `Model ${index + 1}`,
     position: sanitizeVector3(entry.position, { x: 0, y: 1, z: 0 }),
@@ -463,6 +467,7 @@ function sanitizeScreenEntry(entry = {}, index = 0, options = {}) {
   const html = sanitizeScreenHtml(entry.html ?? entry.html_source ?? entry.htmlSource ?? "");
   return {
     id: ensureEntityId("screen", entry.id || `screen-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
     position: sanitizeVector3(entry.position, { x: 0, y: 2, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
     scale: sanitizeScale3(entry.scale, { x: 4, y: 2.25, z: 0.2 }),
@@ -578,6 +583,7 @@ function sanitizeText3Entry(entry = {}, index = 0, options = {}) {
   const value = sanitizeWorldText(entry.value ?? entry.text ?? `Text ${index + 1}`, "3d text", 160);
   return {
     id: ensureEntityId("text3d", entry.id || `text-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
     value,
     position: sanitizeVector3(entry.position, { x: 0, y: 2, z: 0 }),
     rotation: sanitizeEuler3(entry.rotation),
@@ -591,6 +597,7 @@ function sanitizeText3Entry(entry = {}, index = 0, options = {}) {
 function sanitizeTriggerZoneEntry(entry = {}, index = 0, options = {}) {
   return {
     id: ensureEntityId("trigger", entry.id || `trigger-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
     position: sanitizeVector3(entry.position, { x: 0, y: 0.5, z: 0 }),
     scale: sanitizeScale3(entry.scale, { x: 2, y: 2, z: 2 }),
     label: String(entry.label ?? `Trigger ${index + 1}`).trim().slice(0, 48) || `Trigger ${index + 1}`,
@@ -626,6 +633,7 @@ function sanitizePrefabInstanceEntry(entry = {}, index = 0, options = {}) {
 function sanitizeParticleEntry(entry = {}, index = 0, options = {}) {
   return {
     id: ensureEntityId("particle", entry.id || `particle-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
     effect: String(entry.effect ?? "sparkles").trim().toLowerCase().slice(0, 40) || "sparkles",
     target_id: String(entry.target_id ?? entry.targetId ?? "").trim() || null,
     enabled: entry.enabled !== false,
@@ -814,6 +822,7 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}, options = {}) 
   };
   const applyCommonOverrides = (entity) => ({
     ...entity,
+    instance_id: instance.id,
     material: instance.overrides?.material
       ? { ...entity.material, ...instance.overrides.material }
       : entity.material,
@@ -850,6 +859,7 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}, options = {}) 
   const players = doc.players.map((entry) => ({
     ...transformPrefabEntity(entry, instance),
     id: registerId(entry.id),
+    instance_id: instance.id,
   }));
   const texts = doc.texts.map((entry) => applyCommonOverrides({
     ...transformPrefabEntity(entry, instance),
@@ -859,10 +869,12 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}, options = {}) 
   const trigger_zones = doc.trigger_zones.map((entry) => ({
     ...transformPrefabEntity(entry, instance),
     id: registerId(entry.id),
+    instance_id: instance.id,
   }));
   const particles = doc.particles.map((entry) => ({
     ...entry,
     id: registerId(entry.id),
+    instance_id: instance.id,
     target_id: resolveEntityAlias(aliasMap, entry.target_id),
   }));
   const rules = doc.rules.map((entry) => {
@@ -978,6 +990,30 @@ export function createDefaultSceneDoc() {
   };
 }
 
+export function buildSceneEntityAliasMap(sourceSceneDoc = {}, normalizedSceneDoc = sourceSceneDoc) {
+  const aliasMap = new Map();
+  const collections = [
+    ["voxels", normalizedSceneDoc?.voxels ?? []],
+    ["primitives", normalizedSceneDoc?.primitives ?? []],
+    ["panels", normalizedSceneDoc?.panels ?? []],
+    ["models", normalizedSceneDoc?.models ?? []],
+    ["screens", normalizedSceneDoc?.screens ?? []],
+    ["players", normalizedSceneDoc?.players ?? []],
+    ["texts", normalizedSceneDoc?.texts ?? []],
+    ["trigger_zones", normalizedSceneDoc?.trigger_zones ?? []],
+    ["prefab_instances", normalizedSceneDoc?.prefab_instances ?? []],
+    ["particles", normalizedSceneDoc?.particles ?? []],
+  ];
+  for (const [key, normalizedEntries] of collections) {
+    const sourceEntries = Array.isArray(sourceSceneDoc?.[key]) ? sourceSceneDoc[key] : [];
+    normalizedEntries.forEach((entry, index) => {
+      rememberEntityAlias(aliasMap, sourceEntries[index]?.id, entry?.id);
+      rememberEntityAlias(aliasMap, entry?.id, entry?.id);
+    });
+  }
+  return aliasMap;
+}
+
 export function normalizeSceneDoc(input = {}, options = {}) {
   const source = typeof input === "object" && input ? input : {};
   const normalizationOptions = {
@@ -1042,7 +1078,11 @@ export function normalizeSceneDoc(input = {}, options = {}) {
   });
   const prefabInstances = (Array.isArray(source.prefab_instances ?? source.prefabInstances) ? (source.prefab_instances ?? source.prefabInstances) : [])
     .slice(0, 256)
-    .map((entry, index) => sanitizePrefabInstanceEntry(entry, index, normalizationOptions));
+    .map((entry, index) => {
+      const value = sanitizePrefabInstanceEntry(entry, index, normalizationOptions);
+      rememberEntityAlias(entityAliases, entry?.id, value.id);
+      return value;
+    });
   const particles = (Array.isArray(source.particles) ? source.particles : []).slice(0, 256).map((entry, index) => {
     const value = sanitizeParticleEntry(entry, index, normalizationOptions);
     return {
@@ -1108,21 +1148,24 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
     sceneDocAlreadyNormalized: true,
     prefabsAlreadyNormalized: options.prefabsAlreadyNormalized === true,
   });
+  const entityAliases = buildSceneEntityAliasMap(sceneDoc, doc);
+  for (const entry of [
+    ...resolvedDoc.voxels,
+    ...resolvedDoc.primitives,
+    ...resolvedDoc.panels,
+    ...resolvedDoc.models,
+    ...resolvedDoc.screens,
+    ...resolvedDoc.players,
+    ...resolvedDoc.texts,
+    ...resolvedDoc.trigger_zones,
+    ...resolvedDoc.prefab_instances,
+    ...resolvedDoc.particles,
+  ]) {
+    rememberEntityAlias(entityAliases, entry?.id, entry?.id);
+  }
   const structuredRules = cloneJson(resolvedDoc.rules);
   const dsl = compilePrivateWorldScriptDsl(doc.script_dsl, {
-    entityAliases: new Map(
-      [
-        ...resolvedDoc.voxels,
-        ...resolvedDoc.primitives,
-        ...resolvedDoc.panels,
-        ...resolvedDoc.models,
-        ...resolvedDoc.screens,
-        ...resolvedDoc.players,
-        ...resolvedDoc.texts,
-        ...resolvedDoc.trigger_zones,
-        ...resolvedDoc.particles,
-      ].map((entry) => [entry.id, entry.id]),
-    ),
+    entityAliases,
     sceneDoc: resolvedDoc,
   });
   resolvedDoc.rules = dsl.rules.length > 0 ? dsl.rules : resolvedDoc.rules;
@@ -1132,7 +1175,11 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       .map((entry) => entry.target_id),
   );
   const miniatureMovingPlatforms = resolvedDoc.primitives
-    .filter((entry) => movingPlatformTargetIds.has(entry.id) || entry.physics?.carry_riders === true)
+    .filter((entry) => (
+      movingPlatformTargetIds.has(entry.id)
+      || movingPlatformTargetIds.has(entry.instance_id)
+      || entry.physics?.carry_riders === true
+    ))
     .map((entry) => ({
       id: entry.id,
       shape: entry.shape,
@@ -1176,6 +1223,16 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       })),
     },
     runtime: {
+      prefab_instances: resolvedDoc.prefab_instances.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        prefab_id: entry.prefab_id,
+        position: entry.position,
+        rotation: entry.rotation,
+        scale: entry.scale,
+        visible: entry.overrides?.visible !== false,
+        material_override: entry.overrides?.material ?? null,
+      })),
       players: resolvedDoc.players.map((entry) => ({
         id: entry.id,
         position: entry.position,
@@ -1196,6 +1253,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       dynamic_objects: resolvedDoc.primitives.map((entry) => ({
         id: entry.id,
         entity_kind: "primitive",
+        instance_id: entry.instance_id ?? null,
         asset_id: entry.asset_id ?? null,
         position: entry.position,
         rotation: entry.rotation,
@@ -1210,6 +1268,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       })).concat(resolvedDoc.models.map((entry) => ({
         id: entry.id,
         entity_kind: "model",
+        instance_id: entry.instance_id ?? null,
         asset_id: entry.asset_id,
         position: entry.position,
         rotation: entry.rotation,

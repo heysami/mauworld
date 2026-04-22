@@ -182,3 +182,45 @@ scene_start -> apply_force to crate_missing direction facing strength 12
   assert.ok(compiled.errors.some((entry) => String(entry.message).includes("Parameter `move_speed` must stay between")));
   assert.equal(compiled.rules[0].source_line_number, 1);
 });
+
+test("prefab instances are valid rule targets but invalid player module targets", () => {
+  const sceneDoc = {
+    players: [{ id: "player_one" }],
+    prefab_instances: [{ id: "prefabinst_group" }],
+  };
+  const entityAliases = new Map([
+    ["player_one", "player_one"],
+    ["prefabinst_group", "prefabinst_group"],
+  ]);
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[group]: Group Motion
+scene_start -> move_platform to prefabinst_group delta(4,0,0) duration 1s
+
+# function[controls]: Controls
+@module playmode.wasd_jump
+@target prefabinst_group
+  `, {
+    sceneDoc,
+    entityAliases,
+  });
+
+  assert.equal(compiled.rules[0].target_id, "prefabinst_group");
+  assert.ok(compiled.errors.some((entry) => String(entry.message).includes("can only target players")));
+});
+
+test("physics world modules still only target scene", () => {
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[gravity]: Gravity
+@module physics.world
+@target player_one
+  `, {
+    sceneDoc: {
+      players: [{ id: "player_one" }],
+    },
+    entityAliases: new Map([
+      ["player_one", "player_one"],
+    ]),
+  });
+
+  assert.ok(compiled.errors.some((entry) => String(entry.message).includes("must target `scene`")));
+});

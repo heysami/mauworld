@@ -665,6 +665,161 @@ test("scene_start move_platform scripts move rigid platforms diagonally and carr
   assert.ok(Math.abs((player.position.z - beforePlayer.z) - 1.92) < 0.25);
 });
 
+test("scene_start move_platform scripts can target prefab instances and only expose the parent in snapshots", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [],
+    screens: [],
+    players: [{ id: "player_one", label: "Player One", position: { x: 0.2, y: 1.9, z: -0.25 }, scale: 1, body_mode: "rigid", camera_mode: "third_person" }],
+    texts: [],
+    trigger_zones: [],
+    prefab_instances: [
+      {
+        id: "platform_group",
+        prefab_id: "prefab_platform",
+        position: { x: 0, y: 0, z: 0 },
+      },
+    ],
+    prefabs: [],
+    particles: [],
+    rules: [],
+    script_dsl: "scene_start -> move_platform to platform_group delta(6,0,6) duration 3s loop pingpong",
+  };
+  const compiled = compileSceneDoc(sceneDoc, {
+    world_type: "room",
+    width: 40,
+    length: 30,
+    height: 12,
+  }, {
+    prefabs: [
+      {
+        id: "prefab_platform",
+        prefab_doc: {
+          primitives: [
+            {
+              id: "deck",
+              shape: "box",
+              position: { x: 0, y: 0.5, z: 0 },
+              scale: { x: 4, y: 1, z: 4 },
+              rotation: { x: 0, y: 0, z: 0 },
+              material: { color: "#8fd4ff", texture_preset: "metal" },
+              rigid_mode: "rigid",
+              physics: {
+                gravity_scale: 0,
+                ignore_gravity: true,
+                carry_riders: true,
+                restitution: 0,
+                friction: 0.9,
+                mass: 200,
+              },
+            },
+          ],
+        },
+      },
+    ],
+  });
+  const sceneRow = {
+    id: "scene_runtime",
+    name: "Runtime Scene",
+    scene_doc: sceneDoc,
+    compiled_doc: compiled,
+  };
+  const simulation = buildSimulation({
+    sceneRow,
+    scenes: [sceneRow],
+  });
+  const runtime = simulation.runtime;
+  const player = runtime.players[0];
+  const beforePlayer = { ...player.position };
+
+  for (let index = 0; index < 12; index += 1) {
+    stepPrivateWorldSimulation(runtime, {
+      deltaMs: 80,
+      pendingInputs: [],
+    });
+  }
+
+  assert.ok(Math.abs(runtime.prefabInstances[0].position.x - 1.92) < 0.15);
+  assert.ok(Math.abs(runtime.prefabInstances[0].position.z - 1.92) < 0.15);
+  assert.ok(Math.abs((player.position.x - beforePlayer.x) - 1.92) < 0.25);
+  assert.ok(Math.abs((player.position.z - beforePlayer.z) - 1.92) < 0.25);
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(runtime);
+  assert.equal(snapshot.prefab_instances.length, 1);
+  assert.equal(snapshot.dynamic_objects.length, 0);
+  assert.equal(snapshot.prefab_instances[0].id, "prefabinst_platform-group");
+});
+
+test("teleporting a prefab instance moves its descendant collision and trigger state", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    prefab_instances: [
+      {
+        id: "trap_group",
+        prefab_id: "prefab_trap",
+        position: { x: 0, y: 0, z: 0 },
+      },
+    ],
+    script_dsl: "scene_start -> teleport to trap_group position(10,0,0)",
+  };
+  const compiled = compileSceneDoc(sceneDoc, {
+    world_type: "room",
+    width: 40,
+    length: 30,
+    height: 12,
+  }, {
+    prefabs: [
+      {
+        id: "prefab_trap",
+        prefab_doc: {
+          primitives: [
+            {
+              id: "trap_body",
+              shape: "box",
+              position: { x: 1, y: 0.5, z: 0 },
+              scale: { x: 2, y: 1, z: 2 },
+              rigid_mode: "rigid",
+              physics: {
+                gravity_scale: 0,
+                ignore_gravity: true,
+                mass: 10,
+              },
+            },
+          ],
+          trigger_zones: [
+            {
+              id: "trap_zone",
+              position: { x: 1, y: 1, z: 0 },
+              scale: { x: 2, y: 2, z: 2 },
+            },
+          ],
+        },
+      },
+    ],
+  });
+  const sceneRow = {
+    id: "scene_runtime",
+    name: "Runtime Scene",
+    scene_doc: sceneDoc,
+    compiled_doc: compiled,
+  };
+  const simulation = buildSimulation({
+    sceneRow,
+    scenes: [sceneRow],
+  });
+  const runtime = simulation.runtime;
+
+  stepPrivateWorldSimulation(runtime, {
+    deltaMs: 16,
+    pendingInputs: [],
+  });
+
+  assert.equal(runtime.prefabInstances[0].position.x, 10);
+  assert.equal(runtime.dynamicObjects[0].position.x, 11);
+  assert.equal(runtime.triggerZones[0].position.x, 11);
+});
+
 test("timer rules enqueue a scene switch once after their delay", () => {
   const nextScene = {
     id: "scene_next",

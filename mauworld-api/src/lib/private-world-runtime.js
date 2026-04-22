@@ -1,6 +1,6 @@
 import * as RAPIER from "@dimforge/rapier3d-compat/rapier.es.js";
 import { HttpError } from "./http.js";
-import { normalizeSceneDoc, resolveEntityIdAlias } from "./private-worlds.js";
+import { buildSceneEntityAliasMap, normalizeSceneDoc, resolveEntityIdAlias } from "./private-worlds.js";
 import { compilePrivateWorldScriptDsl as compileSharedPrivateWorldScriptDsl } from "../../../social/private-script-dsl.mjs";
 
 await RAPIER.init({});
@@ -57,21 +57,24 @@ function getRuntimeScriptConfig(runtime = {}) {
   if (runtime?.scriptConfig) {
     return runtime.scriptConfig;
   }
+  const entityAliases = buildSceneEntityAliasMap(runtime?.sourceSceneDoc ?? runtime?.sceneDoc ?? {}, runtime?.sceneDoc ?? {});
+  for (const entry of [
+    ...(runtime?.sceneDoc?.voxels ?? []),
+    ...(runtime?.sceneDoc?.primitives ?? []),
+    ...(runtime?.sceneDoc?.panels ?? []),
+    ...(runtime?.sceneDoc?.models ?? []),
+    ...(runtime?.sceneDoc?.screens ?? []),
+    ...(runtime?.sceneDoc?.players ?? []),
+    ...(runtime?.sceneDoc?.texts ?? []),
+    ...(runtime?.sceneDoc?.trigger_zones ?? []),
+    ...(runtime?.sceneDoc?.prefab_instances ?? []),
+    ...(runtime?.sceneDoc?.particles ?? []),
+  ]) {
+    entityAliases.set(entry.id, entry.id);
+  }
   const fallback = compileSharedPrivateWorldScriptDsl(runtime?.sceneDoc?.script_dsl ?? "", {
     sceneDoc: runtime?.sceneDoc ?? {},
-    entityAliases: new Map(
-      [
-        ...(runtime?.sceneDoc?.voxels ?? []),
-        ...(runtime?.sceneDoc?.primitives ?? []),
-        ...(runtime?.sceneDoc?.panels ?? []),
-        ...(runtime?.sceneDoc?.models ?? []),
-        ...(runtime?.sceneDoc?.screens ?? []),
-        ...(runtime?.sceneDoc?.players ?? []),
-        ...(runtime?.sceneDoc?.texts ?? []),
-        ...(runtime?.sceneDoc?.trigger_zones ?? []),
-        ...(runtime?.sceneDoc?.particles ?? []),
-      ].map((entry) => [entry.id, entry.id]),
-    ),
+    entityAliases,
   });
   return fallback.script_config ?? null;
 }
@@ -286,6 +289,13 @@ function findTargetBody(simulation, targetId) {
   return simulation.players.find((entry) => entry.id === targetId)
     ?? simulation.dynamicObjects.find((entry) => entry.id === targetId)
     ?? null;
+}
+
+function findPrefabInstanceTarget(simulation, targetId) {
+  if (!targetId) {
+    return null;
+  }
+  return simulation.prefabInstances?.find((entry) => entry.id === targetId) ?? null;
 }
 
 function pushRuntimeEvent(simulation, event = {}) {
@@ -531,6 +541,9 @@ function initializeRapierRuntime(runtime) {
     playerColliders: new Map(),
     objectBodies: new Map(),
     objectColliders: new Map(),
+    voxelBodies: new Map(),
+    voxelColliders: new Map(),
+    staticVoxelColliders: new Map(),
   };
   runtime.physics = physics;
 
@@ -547,12 +560,30 @@ function initializeRapierRuntime(runtime) {
       y: Math.max(0.1, mustFinite(voxel.scale?.y, 1) / 2),
       z: Math.max(0.1, mustFinite(voxel.scale?.z, 1) / 2),
     };
-    world.createCollider(
+    if (voxel.instance_id) {
+      const body = world.createRigidBody(
+        RAPIER.RigidBodyDesc.kinematicPositionBased()
+          .setTranslation(voxel.position.x, voxel.position.y, voxel.position.z)
+          .setGravityScale(0)
+          .setCanSleep(false),
+      );
+      const collider = world.createCollider(
+        RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
+          .setFriction(1)
+          .setRestitution(0),
+        body,
+      );
+      runtime.physics.voxelBodies.set(voxel.id, body);
+      runtime.physics.voxelColliders.set(voxel.id, collider);
+      continue;
+    }
+    const collider = world.createCollider(
       RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
         .setTranslation(voxel.position.x, voxel.position.y, voxel.position.z)
         .setFriction(1)
         .setRestitution(0),
     );
+    runtime.physics.staticVoxelColliders.set(voxel.id, collider);
   }
 
   for (const primitive of runtime.dynamicObjects) {
@@ -740,6 +771,156 @@ function translateDynamicObjectByDelta(runtime, entry, delta) {
   body.wakeUp?.();
 }
 
+function applyDynamicObjectGroupMotion(runtime, entry, {
+  delta = null,
+  velocity = null,
+  forceKinematic = false,
+  zeroVelocity = false,
+} = {}) {
+  if (!runtime || !entry) {
+    return null;
+  }
+  const currentPosition = vec3(entry.position);
+  const resolvedDelta = vec3(delta, { x: 0, y: 0, z: 0 });
+  const nextPosition = {
+    x: currentPosition.x + resolvedDelta.x,
+    y: currentPosition.y + resolvedDelta.y,
+    z: currentPosition.z + resolvedDelta.z,
+  };
+  const nextVelocity = zeroVelocity
+    ? { x: 0, y: 0, z: 0 }
+    : vec3(velocity, entry.velocity);
+  entry.position = nextPosition;
+  entry.velocity = nextVelocity;
+  entry.sleeping = false;
+  const body = runtime.physics?.objectBodies?.get(entry.id) ?? null;
+  if (!body) {
+    return {
+      position: cloneJson(nextPosition),
+      velocity: cloneJson(nextVelocity),
+    };
+  }
+  if (forceKinematic) {
+    body.setBodyType?.(RAPIER.RigidBodyType.KinematicPositionBased, true);
+    body.setGravityScale?.(0, true);
+    if (typeof body.setNextKinematicTranslation === "function") {
+      body.setNextKinematicTranslation(nextPosition);
+    }
+  }
+  body.setTranslation(nextPosition, true);
+  body.setLinvel?.(nextVelocity, true);
+  body.wakeUp?.();
+  return {
+    position: cloneJson(nextPosition),
+    velocity: cloneJson(nextVelocity),
+  };
+}
+
+function translateRuntimeVoxelByDelta(runtime, voxelId = "", delta = null) {
+  const resolvedVoxelId = String(voxelId ?? "").trim();
+  if (!runtime || !resolvedVoxelId) {
+    return null;
+  }
+  const voxel = (runtime.sceneDoc?.voxels ?? []).find((entry) => entry.id === resolvedVoxelId) ?? null;
+  if (!voxel) {
+    return null;
+  }
+  const resolvedDelta = vec3(delta, { x: 0, y: 0, z: 0 });
+  const nextPosition = {
+    x: mustFinite(voxel.position?.x, 0) + resolvedDelta.x,
+    y: mustFinite(voxel.position?.y, 0) + resolvedDelta.y,
+    z: mustFinite(voxel.position?.z, 0) + resolvedDelta.z,
+  };
+  voxel.position = nextPosition;
+  const staticSolid = runtime.staticSolids?.find((entry) => entry.id === resolvedVoxelId) ?? null;
+  if (staticSolid) {
+    staticSolid.position = cloneJson(nextPosition);
+  }
+  const body = runtime.physics?.voxelBodies?.get(resolvedVoxelId) ?? null;
+  if (body) {
+    if (typeof body.setNextKinematicTranslation === "function") {
+      body.setNextKinematicTranslation(nextPosition);
+    }
+    body.setTranslation(nextPosition, true);
+    body.wakeUp?.();
+    return cloneJson(nextPosition);
+  }
+  const collider = runtime.physics?.staticVoxelColliders?.get(resolvedVoxelId) ?? null;
+  collider?.setTranslation?.(nextPosition);
+  return cloneJson(nextPosition);
+}
+
+function translateRuntimeTriggerZoneByDelta(runtime, triggerZoneId = "", delta = null) {
+  const resolvedZoneId = String(triggerZoneId ?? "").trim();
+  if (!runtime || !resolvedZoneId) {
+    return null;
+  }
+  const zone = runtime.triggerZones?.find((entry) => entry.id === resolvedZoneId) ?? null;
+  if (!zone) {
+    return null;
+  }
+  const resolvedDelta = vec3(delta, { x: 0, y: 0, z: 0 });
+  zone.position = {
+    x: mustFinite(zone.position?.x, 0) + resolvedDelta.x,
+    y: mustFinite(zone.position?.y, 0) + resolvedDelta.y,
+    z: mustFinite(zone.position?.z, 0) + resolvedDelta.z,
+  };
+  const sceneZone = (runtime.sceneDoc?.trigger_zones ?? []).find((entry) => entry.id === resolvedZoneId) ?? null;
+  if (sceneZone) {
+    sceneZone.position = cloneJson(zone.position);
+  }
+  return cloneJson(zone.position);
+}
+
+function applyPrefabInstancePose(runtime, prefabInstance, {
+  position = null,
+  velocity = null,
+  zeroVelocity = false,
+  forceKinematicDescendants = false,
+} = {}) {
+  if (!runtime || !prefabInstance) {
+    return null;
+  }
+  const currentPosition = vec3(prefabInstance.position);
+  const nextPosition = vec3(position, currentPosition);
+  const delta = {
+    x: nextPosition.x - currentPosition.x,
+    y: nextPosition.y - currentPosition.y,
+    z: nextPosition.z - currentPosition.z,
+  };
+  const nextVelocity = zeroVelocity
+    ? { x: 0, y: 0, z: 0 }
+    : vec3(velocity, prefabInstance.velocity);
+  prefabInstance.position = nextPosition;
+  prefabInstance.velocity = nextVelocity;
+  const scenePrefabInstance = (runtime.sceneDoc?.prefab_instances ?? []).find((entry) => entry.id === prefabInstance.id) ?? null;
+  if (scenePrefabInstance) {
+    scenePrefabInstance.position = cloneJson(nextPosition);
+  }
+  for (const dynamicObjectId of prefabInstance.dynamic_object_ids ?? []) {
+    const dynamicObject = runtime.dynamicObjects?.find((entry) => entry.id === dynamicObjectId) ?? null;
+    if (!dynamicObject) {
+      continue;
+    }
+    applyDynamicObjectGroupMotion(runtime, dynamicObject, {
+      delta,
+      velocity: nextVelocity,
+      zeroVelocity,
+      forceKinematic: forceKinematicDescendants,
+    });
+  }
+  for (const voxelId of prefabInstance.voxel_ids ?? []) {
+    translateRuntimeVoxelByDelta(runtime, voxelId, delta);
+  }
+  for (const triggerZoneId of prefabInstance.trigger_zone_ids ?? []) {
+    translateRuntimeTriggerZoneByDelta(runtime, triggerZoneId, delta);
+  }
+  return {
+    position: cloneJson(nextPosition),
+    velocity: cloneJson(nextVelocity),
+  };
+}
+
 function normalizeScriptedPlatformLoopMode(value = "pingpong") {
   const normalized = String(value ?? "pingpong").trim().toLowerCase();
   if (normalized === "loop" || normalized === "repeat") {
@@ -765,6 +946,7 @@ function registerScriptedPlatformMotion(simulation, entry, payload = {}) {
   }
   simulation.scriptedPlatformMotions.set(entry.id, {
     targetId: entry.id,
+    targetKind: entry.kind === "prefab_instance" ? "prefab_instance" : "dynamic_object",
     basePosition: cloneJson(entry.position),
     delta,
     durationMs: clampNumber(
@@ -797,12 +979,6 @@ function advanceScriptedPlatformMotions(simulation, deltaSeconds) {
     return;
   }
   for (const [targetId, controller] of simulation.scriptedPlatformMotions.entries()) {
-    const entry = simulation.dynamicObjects.find((candidate) => candidate.id === targetId) ?? null;
-    const body = simulation.physics?.objectBodies?.get(targetId) ?? null;
-    if (!entry || !body) {
-      simulation.scriptedPlatformMotions.delete(targetId);
-      continue;
-    }
     const progress = resolveScriptedPlatformProgress(
       controller,
       Math.max(0, mustFinite(simulation.elapsedMs, 0) - mustFinite(controller.startedAtMs, 0)),
@@ -812,6 +988,33 @@ function advanceScriptedPlatformMotions(simulation, deltaSeconds) {
       y: mustFinite(controller.basePosition?.y, 0) + mustFinite(controller.delta?.y, 0) * progress,
       z: mustFinite(controller.basePosition?.z, 0) + mustFinite(controller.delta?.z, 0) * progress,
     };
+    if (controller.targetKind === "prefab_instance") {
+      const entry = findPrefabInstanceTarget(simulation, targetId);
+      if (!entry) {
+        simulation.scriptedPlatformMotions.delete(targetId);
+        continue;
+      }
+      const previousPosition = vec3(entry.position);
+      const nextVelocity = deltaSeconds > 0
+        ? {
+          x: (nextPosition.x - previousPosition.x) / deltaSeconds,
+          y: (nextPosition.y - previousPosition.y) / deltaSeconds,
+          z: (nextPosition.z - previousPosition.z) / deltaSeconds,
+        }
+        : vec3(entry.velocity);
+      applyPrefabInstancePose(simulation, entry, {
+        position: nextPosition,
+        velocity: nextVelocity,
+        forceKinematicDescendants: true,
+      });
+      continue;
+    }
+    const entry = simulation.dynamicObjects.find((candidate) => candidate.id === targetId) ?? null;
+    const body = simulation.physics?.objectBodies?.get(targetId) ?? null;
+    if (!entry || !body) {
+      simulation.scriptedPlatformMotions.delete(targetId);
+      continue;
+    }
     const previousPosition = vec3(entry.position);
     const nextVelocity = deltaSeconds > 0
       ? {
@@ -1612,7 +1815,8 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   const sceneDoc = normalizeSceneDoc(resolvedSceneDoc, {
     preserveNormalizedIds: compiledResolvedSceneDoc != null,
   });
-  const sceneEntities = [
+  const entityAliases = buildSceneEntityAliasMap(sceneRow?.scene_doc ?? {}, normalizeSceneDoc(sceneRow?.scene_doc ?? {}));
+  for (const entry of [
     ...(sceneDoc.voxels ?? []),
     ...(sceneDoc.primitives ?? []),
     ...(sceneDoc.panels ?? []),
@@ -1621,14 +1825,11 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     ...(sceneDoc.players ?? []),
     ...(sceneDoc.texts ?? []),
     ...(sceneDoc.trigger_zones ?? []),
+    ...(sceneDoc.prefab_instances ?? []),
     ...(sceneDoc.particles ?? []),
-  ];
-  const entityAliases = new Map(
-    sceneEntities
-      .map((entry) => String(entry?.id ?? "").trim())
-      .filter(Boolean)
-      .map((entryId) => [entryId, entryId]),
-  );
+  ]) {
+    entityAliases.set(entry.id, entry.id);
+  }
   const compiledScriptConfig = sceneRow?.compiled_doc?.runtime?.script_config ?? null;
   const fallbackCompile = compiledScriptConfig
     ? null
@@ -1641,6 +1842,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   const authoredPlayerIds = normalizeSceneDoc(sceneRow?.scene_doc ?? {}).players.map((entry) => entry.id);
   const staticSolids = (sceneDoc.voxels ?? []).map((entry) => ({
     id: entry.id,
+    instance_id: entry.instance_id ?? null,
     position: vec3(entry.position),
     halfExtents: {
       x: Math.max(0.1, mustFinite(entry.scale?.x, 1) / 2),
@@ -1697,6 +1899,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   const dynamicObjects = (sceneDoc.primitives ?? []).map((entry) => ({
     kind: "dynamic_object",
     id: entry.id,
+    instance_id: entry.instance_id ?? null,
     entity_kind: "primitive",
     asset_id: entry.asset_id ?? null,
     shape: entry.shape,
@@ -1719,6 +1922,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     material: cloneJson(entry.material ?? {}),
   })).concat((sceneDoc.models ?? []).map((entry) => ({
     kind: "dynamic_object",
+    instance_id: entry.instance_id ?? null,
     entity_kind: "model",
     id: entry.id,
     asset_id: entry.asset_id ?? null,
@@ -1748,6 +1952,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   })));
   const triggerZones = (sceneDoc.trigger_zones ?? []).map((entry) => ({
     id: entry.id,
+    instance_id: entry.instance_id ?? null,
     label: entry.label,
     position: vec3(entry.position, { x: 0, y: 0.5, z: 0 }),
     halfExtents: {
@@ -1759,6 +1964,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   }));
   const particleState = Object.fromEntries((sceneDoc.particles ?? []).map((entry) => [entry.id, {
     id: entry.id,
+    instance_id: entry.instance_id ?? null,
     effect: entry.effect,
     target_id: entry.target_id,
     color: entry.color,
@@ -1766,13 +1972,37 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
   }]));
   const textState = Object.fromEntries((sceneDoc.texts ?? []).map((entry) => [entry.id, {
     id: entry.id,
+    instance_id: entry.instance_id ?? null,
     value: entry.value,
   }]));
+  const prefabInstances = (sceneDoc.prefab_instances ?? []).map((entry) => ({
+    kind: "prefab_instance",
+    id: entry.id,
+    label: entry.label,
+    prefab_id: entry.prefab_id,
+    position: vec3(entry.position),
+    initialPosition: vec3(entry.position),
+    rotation: vec3(entry.rotation),
+    scale: cloneJson(entry.scale ?? { x: 1, y: 1, z: 1 }),
+    velocity: { x: 0, y: 0, z: 0 },
+    visibility: entry.overrides?.visible !== false,
+    material_override: cloneJson(entry.overrides?.material ?? null),
+    dynamic_object_ids: dynamicObjects
+      .filter((candidate) => candidate.instance_id === entry.id)
+      .map((candidate) => candidate.id),
+    voxel_ids: staticSolids
+      .filter((candidate) => candidate.instance_id === entry.id)
+      .map((candidate) => candidate.id),
+    trigger_zone_ids: triggerZones
+      .filter((candidate) => candidate.instance_id === entry.id)
+      .map((candidate) => candidate.id),
+  }));
   const runtime = {
     sceneRowId: sceneRow?.id ?? null,
     sceneName: sceneRow?.name ?? "Scene",
     sceneVersion: mustFinite(sceneRow?.version, 0),
     sceneUpdatedAt: sceneRow?.updated_at ?? sceneRow?.created_at ?? null,
+    sourceSceneDoc: sceneRow?.scene_doc ?? null,
     sceneDoc,
     scriptConfig,
     rules: buildSceneRules(sceneRow, sceneDoc),
@@ -1787,6 +2017,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     staticSolids,
     players,
     dynamicObjects,
+    prefabInstances,
     triggerZones,
     ruleState: {
       firedRuleIds: new Set(),
@@ -1958,6 +2189,7 @@ function executeRuleAction(simulation, rule, context = {}) {
     }
   };
   const targetId = String(rule.target_id ?? rule.payload?.target_id ?? rule.payload?.targetId ?? "").trim() || null;
+  const prefabTarget = findPrefabInstanceTarget(simulation, targetId);
   if (rule.action === "apply_force") {
     const target = findTargetBody(simulation, targetId);
     if (target) {
@@ -1992,7 +2224,18 @@ function executeRuleAction(simulation, rule, context = {}) {
 
   if (rule.action === "teleport") {
     const target = findTargetBody(simulation, targetId);
-    if (target) {
+    if (prefabTarget) {
+      const nextPosition = vec3(rule.payload?.position, prefabTarget.position);
+      applyPrefabInstancePose(simulation, prefabTarget, {
+        position: nextPosition,
+        zeroVelocity: true,
+      });
+      pushRuntimeEvent(simulation, {
+        type: "teleport",
+        rule_id: rule.id,
+        target_id: prefabTarget.id,
+      });
+    } else if (target) {
       const nextPosition = vec3(rule.payload?.position, target.position);
       const body = simulation.physics?.playerBodies?.get(target.id)
         ?? simulation.physics?.objectBodies?.get(target.id)
@@ -2014,7 +2257,7 @@ function executeRuleAction(simulation, rule, context = {}) {
   }
 
   if (rule.action === "move_platform") {
-    const target = simulation.dynamicObjects.find((entry) => entry.id === targetId) ?? null;
+    const target = prefabTarget ?? simulation.dynamicObjects.find((entry) => entry.id === targetId) ?? null;
     if (target && registerScriptedPlatformMotion(simulation, target, rule.payload)) {
       pushRuntimeEvent(simulation, {
         type: "move_platform",
@@ -2028,7 +2271,21 @@ function executeRuleAction(simulation, rule, context = {}) {
 
   if (rule.action === "set_material") {
     const target = findTargetBody(simulation, targetId);
-    if (target) {
+    if (prefabTarget) {
+      const nextMaterial = cloneJson(rule.payload?.material ?? {});
+      prefabTarget.material_override = nextMaterial;
+      for (const dynamicObjectId of prefabTarget.dynamic_object_ids ?? []) {
+        const dynamicObject = simulation.dynamicObjects.find((entry) => entry.id === dynamicObjectId) ?? null;
+        if (dynamicObject) {
+          dynamicObject.material_override = cloneJson(nextMaterial);
+        }
+      }
+      pushRuntimeEvent(simulation, {
+        type: "set_material",
+        rule_id: rule.id,
+        target_id: prefabTarget.id,
+      });
+    } else if (target) {
       target.material_override = cloneJson(rule.payload?.material ?? {});
       pushRuntimeEvent(simulation, {
         type: "set_material",
@@ -2042,7 +2299,21 @@ function executeRuleAction(simulation, rule, context = {}) {
 
   if (rule.action === "set_visibility") {
     const target = findTargetBody(simulation, targetId);
-    if (target) {
+    if (prefabTarget) {
+      prefabTarget.visibility = rule.payload?.visible !== false;
+      for (const dynamicObjectId of prefabTarget.dynamic_object_ids ?? []) {
+        const dynamicObject = simulation.dynamicObjects.find((entry) => entry.id === dynamicObjectId) ?? null;
+        if (dynamicObject) {
+          dynamicObject.visibility = prefabTarget.visibility;
+        }
+      }
+      pushRuntimeEvent(simulation, {
+        type: "set_visibility",
+        rule_id: rule.id,
+        target_id: prefabTarget.id,
+        visible: prefabTarget.visibility,
+      });
+    } else if (target) {
       target.visibility = rule.payload?.visible !== false;
       pushRuntimeEvent(simulation, {
         type: "set_visibility",
@@ -2279,6 +2550,10 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     return null;
   }
   const runtime = simulation.runtime ?? simulation;
+  const publicDynamicObjects = runtime.dynamicObjects.filter((entry) => !entry.instance_id);
+  const publicTriggerZones = runtime.triggerZones.filter((entry) => !entry.instance_id);
+  const publicParticles = Object.values(runtime.particleState).filter((entry) => !entry.instance_id);
+  const publicTexts = Object.values(runtime.textState).filter((entry) => !entry.instance_id);
   return {
     instance_id: simulation.instanceId ?? null,
     active_scene_id: simulation.activeSceneId ?? null,
@@ -2291,6 +2566,17 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     tick: runtime.tick,
     elapsed_ms: Number(runtime.elapsedMs.toFixed(0)),
     started_at: runtime.startedAt ?? null,
+    prefab_instances: runtime.prefabInstances.map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      prefab_id: entry.prefab_id,
+      position: cloneJson(entry.position),
+      rotation: cloneJson(entry.rotation),
+      scale: cloneJson(entry.scale),
+      velocity: cloneJson(entry.velocity),
+      visible: entry.visibility !== false,
+      material_override: cloneJson(entry.material_override),
+    })),
     players: runtime.players.map((entry) => {
       const replicatedPose = getFreshClientReplicatedPose(entry);
       return {
@@ -2323,7 +2609,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
         material_override: cloneJson(entry.material_override),
       };
     }),
-    dynamic_objects: runtime.dynamicObjects.map((entry) => ({
+    dynamic_objects: publicDynamicObjects.map((entry) => ({
       id: entry.id,
       entity_kind: entry.entity_kind ?? "primitive",
       asset_id: entry.asset_id ?? null,
@@ -2345,13 +2631,13 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       material: cloneJson(entry.material),
       material_override: cloneJson(entry.material_override),
     })),
-    trigger_zones: runtime.triggerZones.map((entry) => ({
+    trigger_zones: publicTriggerZones.map((entry) => ({
       id: entry.id,
       label: entry.label,
       occupant_ids: [...entry.currentOccupants],
     })),
-    particles: Object.values(runtime.particleState).map((entry) => cloneJson(entry)),
-    texts: Object.values(runtime.textState).map((entry) => cloneJson(entry)),
+    particles: publicParticles.map((entry) => cloneJson(entry)),
+    texts: publicTexts.map((entry) => cloneJson(entry)),
     recent_events: cloneJson(runtime.recentEvents),
   };
 }

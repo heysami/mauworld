@@ -187,6 +187,26 @@ const PRIVATE_WORLD_BINDING_DEFINITION_MAP = new Map(
     .map((entry) => [entry.name, entry]),
 );
 
+const PRIVATE_WORLD_TARGET_COLLECTIONS = [
+  { key: "voxels", kind: "voxel" },
+  { key: "primitives", kind: "primitive" },
+  { key: "panels", kind: "panel" },
+  { key: "models", kind: "model" },
+  { key: "screens", kind: "screen" },
+  { key: "players", kind: "player" },
+  { key: "texts", kind: "text" },
+  { key: "trigger_zones", kind: "trigger" },
+  { key: "prefab_instances", kind: "prefab_instance" },
+  { key: "particles", kind: "particle" },
+];
+
+const PREFAB_INSTANCE_RULE_ACTIONS = new Set([
+  "teleport",
+  "move_platform",
+  "set_visibility",
+  "set_material",
+]);
+
 function finiteNumber(value, fallback = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
@@ -299,6 +319,42 @@ function getModuleParamDefinition(moduleKind = "", param = "") {
 
 function getModuleBindingDefinition(moduleKind = "", binding = "") {
   return getModuleDefinition(moduleKind)?.bindings?.find((entry) => entry.name === binding) ?? null;
+}
+
+export function buildPrivateWorldScriptTargetCatalog(sceneDoc = {}) {
+  const catalog = new Map([
+    ["scene", {
+      id: "scene",
+      target_scope: "scene",
+      target_kind: "scene",
+    }],
+  ]);
+  for (const collection of PRIVATE_WORLD_TARGET_COLLECTIONS) {
+    for (const entry of Array.isArray(sceneDoc?.[collection.key]) ? sceneDoc[collection.key] : []) {
+      const entryId = String(entry?.id ?? "").trim();
+      if (!entryId) {
+        continue;
+      }
+      catalog.set(entryId, {
+        id: entryId,
+        target_scope: "entity",
+        target_kind: collection.kind,
+      });
+    }
+  }
+  return catalog;
+}
+
+export function isPrivateWorldRuleTargetAllowed(action = "", targetKind = "") {
+  const normalizedAction = String(action ?? "").trim().toLowerCase();
+  const normalizedTargetKind = String(targetKind ?? "").trim().toLowerCase();
+  if (!normalizedAction || !normalizedTargetKind) {
+    return true;
+  }
+  if (normalizedTargetKind === "prefab_instance") {
+    return PREFAB_INSTANCE_RULE_ACTIONS.has(normalizedAction);
+  }
+  return true;
 }
 
 function getPlayerColliderDefaults(player = {}) {
@@ -680,9 +736,16 @@ export function buildImplicitPrivateWorldScriptConfig(sceneDoc = {}) {
   };
 }
 
+function getTargetCatalog(options = {}) {
+  if (options.targetCatalog instanceof Map) {
+    return options.targetCatalog;
+  }
+  return buildPrivateWorldScriptTargetCatalog(options.sceneDoc ?? {});
+}
+
 function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
   const aliasMap = options.entityAliases instanceof Map ? options.entityAliases : new Map();
-  const entityIds = new Set(aliasMap.values());
+  const targetCatalog = getTargetCatalog(options);
   const normalizedEntry = normalizeScriptFunctionEntry(entry, index);
   const rawLines = String(normalizedEntry.body ?? "").replace(/\r\n/g, "\n").split("\n");
   const comments = [];
@@ -692,6 +755,7 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
   let moduleKind = "";
   let targetId = "";
   let targetScope = "";
+  let targetKind = "";
   let targetRawValue = "";
   let targetLineNumber = 0;
   let enabled = null;
@@ -743,9 +807,12 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
       if (rest.toLowerCase() === "scene") {
         targetId = "scene";
         targetScope = "scene";
+        targetKind = "scene";
       } else {
         targetId = resolveEntityAlias(aliasMap, rest);
-        targetScope = targetId ? "entity" : "";
+        const targetDescriptor = targetCatalog.get(targetId) ?? null;
+        targetScope = targetDescriptor?.target_scope ?? (targetId ? "entity" : "");
+        targetKind = targetDescriptor?.target_kind ?? "";
       }
       if (!targetId) {
         errors.push({ line: lineIndex + 1, message: "Directive `@target` requires an id or `scene`." });
@@ -794,15 +861,23 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     errors.push({ line: lineIndex + 1, message: `Unsupported directive: @${directive}` });
   }
 
-  if (moduleKind === "physics.world") {
-    if (!targetScope) {
-      targetId = "scene";
-      targetScope = "scene";
-    } else if (targetScope !== "scene") {
-      errors.push({ line: 1, message: "Module `physics.world` must target `scene`." });
+  if (moduleKind) {
+    const moduleDefinition = getModuleDefinition(moduleKind);
+    if (moduleDefinition?.scope === "scene") {
+      if (!targetScope) {
+        targetId = "scene";
+        targetScope = "scene";
+        targetKind = "scene";
+      } else if (targetScope !== "scene") {
+        errors.push({ line: targetLineNumber || 1, message: "Module `physics.world` must target `scene`." });
+      }
+    } else if (moduleDefinition?.scope === "player") {
+      if (targetScope !== "entity" || !targetId) {
+        errors.push({ line: targetLineNumber || 1, message: `Module \`${moduleKind}\` requires an explicit player target.` });
+      } else if (targetCatalog.has(targetId) && targetKind !== "player") {
+        errors.push({ line: targetLineNumber || 1, message: `Module \`${moduleKind}\` can only target players.` });
+      }
     }
-  } else if (moduleKind && targetScope !== "entity") {
-    errors.push({ line: 1, message: `Module \`${moduleKind}\` requires an explicit player target.` });
   }
 
   if (moduleKind) {
@@ -853,7 +928,7 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     }
   }
 
-  if (moduleKind && targetScope === "entity" && targetId && !entityIds.has(targetId)) {
+  if (moduleKind && targetScope === "entity" && targetId && !targetCatalog.has(targetId)) {
     errors.push({
       line: targetLineNumber || 1,
       message: `Target \`${targetRawValue || targetId}\` no longer exists in this scene.`,
@@ -865,6 +940,7 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     module_kind: moduleKind,
     target_id: targetId || null,
     target_scope: targetScope || null,
+    target_kind: targetKind || null,
     enabled,
     params,
     bindings,
@@ -1289,6 +1365,7 @@ function buildScriptConfigModules(functions = []) {
       module_kind: entry.module_kind,
       target_id: entry.target_id,
       target_scope: entry.target_scope,
+      target_kind: entry.target_kind ?? null,
       enabled: entry.enabled,
       params: cloneJson(entry.params),
       bindings: cloneJson(entry.bindings),

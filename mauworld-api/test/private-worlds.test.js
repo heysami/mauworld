@@ -740,8 +740,52 @@ test("compileSceneDoc flattens linked prefab instances into runtime scene data",
   assert.equal(compiled.runtime.resolved_scene_doc.primitives.length, 1);
   assert.equal(compiled.runtime.resolved_scene_doc.screens.length, 1);
   assert.equal(compiled.runtime.resolved_scene_doc.primitives[0].position.x, 6);
+  assert.equal(compiled.runtime.resolved_scene_doc.primitives[0].instance_id, "prefabinst_arch-instance");
   assert.equal(compiled.runtime.resolved_scene_doc.screens[0].position.y, 3);
   assert.equal(compiled.stats.prefab_instance_count, 1);
+});
+
+test("compileSceneDoc allows prefab instance ids in rule targets while keeping them as parent runtime objects", () => {
+  const sceneDoc = {
+    prefab_instances: [
+      {
+        id: "platform_group",
+        prefab_id: "prefab_platform",
+        position: { x: 2, y: 0, z: 1 },
+      },
+    ],
+    script_dsl: "scene_start -> move_platform to platform_group delta(4,0,0) duration 1s",
+  };
+  const compiled = compileSceneDoc(sceneDoc, {
+    world_type: "room",
+    width: 40,
+    length: 20,
+    height: 10,
+  }, {
+    prefabs: [
+      {
+        id: "prefab_platform",
+        prefab_doc: {
+          primitives: [
+            {
+              id: "deck",
+              shape: "box",
+              position: { x: 0, y: 0.5, z: 0 },
+              scale: { x: 4, y: 1, z: 4 },
+              rigid_mode: "rigid",
+              physics: {
+                carry_riders: true,
+              },
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  assert.equal(compiled.runtime.rules[0].target_id, "prefabinst_platform-group");
+  assert.equal(compiled.runtime.prefab_instances[0].id, "prefabinst_platform-group");
+  assert.equal(compiled.runtime.dynamic_objects[0].instance_id, "prefabinst_platform-group");
 });
 
 test("compileSceneDoc exposes moving-platform primitives in the miniature payload", () => {

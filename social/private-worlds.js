@@ -61,6 +61,8 @@ import {
 } from "./private-runtime-motion.mjs?v=20260421c";
 import { normalizePrivateInputKey } from "./private-input.mjs";
 import {
+  buildPrivateWorldScriptTargetCatalog,
+  isPrivateWorldRuleTargetAllowed,
   PRIVATE_WORLD_MODULE_DEFINITIONS,
   SCRIPT_FUNCTION_HEADER_RE as PRIVATE_SCRIPT_FUNCTION_HEADER_RE,
   compilePrivateWorldScriptDsl as compileSharedPrivateWorldScriptDsl,
@@ -69,7 +71,7 @@ import {
   parseScriptFunctionLibrary as parseSharedScriptFunctionLibrary,
   serializePrivateWorldModuleFunctionBody,
   serializeScriptFunctionLibrary as serializeSharedScriptFunctionLibrary,
-} from "./private-script-dsl.mjs?v=20260422logicissues1";
+} from "./private-script-dsl.mjs?v=20260422groupprefab1";
 
 // Private-world physics contract: keep occupied-player support, landing, overlap
 // prevention, and moving-platform carry client-local. See
@@ -4989,6 +4991,26 @@ function getSelectedEntities(sceneDoc = parseSceneTextarea()) {
     .filter(Boolean);
 }
 
+const GROUP_PREFAB_SUPPORTED_KINDS = new Set([
+  "voxel",
+  "primitive",
+  "panel",
+  "model",
+  "screen",
+  "text",
+  "trigger",
+]);
+
+function canConvertSelectionToGroupPrefab(selectedEntities = []) {
+  return Array.isArray(selectedEntities)
+    && selectedEntities.length > 0
+    && selectedEntities.every((entry) => GROUP_PREFAB_SUPPORTED_KINDS.has(String(entry?.kind ?? "").trim()));
+}
+
+function getConvertPrefabButtonLabel(selectedEntities = []) {
+  return selectedEntities.length > 1 ? "Create Group Prefab" : "Convert to Prefab";
+}
+
 function ensureBuilderSelection(sceneDoc = parseSceneTextarea()) {
   const expandedRefs = expandSelectionRefsWithPersistentGroups(getBuilderSelectionRefs(), sceneDoc);
   const validSelections = expandedRefs
@@ -9658,10 +9680,11 @@ function pushScriptFunctionDiagnostic(map, functionId = "", issue = {}) {
 
 function buildSceneScriptFunctionDiagnostics(sceneDoc = {}, scriptDslText = "") {
   const aliasMap = buildPrivateScriptDslEntityAliasMap(sceneDoc);
-  const entityIds = new Set(aliasMap.values());
+  const targetCatalog = buildPrivateScriptDslTargetCatalog(sceneDoc);
   const compile = compileSharedPrivateWorldScriptDsl(scriptDslText, {
     sceneDoc,
     entityAliases: aliasMap,
+    targetCatalog,
   });
   const issuesByFunctionId = new Map();
   for (const error of compile.errors ?? []) {
@@ -9679,31 +9702,41 @@ function buildSceneScriptFunctionDiagnostics(sceneDoc = {}, scriptDslText = "") 
   for (const rule of compile.rules ?? []) {
     const functionId = String(rule?.function_id ?? "").trim();
     const line = Number(rule?.source_line_number ?? 0) || 0;
-    if (rule?.source_id && !entityIds.has(rule.source_id)) {
+    const sourceTarget = rule?.source_id ? (targetCatalog.get(rule.source_id) ?? null) : null;
+    const directTarget = rule?.target_id ? (targetCatalog.get(rule.target_id) ?? null) : null;
+    const payloadTarget = rule?.payload?.target_id ? (targetCatalog.get(rule.payload.target_id) ?? null) : null;
+    const particleTarget = rule?.payload?.particle_id ? (targetCatalog.get(rule.payload.particle_id) ?? null) : null;
+    const textTarget = rule?.payload?.text_id ? (targetCatalog.get(rule.payload.text_id) ?? null) : null;
+    if (rule?.source_id && !sourceTarget) {
       pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
         line,
         message: `Rule references missing source \`${rule.source_id}\`.`,
       });
     }
-    if (rule?.target_id && !entityIds.has(rule.target_id)) {
+    if (rule?.target_id && !directTarget) {
       pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
         line,
         message: `Rule references missing target \`${rule.target_id}\`.`,
       });
+    } else if (directTarget && !isPrivateWorldRuleTargetAllowed(rule.action, directTarget.target_kind)) {
+      pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
+        line,
+        message: `Action \`${rule.action}\` cannot target \`${rule.target_id}\` because it is a ${String(directTarget.target_kind ?? "scene").replace(/_/g, " ")}.`,
+      });
     }
-    if (rule?.payload?.target_id && !entityIds.has(rule.payload.target_id)) {
+    if (rule?.payload?.target_id && !payloadTarget) {
       pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
         line,
         message: `Rule references missing payload target \`${rule.payload.target_id}\`.`,
       });
     }
-    if (rule?.payload?.particle_id && !entityIds.has(rule.payload.particle_id)) {
+    if (rule?.payload?.particle_id && !particleTarget) {
       pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
         line,
         message: `Rule references missing particle \`${rule.payload.particle_id}\`.`,
       });
     }
-    if (rule?.payload?.text_id && !entityIds.has(rule.payload.text_id)) {
+    if (rule?.payload?.text_id && !textTarget) {
       pushScriptFunctionDiagnostic(issuesByFunctionId, functionId, {
         line,
         message: `Rule references missing text \`${rule.payload.text_id}\`.`,
@@ -10269,6 +10302,7 @@ function buildPrivateScriptDslEntityAliasMap(sceneDoc = {}) {
     ...(sceneDoc?.players ?? []),
     ...(sceneDoc?.texts ?? []),
     ...(sceneDoc?.trigger_zones ?? []),
+    ...(sceneDoc?.prefab_instances ?? []),
     ...(sceneDoc?.particles ?? []),
   ];
   return new Map(
@@ -10277,6 +10311,10 @@ function buildPrivateScriptDslEntityAliasMap(sceneDoc = {}) {
       .filter(Boolean)
       .map((entryId) => [entryId, entryId]),
   );
+}
+
+function buildPrivateScriptDslTargetCatalog(sceneDoc = {}) {
+  return buildPrivateWorldScriptTargetCatalog(sceneDoc);
 }
 
 function getActivePrivateWorldRuntime() {
@@ -11368,6 +11406,11 @@ function addPrivateSupportSurface(surfaces, surface = {}, probe = null) {
       y: Number(surface.velocity?.y ?? 0) || 0,
       z: Number(surface.velocity?.z ?? 0) || 0,
     },
+    anchorPosition: surface.anchorPosition ? {
+      x: Number(surface.anchorPosition?.x ?? position.x) || 0,
+      y: Number(surface.anchorPosition?.y ?? position.y) || 0,
+      z: Number(surface.anchorPosition?.z ?? position.z) || 0,
+    } : null,
     entryId: String(surface.entryId ?? "").trim(),
     entry: surface.entry ?? null,
   });
@@ -11406,6 +11449,296 @@ function getPrivateDynamicEntryMotionSample(entry = null, options = {}) {
       y: Number(velocitySource?.y ?? entry?.velocity?.y ?? 0) || 0,
       z: Number(velocitySource?.z ?? entry?.velocity?.z ?? 0) || 0,
     },
+  };
+}
+
+function getPrivatePrefabInstanceMotionSample(entry = null, options = {}) {
+  const baseSample = getPrivateDynamicEntryMotionSample(entry, options);
+  const mesh = baseSample.mesh ?? null;
+  const resolvedRotation = (() => {
+    if (options.worldSpace === true && mesh && typeof mesh.getWorldQuaternion === "function") {
+      const quaternion = mesh.getWorldQuaternion(new THREE.Quaternion());
+      const euler = new THREE.Euler().setFromQuaternion(quaternion, "XYZ");
+      return {
+        x: Number(euler.x) || 0,
+        y: Number(euler.y) || 0,
+        z: Number(euler.z) || 0,
+      };
+    }
+    return {
+      x: Number(mesh?.rotation?.x ?? entry?.rotation?.x ?? 0) || 0,
+      y: Number(mesh?.rotation?.y ?? entry?.rotation?.y ?? 0) || 0,
+      z: Number(mesh?.rotation?.z ?? entry?.rotation?.z ?? 0) || 0,
+    };
+  })();
+  const resolvedScale = (() => {
+    if (options.worldSpace === true && mesh && typeof mesh.getWorldScale === "function") {
+      const scale = mesh.getWorldScale(new THREE.Vector3());
+      return {
+        x: Number(scale?.x ?? 1) || 1,
+        y: Number(scale?.y ?? 1) || 1,
+        z: Number(scale?.z ?? 1) || 1,
+      };
+    }
+    return {
+      x: Number(mesh?.scale?.x ?? entry?.scale?.x ?? 1) || 1,
+      y: Number(mesh?.scale?.y ?? entry?.scale?.y ?? 1) || 1,
+      z: Number(mesh?.scale?.z ?? entry?.scale?.z ?? 1) || 1,
+    };
+  })();
+  return {
+    ...baseSample,
+    rotation: resolvedRotation,
+    scale: resolvedScale,
+  };
+}
+
+function multiplyPrivateScale3(left = {}, right = {}) {
+  return {
+    x: (Number(left?.x ?? 1) || 1) * (Number(right?.x ?? 1) || 1),
+    y: (Number(left?.y ?? 1) || 1) * (Number(right?.y ?? 1) || 1),
+    z: (Number(left?.z ?? 1) || 1) * (Number(right?.z ?? 1) || 1),
+  };
+}
+
+function addPrivateEuler3(left = {}, right = {}) {
+  return {
+    x: (Number(left?.x ?? 0) || 0) + (Number(right?.x ?? 0) || 0),
+    y: (Number(left?.y ?? 0) || 0) + (Number(right?.y ?? 0) || 0),
+    z: (Number(left?.z ?? 0) || 0) + (Number(right?.z ?? 0) || 0),
+  };
+}
+
+function rotatePrivatePointByEuler(point = {}, rotation = {}) {
+  let x = Number(point?.x ?? 0) || 0;
+  let y = Number(point?.y ?? 0) || 0;
+  let z = Number(point?.z ?? 0) || 0;
+  const rx = Number(rotation?.x ?? 0) || 0;
+  const ry = Number(rotation?.y ?? 0) || 0;
+  const rz = Number(rotation?.z ?? 0) || 0;
+  const cosX = Math.cos(rx);
+  const sinX = Math.sin(rx);
+  const cosY = Math.cos(ry);
+  const sinY = Math.sin(ry);
+  const cosZ = Math.cos(rz);
+  const sinZ = Math.sin(rz);
+
+  let nextY = y * cosX - z * sinX;
+  let nextZ = y * sinX + z * cosX;
+  y = nextY;
+  z = nextZ;
+
+  let nextX = x * cosY + z * sinY;
+  nextZ = -x * sinY + z * cosY;
+  x = nextX;
+  z = nextZ;
+
+  nextX = x * cosZ - y * sinZ;
+  nextY = x * sinZ + y * cosZ;
+  x = nextX;
+  y = nextY;
+
+  return { x, y, z };
+}
+
+function transformPrivatePrefabPosition(localPosition = {}, parentTransform = {}) {
+  const scaled = {
+    x: (Number(localPosition?.x ?? 0) || 0) * (Number(parentTransform?.scale?.x ?? 1) || 1),
+    y: (Number(localPosition?.y ?? 0) || 0) * (Number(parentTransform?.scale?.y ?? 1) || 1),
+    z: (Number(localPosition?.z ?? 0) || 0) * (Number(parentTransform?.scale?.z ?? 1) || 1),
+  };
+  const rotated = rotatePrivatePointByEuler(scaled, parentTransform.rotation);
+  return {
+    x: rotated.x + (Number(parentTransform?.position?.x ?? 0) || 0),
+    y: rotated.y + (Number(parentTransform?.position?.y ?? 0) || 0),
+    z: rotated.z + (Number(parentTransform?.position?.z ?? 0) || 0),
+  };
+}
+
+function getRuntimePrefabTransformState(sceneInstance = {}, runtimeInstance = null) {
+  const motionSample = runtimeInstance
+    ? getPrivatePrefabInstanceMotionSample(runtimeInstance, { worldSpace: true })
+    : null;
+  return {
+    id: String(runtimeInstance?.id ?? sceneInstance?.id ?? "").trim(),
+    entry: runtimeInstance ?? sceneInstance,
+    position: motionSample?.position ?? {
+      x: Number(sceneInstance?.position?.x ?? 0) || 0,
+      y: Number(sceneInstance?.position?.y ?? 0) || 0,
+      z: Number(sceneInstance?.position?.z ?? 0) || 0,
+    },
+    rotation: motionSample?.rotation ?? {
+      x: Number(sceneInstance?.rotation?.x ?? 0) || 0,
+      y: Number(sceneInstance?.rotation?.y ?? 0) || 0,
+      z: Number(sceneInstance?.rotation?.z ?? 0) || 0,
+    },
+    scale: motionSample?.scale ?? {
+      x: Number(sceneInstance?.scale?.x ?? 1) || 1,
+      y: Number(sceneInstance?.scale?.y ?? 1) || 1,
+      z: Number(sceneInstance?.scale?.z ?? 1) || 1,
+    },
+    velocity: motionSample?.velocity ?? {
+      x: Number(runtimeInstance?.velocity?.x ?? 0) || 0,
+      y: Number(runtimeInstance?.velocity?.y ?? 0) || 0,
+      z: Number(runtimeInstance?.velocity?.z ?? 0) || 0,
+    },
+  };
+}
+
+function visitRenderablePrefabCollisionEntries(sceneDoc = null, runtime = null, visitor = () => {}, options = {}) {
+  if (!sceneDoc || typeof visitor !== "function") {
+    return;
+  }
+  const runtimeSceneId = String(runtime?.active_scene_id ?? "").trim();
+  const selectedSceneId = String(state.selectedSceneId ?? "").trim();
+  const runtimeMatchesSelectedScene = Boolean(runtime && runtimeSceneId && runtimeSceneId === selectedSceneId);
+  const runtimePrefabById = new Map((runtime?.prefab_instances ?? []).map((entry) => [String(entry?.id ?? "").trim(), entry]));
+  const recursePrefabDocument = (prefabDoc = {}, parentState, visitedPrefabIds = new Set()) => {
+    for (const voxel of prefabDoc.voxels ?? []) {
+      visitor({
+        kind: "voxel",
+        entry: {
+          ...voxel,
+          position: transformPrivatePrefabPosition(voxel.position, parentState),
+          rotation: addPrivateEuler3(voxel.rotation, parentState.rotation),
+          scale: multiplyPrivateScale3(voxel.scale ?? { x: 1, y: 1, z: 1 }, parentState.scale),
+        },
+        parent: parentState,
+        velocity: parentState.velocity,
+      });
+    }
+    for (const primitive of prefabDoc.primitives ?? []) {
+      visitor({
+        kind: "primitive",
+        entry: {
+          ...primitive,
+          position: transformPrivatePrefabPosition(primitive.position, parentState),
+          rotation: addPrivateEuler3(primitive.rotation, parentState.rotation),
+          scale: multiplyPrivateScale3(primitive.scale ?? { x: 1, y: 1, z: 1 }, parentState.scale),
+        },
+        parent: parentState,
+        velocity: parentState.velocity,
+      });
+    }
+    for (const model of prefabDoc.models ?? []) {
+      const scale = multiplyPrivateScale3(model.scale ?? { x: 1, y: 1, z: 1 }, parentState.scale);
+      const bounds = model.bounds ?? { x: 1, y: 1, z: 1 };
+      visitor({
+        kind: "model",
+        entry: {
+          ...model,
+          position: transformPrivatePrefabPosition(model.position, parentState),
+          rotation: addPrivateEuler3(model.rotation, parentState.rotation),
+          scale,
+          collider_scale: {
+            x: (Number(scale?.x ?? 1) || 1) * (Number(bounds?.x ?? 1) || 1),
+            y: (Number(scale?.y ?? 1) || 1) * (Number(bounds?.y ?? 1) || 1),
+            z: (Number(scale?.z ?? 1) || 1) * (Number(bounds?.z ?? 1) || 1),
+          },
+        },
+        parent: parentState,
+        velocity: parentState.velocity,
+      });
+    }
+    for (const nestedInstance of prefabDoc.prefab_instances ?? []) {
+      if (nestedInstance?.overrides?.visible === false) {
+        continue;
+      }
+      const nestedPrefabId = String(nestedInstance?.prefab_id ?? "").trim();
+      if (!nestedPrefabId || visitedPrefabIds.has(nestedPrefabId)) {
+        continue;
+      }
+      const nestedPrefab = getSelectedPrefabEntry(nestedPrefabId);
+      if (!nestedPrefab?.prefab_doc) {
+        continue;
+      }
+      const nestedParentState = {
+        id: parentState.id,
+        entry: parentState.entry,
+        position: transformPrivatePrefabPosition(nestedInstance.position, parentState),
+        rotation: addPrivateEuler3(nestedInstance.rotation, parentState.rotation),
+        scale: multiplyPrivateScale3(nestedInstance.scale ?? { x: 1, y: 1, z: 1 }, parentState.scale),
+        velocity: parentState.velocity,
+      };
+      recursePrefabDocument(
+        nestedPrefab.prefab_doc ?? {},
+        nestedParentState,
+        new Set([...visitedPrefabIds, nestedPrefabId]),
+      );
+    }
+  };
+  for (const sceneInstance of sceneDoc.prefab_instances ?? []) {
+    const prefabId = String(sceneInstance?.prefab_id ?? "").trim();
+    if (!prefabId) {
+      continue;
+    }
+    const prefab = getSelectedPrefabEntry(prefabId);
+    if (!prefab?.prefab_doc) {
+      continue;
+    }
+    const runtimeInstance = runtimeMatchesSelectedScene
+      ? (runtimePrefabById.get(String(sceneInstance?.id ?? "").trim()) ?? null)
+      : null;
+    const parentState = getRuntimePrefabTransformState(sceneInstance, runtimeInstance);
+    recursePrefabDocument(prefab.prefab_doc ?? {}, parentState, new Set([prefabId]));
+  }
+}
+
+function getPrefabCarryPlatformStateById(sceneDoc = null, runtime = null, prefabInstanceId = "") {
+  const resolvedPrefabInstanceId = String(prefabInstanceId ?? "").trim();
+  if (!sceneDoc || !runtime || !resolvedPrefabInstanceId) {
+    return null;
+  }
+  const runtimeEntry = (runtime.prefab_instances ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedPrefabInstanceId) ?? null;
+  const sceneEntry = (sceneDoc.prefab_instances ?? []).find((entry) => String(entry?.id ?? "").trim() === resolvedPrefabInstanceId) ?? null;
+  if (!runtimeEntry && !sceneEntry) {
+    return null;
+  }
+  const parentState = getRuntimePrefabTransformState(sceneEntry ?? runtimeEntry, runtimeEntry);
+  let aggregateHalf = null;
+  let highestSurfaceY = Number.NEGATIVE_INFINITY;
+  visitRenderablePrefabCollisionEntries(sceneDoc, runtime, (candidate) => {
+    if (String(candidate?.parent?.id ?? "").trim() !== resolvedPrefabInstanceId) {
+      return;
+    }
+    if (
+      (candidate.kind !== "primitive" && candidate.kind !== "model")
+      || candidate.entry?.physics?.carry_riders !== true
+      || !isPrivateCollisionModeRigid(candidate.entry?.rigid_mode)
+    ) {
+      return;
+    }
+    const size = getPrivateCollisionEntrySize(candidate.kind, candidate.entry);
+    const envelope = getPrivateCollisionSupportEnvelope(candidate.entry.position, size, candidate.entry.rotation);
+    highestSurfaceY = Math.max(highestSurfaceY, Number(envelope.surfaceY ?? Number.NEGATIVE_INFINITY));
+    const offsetHalf = {
+      x: Math.abs((Number(envelope.position?.x ?? 0) || 0) - parentState.position.x) + envelope.half.x,
+      y: Math.abs((Number(envelope.position?.y ?? 0) || 0) - parentState.position.y) + envelope.half.y,
+      z: Math.abs((Number(envelope.position?.z ?? 0) || 0) - parentState.position.z) + envelope.half.z,
+    };
+    aggregateHalf = aggregateHalf
+      ? {
+          x: Math.max(aggregateHalf.x, offsetHalf.x),
+          y: Math.max(aggregateHalf.y, offsetHalf.y),
+          z: Math.max(aggregateHalf.z, offsetHalf.z),
+        }
+      : offsetHalf;
+  });
+  if (!aggregateHalf) {
+    return null;
+  }
+  return {
+    entry: parentState.entry,
+    entryId: resolvedPrefabInstanceId,
+    position: parentState.position,
+    velocity: parentState.velocity,
+    size: {
+      x: aggregateHalf.x * 2,
+      y: aggregateHalf.y * 2,
+      z: aggregateHalf.z * 2,
+    },
+    half: aggregateHalf,
+    surfaceY: Number.isFinite(highestSurfaceY) ? highestSurfaceY : parentState.position.y + aggregateHalf.y,
   };
 }
 
@@ -11496,6 +11829,30 @@ function getPrivatePossessedSupportSurfaces(prediction, desiredPosition = predic
     }, probe);
   }
 
+  visitRenderablePrefabCollisionEntries(sceneDoc, runtime, ({ kind, entry, parent, velocity }) => {
+    if (kind === "voxel") {
+      addPrivateSupportSurface(surfaces, {
+        position: entry.position,
+        size: getPrivateCollisionEntrySize("voxel", entry),
+        rotation: entry.rotation,
+      }, probe);
+      return;
+    }
+    if ((kind !== "primitive" && kind !== "model") || (entry?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(entry?.rigid_mode))) {
+      return;
+    }
+    addPrivateSupportSurface(surfaces, {
+      position: entry.position,
+      size: getPrivateCollisionEntrySize(kind, entry),
+      rotation: entry.rotation,
+      carry_riders: entry?.physics?.carry_riders === true,
+      velocity,
+      anchorPosition: parent?.position ?? entry.position,
+      entryId: parent?.id ?? entry.id,
+      entry: parent?.entry ?? entry,
+    }, probe);
+  });
+
   return surfaces;
 }
 
@@ -11518,6 +11875,12 @@ function getLocalCarryPlatformSupport(playerLike = null) {
     y: Number(playerLike.position?.y ?? 0) || 0,
     z: Number(playerLike.position?.z ?? 0) || 0,
   };
+  let sceneDoc = null;
+  try {
+    sceneDoc = getRenderableSceneDoc();
+  } catch (_error) {
+    sceneDoc = null;
+  }
   const playerBottom = playerPosition.y - playerHalf.y;
   let bestSupport = null;
   for (const entry of runtime.dynamic_objects ?? []) {
@@ -11578,6 +11941,59 @@ function getLocalCarryPlatformSupport(playerLike = null) {
       };
     }
   }
+  visitRenderablePrefabCollisionEntries(sceneDoc, runtime, ({ kind, entry, parent, velocity }) => {
+    if (
+      (kind !== "primitive" && kind !== "model")
+      || entry?.physics?.carry_riders !== true
+      || !isPrivateCollisionModeRigid(entry?.rigid_mode)
+    ) {
+      return;
+    }
+    const size = getPrivateCollisionEntrySize(kind, entry);
+    const envelope = getPrivateCollisionSupportEnvelope(entry.position, size, entry.rotation);
+    const supportSample = samplePrivateCollisionSupportSurface(
+      entry.position,
+      size,
+      entry.rotation,
+      playerPosition,
+      {
+        x: playerHalf.x + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER,
+        z: playerHalf.z + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER,
+      },
+    );
+    if (!supportSample) {
+      return;
+    }
+    const platformTop = supportSample.surfaceY;
+    const verticalGap = playerBottom - platformTop;
+    const verticalTolerance = playerLike?.onGround === true
+      ? getPrivatePlatformCarryRecoveryTolerance(playerHalf, envelope.half)
+      : getPrivatePlatformCarryVerticalTolerance(playerHalf, envelope.half);
+    if (verticalGap < -verticalTolerance || verticalGap > verticalTolerance) {
+      return;
+    }
+    const limitX = envelope.half.x + playerHalf.x + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER;
+    const limitZ = envelope.half.z + playerHalf.z + PRIVATE_PLATFORM_CARRY_HORIZONTAL_BUFFER;
+    if (
+      Math.abs(playerPosition.x - envelope.position.x) > limitX
+      || Math.abs(playerPosition.z - envelope.position.z) > limitZ
+    ) {
+      return;
+    }
+    const absoluteGap = Math.abs(verticalGap);
+    if (!bestSupport || absoluteGap < bestSupport.absoluteGap) {
+      bestSupport = {
+        entry: parent?.entry ?? entry,
+        entryId: parent?.id ?? entry.id,
+        position: parent?.position ?? entry.position,
+        velocity: velocity ?? { x: 0, y: 0, z: 0 },
+        surfaceY: platformTop,
+        supportedPlayerY: platformTop + playerHalf.y,
+        verticalGap,
+        absoluteGap,
+      };
+    }
+  });
   return bestSupport;
 }
 
@@ -11590,6 +12006,12 @@ function getLocalCarryPlatformStateById(platformId = "") {
   if (!runtime) {
     return null;
   }
+  let sceneDoc = null;
+  try {
+    sceneDoc = getRenderableSceneDoc();
+  } catch (_error) {
+    sceneDoc = null;
+  }
   const entry = (runtime.dynamic_objects ?? []).find((candidate) => {
     if (candidate?.carry_riders !== true) {
       return false;
@@ -11597,7 +12019,7 @@ function getLocalCarryPlatformStateById(platformId = "") {
     return String(candidate?.id ?? "").trim() === resolvedPlatformId;
   }) ?? null;
   if (!entry) {
-    return null;
+    return getPrefabCarryPlatformStateById(sceneDoc, runtime, resolvedPlatformId);
   }
   const entryId = String(entry?.id ?? "").trim();
   const kind = entry?.entity_kind === "model" ? "model" : "primitive";
@@ -11767,7 +12189,7 @@ function getLocalPossessedGroundSupport(prediction = null, options = {}) {
       carrySupport = {
         entry: supportResult.blocker.entry ?? null,
         entryId: String(supportResult.blocker.entryId ?? "").trim(),
-        position: supportResult.blocker.position ?? null,
+        position: supportResult.blocker.anchorPosition ?? supportResult.blocker.position ?? null,
         velocity: supportResult.blocker.velocity ?? null,
         surfaceY: Number(supportResult.surfaceY),
         supportedPlayerY: groundY,
@@ -11878,7 +12300,7 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
           ? {
               entry: metadata?.entry ?? null,
               entryId: String(metadata?.entryId ?? "").trim(),
-              position: {
+              position: metadata?.anchorPosition ?? {
                 x: envelope.position.x,
                 y: envelope.position.y,
                 z: envelope.position.z,
@@ -11969,6 +12391,23 @@ function getPrivatePlayerProjectedShadowSurface(playerLike = null, options = {})
       entry: model,
     });
   }
+
+  visitRenderablePrefabCollisionEntries(sceneDoc, runtime, ({ kind, entry, parent, velocity }) => {
+    if (kind === "voxel") {
+      considerSurface(entry.position, getPrivateCollisionEntrySize("voxel", entry), entry.rotation);
+      return;
+    }
+    if ((kind !== "primitive" && kind !== "model") || (entry?.physics?.carry_riders !== true && !isPrivateCollisionModeRigid(entry?.rigid_mode))) {
+      return;
+    }
+    considerSurface(entry.position, getPrivateCollisionEntrySize(kind, entry), entry.rotation, {
+      carry_riders: entry?.physics?.carry_riders === true,
+      velocity: velocity ?? { x: 0, y: 0, z: 0 },
+      entryId: parent?.id ?? entry.id,
+      entry: parent?.entry ?? entry,
+      anchorPosition: parent?.position ?? entry.position,
+    });
+  });
 
   if (!bestSurface && allowCurrentSurfaceFallback && playerLike?.onGround === true) {
     bestSurface = {
@@ -12075,6 +12514,24 @@ function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = pred
         rotation: entry.rotation,
       }, probe);
     }
+    visitRenderablePrefabCollisionEntries(sceneDoc, runtime, ({ kind, entry }) => {
+      if (kind === "voxel") {
+        addPrivateCollisionBlocker(blockers, {
+          position: entry.position,
+          size: getPrivateCollisionEntrySize("voxel", entry),
+          rotation: entry.rotation,
+        }, probe);
+        return;
+      }
+      if ((kind !== "primitive" && kind !== "model") || !isPrivateCollisionModeRigid(entry?.rigid_mode) || entry?.physics?.carry_riders === true) {
+        return;
+      }
+      addPrivateCollisionBlocker(blockers, {
+        position: entry.position,
+        size: getPrivateCollisionEntrySize(kind, entry),
+        rotation: entry.rotation,
+      }, probe);
+    });
     return blockers;
   }
 
@@ -12110,6 +12567,24 @@ function getPrivatePossessedCollisionBlockers(prediction, desiredPosition = pred
       rotation: player.rotation,
     }, probe);
   }
+  visitRenderablePrefabCollisionEntries(sceneDoc, runtime, ({ kind, entry }) => {
+    if (kind === "voxel") {
+      addPrivateCollisionBlocker(blockers, {
+        position: entry.position,
+        size: getPrivateCollisionEntrySize("voxel", entry),
+        rotation: entry.rotation,
+      }, probe);
+      return;
+    }
+    if ((kind !== "primitive" && kind !== "model") || !isPrivateCollisionModeRigid(entry?.rigid_mode) || entry?.physics?.carry_riders === true) {
+      return;
+    }
+    addPrivateCollisionBlocker(blockers, {
+      position: entry.position,
+      size: getPrivateCollisionEntrySize(kind, entry),
+      rotation: entry.rotation,
+    }, probe);
+  });
   return blockers;
 }
 
@@ -12162,6 +12637,27 @@ function getPrivateDynamicObjectCollisionBlockers(objectId = "", objectSize = { 
         rotation: entry.rotation,
       }, probe);
     }
+    visitRenderablePrefabCollisionEntries(sceneDoc, runtime, ({ kind, entry, parent }) => {
+      if (kind === "voxel") {
+        addPrivateCollisionBlocker(blockers, {
+          position: entry.position,
+          size: getPrivateCollisionEntrySize("voxel", entry),
+          rotation: entry.rotation,
+        }, probe);
+        return;
+      }
+      if ((kind !== "primitive" && kind !== "model") || !isPrivateCollisionModeRigid(entry?.rigid_mode) || entry?.physics?.carry_riders === true) {
+        return;
+      }
+      if (String(parent?.id ?? "").trim() === resolvedObjectId) {
+        return;
+      }
+      addPrivateCollisionBlocker(blockers, {
+        position: entry.position,
+        size: getPrivateCollisionEntrySize(kind, entry),
+        rotation: entry.rotation,
+      }, probe);
+    });
     return blockers;
   }
 
@@ -12197,6 +12693,27 @@ function getPrivateDynamicObjectCollisionBlockers(objectId = "", objectSize = { 
       rotation: player.rotation,
     }, probe);
   }
+  visitRenderablePrefabCollisionEntries(sceneDoc, runtime, ({ kind, entry, parent }) => {
+    if (kind === "voxel") {
+      addPrivateCollisionBlocker(blockers, {
+        position: entry.position,
+        size: getPrivateCollisionEntrySize("voxel", entry),
+        rotation: entry.rotation,
+      }, probe);
+      return;
+    }
+    if ((kind !== "primitive" && kind !== "model") || !isPrivateCollisionModeRigid(entry?.rigid_mode) || entry?.physics?.carry_riders === true) {
+      return;
+    }
+    if (String(parent?.id ?? "").trim() === resolvedObjectId) {
+      return;
+    }
+    addPrivateCollisionBlocker(blockers, {
+      position: entry.position,
+      size: getPrivateCollisionEntrySize(kind, entry),
+      rotation: entry.rotation,
+    }, probe);
+  });
   return blockers;
 }
 
@@ -13672,7 +14189,7 @@ function renderAssetsLibrary() {
 
 function buildTargetOptions(sceneDoc, selectedValue = "") {
   const options = [];
-  for (const config of ENTITY_COLLECTIONS.filter((entry) => entry.kind !== "particle" && entry.kind !== "prefab_instance")) {
+  for (const config of ENTITY_COLLECTIONS.filter((entry) => entry.kind !== "particle")) {
     for (const entry of getEntityArray(sceneDoc, config.key)) {
       options.push({
         value: entry.id,
@@ -14100,16 +14617,17 @@ function renderEntityInspector(sceneDoc, selected = null) {
     elements.entityEditor.innerHTML = "";
     elements.removeEntity.disabled = true;
     elements.convertPrefab.disabled = true;
+    elements.convertPrefab.textContent = getConvertPrefabButtonLabel([]);
     return;
   }
   if (selectedEntities.length > 1) {
     elements.selectionLabel.textContent = `${selectedEntities.length} selected`;
     elements.entityEmpty.hidden = true;
     elements.removeEntity.disabled = !isEditor() || state.mode !== "build";
-    elements.convertPrefab.disabled = true;
+    elements.convertPrefab.disabled = !isEditor() || state.mode !== "build" || !canConvertSelectionToGroupPrefab(selectedEntities);
+    elements.convertPrefab.textContent = getConvertPrefabButtonLabel(selectedEntities);
     elements.entityEditor.innerHTML = `
-      <p class="pw-inspector-note">This group moves together. Hold Shift to add more, drag it while Shift is held, or hold Q for axis grabbers.</p>
-      ${buildPersistentGroupInspectorActions(sceneDoc, selectedEntities)}
+      <p class="pw-inspector-note">This selection already moves together in Build mode. Use Create Group Prefab when you want one scriptable parent object with its own id, position, rotation, and scale.</p>
       <div class="pw-builder-group">
         <div class="pw-builder-group__header">
           <strong>Selection</strong>
@@ -14131,7 +14649,8 @@ function renderEntityInspector(sceneDoc, selected = null) {
   elements.selectionLabel.textContent = getDisplayNameForEntity(kind, entry);
   elements.entityEmpty.hidden = true;
   elements.removeEntity.disabled = !isEditor() || state.mode !== "build";
-  elements.convertPrefab.disabled = !isEditor() || state.mode !== "build" || kind === "particle" || kind === "prefab_instance";
+  elements.convertPrefab.disabled = !isEditor() || state.mode !== "build" || !canConvertSelectionToGroupPrefab(selectedEntities);
+  elements.convertPrefab.textContent = getConvertPrefabButtonLabel(selectedEntities);
 
   if (kind === "voxel") {
     elements.entityEditor.innerHTML = `
@@ -14144,12 +14663,6 @@ function renderEntityInspector(sceneDoc, selected = null) {
           <label>
             <span>Shape</span>
             <input type="text" data-entity-field="shape_preset" data-value-type="text" value="${htmlEscape(entry.shape_preset || "cube")}" />
-          </label>
-        </div>
-        <div>
-          <label>
-            <span>Group</span>
-            <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" placeholder="optional group name" />
           </label>
         </div>
       </div>
@@ -14215,12 +14728,6 @@ function renderEntityInspector(sceneDoc, selected = null) {
             <input type="number" step="0.1" data-entity-field="physics.mass" data-value-type="number" value="${htmlEscape(entry.physics?.mass ?? 1)}" />
           </label>
         </div>
-        <div>
-          <label>
-            <span>Group</span>
-            <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" placeholder="optional group name" />
-          </label>
-        </div>
       </div>
       <div class="pw-checkbox">
         <input type="checkbox" data-entity-field="physics.ignore_gravity" data-value-type="checkbox" ${entry.physics?.ignore_gravity === true ? "checked" : ""} />
@@ -14264,17 +14771,9 @@ function renderEntityInspector(sceneDoc, selected = null) {
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale || { x: 4, y: 2.25, z: 0.1 })}</div>
-      <div class="pw-inspector-grid pw-inspector-grid--2">
-        <div>
-          <label>
-            <span>Group</span>
-            <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" placeholder="optional group name" />
-          </label>
-        </div>
-        <div class="pw-checkbox">
-          <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible === true ? "checked" : ""} />
-          <span>Invisible in play</span>
-        </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible === true ? "checked" : ""} />
+        <span>Invisible in play</span>
       </div>
     `;
     return;
@@ -14299,12 +14798,6 @@ function renderEntityInspector(sceneDoc, selected = null) {
           <label>
             <span>Rigid Mode</span>
             <select data-entity-field="rigid_mode" data-value-type="text">${buildOptions(["rigid", "ghost"], entry.rigid_mode || "rigid")}</select>
-          </label>
-        </div>
-        <div>
-          <label>
-            <span>Group</span>
-            <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" placeholder="optional group name" />
           </label>
         </div>
       </div>
@@ -14499,12 +14992,6 @@ function renderEntityInspector(sceneDoc, selected = null) {
           <label>
             <span>Scale</span>
             <input type="number" step="0.1" data-entity-field="scale" data-value-type="number" value="${htmlEscape(entry.scale ?? 1)}" />
-          </label>
-        </div>
-        <div>
-          <label>
-            <span>Group</span>
-            <input type="text" data-entity-field="group_id" data-value-type="text" value="${htmlEscape(entry.group_id || "")}" />
           </label>
         </div>
       </div>
@@ -15651,9 +16138,14 @@ function renderSelectedWorld() {
     elements.removeEntity.disabled = !hasWorld || !canEdit || state.mode !== "build" || !hasBuilderSelection();
   }
   if (elements.convertPrefab) {
-    const selectionKind = state.builderSelection?.kind || "";
-    const hasSingleSelection = getBuilderSelectionRefs().length === 1;
-    elements.convertPrefab.disabled = !hasWorld || !canEdit || state.mode !== "build" || !hasSingleSelection || selectionKind === "particle" || selectionKind === "prefab_instance";
+    let selectedEntities = [];
+    try {
+      selectedEntities = getSelectedEntities(parseSceneTextarea());
+    } catch (_error) {
+      selectedEntities = [];
+    }
+    elements.convertPrefab.disabled = !hasWorld || !canEdit || state.mode !== "build" || !canConvertSelectionToGroupPrefab(selectedEntities);
+    elements.convertPrefab.textContent = getConvertPrefabButtonLabel(selectedEntities);
   }
   if (elements.placePrefab) {
     elements.placePrefab.disabled = !hasWorld || !canEdit || state.mode !== "build" || !state.selectedPrefabId;
@@ -20700,6 +21192,8 @@ function getRuntimeTransformMaps() {
     return {
       dynamicById: new Map(),
       dynamicObjects: [],
+      prefabById: new Map(),
+      prefabInstances: [],
       playerById: new Map(),
       players: [],
     };
@@ -20707,6 +21201,8 @@ function getRuntimeTransformMaps() {
   return {
     dynamicById: new Map((runtime.dynamic_objects ?? []).map((entry) => [entry.id, entry])),
     dynamicObjects: runtime.dynamic_objects ?? [],
+    prefabById: new Map((runtime.prefab_instances ?? []).map((entry) => [entry.id, entry])),
+    prefabInstances: runtime.prefab_instances ?? [],
     playerById: new Map((runtime.players ?? []).map((entry) => [entry.id, entry])),
     players: runtime.players ?? [],
   };
@@ -21008,6 +21504,44 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
   }
 }
 
+function applyPrefabInstanceRuntimeAppearance(group, runtimeEntry = {}) {
+  if (!group) {
+    return;
+  }
+  applyRenderableVisibility(group, {
+    runtimeVisible: runtimeEntry?.visible !== false,
+  });
+  const runtimeMaterial = runtimeEntry?.material_override ?? null;
+  const runtimeMaterialSignature = runtimeMaterial
+    ? [
+      String(runtimeMaterial.color ?? ""),
+      String(runtimeMaterial.texture_asset_id ?? ""),
+      Number(runtimeMaterial.emissive_intensity ?? runtimeMaterial.emissiveIntensity ?? 0).toFixed(4),
+    ].join("|")
+    : "";
+  if (!runtimeMaterial || group.userData.privateWorldPrefabRuntimeMaterialSignature === runtimeMaterialSignature) {
+    return;
+  }
+  group.traverse((child) => {
+    for (const material of getObjectMaterials(child)) {
+      if (runtimeMaterial.color) {
+        material.color?.set?.(runtimeMaterial.color);
+      }
+      if (runtimeMaterial.texture_asset_id) {
+        void applyTextureAssetMapsToMaterial(material, runtimeMaterial.texture_asset_id, group.scale ?? { x: 1, y: 1, z: 1 });
+      }
+      if (material.emissiveIntensity !== undefined) {
+        material.emissiveIntensity = Math.max(
+          Number(material.emissiveIntensity || 0),
+          Math.max(0, Number(runtimeMaterial.emissive_intensity ?? runtimeMaterial.emissiveIntensity ?? 0) || 0),
+        );
+      }
+      material.needsUpdate = true;
+    }
+  });
+  group.userData.privateWorldPrefabRuntimeMaterialSignature = runtimeMaterialSignature;
+}
+
 function advanceRuntimeVisuals(preview, deltaSeconds) {
   if (!preview?.entityMeshes?.size) {
     return;
@@ -21176,9 +21710,10 @@ function syncPreviewRuntimeSnapshot(snapshot) {
     return false;
   }
   const dynamicObjects = Array.isArray(snapshot.dynamic_objects) ? snapshot.dynamic_objects : [];
+  const prefabInstances = Array.isArray(snapshot.prefab_instances) ? snapshot.prefab_instances : [];
   const players = Array.isArray(snapshot.players) ? snapshot.players : [];
   const localPlayerId = getLocallyControlledPlayerEntityId();
-  for (const entry of [...dynamicObjects, ...players]) {
+  for (const entry of [...dynamicObjects, ...prefabInstances, ...players]) {
     if (!preview.entityMeshes.has(entry.id)) {
       return false;
     }
@@ -21188,6 +21723,15 @@ function syncPreviewRuntimeSnapshot(snapshot) {
       leadSeconds: 0,
       motionMode: "dynamic_continuous",
     });
+  }
+  for (const runtimePrefabInstance of prefabInstances) {
+    const mesh = preview.entityMeshes.get(runtimePrefabInstance.id);
+    applyRuntimeEntryToMesh(mesh, runtimePrefabInstance, {
+      leadSeconds: 0,
+      motionMode: "target_lerp",
+      fallbackScale: runtimePrefabInstance.scale ?? { x: 1, y: 1, z: 1 },
+    });
+    applyPrefabInstanceRuntimeAppearance(mesh, runtimePrefabInstance);
   }
   for (const runtimePlayer of players) {
     if (localPlayerId && runtimePlayer.id === localPlayerId) {
@@ -22138,32 +22682,40 @@ function updatePreviewFromSelection(options = {}) {
 
   for (const prefabInstance of sceneDoc.prefab_instances ?? []) {
     const prefab = getSelectedPrefabEntry(prefabInstance.prefab_id);
-    if (!prefab || prefabInstance.overrides?.visible === false) {
+    if (!prefab) {
       continue;
     }
+    const runtimePrefabInstance = runtimeTransforms.prefabById.get(String(prefabInstance.id ?? "").trim()) ?? null;
+    const resolvedPrefabPosition = runtimePrefabInstance?.position ?? prefabInstance.position ?? { x: 0, y: 0, z: 0 };
+    const resolvedPrefabRotation = runtimePrefabInstance?.rotation ?? prefabInstance.rotation ?? { x: 0, y: 0, z: 0 };
+    const resolvedPrefabScale = runtimePrefabInstance?.scale ?? prefabInstance.scale ?? { x: 1, y: 1, z: 1 };
     const group = new THREE.Group();
     group.position.set(
-      prefabInstance.position?.x || 0,
-      prefabInstance.position?.y || 0,
-      prefabInstance.position?.z || 0,
+      resolvedPrefabPosition?.x || 0,
+      resolvedPrefabPosition?.y || 0,
+      resolvedPrefabPosition?.z || 0,
     );
     group.rotation.set(
-      prefabInstance.rotation?.x || 0,
-      prefabInstance.rotation?.y || 0,
-      prefabInstance.rotation?.z || 0,
+      resolvedPrefabRotation?.x || 0,
+      resolvedPrefabRotation?.y || 0,
+      resolvedPrefabRotation?.z || 0,
     );
     group.scale.set(
-      prefabInstance.scale?.x || 1,
-      prefabInstance.scale?.y || 1,
-      prefabInstance.scale?.z || 1,
+      resolvedPrefabScale?.x || 1,
+      resolvedPrefabScale?.y || 1,
+      resolvedPrefabScale?.z || 1,
     );
     preview.root.add(group);
     preview.entityMeshes.set(prefabInstance.id, group);
     const rendered = renderPrefabDocument(group, prefab.prefab_doc ?? {}, {
       metadata: { id: prefabInstance.id, kind: "prefab_instance" },
       selected: isSelected("prefab_instance", prefabInstance.id),
-      materialOverride: prefabInstance.overrides?.material ?? null,
+      materialOverride: runtimePrefabInstance?.material_override ?? prefabInstance.overrides?.material ?? null,
       visitedPrefabIds: new Set([String(prefab.id ?? "").trim()]),
+    });
+    applyPrefabInstanceRuntimeAppearance(group, runtimePrefabInstance ?? {
+      visible: state.mode === "play" ? prefabInstance.overrides?.visible !== false : true,
+      material_override: prefabInstance.overrides?.material ?? null,
     });
     if (!rendered) {
       const fallbackBounds = getPrefabDocBounds(prefab.prefab_doc ?? {});
@@ -23737,42 +24289,93 @@ function removeSelectedEntity() {
   });
 }
 
-function buildPrefabDocFromSelection(selection) {
-  const localEntry = deepClone(selection.entry);
-  const anchorPosition = deepClone(localEntry.position ?? { x: 0, y: 0, z: 0 });
-  const anchorRotation = deepClone(localEntry.rotation ?? { x: 0, y: 0, z: 0 });
-  if (localEntry.position) {
-    localEntry.position = { x: 0, y: 0, z: 0 };
+function getGroupPrefabAnchorPosition(selectedEntities = []) {
+  const selectionRefs = normalizeEntityRefs(
+    selectedEntities.map((entry) => ({ kind: entry.kind, id: entry.entry?.id })),
+  );
+  const selectionFrame = getOverlayFrameForRefs(state.preview, selectionRefs);
+  if (selectionFrame?.center) {
+    return {
+      x: roundPrivateValue(selectionFrame.center.x),
+      y: roundPrivateValue(selectionFrame.center.y),
+      z: roundPrivateValue(selectionFrame.center.z),
+    };
   }
-  if (localEntry.rotation) {
-    localEntry.rotation = { x: 0, y: 0, z: 0 };
+  const positions = selectedEntities
+    .map((entry) => entry?.entry?.position)
+    .filter(Boolean);
+  if (!positions.length) {
+    return { x: 0, y: 0, z: 0 };
   }
-  const key = selection.key;
+  const summed = positions.reduce((accumulator, position) => ({
+    x: accumulator.x + (Number(position?.x ?? 0) || 0),
+    y: accumulator.y + (Number(position?.y ?? 0) || 0),
+    z: accumulator.z + (Number(position?.z ?? 0) || 0),
+  }), { x: 0, y: 0, z: 0 });
+  return {
+    x: roundPrivateValue(summed.x / positions.length),
+    y: roundPrivateValue(summed.y / positions.length),
+    z: roundPrivateValue(summed.z / positions.length),
+  };
+}
+
+function buildGroupPrefabBaseName(selectedEntities = []) {
+  if (!selectedEntities.length) {
+    return "Group";
+  }
+  if (selectedEntities.length === 1) {
+    const selected = selectedEntities[0];
+    return getDisplayNameForEntity(selected.kind, selected.entry);
+  }
+  const primary = selectedEntities[selectedEntities.length - 1];
+  const primaryName = getDisplayNameForEntity(primary.kind, primary.entry);
+  return primaryName ? `${primaryName} Group` : `Group ${selectedEntities.length}`;
+}
+
+function buildPrefabDocFromSelection(selectedEntities = []) {
+  const normalizedSelection = Array.isArray(selectedEntities)
+    ? selectedEntities.filter(Boolean)
+    : (selectedEntities ? [selectedEntities] : []);
+  const anchorPosition = getGroupPrefabAnchorPosition(normalizedSelection);
+  const prefabDoc = {
+    settings: {
+      gravity: { x: 0, y: -9.8, z: 0 },
+      camera_mode: "third_person",
+      start_on_ready: true,
+      skybox: "blank",
+      ambient_light: "even",
+    },
+    voxels: [],
+    primitives: [],
+    panels: [],
+    models: [],
+    screens: [],
+    players: [],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    prefab_instances: [],
+    particles: [],
+    rules: [],
+    script_dsl: "",
+  };
+  for (const selection of normalizedSelection) {
+    const localEntry = deepClone(selection.entry);
+    if (localEntry.position) {
+      localEntry.position = {
+        x: roundPrivateValue((Number(localEntry.position?.x ?? 0) || 0) - anchorPosition.x),
+        y: roundPrivateValue((Number(localEntry.position?.y ?? 0) || 0) - anchorPosition.y),
+        z: roundPrivateValue((Number(localEntry.position?.z ?? 0) || 0) - anchorPosition.z),
+      };
+    }
+    if ("group_id" in localEntry) {
+      delete localEntry.group_id;
+    }
+    prefabDoc[selection.key].push(localEntry);
+  }
   return {
     anchorPosition,
-    anchorRotation,
-    prefabDoc: {
-      settings: {
-        gravity: { x: 0, y: -9.8, z: 0 },
-        camera_mode: "third_person",
-        start_on_ready: true,
-        skybox: "blank",
-        ambient_light: "even",
-      },
-      voxels: key === "voxels" ? [localEntry] : [],
-      primitives: key === "primitives" ? [localEntry] : [],
-      panels: key === "panels" ? [localEntry] : [],
-      models: key === "models" ? [localEntry] : [],
-      screens: key === "screens" ? [localEntry] : [],
-      players: key === "players" ? [localEntry] : [],
-      texts: key === "texts" ? [localEntry] : [],
-      trigger_zones: key === "trigger_zones" ? [localEntry] : [],
-      prefabs: [],
-      prefab_instances: [],
-      particles: key === "particles" ? [localEntry] : [],
-      rules: [],
-      script_dsl: "",
-    },
+    prefabDoc,
   };
 }
 
@@ -23780,16 +24383,14 @@ async function convertSelectionToPrefab() {
   if (!state.selectedWorld || !isEditor()) {
     return;
   }
-  if (getBuilderSelectionRefs().length !== 1) {
-    return;
-  }
   const sceneDoc = parseSceneTextarea();
-  const selected = getSelectedEntity(sceneDoc);
-  if (!selected || selected.kind === "particle" || selected.kind === "prefab_instance") {
+  const selectedEntities = getSelectedEntities(sceneDoc);
+  if (!canConvertSelectionToGroupPrefab(selectedEntities)) {
+    setStatus("Select voxels, objects, panels, models, screens, text, or triggers to create a group prefab.");
     return;
   }
-  const prefabBaseName = getDisplayNameForEntity(selected.kind, selected.entry);
-  const { anchorPosition, anchorRotation, prefabDoc } = buildPrefabDocFromSelection(selected);
+  const prefabBaseName = buildGroupPrefabBaseName(selectedEntities);
+  const { anchorPosition, prefabDoc } = buildPrefabDocFromSelection(selectedEntities);
   const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/prefabs`, {
     method: "POST",
     body: {
@@ -23800,19 +24401,26 @@ async function convertSelectionToPrefab() {
   });
   state.selectedWorld.prefabs = [...(state.selectedWorld.prefabs ?? []), payload.prefab];
   state.selectedPrefabId = payload.prefab.id;
-  mutateSceneDoc((nextSceneDoc) => {
-    const latestSelection = getSelectedEntity(nextSceneDoc);
-    if (!latestSelection) {
-      return;
+  const selectedIdsByKey = new Map();
+  for (const selection of selectedEntities) {
+    if (!selectedIdsByKey.has(selection.key)) {
+      selectedIdsByKey.set(selection.key, new Set());
     }
-    nextSceneDoc[latestSelection.key].splice(latestSelection.index, 1);
+    selectedIdsByKey.get(selection.key).add(selection.entry.id);
+  }
+  mutateSceneDoc((nextSceneDoc) => {
+    for (const [key, ids] of selectedIdsByKey.entries()) {
+      const entries = Array.isArray(nextSceneDoc?.[key]) ? nextSceneDoc[key] : [];
+      nextSceneDoc[key] = entries.filter((entry) => !ids.has(String(entry?.id ?? "").trim()));
+    }
     nextSceneDoc.prefab_instances = nextSceneDoc.prefab_instances || [];
+    const instanceId = `prefabinst_${slugToken(payload.prefab.name)}_${nextSceneDoc.prefab_instances.length + 1}`;
     nextSceneDoc.prefab_instances.push({
-      id: `prefabinst_${slugToken(payload.prefab.name)}_${nextSceneDoc.prefab_instances.length + 1}`,
+      id: instanceId,
       prefab_id: payload.prefab.id,
       label: prefabBaseName,
       position: anchorPosition,
-      rotation: anchorRotation,
+      rotation: { x: 0, y: 0, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
       overrides: {
         material: null,
@@ -23821,10 +24429,10 @@ async function convertSelectionToPrefab() {
     });
     writeBuilderSelection([{
       kind: "prefab_instance",
-      id: nextSceneDoc.prefab_instances[nextSceneDoc.prefab_instances.length - 1].id,
+      id: instanceId,
     }], {
       kind: "prefab_instance",
-      id: nextSceneDoc.prefab_instances[nextSceneDoc.prefab_instances.length - 1].id,
+      id: instanceId,
     });
   });
   pushEvent("prefab:created", payload.prefab.name);
