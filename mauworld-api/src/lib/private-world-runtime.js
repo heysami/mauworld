@@ -36,6 +36,7 @@ const PLATFORM_CARRY_VERTICAL_TOLERANCE = 0.24;
 const PLATFORM_CARRY_HORIZONTAL_BUFFER = 0.14;
 const MAX_DELTA_SECONDS = 0.08;
 const FLOOR_HALF_EXTENT = 4096;
+const SCRIPT_RUNTIME_REF_KEY = "__pw_script_ref";
 
 function nowIso() {
   return new Date().toISOString();
@@ -378,10 +379,10 @@ function applyDynamicObjectPose(runtime, entry, {
   const currentVelocity = body ? vec3(body.linvel(), entry.velocity) : vec3(entry.velocity);
   const currentRotation = body ? quaternionToEuler(body.rotation()) : vec3(entry.rotation);
   const currentAngularVelocity = body ? vec3(body.angvel(), entry.angular_velocity) : vec3(entry.angular_velocity);
-  const nextPosition = vec3(position, currentPosition);
-  const nextVelocity = vec3(velocity, currentVelocity);
-  const nextRotation = vec3(rotation, currentRotation);
-  const nextAngularVelocity = vec3(angularVelocity, currentAngularVelocity);
+  const nextPosition = position == null ? currentPosition : vec3(position, currentPosition);
+  const nextVelocity = velocity == null ? currentVelocity : vec3(velocity, currentVelocity);
+  const nextRotation = rotation == null ? currentRotation : vec3(rotation, currentRotation);
+  const nextAngularVelocity = angularVelocity == null ? currentAngularVelocity : vec3(angularVelocity, currentAngularVelocity);
   entry.position = nextPosition;
   entry.velocity = nextVelocity;
   entry.rotation = nextRotation;
@@ -952,6 +953,1049 @@ function applyPrefabInstancePose(runtime, prefabInstance, {
     position: cloneJson(nextPosition),
     velocity: cloneJson(nextVelocity),
   };
+}
+
+function createScriptRuntimeEntityRef(kind = "", id = "") {
+  return Object.freeze({
+    [SCRIPT_RUNTIME_REF_KEY]: "entity",
+    kind: String(kind ?? "").trim(),
+    id: String(id ?? "").trim(),
+  });
+}
+
+function createScriptRuntimeSceneRef() {
+  return Object.freeze({
+    [SCRIPT_RUNTIME_REF_KEY]: "scene",
+    kind: "scene",
+    id: "scene",
+  });
+}
+
+function isScriptRuntimeEntityRef(value) {
+  return value?.[SCRIPT_RUNTIME_REF_KEY] === "entity";
+}
+
+function isScriptRuntimeSceneRef(value) {
+  return value?.[SCRIPT_RUNTIME_REF_KEY] === "scene";
+}
+
+function isScriptRuntimeRef(value) {
+  return isScriptRuntimeEntityRef(value) || isScriptRuntimeSceneRef(value);
+}
+
+function cloneScriptRuntimeValue(value) {
+  if (isScriptRuntimeRef(value) || value == null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => cloneScriptRuntimeValue(entry));
+  }
+  const clone = {};
+  for (const [key, entry] of Object.entries(value)) {
+    clone[key] = cloneScriptRuntimeValue(entry);
+  }
+  return clone;
+}
+
+function isScriptRuntimeVectorLike(value) {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Number.isFinite(Number(value.x))
+    && Number.isFinite(Number(value.y))
+    && Number.isFinite(Number(value.z))
+  );
+}
+
+function toScriptRuntimeVector(value, fallback = { x: 0, y: 0, z: 0 }) {
+  return {
+    x: mustFinite(value?.x, fallback.x),
+    y: mustFinite(value?.y, fallback.y),
+    z: mustFinite(value?.z, fallback.z),
+  };
+}
+
+function scriptRuntimeVectorLength(value) {
+  const vector = toScriptRuntimeVector(value);
+  return Math.hypot(vector.x, vector.y, vector.z);
+}
+
+function normalizeScriptRuntimeEntityKind(kind = "") {
+  const normalized = String(kind ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "players") {
+    return "player";
+  }
+  if (normalized === "prefab" || normalized === "prefabinstance") {
+    return "prefab_instance";
+  }
+  if (normalized === "trigger_zone" || normalized === "triggerzone") {
+    return "trigger";
+  }
+  return normalized;
+}
+
+function listScriptRuntimeEntityRefs(simulation, kind = "") {
+  const normalizedKind = normalizeScriptRuntimeEntityKind(kind);
+  const refs = [];
+  for (const player of simulation.players ?? []) {
+    refs.push(createScriptRuntimeEntityRef("player", player.id));
+  }
+  for (const entry of simulation.dynamicObjects ?? []) {
+    refs.push(createScriptRuntimeEntityRef(entry.entity_kind || "dynamic_object", entry.id));
+  }
+  for (const entry of simulation.prefabInstances ?? []) {
+    refs.push(createScriptRuntimeEntityRef("prefab_instance", entry.id));
+  }
+  for (const entry of simulation.triggerZones ?? []) {
+    refs.push(createScriptRuntimeEntityRef("trigger", entry.id));
+  }
+  for (const entry of simulation.sceneDoc?.voxels ?? []) {
+    refs.push(createScriptRuntimeEntityRef("voxel", entry.id));
+  }
+  for (const entry of Object.values(simulation.screenState ?? {})) {
+    refs.push(createScriptRuntimeEntityRef("screen", entry.id));
+  }
+  for (const entry of Object.values(simulation.textState ?? {})) {
+    refs.push(createScriptRuntimeEntityRef("text", entry.id));
+  }
+  if (!normalizedKind) {
+    return refs;
+  }
+  return refs.filter((entry) => entry.kind === normalizedKind);
+}
+
+function findScriptRuntimeEntityRef(simulation, id = "") {
+  const normalizedId = String(id ?? "").trim();
+  if (!normalizedId) {
+    return null;
+  }
+  return listScriptRuntimeEntityRefs(simulation).find((entry) => entry.id === normalizedId) ?? null;
+}
+
+function resolveScriptRuntimeEntityTarget(simulation, ref = null) {
+  if (!isScriptRuntimeEntityRef(ref)) {
+    return null;
+  }
+  if (ref.kind === "player") {
+    return simulation.players?.find((entry) => entry.id === ref.id) ?? null;
+  }
+  if (ref.kind === "primitive" || ref.kind === "model" || ref.kind === "dynamic_object") {
+    return simulation.dynamicObjects?.find((entry) => entry.id === ref.id) ?? null;
+  }
+  if (ref.kind === "prefab_instance") {
+    return findPrefabInstanceTarget(simulation, ref.id);
+  }
+  if (ref.kind === "trigger") {
+    return simulation.triggerZones?.find((entry) => entry.id === ref.id) ?? null;
+  }
+  if (ref.kind === "voxel") {
+    return simulation.sceneDoc?.voxels?.find((entry) => entry.id === ref.id) ?? null;
+  }
+  if (ref.kind === "screen") {
+    return simulation.screenState?.[ref.id] ?? null;
+  }
+  if (ref.kind === "text") {
+    return simulation.textState?.[ref.id] ?? null;
+  }
+  return null;
+}
+
+function resolveScriptRuntimePositionLike(simulation, value) {
+  if (isScriptRuntimeEntityRef(value)) {
+    const target = resolveScriptRuntimeEntityTarget(simulation, value);
+    if (target?.position) {
+      return toScriptRuntimeVector(target.position);
+    }
+    return null;
+  }
+  if (isScriptRuntimeVectorLike(value)) {
+    return toScriptRuntimeVector(value);
+  }
+  if (value && typeof value === "object" && isScriptRuntimeVectorLike(value.position)) {
+    return toScriptRuntimeVector(value.position);
+  }
+  return null;
+}
+
+function readScriptRuntimeEntityProperty(simulation, ref, property = "") {
+  const target = resolveScriptRuntimeEntityTarget(simulation, ref);
+  if (!target) {
+    return null;
+  }
+  const normalizedProperty = String(property ?? "").trim();
+  if (!normalizedProperty) {
+    return null;
+  }
+  if (normalizedProperty === "id") {
+    return ref.id;
+  }
+  if (normalizedProperty === "kind") {
+    return ref.kind;
+  }
+  if (normalizedProperty === "label") {
+    return target.label ?? null;
+  }
+  if (normalizedProperty === "visible" || normalizedProperty === "visibility") {
+    if (Object.hasOwn(target, "visibility")) {
+      return target.visibility !== false;
+    }
+    if (Object.hasOwn(target, "visible")) {
+      return target.visible !== false;
+    }
+  }
+  if (normalizedProperty === "value" && ref.kind === "text") {
+    return String(target.value ?? "");
+  }
+  if (normalizedProperty === "state" && ref.kind === "screen") {
+    return cloneScriptRuntimeValue(target.state ?? {});
+  }
+  if (normalizedProperty === "assets" && ref.kind === "screen") {
+    return cloneScriptRuntimeValue(target.assets ?? {});
+  }
+  if (normalizedProperty === "material_override") {
+    return cloneScriptRuntimeValue(target.material_override ?? null);
+  }
+  if (normalizedProperty === "material") {
+    return cloneScriptRuntimeValue(target.material ?? null);
+  }
+  if (normalizedProperty === "position" || normalizedProperty === "rotation" || normalizedProperty === "scale" || normalizedProperty === "velocity") {
+    return target[normalizedProperty] != null ? cloneScriptRuntimeValue(target[normalizedProperty]) : null;
+  }
+  if (Object.hasOwn(target, normalizedProperty) && typeof target[normalizedProperty] !== "function") {
+    return cloneScriptRuntimeValue(target[normalizedProperty]);
+  }
+  return null;
+}
+
+function readScriptRuntimeSceneProperty(simulation, property = "") {
+  const normalizedProperty = String(property ?? "").trim();
+  if (!normalizedProperty) {
+    return null;
+  }
+  if (normalizedProperty === "id") {
+    return "scene";
+  }
+  if (normalizedProperty === "kind") {
+    return "scene";
+  }
+  if (normalizedProperty === "gravity") {
+    return cloneScriptRuntimeValue(simulation.gravity);
+  }
+  if (normalizedProperty === "scene_started") {
+    return simulation.sceneStarted === true;
+  }
+  if (normalizedProperty === "status") {
+    return simulation.status ?? "active";
+  }
+  if (normalizedProperty === "elapsed_ms") {
+    return mustFinite(simulation.elapsedMs, 0);
+  }
+  return null;
+}
+
+function readScriptRuntimeProperty(simulation, value, property = "") {
+  if (isScriptRuntimeEntityRef(value)) {
+    return readScriptRuntimeEntityProperty(simulation, value, property);
+  }
+  if (isScriptRuntimeSceneRef(value)) {
+    return readScriptRuntimeSceneProperty(simulation, property);
+  }
+  if (Array.isArray(value) && property === "length") {
+    return value.length;
+  }
+  if (typeof value === "string" && property === "length") {
+    return value.length;
+  }
+  if (value && typeof value === "object" && Object.hasOwn(value, property)) {
+    return cloneScriptRuntimeValue(value[property]);
+  }
+  return null;
+}
+
+function setScriptRuntimePlainObjectPath(target, path = [], value = null) {
+  if (!target || typeof target !== "object" || isScriptRuntimeRef(target) || !Array.isArray(path) || !path.length) {
+    return false;
+  }
+  let cursor = target;
+  for (const key of path.slice(0, -1)) {
+    if (!cursor[key] || typeof cursor[key] !== "object" || Array.isArray(cursor[key]) || isScriptRuntimeRef(cursor[key])) {
+      cursor[key] = {};
+    }
+    cursor = cursor[key];
+  }
+  cursor[path[path.length - 1]] = cloneScriptRuntimeValue(value);
+  return true;
+}
+
+function applyScriptRuntimePlayerPosition(simulation, player, nextPosition) {
+  const body = simulation.physics?.playerBodies?.get(player.id) ?? null;
+  player.position = cloneJson(nextPosition);
+  player.velocity = { x: 0, y: 0, z: 0 };
+  player.sleeping = false;
+  if (!body) {
+    return true;
+  }
+  if (player.body_mode === "ghost" && typeof body.setNextKinematicTranslation === "function") {
+    body.setNextKinematicTranslation(nextPosition);
+  }
+  body.setTranslation(nextPosition, true);
+  body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  body.wakeUp?.();
+  return true;
+}
+
+function applyScriptRuntimePlayerRotation(simulation, player, nextRotation) {
+  const body = simulation.physics?.playerBodies?.get(player.id) ?? null;
+  player.rotation = cloneJson(nextRotation);
+  player.sleeping = false;
+  if (!body) {
+    return true;
+  }
+  body.setRotation(toRapierRotation(nextRotation), true);
+  body.wakeUp?.();
+  return true;
+}
+
+function applyScriptRuntimePlayerVelocity(simulation, player, nextVelocity) {
+  const body = simulation.physics?.playerBodies?.get(player.id) ?? null;
+  player.velocity = cloneJson(nextVelocity);
+  player.sleeping = false;
+  if (!body) {
+    return true;
+  }
+  body.setLinvel(nextVelocity, true);
+  body.wakeUp?.();
+  return true;
+}
+
+function applyScriptRuntimeScreenPosition(simulation, screenId = "", nextPosition = null) {
+  const screenState = simulation.screenState?.[screenId] ?? null;
+  if (!screenState) {
+    return false;
+  }
+  screenState.position = cloneJson(nextPosition);
+  const sceneScreen = simulation.sceneDoc?.screens?.find((entry) => entry.id === screenId) ?? null;
+  if (sceneScreen) {
+    sceneScreen.position = cloneJson(nextPosition);
+  }
+  return true;
+}
+
+function setScriptRuntimeEntityPath(simulation, ref, path = [], value = null) {
+  if (!Array.isArray(path) || !path.length) {
+    throw new Error("Missing property path in script.runtime assignment.");
+  }
+  const property = path[0];
+  const target = resolveScriptRuntimeEntityTarget(simulation, ref);
+  if (!target) {
+    throw new Error(`Script target \`${ref.id}\` is no longer available.`);
+  }
+  if (property === "position") {
+    const current = toScriptRuntimeVector(target.position);
+    if (path.length > 1 && !["x", "y", "z"].includes(path[1])) {
+      throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
+    }
+    const next = path.length === 1
+      ? toScriptRuntimeVector(value, current)
+      : {
+        ...current,
+        [path[1]]: mustFinite(value, current[path[1]]),
+      };
+    if (ref.kind === "player") {
+      return applyScriptRuntimePlayerPosition(simulation, target, next);
+    }
+    if (ref.kind === "primitive" || ref.kind === "model" || ref.kind === "dynamic_object") {
+      applyDynamicObjectPose(simulation, target, {
+        position: next,
+        velocity: { x: 0, y: 0, z: 0 },
+      });
+      return true;
+    }
+    if (ref.kind === "prefab_instance") {
+      applyPrefabInstancePose(simulation, target, {
+        position: next,
+        zeroVelocity: true,
+      });
+      return true;
+    }
+    if (ref.kind === "trigger") {
+      target.position = cloneJson(next);
+      const sceneZone = simulation.sceneDoc?.trigger_zones?.find((entry) => entry.id === ref.id) ?? null;
+      if (sceneZone) {
+        sceneZone.position = cloneJson(next);
+      }
+      return true;
+    }
+    if (ref.kind === "voxel") {
+      const currentPosition = toScriptRuntimeVector(target.position);
+      translateRuntimeVoxelByDelta(simulation, ref.id, {
+        x: next.x - currentPosition.x,
+        y: next.y - currentPosition.y,
+        z: next.z - currentPosition.z,
+      });
+      return true;
+    }
+    if (ref.kind === "screen") {
+      return applyScriptRuntimeScreenPosition(simulation, ref.id, next);
+    }
+    throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
+  }
+  if (property === "rotation") {
+    const current = toScriptRuntimeVector(target.rotation);
+    if (path.length > 1 && !["x", "y", "z"].includes(path[1])) {
+      throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
+    }
+    const next = path.length === 1
+      ? toScriptRuntimeVector(value, current)
+      : {
+        ...current,
+        [path[1]]: mustFinite(value, current[path[1]]),
+      };
+    if (ref.kind === "player") {
+      return applyScriptRuntimePlayerRotation(simulation, target, next);
+    }
+    if (ref.kind === "primitive" || ref.kind === "model" || ref.kind === "dynamic_object") {
+      applyDynamicObjectPose(simulation, target, { rotation: next });
+      return true;
+    }
+    throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
+  }
+  if (property === "velocity") {
+    const current = toScriptRuntimeVector(target.velocity);
+    if (path.length > 1 && !["x", "y", "z"].includes(path[1])) {
+      throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
+    }
+    const next = path.length === 1
+      ? toScriptRuntimeVector(value, current)
+      : {
+        ...current,
+        [path[1]]: mustFinite(value, current[path[1]]),
+      };
+    if (ref.kind === "player") {
+      return applyScriptRuntimePlayerVelocity(simulation, target, next);
+    }
+    if (ref.kind === "primitive" || ref.kind === "model" || ref.kind === "dynamic_object") {
+      applyDynamicObjectPose(simulation, target, { velocity: next });
+      return true;
+    }
+    throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
+  }
+  if ((property === "visible" || property === "visibility") && path.length === 1) {
+    const nextVisible = value !== false;
+    if (ref.kind === "prefab_instance") {
+      target.visibility = nextVisible;
+      for (const dynamicObjectId of target.dynamic_object_ids ?? []) {
+        const dynamicObject = simulation.dynamicObjects?.find((entry) => entry.id === dynamicObjectId) ?? null;
+        if (dynamicObject) {
+          dynamicObject.visibility = nextVisible;
+        }
+      }
+      return true;
+    }
+    if (Object.hasOwn(target, "visibility")) {
+      target.visibility = nextVisible;
+      return true;
+    }
+    if (Object.hasOwn(target, "visible")) {
+      target.visible = nextVisible;
+      return true;
+    }
+  }
+  if (property === "value" && ref.kind === "text" && path.length === 1) {
+    target.value = String(value ?? "").slice(0, 160);
+    return true;
+  }
+  throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
+}
+
+function setScriptRuntimeScenePath(simulation, path = [], value = null) {
+  if (!Array.isArray(path) || !path.length) {
+    throw new Error("Missing scene property path in script.runtime assignment.");
+  }
+  if (path[0] !== "gravity") {
+    throw new Error(`Scene property \`${path.join(".")}\` is not writable in script.runtime.`);
+  }
+  const current = toScriptRuntimeVector(simulation.gravity);
+  if (path.length > 1 && !["x", "y", "z"].includes(path[1])) {
+    throw new Error(`Scene property \`${path.join(".")}\` is not writable in script.runtime.`);
+  }
+  const next = path.length === 1
+    ? toScriptRuntimeVector(value, current)
+    : {
+      ...current,
+      [path[1]]: mustFinite(value, current[path[1]]),
+    };
+  simulation.gravity = cloneJson(next);
+  if (simulation.physics?.world) {
+    simulation.physics.world.gravity = toRapierVector(next);
+  }
+  return true;
+}
+
+function unwrapScriptRuntimeReferencePath(reference) {
+  const path = [];
+  let cursor = reference;
+  while (cursor?.type === "member") {
+    path.unshift(cursor.property);
+    cursor = cursor.object;
+  }
+  return {
+    root: cursor,
+    path,
+  };
+}
+
+function createScriptRuntimeEnvironment({
+  constants = {},
+  selfRef = null,
+  sceneRef = createScriptRuntimeSceneRef(),
+  dt = 0,
+  time = 0,
+  builtins = new Map(),
+} = {}) {
+  const bindings = new Map();
+  const readonly = new Set(["self", "scene", "dt", "time"]);
+  for (const [key, value] of Object.entries(constants ?? {})) {
+    bindings.set(key, cloneScriptRuntimeValue(value));
+    readonly.add(key);
+  }
+  bindings.set("self", selfRef);
+  bindings.set("scene", sceneRef);
+  bindings.set("dt", dt);
+  bindings.set("time", time);
+  return {
+    define(name, value) {
+      bindings.set(name, cloneScriptRuntimeValue(value));
+      return bindings.get(name);
+    },
+    get(name) {
+      if (bindings.has(name)) {
+        return bindings.get(name);
+      }
+      if (builtins.has(name)) {
+        return builtins.get(name);
+      }
+      return undefined;
+    },
+    has(name) {
+      return bindings.has(name) || builtins.has(name);
+    },
+    set(name, value) {
+      if (!bindings.has(name)) {
+        return false;
+      }
+      if (readonly.has(name)) {
+        throw new Error(`\`${name}\` is read-only in script.runtime.`);
+      }
+      bindings.set(name, cloneScriptRuntimeValue(value));
+      return true;
+    },
+  };
+}
+
+function scriptRuntimeTruthy(value) {
+  return Boolean(value);
+}
+
+function scriptRuntimeVectorsEqual(left, right) {
+  const leftVector = toScriptRuntimeVector(left);
+  const rightVector = toScriptRuntimeVector(right);
+  return (
+    Math.abs(leftVector.x - rightVector.x) <= 0.0001
+    && Math.abs(leftVector.y - rightVector.y) <= 0.0001
+    && Math.abs(leftVector.z - rightVector.z) <= 0.0001
+  );
+}
+
+function applyScriptRuntimeBinaryOperator(operator = "", left, right) {
+  if (operator === "==" || operator === "!=") {
+    const equal = isScriptRuntimeRef(left) && isScriptRuntimeRef(right)
+      ? left.kind === right.kind && left.id === right.id
+      : isScriptRuntimeVectorLike(left) && isScriptRuntimeVectorLike(right)
+        ? scriptRuntimeVectorsEqual(left, right)
+        : left === right;
+    return operator === "==" ? equal : !equal;
+  }
+  if (["<", ">", "<=", ">="].includes(operator)) {
+    if (operator === "<") {
+      return left < right;
+    }
+    if (operator === ">") {
+      return left > right;
+    }
+    if (operator === "<=") {
+      return left <= right;
+    }
+    return left >= right;
+  }
+  if (!isScriptRuntimeVectorLike(left) && !isScriptRuntimeVectorLike(right)) {
+    if (operator === "+") {
+      return typeof left === "string" || typeof right === "string"
+        ? `${left ?? ""}${right ?? ""}`
+        : mustFinite(left, 0) + mustFinite(right, 0);
+    }
+    if (operator === "-") {
+      return mustFinite(left, 0) - mustFinite(right, 0);
+    }
+    if (operator === "*") {
+      return mustFinite(left, 0) * mustFinite(right, 0);
+    }
+    if (operator === "/") {
+      const denominator = mustFinite(right, 0);
+      return Math.abs(denominator) <= 0.000001 ? 0 : mustFinite(left, 0) / denominator;
+    }
+  }
+  const leftVector = isScriptRuntimeVectorLike(left) ? toScriptRuntimeVector(left) : null;
+  const rightVector = isScriptRuntimeVectorLike(right) ? toScriptRuntimeVector(right) : null;
+  const leftScalar = leftVector ? null : mustFinite(left, 0);
+  const rightScalar = rightVector ? null : mustFinite(right, 0);
+  if (operator === "+") {
+    if (leftVector && rightVector) {
+      return {
+        x: leftVector.x + rightVector.x,
+        y: leftVector.y + rightVector.y,
+        z: leftVector.z + rightVector.z,
+      };
+    }
+    if (leftVector) {
+      return {
+        x: leftVector.x + rightScalar,
+        y: leftVector.y + rightScalar,
+        z: leftVector.z + rightScalar,
+      };
+    }
+    if (rightVector) {
+      return {
+        x: leftScalar + rightVector.x,
+        y: leftScalar + rightVector.y,
+        z: leftScalar + rightVector.z,
+      };
+    }
+  }
+  if (operator === "-") {
+    if (leftVector && rightVector) {
+      return {
+        x: leftVector.x - rightVector.x,
+        y: leftVector.y - rightVector.y,
+        z: leftVector.z - rightVector.z,
+      };
+    }
+    if (leftVector) {
+      return {
+        x: leftVector.x - rightScalar,
+        y: leftVector.y - rightScalar,
+        z: leftVector.z - rightScalar,
+      };
+    }
+    if (rightVector) {
+      return {
+        x: leftScalar - rightVector.x,
+        y: leftScalar - rightVector.y,
+        z: leftScalar - rightVector.z,
+      };
+    }
+  }
+  if (operator === "*") {
+    if (leftVector && rightVector) {
+      return {
+        x: leftVector.x * rightVector.x,
+        y: leftVector.y * rightVector.y,
+        z: leftVector.z * rightVector.z,
+      };
+    }
+    if (leftVector) {
+      return {
+        x: leftVector.x * rightScalar,
+        y: leftVector.y * rightScalar,
+        z: leftVector.z * rightScalar,
+      };
+    }
+    if (rightVector) {
+      return {
+        x: leftScalar * rightVector.x,
+        y: leftScalar * rightVector.y,
+        z: leftScalar * rightVector.z,
+      };
+    }
+  }
+  if (operator === "/") {
+    if (leftVector && rightVector) {
+      return {
+        x: Math.abs(rightVector.x) <= 0.000001 ? 0 : leftVector.x / rightVector.x,
+        y: Math.abs(rightVector.y) <= 0.000001 ? 0 : leftVector.y / rightVector.y,
+        z: Math.abs(rightVector.z) <= 0.000001 ? 0 : leftVector.z / rightVector.z,
+      };
+    }
+    if (leftVector) {
+      const divisor = Math.abs(rightScalar) <= 0.000001 ? 1 : rightScalar;
+      return {
+        x: leftVector.x / divisor,
+        y: leftVector.y / divisor,
+        z: leftVector.z / divisor,
+      };
+    }
+  }
+  throw new Error(`Unsupported operator \`${operator}\` in script.runtime.`);
+}
+
+function createScriptRuntimeBuiltins(simulation, sceneRef = createScriptRuntimeSceneRef()) {
+  return new Map([
+    ["entity", (id) => findScriptRuntimeEntityRef(simulation, id)],
+    ["entities", (kind = "") => listScriptRuntimeEntityRefs(simulation, kind)],
+    ["players", () => listScriptRuntimeEntityRefs(simulation, "player")],
+    ["nearest", (list, from) => {
+      const origin = resolveScriptRuntimePositionLike(simulation, from);
+      if (!origin || !Array.isArray(list)) {
+        return null;
+      }
+      let best = null;
+      let bestDistance = Infinity;
+      for (const entry of list) {
+        const position = resolveScriptRuntimePositionLike(simulation, entry);
+        if (!position) {
+          continue;
+        }
+        const distance = Math.hypot(
+          position.x - origin.x,
+          position.y - origin.y,
+          position.z - origin.z,
+        );
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = entry;
+        }
+      }
+      return best;
+    }],
+    ["sort_by_distance", (list, from) => {
+      const origin = resolveScriptRuntimePositionLike(simulation, from);
+      if (!origin || !Array.isArray(list)) {
+        return [];
+      }
+      return [...list]
+        .filter((entry) => resolveScriptRuntimePositionLike(simulation, entry))
+        .sort((left, right) => {
+          const leftPosition = resolveScriptRuntimePositionLike(simulation, left);
+          const rightPosition = resolveScriptRuntimePositionLike(simulation, right);
+          const leftDistance = Math.hypot(leftPosition.x - origin.x, leftPosition.y - origin.y, leftPosition.z - origin.z);
+          const rightDistance = Math.hypot(rightPosition.x - origin.x, rightPosition.y - origin.y, rightPosition.z - origin.z);
+          return leftDistance - rightDistance;
+        });
+    }],
+    ["distance", (left, right) => {
+      const leftPosition = resolveScriptRuntimePositionLike(simulation, left);
+      const rightPosition = resolveScriptRuntimePositionLike(simulation, right);
+      if (!leftPosition || !rightPosition) {
+        return 0;
+      }
+      return Math.hypot(
+        rightPosition.x - leftPosition.x,
+        rightPosition.y - leftPosition.y,
+        rightPosition.z - leftPosition.z,
+      );
+    }],
+    ["normalize", (value) => {
+      const vector = resolveScriptRuntimePositionLike(simulation, value) ?? (isScriptRuntimeVectorLike(value) ? toScriptRuntimeVector(value) : null);
+      if (!vector) {
+        return { x: 0, y: 0, z: 0 };
+      }
+      const length = scriptRuntimeVectorLength(vector);
+      if (length <= 0.000001) {
+        return { x: 0, y: 0, z: 0 };
+      }
+      return {
+        x: vector.x / length,
+        y: vector.y / length,
+        z: vector.z / length,
+      };
+    }],
+    ["length", (value) => {
+      if (Array.isArray(value) || typeof value === "string") {
+        return value.length;
+      }
+      if (isScriptRuntimeVectorLike(value)) {
+        return scriptRuntimeVectorLength(value);
+      }
+      return Math.abs(mustFinite(value, 0));
+    }],
+    ["vec", (x = 0, y = 0, z = 0) => ({
+      x: mustFinite(x, 0),
+      y: mustFinite(y, 0),
+      z: mustFinite(z, 0),
+    })],
+    ["clamp", (value = 0, min = 0, max = 0) => clampNumber(mustFinite(value, 0), mustFinite(min, 0), mustFinite(max, 0))],
+    ["min", (...values) => Math.min(...values.map((entry) => mustFinite(entry, 0)))],
+    ["max", (...values) => Math.max(...values.map((entry) => mustFinite(entry, 0)))],
+    ["move_toward", (from, to, maxStep = 0, stopDistance = 0) => {
+      const fromPosition = resolveScriptRuntimePositionLike(simulation, from);
+      const toPosition = resolveScriptRuntimePositionLike(simulation, to);
+      if (!fromPosition || !toPosition) {
+        return { x: 0, y: 0, z: 0 };
+      }
+      const dx = toPosition.x - fromPosition.x;
+      const dy = toPosition.y - fromPosition.y;
+      const dz = toPosition.z - fromPosition.z;
+      const distance = Math.hypot(dx, dy, dz);
+      const safeStopDistance = Math.max(0, mustFinite(stopDistance, 0));
+      const safeMaxStep = Math.max(0, mustFinite(maxStep, 0));
+      if (distance <= safeStopDistance || safeMaxStep <= 0.000001) {
+        return cloneJson(fromPosition);
+      }
+      const remaining = Math.max(0, distance - safeStopDistance);
+      const step = Math.min(remaining, safeMaxStep);
+      if (distance <= 0.000001) {
+        return cloneJson(fromPosition);
+      }
+      return {
+        x: fromPosition.x + (dx / distance) * step,
+        y: fromPosition.y + (dy / distance) * step,
+        z: fromPosition.z + (dz / distance) * step,
+      };
+    }],
+    ["scene", sceneRef],
+  ]);
+}
+
+function resolveScriptRuntimeReference(expression = null) {
+  if (!expression) {
+    return null;
+  }
+  if (expression.type === "Identifier") {
+    return { type: "binding", name: expression.name };
+  }
+  if (expression.type === "MemberExpression") {
+    const objectReference = resolveScriptRuntimeReference(expression.object);
+    if (!objectReference) {
+      return null;
+    }
+    return {
+      type: "member",
+      object: objectReference,
+      property: expression.property?.name ?? "",
+    };
+  }
+  return null;
+}
+
+function getScriptRuntimeReferenceValue(simulation, environment, reference) {
+  if (!reference) {
+    return undefined;
+  }
+  if (reference.type === "binding") {
+    return environment.get(reference.name);
+  }
+  if (reference.type === "member") {
+    return readScriptRuntimeProperty(
+      simulation,
+      getScriptRuntimeReferenceValue(simulation, environment, reference.object),
+      reference.property,
+    );
+  }
+  return undefined;
+}
+
+function setScriptRuntimeReferenceValue(simulation, environment, reference, value) {
+  if (!reference) {
+    throw new Error("Invalid script.runtime assignment target.");
+  }
+  if (reference.type === "binding") {
+    const updated = environment.set(reference.name, value);
+    if (!updated) {
+      throw new Error(`Unknown script.runtime variable \`${reference.name}\`.`);
+    }
+    return value;
+  }
+  const { root, path } = unwrapScriptRuntimeReferencePath(reference);
+  if (!root || !path.length) {
+    throw new Error("Invalid script.runtime assignment target.");
+  }
+  const rootValue = getScriptRuntimeReferenceValue(simulation, environment, root);
+  if (isScriptRuntimeEntityRef(rootValue)) {
+    setScriptRuntimeEntityPath(simulation, rootValue, path, value);
+    return value;
+  }
+  if (isScriptRuntimeSceneRef(rootValue)) {
+    setScriptRuntimeScenePath(simulation, path, value);
+    return value;
+  }
+  if (root.type !== "binding") {
+    throw new Error("Script.runtime can only assign through variables, `self`, or `scene`.");
+  }
+  const nextRootValue = cloneScriptRuntimeValue(rootValue);
+  if (!setScriptRuntimePlainObjectPath(nextRootValue, path, value)) {
+    throw new Error(`Property path \`${path.join(".")}\` is not writable in script.runtime.`);
+  }
+  environment.set(root.name, nextRootValue);
+  return value;
+}
+
+function evaluateScriptRuntimeExpression(simulation, environment, expression = null) {
+  if (!expression) {
+    return null;
+  }
+  if (expression.type === "Literal") {
+    return cloneScriptRuntimeValue(expression.value);
+  }
+  if (expression.type === "Identifier") {
+    if (!environment.has(expression.name)) {
+      throw new Error(`Unknown script.runtime identifier \`${expression.name}\`.`);
+    }
+    return environment.get(expression.name);
+  }
+  if (expression.type === "MemberExpression") {
+    const target = evaluateScriptRuntimeExpression(simulation, environment, expression.object);
+    return readScriptRuntimeProperty(simulation, target, expression.property?.name ?? "");
+  }
+  if (expression.type === "CallExpression") {
+    const callee = evaluateScriptRuntimeExpression(simulation, environment, expression.callee);
+    if (typeof callee !== "function") {
+      throw new Error("Tried to call a non-function in script.runtime.");
+    }
+    const args = (expression.arguments ?? []).map((entry) => evaluateScriptRuntimeExpression(simulation, environment, entry));
+    return callee(...args);
+  }
+  if (expression.type === "UnaryExpression") {
+    const argument = evaluateScriptRuntimeExpression(simulation, environment, expression.argument);
+    if (expression.operator === "!") {
+      return !scriptRuntimeTruthy(argument);
+    }
+    if (expression.operator === "-") {
+      if (isScriptRuntimeVectorLike(argument)) {
+        const vector = toScriptRuntimeVector(argument);
+        return {
+          x: -vector.x,
+          y: -vector.y,
+          z: -vector.z,
+        };
+      }
+      return -mustFinite(argument, 0);
+    }
+  }
+  if (expression.type === "LogicalExpression") {
+    const left = evaluateScriptRuntimeExpression(simulation, environment, expression.left);
+    if (expression.operator === "&&") {
+      return scriptRuntimeTruthy(left)
+        ? evaluateScriptRuntimeExpression(simulation, environment, expression.right)
+        : left;
+    }
+    if (expression.operator === "||") {
+      return scriptRuntimeTruthy(left)
+        ? left
+        : evaluateScriptRuntimeExpression(simulation, environment, expression.right);
+    }
+  }
+  if (expression.type === "BinaryExpression") {
+    const left = evaluateScriptRuntimeExpression(simulation, environment, expression.left);
+    const right = evaluateScriptRuntimeExpression(simulation, environment, expression.right);
+    return applyScriptRuntimeBinaryOperator(expression.operator, left, right);
+  }
+  throw new Error(`Unsupported script.runtime expression type \`${expression.type}\`.`);
+}
+
+function executeScriptRuntimeStatement(simulation, environment, statement = null) {
+  if (!statement) {
+    return { returned: false, value: null };
+  }
+  if (statement.type === "Program" || statement.type === "BlockStatement") {
+    for (const entry of statement.body ?? []) {
+      const result = executeScriptRuntimeStatement(simulation, environment, entry);
+      if (result.returned) {
+        return result;
+      }
+    }
+    return { returned: false, value: null };
+  }
+  if (statement.type === "VariableDeclaration") {
+    environment.define(
+      statement.name,
+      evaluateScriptRuntimeExpression(simulation, environment, statement.init),
+    );
+    return { returned: false, value: null };
+  }
+  if (statement.type === "AssignmentStatement") {
+    const reference = resolveScriptRuntimeReference(statement.target);
+    if (!reference) {
+      throw new Error("Invalid script.runtime assignment target.");
+    }
+    const value = evaluateScriptRuntimeExpression(simulation, environment, statement.value);
+    setScriptRuntimeReferenceValue(simulation, environment, reference, value);
+    return { returned: false, value: null };
+  }
+  if (statement.type === "ExpressionStatement") {
+    evaluateScriptRuntimeExpression(simulation, environment, statement.expression);
+    return { returned: false, value: null };
+  }
+  if (statement.type === "IfStatement") {
+    const testValue = evaluateScriptRuntimeExpression(simulation, environment, statement.test);
+    if (scriptRuntimeTruthy(testValue)) {
+      return executeScriptRuntimeStatement(simulation, environment, statement.consequent);
+    }
+    if (statement.alternate) {
+      return executeScriptRuntimeStatement(simulation, environment, statement.alternate);
+    }
+    return { returned: false, value: null };
+  }
+  if (statement.type === "ReturnStatement") {
+    return {
+      returned: true,
+      value: statement.argument ? evaluateScriptRuntimeExpression(simulation, environment, statement.argument) : null,
+    };
+  }
+  throw new Error(`Unsupported script.runtime statement type \`${statement.type}\`.`);
+}
+
+function executeRuntimeScript(simulation, scriptEntry = {}, deltaSeconds = 0) {
+  if (!scriptEntry?.program_ast || scriptEntry.enabled === false) {
+    return;
+  }
+  const sceneRef = createScriptRuntimeSceneRef();
+  const selfRef = scriptEntry.target_id === "scene"
+    ? sceneRef
+    : findScriptRuntimeEntityRef(simulation, scriptEntry.target_id);
+  if (!selfRef) {
+    throw new Error(`Script target \`${scriptEntry.target_id || "scene"}\` is no longer available.`);
+  }
+  const environment = createScriptRuntimeEnvironment({
+    constants: scriptEntry.constants ?? {},
+    selfRef,
+    sceneRef,
+    dt: Math.max(0, mustFinite(deltaSeconds, 0)),
+    time: Math.max(0, mustFinite(simulation.elapsedMs, 0)) / 1000,
+    builtins: createScriptRuntimeBuiltins(simulation, sceneRef),
+  });
+  executeScriptRuntimeStatement(simulation, environment, scriptEntry.program_ast);
+}
+
+function executeRuntimeScripts(simulation, deltaSeconds = 0) {
+  const scripts = Array.isArray(simulation?.scriptConfig?.runtime_scripts)
+    ? simulation.scriptConfig.runtime_scripts
+    : [];
+  if (!scripts.length) {
+    return;
+  }
+  for (const scriptEntry of scripts) {
+    try {
+      executeRuntimeScript(simulation, scriptEntry, deltaSeconds);
+      simulation.scriptRuntimeState?.lastErrorByFunctionId?.delete?.(scriptEntry.function_id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown script.runtime execution error.";
+      const previous = simulation.scriptRuntimeState?.lastErrorByFunctionId?.get?.(scriptEntry.function_id) ?? "";
+      if (previous === message) {
+        continue;
+      }
+      simulation.scriptRuntimeState?.lastErrorByFunctionId?.set?.(scriptEntry.function_id, message);
+      pushRuntimeEvent(simulation, {
+        type: "script_runtime_error",
+        function_id: scriptEntry.function_id ?? null,
+        function_name: scriptEntry.function_name ?? null,
+        message,
+      });
+    }
+  }
 }
 
 function normalizeScriptedPlatformLoopMode(value = "pingpong") {
@@ -2075,6 +3119,9 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     recentEvents: [],
     commandQueue: [],
     scriptedPlatformMotions: new Map(),
+    scriptRuntimeState: {
+      lastErrorByFunctionId: new Map(),
+    },
     physics: null,
   };
   initializeRapierRuntime(runtime);
@@ -2584,6 +3631,8 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
 
     carryPlatformRiders(simulation, preStepBodyState, deltaSeconds);
   }
+
+  executeRuntimeScripts(simulation, deltaSeconds);
 
   refreshTriggerOccupancy(simulation);
 

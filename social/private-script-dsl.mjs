@@ -50,6 +50,31 @@ const DEFAULT_FACE_MOUSE_DEADZONE_PX = 8;
 const DEFAULT_WORLD_FRICTION = 0.4;
 const DEFAULT_WORLD_RESTITUTION = 0;
 const DEFAULT_WORLD_TERMINAL_VELOCITY = 120;
+const SCRIPT_RUNTIME_MODULE_KIND = "script.runtime";
+const SCRIPT_RUNTIME_RESERVED_IDENTIFIERS = new Set([
+  "if",
+  "let",
+  "return",
+  "true",
+  "false",
+  "null",
+  "self",
+  "scene",
+  "dt",
+  "time",
+  "entity",
+  "entities",
+  "players",
+  "nearest",
+  "sort_by_distance",
+  "distance",
+  "normalize",
+  "length",
+  "vec",
+  "clamp",
+  "min",
+  "max",
+]);
 
 const ALLOWED_RULE_TRIGGERS = new Set([
   "zone_enter",
@@ -78,6 +103,7 @@ const MODULE_KINDS = new Set([
   "camera.overworld_drag_pan",
   "behavior.face_mouse_orthogonal",
   "physics.world",
+  SCRIPT_RUNTIME_MODULE_KIND,
 ]);
 
 const PRIVATE_WORLD_MODULE_DEFINITION_DATA = {
@@ -161,6 +187,13 @@ const PRIVATE_WORLD_MODULE_DEFINITION_DATA = {
     ],
     bindings: [],
   },
+  [SCRIPT_RUNTIME_MODULE_KIND]: {
+    scope: "runtime",
+    allowed_target_scopes: ["scene", "entity"],
+    allow_custom_params: true,
+    params: [],
+    bindings: [],
+  },
 };
 
 export const PRIVATE_WORLD_MODULE_DEFINITIONS = Object.freeze(
@@ -169,6 +202,8 @@ export const PRIVATE_WORLD_MODULE_DEFINITIONS = Object.freeze(
       moduleKind,
       Object.freeze({
         scope: definition.scope,
+        allowed_target_scopes: Object.freeze([...(definition.allowed_target_scopes ?? [])]),
+        allow_custom_params: definition.allow_custom_params === true,
         params: Object.freeze(definition.params.map((entry) => Object.freeze({ ...entry }))),
         bindings: Object.freeze(definition.bindings.map((entry) => Object.freeze({ ...entry }))),
       }),
@@ -556,6 +591,16 @@ export function serializePrivateWorldModuleFunctionBody(moduleConfig = {}) {
     targetId ? `@target ${targetId}` : "",
     `@enabled ${enabled ? "true" : "false"}`,
   ].filter(Boolean);
+  if (moduleKind === SCRIPT_RUNTIME_MODULE_KIND) {
+    for (const [name, value] of Object.entries(moduleConfig?.params ?? {})) {
+      if (!isValidScriptRuntimeIdentifier(name)) {
+        continue;
+      }
+      lines.push(`@set ${name} ${formatScriptRuntimeDirectiveValue(value)}`);
+    }
+    const programSource = String(moduleConfig?.program_source ?? moduleConfig?.programSource ?? "").trim();
+    return [...lines, programSource].filter(Boolean).join("\n").trim();
+  }
   for (const definition of listModuleBindings(moduleKind)) {
     const rawValue = moduleConfig?.bindings?.[definition.name];
     const value = sanitizeModuleBindingValue(moduleKind, definition.name, rawValue, "");
@@ -682,6 +727,627 @@ function parseDirectiveValue(param = "", rawValue = "") {
   return String(rawValue ?? "").trim();
 }
 
+function isValidScriptRuntimeIdentifier(value = "") {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value ?? "").trim());
+}
+
+function parseScriptRuntimeDirectiveValue(rawValue = "") {
+  const trimmed = String(rawValue ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const vector = parseDirectiveVectorValue(trimmed);
+  if (vector) {
+    return vector;
+  }
+  if (/^(true|false|yes|no|on|off)$/i.test(trimmed)) {
+    return parseDirectiveBooleanValue(trimmed, false);
+  }
+  if (trimmed === "null") {
+    return null;
+  }
+  if (/^-?\d+(?:\.\d+)?$/i.test(trimmed)) {
+    return Number(trimmed);
+  }
+  return trimmed;
+}
+
+function formatScriptRuntimeDirectiveValue(value = null) {
+  if (value == null) {
+    return "null";
+  }
+  if (typeof value === "boolean" || typeof value === "number") {
+    return formatDslScalarValue(value);
+  }
+  if (
+    value
+    && typeof value === "object"
+    && Number.isFinite(Number(value.x))
+    && Number.isFinite(Number(value.y))
+    && Number.isFinite(Number(value.z))
+  ) {
+    const vector = sanitizeVector3(value);
+    return `(${formatDslScalarValue(vector.x)},${formatDslScalarValue(vector.y)},${formatDslScalarValue(vector.z)})`;
+  }
+  const text = String(value ?? "");
+  return /\s/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
+}
+
+function tokenizeScriptRuntimeExpression(source = "", lineNumber = 0) {
+  const tokens = [];
+  const text = String(source ?? "");
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+    const twoChar = text.slice(index, index + 2);
+    if (["&&", "||", "==", "!=", "<=", ">="].includes(twoChar)) {
+      tokens.push({ type: "operator", value: twoChar, line: lineNumber });
+      index += 2;
+      continue;
+    }
+    if (["+", "-", "*", "/", "!", "<", ">", "(", ")", ".", ","].includes(char)) {
+      tokens.push({
+        type: ["(", ")", ".", ","].includes(char) ? "punctuation" : "operator",
+        value: char,
+        line: lineNumber,
+      });
+      index += 1;
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      const quote = char;
+      let value = "";
+      let cursor = index + 1;
+      let closed = false;
+      while (cursor < text.length) {
+        const next = text[cursor];
+        if (next === "\\") {
+          const escaped = text[cursor + 1] ?? "";
+          if (escaped === "n") {
+            value += "\n";
+          } else if (escaped === "t") {
+            value += "\t";
+          } else {
+            value += escaped;
+          }
+          cursor += 2;
+          continue;
+        }
+        if (next === quote) {
+          closed = true;
+          cursor += 1;
+          break;
+        }
+        value += next;
+        cursor += 1;
+      }
+      if (!closed) {
+        return {
+          tokens: [],
+          errors: [{ line: lineNumber, message: "Unterminated string literal in script.runtime expression." }],
+        };
+      }
+      tokens.push({ type: "string", value, line: lineNumber });
+      index = cursor;
+      continue;
+    }
+    if (/\d/.test(char) || (char === "." && /\d/.test(text[index + 1] ?? ""))) {
+      let cursor = index + 1;
+      while (cursor < text.length && /[\d.]/.test(text[cursor])) {
+        cursor += 1;
+      }
+      const value = text.slice(index, cursor);
+      if (!/^\d+(?:\.\d+)?$|^\.\d+$/.test(value)) {
+        return {
+          tokens: [],
+          errors: [{ line: lineNumber, message: `Invalid numeric literal \`${value}\` in script.runtime expression.` }],
+        };
+      }
+      tokens.push({ type: "number", value: Number(value), line: lineNumber });
+      index = cursor;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(char)) {
+      let cursor = index + 1;
+      while (cursor < text.length && /[A-Za-z0-9_]/.test(text[cursor])) {
+        cursor += 1;
+      }
+      tokens.push({ type: "identifier", value: text.slice(index, cursor), line: lineNumber });
+      index = cursor;
+      continue;
+    }
+    return {
+      tokens: [],
+      errors: [{ line: lineNumber, message: `Unexpected token \`${char}\` in script.runtime expression.` }],
+    };
+  }
+  tokens.push({ type: "eof", value: "", line: lineNumber });
+  return { tokens, errors: [] };
+}
+
+function createScriptRuntimeExpressionParser(tokens = [], lineNumber = 0) {
+  let index = 0;
+  const peek = () => tokens[index] ?? { type: "eof", value: "", line: lineNumber };
+  const advance = () => {
+    const token = peek();
+    index += 1;
+    return token;
+  };
+  const matchValue = (...values) => {
+    const token = peek();
+    if (values.includes(token.value)) {
+      advance();
+      return token;
+    }
+    return null;
+  };
+  const expectValue = (value, message) => {
+    const token = advance();
+    if (token.value !== value) {
+      throw new Error(message || `Expected \`${value}\`.`);
+    }
+    return token;
+  };
+  const parsePrimary = () => {
+    const token = advance();
+    if (token.type === "number") {
+      return { type: "Literal", value: token.value, line: token.line };
+    }
+    if (token.type === "string") {
+      return { type: "Literal", value: token.value, line: token.line };
+    }
+    if (token.type === "identifier") {
+      if (token.value === "true" || token.value === "false") {
+        return { type: "Literal", value: token.value === "true", line: token.line };
+      }
+      if (token.value === "null") {
+        return { type: "Literal", value: null, line: token.line };
+      }
+      return { type: "Identifier", name: token.value, line: token.line };
+    }
+    if (token.value === "(") {
+      const expression = parseExpression();
+      expectValue(")", "Missing closing `)` in script.runtime expression.");
+      return expression;
+    }
+    throw new Error(`Unexpected token \`${token.value || token.type}\` in script.runtime expression.`);
+  };
+  const parseCallMember = () => {
+    let expression = parsePrimary();
+    while (true) {
+      if (matchValue(".")) {
+        const property = advance();
+        if (property.type !== "identifier") {
+          throw new Error("Expected a property name after `.` in script.runtime expression.");
+        }
+        expression = {
+          type: "MemberExpression",
+          object: expression,
+          property: { type: "Identifier", name: property.value, line: property.line },
+          line: property.line,
+        };
+        continue;
+      }
+      if (matchValue("(")) {
+        const args = [];
+        if (!matchValue(")")) {
+          do {
+            args.push(parseExpression());
+          } while (matchValue(","));
+          expectValue(")", "Missing closing `)` after function arguments.");
+        }
+        expression = {
+          type: "CallExpression",
+          callee: expression,
+          arguments: args,
+          line: expression.line ?? lineNumber,
+        };
+        continue;
+      }
+      break;
+    }
+    return expression;
+  };
+  const parseUnary = () => {
+    const operator = matchValue("!", "-");
+    if (operator) {
+      return {
+        type: "UnaryExpression",
+        operator: operator.value,
+        argument: parseUnary(),
+        line: operator.line,
+      };
+    }
+    return parseCallMember();
+  };
+  const parseBinary = (nextParser, operators = [], nodeType = "BinaryExpression") => {
+    let left = nextParser();
+    while (operators.includes(peek().value)) {
+      const operator = advance();
+      const right = nextParser();
+      left = {
+        type: nodeType,
+        operator: operator.value,
+        left,
+        right,
+        line: operator.line,
+      };
+    }
+    return left;
+  };
+  const parseMultiplicative = () => parseBinary(parseUnary, ["*", "/"]);
+  const parseAdditive = () => parseBinary(parseMultiplicative, ["+", "-"]);
+  const parseComparison = () => parseBinary(parseAdditive, ["<", ">", "<=", ">="]);
+  const parseEquality = () => parseBinary(parseComparison, ["==", "!="]);
+  const parseLogicalAnd = () => parseBinary(parseEquality, ["&&"], "LogicalExpression");
+  const parseLogicalOr = () => parseBinary(parseLogicalAnd, ["||"], "LogicalExpression");
+  const parseExpression = () => parseLogicalOr();
+  return {
+    parseExpression,
+    peek,
+  };
+}
+
+function parseScriptRuntimeExpression(source = "", lineNumber = 0) {
+  const tokenized = tokenizeScriptRuntimeExpression(source, lineNumber);
+  if (tokenized.errors.length > 0) {
+    return {
+      expression: null,
+      errors: tokenized.errors,
+    };
+  }
+  try {
+    const parser = createScriptRuntimeExpressionParser(tokenized.tokens, lineNumber);
+    const expression = parser.parseExpression();
+    if (parser.peek().type !== "eof") {
+      return {
+        expression: null,
+        errors: [{ line: lineNumber, message: `Unexpected token \`${parser.peek().value}\` in script.runtime expression.` }],
+      };
+    }
+    return { expression, errors: [] };
+  } catch (error) {
+    return {
+      expression: null,
+      errors: [{ line: lineNumber, message: error instanceof Error ? error.message : "Invalid script.runtime expression." }],
+    };
+  }
+}
+
+function findTopLevelAssignmentIndex(source = "") {
+  const text = String(source ?? "");
+  let depth = 0;
+  let quote = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      if (char === "\\") {
+        index += 1;
+        continue;
+      }
+      if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (char !== "=" || depth !== 0) {
+      continue;
+    }
+    const previous = text[index - 1] ?? "";
+    const next = text[index + 1] ?? "";
+    if (previous === "=" || previous === "!" || previous === "<" || previous === ">" || next === "=") {
+      continue;
+    }
+    return index;
+  }
+  return -1;
+}
+
+function isValidScriptRuntimeAssignmentTarget(expression = null) {
+  if (!expression) {
+    return false;
+  }
+  if (expression.type === "Identifier") {
+    return true;
+  }
+  if (expression.type !== "MemberExpression") {
+    return false;
+  }
+  return isValidScriptRuntimeAssignmentTarget(expression.object);
+}
+
+function isScriptRuntimeIfStatementText(text = "") {
+  return /^if(?:\s|\()/.test(String(text ?? "").trim());
+}
+
+function parseScriptRuntimeStatementFromText(text = "", lineNumber = 0, errors = []) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("else")) {
+    errors.push({ line: lineNumber, message: "`else` is not supported in script.runtime yet." });
+    return null;
+  }
+  if (trimmed === "return") {
+    return { type: "ReturnStatement", argument: null, line: lineNumber };
+  }
+  if (trimmed.startsWith("return ")) {
+    const parsed = parseScriptRuntimeExpression(trimmed.slice(7), lineNumber);
+    errors.push(...parsed.errors);
+    return parsed.expression
+      ? { type: "ReturnStatement", argument: parsed.expression, line: lineNumber }
+      : null;
+  }
+  if (trimmed.startsWith("let ")) {
+    const declaration = trimmed.slice(4).trim();
+    const assignmentIndex = findTopLevelAssignmentIndex(declaration);
+    if (assignmentIndex < 0) {
+      errors.push({ line: lineNumber, message: "Expected `let name = expression` in script.runtime code." });
+      return null;
+    }
+    const name = declaration.slice(0, assignmentIndex).trim();
+    if (!isValidScriptRuntimeIdentifier(name)) {
+      errors.push({ line: lineNumber, message: `Invalid script.runtime variable name \`${name || "(empty)"}\`.` });
+      return null;
+    }
+    if (SCRIPT_RUNTIME_RESERVED_IDENTIFIERS.has(name)) {
+      errors.push({ line: lineNumber, message: `Script variable \`${name}\` is reserved by script.runtime.` });
+      return null;
+    }
+    const parsed = parseScriptRuntimeExpression(declaration.slice(assignmentIndex + 1).trim(), lineNumber);
+    errors.push(...parsed.errors);
+    return parsed.expression
+      ? {
+        type: "VariableDeclaration",
+        name,
+        init: parsed.expression,
+        line: lineNumber,
+      }
+      : null;
+  }
+  const assignmentIndex = findTopLevelAssignmentIndex(trimmed);
+  if (assignmentIndex >= 0) {
+    const leftParsed = parseScriptRuntimeExpression(trimmed.slice(0, assignmentIndex).trim(), lineNumber);
+    const rightParsed = parseScriptRuntimeExpression(trimmed.slice(assignmentIndex + 1).trim(), lineNumber);
+    errors.push(...leftParsed.errors, ...rightParsed.errors);
+    if (
+      leftParsed.expression
+      && leftParsed.expression.type !== "Identifier"
+      && leftParsed.expression.type !== "MemberExpression"
+    ) {
+      errors.push({ line: lineNumber, message: "The left side of a script.runtime assignment must be a variable or property path." });
+      return null;
+    }
+    if (leftParsed.expression && !isValidScriptRuntimeAssignmentTarget(leftParsed.expression)) {
+      errors.push({ line: lineNumber, message: "script.runtime assignments must be rooted at a variable, `self`, or `scene`." });
+      return null;
+    }
+    return leftParsed.expression && rightParsed.expression
+      ? {
+        type: "AssignmentStatement",
+        target: leftParsed.expression,
+        value: rightParsed.expression,
+        line: lineNumber,
+      }
+      : null;
+  }
+  const parsed = parseScriptRuntimeExpression(trimmed, lineNumber);
+  errors.push(...parsed.errors);
+  return parsed.expression
+    ? { type: "ExpressionStatement", expression: parsed.expression, line: lineNumber }
+    : null;
+}
+
+function parseScriptRuntimeIfHead(text = "", lineNumber = 0) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed.startsWith("if")) {
+    return {
+      test: null,
+      remainder: "",
+      errors: [{ line: lineNumber, message: "Expected an `if (...)` statement in script.runtime code." }],
+    };
+  }
+  let index = 2;
+  while (index < trimmed.length && /\s/.test(trimmed[index])) {
+    index += 1;
+  }
+  if (trimmed[index] !== "(") {
+    return {
+      test: null,
+      remainder: "",
+      errors: [{ line: lineNumber, message: "Expected `(` after `if` in script.runtime code." }],
+    };
+  }
+  let depth = 0;
+  let quote = "";
+  let closingIndex = -1;
+  for (let cursor = index; cursor < trimmed.length; cursor += 1) {
+    const char = trimmed[cursor];
+    if (quote) {
+      if (char === "\\") {
+        cursor += 1;
+        continue;
+      }
+      if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        closingIndex = cursor;
+        break;
+      }
+    }
+  }
+  if (closingIndex < 0) {
+    return {
+      test: null,
+      remainder: "",
+      errors: [{ line: lineNumber, message: "Missing closing `)` in script.runtime `if` statement." }],
+    };
+  }
+  const parsed = parseScriptRuntimeExpression(trimmed.slice(index + 1, closingIndex), lineNumber);
+  return {
+    test: parsed.expression,
+    remainder: trimmed.slice(closingIndex + 1).trim(),
+    errors: parsed.errors,
+  };
+}
+
+function parseScriptRuntimeProgram(programLines = []) {
+  const normalizedLines = (Array.isArray(programLines) ? programLines : [])
+    .map((entry) => ({
+      line: String(entry?.line ?? "").trim(),
+      lineNumber: Number(entry?.lineNumber ?? 0) || 0,
+    }))
+    .filter((entry) => entry.line);
+  const errors = [];
+  let index = 0;
+
+  const parseInlineOrBlockStatement = (text = "", lineNumber = 0) => {
+    const trimmed = String(text ?? "").trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed === "{") {
+      return parseBlock(true);
+    }
+    if (isScriptRuntimeIfStatementText(trimmed)) {
+      return parseIfStatement(trimmed, lineNumber);
+    }
+    if (trimmed === "}") {
+      errors.push({ line: lineNumber, message: "Unexpected `}` in script.runtime code." });
+      return null;
+    }
+    return parseScriptRuntimeStatementFromText(trimmed, lineNumber, errors);
+  };
+
+  const parseIfStatement = (text = "", lineNumber = 0) => {
+    const parsedHead = parseScriptRuntimeIfHead(text, lineNumber);
+    errors.push(...parsedHead.errors);
+    if (!parsedHead.test) {
+      return null;
+    }
+    if (parsedHead.remainder === "{") {
+      return {
+        type: "IfStatement",
+        test: parsedHead.test,
+        consequent: parseBlock(true),
+        alternate: null,
+        line: lineNumber,
+      };
+    }
+    if (parsedHead.remainder) {
+      return {
+        type: "IfStatement",
+        test: parsedHead.test,
+        consequent: parseInlineOrBlockStatement(parsedHead.remainder, lineNumber),
+        alternate: null,
+        line: lineNumber,
+      };
+    }
+    if (index >= normalizedLines.length) {
+      errors.push({ line: lineNumber, message: "Missing consequent statement after `if (...)` in script.runtime code." });
+      return null;
+    }
+    const nextEntry = normalizedLines[index];
+    index += 1;
+    return {
+      type: "IfStatement",
+      test: parsedHead.test,
+      consequent: parseInlineOrBlockStatement(nextEntry.line, nextEntry.lineNumber),
+      alternate: null,
+      line: lineNumber,
+    };
+  };
+
+  const parseNextStatement = () => {
+    if (index >= normalizedLines.length) {
+      return null;
+    }
+    const entry = normalizedLines[index];
+    index += 1;
+    if (entry.line === "}") {
+      return { type: "__close__", line: entry.lineNumber };
+    }
+    if (entry.line === "{") {
+      return parseBlock(true);
+    }
+    if (isScriptRuntimeIfStatementText(entry.line)) {
+      return parseIfStatement(entry.line, entry.lineNumber);
+    }
+    return parseScriptRuntimeStatementFromText(entry.line, entry.lineNumber, errors);
+  };
+
+  const parseBlock = (expectClose = false) => {
+    const body = [];
+    const blockLine = normalizedLines[Math.max(0, index - 1)]?.lineNumber ?? 0;
+    while (index < normalizedLines.length) {
+      const statement = parseNextStatement();
+      if (!statement) {
+        continue;
+      }
+      if (statement.type === "__close__") {
+        if (!expectClose) {
+          errors.push({ line: statement.line, message: "Unexpected `}` in script.runtime code." });
+          continue;
+        }
+        return {
+          type: "BlockStatement",
+          body,
+          line: blockLine,
+        };
+      }
+      body.push(statement);
+    }
+    if (expectClose) {
+      errors.push({ line: blockLine, message: "Missing closing `}` in script.runtime block." });
+    }
+    return {
+      type: "BlockStatement",
+      body,
+      line: blockLine,
+    };
+  };
+
+  const program = parseBlock(false);
+  return {
+    program: {
+      type: "Program",
+      body: program.body ?? [],
+      line: 1,
+    },
+    errors,
+  };
+}
+
 function buildImplicitPlayerControl(player = {}) {
   const playerId = String(player.id ?? "").trim();
   if (!playerId) {
@@ -754,6 +1420,7 @@ export function buildImplicitPrivateWorldScriptConfig(sceneDoc = {}) {
       key_triggers: [],
       directional_force_rule_ids: [],
     },
+    runtime_scripts: [],
     modules: [],
   };
 }
@@ -771,7 +1438,7 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
   const normalizedEntry = normalizeScriptFunctionEntry(entry, index);
   const rawLines = String(normalizedEntry.body ?? "").replace(/\r\n/g, "\n").split("\n");
   const comments = [];
-  const ruleLines = [];
+  const nonDirectiveLines = [];
   const directives = [];
   const errors = [];
   let moduleKind = "";
@@ -794,7 +1461,7 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
       continue;
     }
     if (!trimmed.startsWith("@")) {
-      ruleLines.push({
+      nonDirectiveLines.push({
         line: rawLine,
         lineNumber: lineIndex + 1,
       });
@@ -852,8 +1519,10 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
         errors.push({ line: lineIndex + 1, message: "Directive `@set` requires a parameter name." });
         continue;
       }
-      const parsedValue = parseDirectiveValue(param, valueText);
-      if (parsedValue == null || parsedValue === "") {
+      const parsedValue = moduleKind === SCRIPT_RUNTIME_MODULE_KIND
+        ? parseScriptRuntimeDirectiveValue(valueText)
+        : parseDirectiveValue(param, valueText);
+      if ((parsedValue == null && valueText !== "null") || parsedValue === "") {
         errors.push({
           line: lineIndex + 1,
           message: valueText
@@ -899,6 +1568,15 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
       } else if (targetCatalog.has(targetId) && targetKind !== "player") {
         errors.push({ line: targetLineNumber || 1, message: `Module \`${moduleKind}\` can only target players.` });
       }
+    } else if (moduleDefinition?.scope === "runtime") {
+      const allowedTargetScopes = Array.isArray(moduleDefinition.allowed_target_scopes)
+        ? moduleDefinition.allowed_target_scopes
+        : ["scene", "entity"];
+      if (!targetScope || !targetId) {
+        errors.push({ line: targetLineNumber || 1, message: `Module \`${moduleKind}\` requires an explicit scene or entity target.` });
+      } else if (!allowedTargetScopes.includes(targetScope)) {
+        errors.push({ line: targetLineNumber || 1, message: `Module \`${moduleKind}\` cannot target ${targetScope}.` });
+      }
     }
   }
 
@@ -906,6 +1584,16 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     const definition = getModuleDefinition(moduleKind);
     for (const directive of directives) {
       if (directive.directive === "set") {
+        if (definition?.allow_custom_params === true) {
+          if (!isValidScriptRuntimeIdentifier(directive.name)) {
+            errors.push({ line: directive.lineNumber, message: `Script constant \`${directive.name || "(empty)"}\` must be a valid identifier.` });
+            continue;
+          }
+          if (SCRIPT_RUNTIME_RESERVED_IDENTIFIERS.has(directive.name)) {
+            errors.push({ line: directive.lineNumber, message: `Script constant \`${directive.name}\` is reserved by script.runtime.` });
+          }
+          continue;
+        }
         const paramDefinition = getModuleParamDefinition(moduleKind, directive.name);
         if (!paramDefinition) {
           errors.push({ line: directive.lineNumber, message: `Parameter \`${directive.name || "(empty)"}\` is not supported by module \`${moduleKind}\`.` });
@@ -957,6 +1645,15 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     });
   }
 
+  const programLines = moduleKind === SCRIPT_RUNTIME_MODULE_KIND ? nonDirectiveLines : [];
+  const ruleLines = moduleKind === SCRIPT_RUNTIME_MODULE_KIND ? [] : nonDirectiveLines;
+  let programAst = null;
+  if (moduleKind === SCRIPT_RUNTIME_MODULE_KIND) {
+    const parsedProgram = parseScriptRuntimeProgram(programLines);
+    programAst = parsedProgram.program;
+    errors.push(...(parsedProgram.errors ?? []));
+  }
+
   return {
     ...normalizedEntry,
     module_kind: moduleKind,
@@ -969,6 +1666,9 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     directives,
     comments,
     ruleLines,
+    programLines,
+    programSource: programLines.map((line) => line.line).join("\n").trim(),
+    programAst,
     errors,
   };
 }
@@ -1401,7 +2101,27 @@ function buildScriptConfigModules(functions = []) {
       params: cloneJson(entry.params),
       bindings: cloneJson(entry.bindings),
       rule_count: entry.ruleLines.length,
+      program_line_count: Array.isArray(entry.programLines) ? entry.programLines.length : 0,
     }));
+}
+
+function applyScriptRuntimeModule(scriptConfig, functionEntry) {
+  if (!scriptConfig || !functionEntry?.programAst) {
+    return;
+  }
+  scriptConfig.runtime_scripts.push({
+    function_id: functionEntry.id,
+    function_name: functionEntry.name,
+    module_kind: functionEntry.module_kind,
+    target_id: functionEntry.target_id,
+    target_scope: functionEntry.target_scope,
+    target_kind: functionEntry.target_kind ?? null,
+    enabled: functionEntry.enabled !== false,
+    constants: cloneJson(functionEntry.params),
+    program_source: String(functionEntry.programSource ?? "").trim(),
+    program_ast: cloneJson(functionEntry.programAst),
+    program_line_count: Array.isArray(functionEntry.programLines) ? functionEntry.programLines.length : 0,
+  });
 }
 
 function buildPrivateWorldScriptConfig(functions = [], rules = [], options = {}) {
@@ -1424,6 +2144,10 @@ function buildPrivateWorldScriptConfig(functions = [], rules = [], options = {})
     }
     if (functionEntry.module_kind === "physics.world") {
       applyWorldPhysicsModule(scriptConfig, functionEntry);
+      continue;
+    }
+    if (functionEntry.module_kind === SCRIPT_RUNTIME_MODULE_KIND) {
+      applyScriptRuntimeModule(scriptConfig, functionEntry);
     }
   }
   scriptConfig.action_metadata = collectActionMetadata(rules, scriptConfig);

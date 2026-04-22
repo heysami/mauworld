@@ -85,6 +85,7 @@ const { mauworldApiUrl } = window.MauworldSocial;
 const AI_REASONING_STORAGE_KEY = "mauworldPrivateWorldAiReasoning";
 const AI_IMAGE_STORAGE_KEY = "mauworldPrivateWorldAiImage";
 const AI_MODEL_STORAGE_KEY = "mauworldPrivateWorldAiModel";
+const AI_DIALOG_SCRIPT_REPAIR_LIMIT = 3;
 const GUEST_SESSION_KEY = "mauworldPrivateWorldGuestSession";
 const PRIVATE_VIEWER_INSTANCE_KEY = "mauworldPrivateWorldViewerInstance";
 const PUBLIC_VIEWER_SESSION_KEY = "mauworldViewerSessionId";
@@ -5570,7 +5571,10 @@ function buildSceneLogicAiObjective(prompt, options = {}) {
     createNewFunction ? "Create a brand new scene logic function instead of rewriting the currently selected function." : "",
     selectedFunction?.name ? `Target function name: ${selectedFunction.name}.` : "",
     "This should end up as one self-contained Mauworld modular logic function using directives, comments, and rule lines when helpful.",
-    "Keep the editable @set and @bind surface visible instead of hiding defaults behind implicit behavior.",
+    "Keep the editable directive surface visible instead of hiding defaults behind implicit behavior.",
+    "When the behavior needs real math, nearest-target selection, or per-tick scripted motion, prefer @module script.runtime instead of forcing it into a config-only module.",
+    "Use @target for entity, player, or scene ids. Use @bind only for supported input bindings.",
+    "Return one self-contained function body for this request, not a whole script library.",
   ]
     .filter(Boolean)
     .join(" ");
@@ -5583,9 +5587,12 @@ function buildSceneLogicEntityContext() {
     return "";
   }
   const sections = [
+    ["voxels", "Voxels", "voxel"],
     ["players", "Players", "player"],
+    ["panels", "Panels", "panel"],
     ["primitives", "Primitives", "primitive"],
     ["models", "Models", "model"],
+    ["prefab_instances", "Prefab instances", "prefab_instance"],
     ["trigger_zones", "Trigger zones", "trigger"],
     ["texts", "Texts", "text"],
     ["particles", "Particles", "particle"],
@@ -5603,6 +5610,89 @@ function buildSceneLogicEntityContext() {
     }
   }
   return lines.join("\n");
+}
+
+function formatSceneLogicModuleContextEntry(entry = {}) {
+  const type = String(entry?.type ?? "value").trim().toLowerCase() || "value";
+  const name = String(entry?.name ?? "").trim();
+  if (!name) {
+    return "";
+  }
+  if (type === "enum" && Array.isArray(entry.values) && entry.values.length) {
+    return `${name}<enum:${entry.values.join("|")}>`;
+  }
+  if ((type === "number" || type === "integer") && Number.isFinite(entry.min) && Number.isFinite(entry.max)) {
+    return `${name}<${type}:${entry.min}..${entry.max}>`;
+  }
+  if (type === "vector3") {
+    return `${name}<vector3>`;
+  }
+  return `${name}<${type}>`;
+}
+
+function buildSceneLogicModuleContext() {
+  const blocks = [];
+  for (const [moduleKind, definition] of Object.entries(PRIVATE_WORLD_MODULE_DEFINITIONS)) {
+    if (moduleKind === "script.runtime") {
+      blocks.push([
+        `${moduleKind} [scope=scene|entity]`,
+        "params: custom @set constants with literal values (number, boolean, string, vector3)",
+        "bindings: (none)",
+        "program: line-based scripting statements run every tick",
+        "syntax: let name = expr · if (expr) return · if (expr) { ... } · assignment like self.position = expr",
+        "expressions: identifiers, property access, function calls, + - * /, comparisons, &&, ||, !",
+        "builtins: entity(id), entities(kind), players(), nearest(list, from), sort_by_distance(list, from), distance(a, b), normalize(v), length(v), vec(x,y,z), clamp(v,min,max), min(...), max(...), move_toward(from,to,max_step,stop_distance)",
+      ].join("\n"));
+      continue;
+    }
+    const params = Array.isArray(definition?.params)
+      ? definition.params.map((entry) => formatSceneLogicModuleContextEntry(entry)).filter(Boolean)
+      : [];
+    const bindings = Array.isArray(definition?.bindings)
+      ? definition.bindings.map((entry) => formatSceneLogicModuleContextEntry(entry)).filter(Boolean)
+      : [];
+    blocks.push([
+      `${moduleKind} [scope=${definition?.scope || "entity"}]`,
+      `params: ${params.length ? params.join(", ") : "(none)"}`,
+      `bindings: ${bindings.length ? bindings.join(", ") : "(none)"}`,
+    ].join("\n"));
+  }
+  blocks.push("rule_triggers: zone_enter, zone_exit, key_press, timer, scene_start, all_players_ready");
+  blocks.push("rule_actions: apply_force, teleport, move_platform, switch_scene, set_material, set_visibility, toggle_particles, set_text, set_screen_state, start_scene");
+  return blocks.join("\n\n");
+}
+
+function buildSceneLogicTargetCatalogContext() {
+  const scene = getSelectedScene();
+  const sceneDoc = scene?.compiled_doc?.runtime?.resolved_scene_doc ?? scene?.scene_doc ?? null;
+  if (!sceneDoc) {
+    return "";
+  }
+  const catalog = [...buildPrivateWorldScriptTargetCatalog(sceneDoc).values()];
+  if (!catalog.length) {
+    return "";
+  }
+  return catalog
+    .sort((left, right) => {
+      if (left.id === "scene") {
+        return -1;
+      }
+      if (right.id === "scene") {
+        return 1;
+      }
+      return String(left.target_kind ?? "").localeCompare(String(right.target_kind ?? ""))
+        || String(left.id ?? "").localeCompare(String(right.id ?? ""));
+    })
+    .map((entry) => `${entry.id} [${entry.target_kind || entry.target_scope || "entity"}]`)
+    .join("\n");
+}
+
+function buildSceneLogicLibraryContext() {
+  const functions = getSceneScriptFunctions().map((entry, index) => normalizeScriptFunctionEntry(entry, index));
+  if (!functions.length) {
+    return "";
+  }
+  return serializeScriptFunctionLibrary(functions);
 }
 
 function buildScreenAiObjective(entry, prompt) {
@@ -5736,6 +5826,7 @@ function buildAiRequestOptions(dialog = state.aiDialog) {
   if (!targetContext.valid) {
     throw new Error(targetContext.error || "That AI target is no longer available.");
   }
+  const isWorldScriptArtifact = dialog.artifactType === "world_script";
   return {
     provider: reasoning.provider,
     model: reasoning.model || "gpt-5.4-mini",
@@ -5748,8 +5839,23 @@ function buildAiRequestOptions(dialog = state.aiDialog) {
     targetLabel: targetContext.targetLabel,
     currentArtifact: targetContext.currentArtifact,
     viewportSummary: targetContext.viewportSummary,
-    entityContext: targetContext.entityContext,
+    entityContext: isWorldScriptArtifact
+      ? (targetContext.entityContext || buildSceneLogicEntityContext())
+      : targetContext.entityContext,
+    scriptModuleContext: isWorldScriptArtifact ? buildSceneLogicModuleContext() : "",
+    scriptTargetContext: isWorldScriptArtifact ? buildSceneLogicTargetCatalogContext() : "",
+    scriptLibraryContext: isWorldScriptArtifact ? buildSceneLogicLibraryContext() : "",
   };
+}
+
+function buildAiDialogValidationDiagnosticsPayload(diagnostics = []) {
+  return (Array.isArray(diagnostics) ? diagnostics : [])
+    .map((issue) => ({
+      line: Number(issue?.line) || 0,
+      message: String(issue?.message ?? "").trim(),
+    }))
+    .filter((issue) => issue.message)
+    .slice(0, 12);
 }
 
 function selectAiDialogThread(threadId = "") {
@@ -6128,35 +6234,51 @@ async function generateAiDialogResult() {
       }
       state.aiDialog.activePane = "result";
     } else {
-      const generatedText = await generateAi(kind, {
-        objective: request.objective,
-        sceneSummary: request.sceneSummary,
-        messages: activeThread.messages,
-        targetLabel: request.targetLabel,
-        currentArtifact: request.currentArtifact,
-        viewportSummary: request.viewportSummary,
-        entityContext: request.entityContext,
-        outputTarget: elements.aiDialogResult,
-        mirrorToAiOutput: state.aiDialog.targetKind === "world",
-      });
-      activeThread.result = String(generatedText ?? "").trim();
-      activeThread.generatedAsset = null;
-      activeThread.awaitingValidationClarification = false;
+      let scriptRepairAttempts = 0;
       if (kind === "script") {
-        const validation = buildAiDialogScriptValidationResult(activeThread.result);
-        activeThread.result = validation.normalizedBody;
-        if (!validation.ok) {
+        const generation = await generateValidatedAiDialogScriptResult({
+          objective: request.objective,
+          sceneSummary: request.sceneSummary,
+          messages: activeThread.messages,
+          targetLabel: request.targetLabel,
+          currentArtifact: request.currentArtifact,
+          viewportSummary: request.viewportSummary,
+          entityContext: request.entityContext,
+          scriptModuleContext: request.scriptModuleContext,
+          scriptTargetContext: request.scriptTargetContext,
+          scriptLibraryContext: request.scriptLibraryContext,
+        });
+        scriptRepairAttempts = generation.attempts;
+        activeThread.result = generation.validation.normalizedBody;
+        activeThread.generatedAsset = null;
+        activeThread.awaitingValidationClarification = false;
+        if (!generation.validation.ok) {
           state.aiDialog.busy = false;
-          if (validation.requiresUserClarification !== true) {
-            setAiDialogStatus(validation.diagnostics[0]?.message || "The generated script could not be validated.", "error");
+          if (generation.validation.requiresUserClarification !== true) {
+            setAiDialogStatus(generation.validation.diagnostics[0]?.message || "The generated script could not be validated.", "error");
             persistAiDialogThreadState();
             renderAiDialog();
             return;
           }
-          handleAiDialogInvalidScriptResult(validation, activeThread);
+          handleAiDialogInvalidScriptResult(generation.validation, activeThread);
           return;
         }
+      } else {
+        const generatedText = await generateAi(kind, {
+          objective: request.objective,
+          sceneSummary: request.sceneSummary,
+          messages: activeThread.messages,
+          targetLabel: request.targetLabel,
+          currentArtifact: request.currentArtifact,
+          viewportSummary: request.viewportSummary,
+          entityContext: request.entityContext,
+          outputTarget: elements.aiDialogResult,
+          mirrorToAiOutput: state.aiDialog.targetKind === "world",
+        });
+        activeThread.result = String(generatedText ?? "").trim();
       }
+      activeThread.generatedAsset = null;
+      activeThread.awaitingValidationClarification = false;
       touchAiDialogThread(activeThread);
       const applyOutcome = applyAiDialogTextToTarget(activeThread.result);
       if (applyOutcome.appliedResult) {
@@ -6168,7 +6290,9 @@ async function generateAiDialogResult() {
       } else if (applyOutcome.applied) {
         finalStatusMessage = kind === "html"
           ? "Generated HTML and applied to the screen."
-          : "Generated script and applied to the function.";
+          : (scriptRepairAttempts > 1
+              ? "Generated script, repaired it against scene validation, and applied it to the function."
+              : "Generated script and applied to the function.");
       } else {
         finalStatusMessage = applyOutcome.message;
       }
@@ -10276,6 +10400,9 @@ function buildScriptFunctionSummary(entry = {}, diagnostics = []) {
   const ruleLines = Array.isArray(parsedEntry.ruleLines)
     ? parsedEntry.ruleLines.map((line) => String(line?.line ?? "").trim()).filter(Boolean)
     : [];
+  const programLines = Array.isArray(parsedEntry.programLines)
+    ? parsedEntry.programLines.map((line) => String(line?.line ?? "").trim()).filter(Boolean)
+    : [];
   const moduleKind = String(parsedEntry.module_kind ?? "").trim();
   const targetId = String(parsedEntry.target_id ?? "").trim();
   const issues = Array.isArray(diagnostics) ? diagnostics.filter(Boolean) : [];
@@ -10290,15 +10417,17 @@ function buildScriptFunctionSummary(entry = {}, diagnostics = []) {
       primaryParams.length ? primaryParams.join(" · ") : "",
     ].filter(Boolean).join(" · ")
     : "";
+  const programPreview = programLines[0] || "";
+  const logicalLineCount = moduleKind === "script.runtime" ? programLines.length : ruleLines.length;
   return {
-    lineCount: ruleLines.length,
+    lineCount: logicalLineCount,
     moduleKind,
     targetId,
     issueCount: issues.length,
     issuePreview: issues[0]?.message || "",
     preview: issues.length > 0
       ? `${issues.length} issue${issues.length === 1 ? "" : "s"} · ${issues[0]?.message || ""}`
-      : (modulePreview || ruleLines[0] || "No rules yet"),
+      : (modulePreview || programPreview || ruleLines[0] || "No rules yet"),
   };
 }
 
@@ -10739,12 +10868,15 @@ function renderSceneLogicLibrary() {
       const diagnostics = diagnosticsByFunctionId.get(entry.id) ?? [];
       const summary = buildScriptFunctionSummary(entry, diagnostics);
       const isSelected = selectedFunction?.id === entry.id;
+      const lineLabel = summary.moduleKind === "script.runtime"
+        ? `${summary.lineCount} script line${summary.lineCount === 1 ? "" : "s"}`
+        : `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}`;
       return `
         <article class="pw-script-card ${isSelected ? "is-active" : ""} ${summary.issueCount > 0 ? "has-issues" : ""}" data-script-function-id="${htmlEscape(entry.id)}">
           <div class="pw-script-card__head">
             <div class="pw-script-card__title">
               <strong>${htmlEscape(entry.name)}</strong>
-              <span>${htmlEscape(summary.moduleKind ? `${summary.moduleKind}${summary.lineCount ? ` · ${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}` : ""}` : `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}`)}</span>
+              <span>${htmlEscape(summary.moduleKind ? `${summary.moduleKind}${summary.lineCount ? ` · ${lineLabel}` : ""}` : lineLabel)}</span>
             </div>
             <div class="pw-script-card__badges">
               ${summary.issueCount > 0 ? `<span class="pw-script-card__badge is-warning">${htmlEscape(`${summary.issueCount} issue${summary.issueCount === 1 ? "" : "s"}`)}</span>` : ""}
@@ -10824,9 +10956,12 @@ function renderSceneLogicLibrary() {
     }
   }
   if (elements.scriptFunctionMeta) {
+    const lineLabel = summary.moduleKind === "script.runtime"
+      ? `${summary.lineCount} script line${summary.lineCount === 1 ? "" : "s"}`
+      : `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}`;
     elements.scriptFunctionMeta.textContent = [
-      summary.moduleKind ? `module ${summary.moduleKind}${summary.targetId ? ` → ${summary.targetId}` : ""}` : `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}`,
-      summary.moduleKind && summary.lineCount ? `${summary.lineCount} rule${summary.lineCount === 1 ? "" : "s"}` : "",
+      summary.moduleKind ? `module ${summary.moduleKind}${summary.targetId ? ` → ${summary.targetId}` : ""}` : lineLabel,
+      summary.moduleKind && summary.lineCount ? lineLabel : "",
       diagnostics.length > 0 ? `${diagnostics.length} issue${diagnostics.length === 1 ? "" : "s"}` : "",
       "comments are okay",
       "saved as one scene script behind the scenes",
@@ -25835,6 +25970,12 @@ async function generateAi(kind, options = {}) {
       currentArtifact: options.currentArtifact ?? "",
       viewportSummary: options.viewportSummary ?? "",
       entityContext: options.entityContext ?? "",
+      scriptModuleContext: options.scriptModuleContext ?? "",
+      scriptTargetContext: options.scriptTargetContext ?? "",
+      scriptLibraryContext: options.scriptLibraryContext ?? "",
+      candidateArtifact: options.candidateArtifact ?? "",
+      validationDiagnostics: buildAiDialogValidationDiagnosticsPayload(options.validationDiagnostics ?? []),
+      repairMode: options.repairMode === true,
     },
   });
   const text = String(payload.text ?? "").trim();
@@ -25846,6 +25987,44 @@ async function generateAi(kind, options = {}) {
   setAiBuilderStatus(kind === "html" ? "Generated screen HTML." : "Generated script.", "success");
   pushEvent("ai:generated", kind === "html" ? "Generated screen HTML" : "Generated script");
   return text;
+}
+
+async function generateValidatedAiDialogScriptResult(request = {}) {
+  let latestText = "";
+  let latestValidation = null;
+  let attempts = 0;
+  for (let attempt = 0; attempt < AI_DIALOG_SCRIPT_REPAIR_LIMIT; attempt += 1) {
+    attempts = attempt + 1;
+    const repairMode = attempt > 0;
+    if (repairMode) {
+      setAiDialogStatus(
+        `Repairing the generated script against validator feedback (${attempt}/${AI_DIALOG_SCRIPT_REPAIR_LIMIT - 1})...`,
+        "",
+      );
+      renderAiDialog();
+    }
+    latestText = await generateAi("script", {
+      ...request,
+      outputTarget: null,
+      mirrorToAiOutput: false,
+      candidateArtifact: repairMode ? latestValidation?.normalizedBody ?? latestText : "",
+      validationDiagnostics: repairMode ? latestValidation?.diagnostics ?? [] : [],
+      repairMode,
+    });
+    latestValidation = buildAiDialogScriptValidationResult(latestText);
+    latestText = latestValidation.normalizedBody;
+    if (latestValidation.ok) {
+      break;
+    }
+  }
+  if (elements.aiDialogResult) {
+    elements.aiDialogResult.value = latestText || "";
+  }
+  return {
+    text: latestText,
+    validation: latestValidation ?? buildAiDialogScriptValidationResult(latestText),
+    attempts,
+  };
 }
 
 function openWorldAiDialog(kind = "html") {

@@ -2542,3 +2542,68 @@ test("runtime heading makes D strafe relative to facing without rotating the pla
   assert.ok(snapshot.players[0].position.z < before.z);
   assert.ok(Math.abs(snapshot.players[0].position.x - before.x) < 0.5);
 });
+
+test("script.runtime can move a primitive toward the nearest player with vector math", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [{
+      id: "sphere",
+      shape: "sphere",
+      position: { x: 0, y: 1, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      rigid_mode: "ghost",
+      physics: { ignore_gravity: true },
+    }],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 8, y: 1, z: 0 },
+      scale: 1,
+      body_mode: "ghost",
+      camera_mode: "third_person",
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    prefab_instances: [],
+    particles: [],
+    rules: [],
+    script_dsl: `
+# function[chase]: Sphere Chase
+@module script.runtime
+@target sphere
+@set chase_speed 10
+@set stop_distance 0.5
+
+let target = nearest(players(), self.position)
+if (!target) return
+if (distance(self.position, target.position) <= stop_distance) return
+let direction = normalize(target.position - self.position)
+self.position = self.position + direction * (chase_speed * dt)
+    `,
+  };
+  const simulation = buildSimulation({
+    sceneDoc,
+    participants: [],
+    sceneStarted: true,
+    status: "started",
+  });
+  const sphere = simulation.runtime.dynamicObjects[0];
+  assert.ok(sphere);
+  const initialDistance = Math.abs(simulation.runtime.players[0].position.x - sphere.position.x);
+
+  for (let index = 0; index < 8; index += 1) {
+    stepPrivateWorldSimulation(simulation.runtime, {
+      deltaMs: 50,
+      pendingInputs: [],
+    });
+  }
+
+  const finalDistance = Math.abs(simulation.runtime.players[0].position.x - sphere.position.x);
+  assert.ok(sphere.position.x > 0.5);
+  assert.ok(finalDistance < initialDistance);
+  assert.ok(finalDistance >= 0.45);
+});

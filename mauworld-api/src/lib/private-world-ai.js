@@ -70,6 +70,45 @@ function buildSharedContext(input = {}) {
   return lines.filter(Boolean).join("\n");
 }
 
+function normalizeValidationDiagnostics(input = []) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return input
+    .map((entry) => {
+      const message = String(entry?.message ?? entry ?? "").trim();
+      if (!message) {
+        return "";
+      }
+      const line = Number(entry?.line) || 0;
+      return line > 0 ? `Line ${line}: ${message}` : message;
+    })
+    .filter(Boolean);
+}
+
+function buildScriptAuthoritativeContext(input = {}, options = {}) {
+  const includeRepair = options.includeRepair === true;
+  const diagnostics = normalizeValidationDiagnostics(input.validationDiagnostics);
+  const sections = [
+    input.scriptModuleContext
+      ? `Authoritative module surface:\n${clipPromptText(input.scriptModuleContext, 12000)}`
+      : "",
+    input.scriptTargetContext
+      ? `Authoritative scene targets:\n${clipPromptText(input.scriptTargetContext, 12000)}`
+      : "",
+    input.scriptLibraryContext
+      ? `Existing scene logic library:\n${clipPromptText(input.scriptLibraryContext, 14000)}`
+      : "",
+    includeRepair && input.candidateArtifact
+      ? `Candidate DSL draft to repair:\n${clipPromptText(input.candidateArtifact, 14000)}`
+      : "",
+    includeRepair && diagnostics.length
+      ? `Validator diagnostics to fix:\n${diagnostics.map((entry) => `- ${entry}`).join("\n")}`
+      : "",
+  ];
+  return sections.filter(Boolean).join("\n\n");
+}
+
 function buildBrainstormPrompt(input = {}) {
   const artifactType = normalizeArtifactType(input.artifactType);
   const transcript = buildMessageTranscript(input.messages);
@@ -92,12 +131,18 @@ function buildBrainstormPrompt(input = {}) {
     introByType[artifactType],
     holdBackByType[artifactType],
     "Reply like a practical collaborator.",
+    artifactType === "world_script"
+      ? "Use only the authoritative Mauworld DSL surface below. If the requested behavior is unsupported, say so plainly instead of inventing modules, params, bindings, triggers, or actions."
+      : "",
     "Always respond with exactly these sections in order:",
     "Assumptions",
     "Questions",
     "Next direction",
     "Keep it concise. Ask only the highest-value questions. If nothing is missing, say so.",
     buildSharedContext(input),
+    artifactType === "world_script"
+      ? buildScriptAuthoritativeContext(input)
+      : "",
     input.objective ? `Builder goal:\n${clipPromptText(input.objective, 1600)}` : "",
     transcript ? `Thread so far:\n${transcript}` : "",
   ]
@@ -126,11 +171,17 @@ function buildScreenHtmlPrompt(input = {}) {
 
 function buildScriptPrompt(input = {}) {
   const transcript = buildMessageTranscript(input.messages);
+  const repairMode = input.repairMode === true || Boolean(input.candidateArtifact) || normalizeValidationDiagnostics(input.validationDiagnostics).length > 0;
   return [
     "Generate a concise Mauworld private-world modular DSL script.",
     "Use the brainstorm thread and context below as the source of truth.",
+    "Only use supported modules, params, bindings, triggers, actions, and target ids from the authoritative context below.",
+    "Use @target for entity, player, or scene ids. Use @bind only for supported input bindings.",
+    "If the requested behavior is impossible with the current DSL or runtime, do not invent syntax or misuse physics.world. Keep the script valid and explain the limitation in comments.",
+    repairMode ? "Repair the candidate DSL draft below so it passes the validator while preserving the builder's intent." : "",
     "The script can mix function blocks, directives, comments, and trigger/action rule lines.",
     "Function blocks must use headers like: # function[my_function_id]: My Function Name",
+    "Unless the builder explicitly asks for a whole library, return one self-contained function body or DSL snippet for a single function.",
     "Supported directives inside a function:",
     "@module <kind>",
     "@target <player_id|entity_id|scene>",
@@ -138,7 +189,7 @@ function buildScriptPrompt(input = {}) {
     "@bind <binding> <key_or_mouse_token>",
     "@enabled <true|false>",
     "Supported module kinds:",
-    "playmode.wasd_jump, camera.overworld_drag_pan, behavior.face_mouse_orthogonal, physics.world.",
+    "playmode.wasd_jump, camera.overworld_drag_pan, behavior.face_mouse_orthogonal, physics.world, script.runtime.",
     "Common editable playmode.wasd_jump bindings:",
     "move_forward_key, move_back_key, move_left_key, move_right_key, jump_key, sprint_key, interact_key, fire_key, alt_fire_key.",
     "Common editable playmode.wasd_jump params:",
@@ -149,11 +200,21 @@ function buildScriptPrompt(input = {}) {
     "enabled, snap_mode, turn_smoothing, rotate_body, rotate_weapon_only, deadzone_px.",
     "Common editable physics.world params:",
     "gravity, default_friction, default_restitution, terminal_velocity.",
+    "script.runtime is the real programmable path for math, nearest-target logic, and per-tick movement.",
+    "script.runtime rules:",
+    "- use @target scene or @target <entity_id>",
+    "- use @set for custom constants like chase_speed 12 or stop_distance 1.5",
+    "- non-directive lines are script statements that run every tick",
+    "- supported statements: let name = expr, if (expr) return, if (expr) { ... }, assignment, expression calls, return",
+    "- supported expressions: identifiers, property access, function calls, + - * /, comparisons, &&, ||, !",
+    "- supported builtins: entity(id), entities(kind), players(), nearest(list, from), sort_by_distance(list, from), distance(a, b), normalize(v), length(v), vec(x,y,z), clamp(v,min,max), min(...), max(...), move_toward(from,to,max_step,stop_distance)",
+    "- special variables: self, scene, dt, time, plus any @set constants",
+    "- writable properties include self.position, self.position.x, self.rotation, self.velocity, scene.gravity, and visible/value where supported",
     "Use readable comments when a placeholder or reminder should stay non-running.",
     "Legacy trigger/action rule lines are still valid. Available triggers:",
     "zone_enter, zone_exit, key_press, timer, scene_start, all_players_ready.",
     "Available actions:",
-    "apply_force, teleport, move_platform, switch_scene, set_material, set_visibility, toggle_particles, set_text, start_scene.",
+    "apply_force, teleport, move_platform, switch_scene, set_material, set_visibility, toggle_particles, set_text, set_screen_state, start_scene.",
     "Supported mouse input tokens are mouse_left, mouse_right, and mouse_middle.",
     "Directional force rules can use syntax like: key_press key mouse_left from player_1 -> apply_force to crate direction facing strength 12",
     "For moving platforms, use syntax like:",
@@ -162,6 +223,7 @@ function buildScriptPrompt(input = {}) {
     "Moving platforms work best on rigid objects with ignore_gravity and carry_riders enabled.",
     "Do not output a runnable bullet-launch action yet. Projectile spawning is not implemented, so keep any bullet example commented as a placeholder only.",
     buildSharedContext(input),
+    buildScriptAuthoritativeContext(input, { includeRepair: true }),
     `User objective: ${input.objective || "Create basic interactive world logic"}`,
     transcript ? `Brainstorm thread:\n${transcript}` : "",
     "",

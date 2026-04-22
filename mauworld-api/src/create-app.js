@@ -819,6 +819,12 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       targetLabel: req.body?.targetLabel,
       currentArtifact: req.body?.currentArtifact,
       entityContext: req.body?.entityContext,
+      scriptModuleContext: req.body?.scriptModuleContext,
+      scriptTargetContext: req.body?.scriptTargetContext,
+      scriptLibraryContext: req.body?.scriptLibraryContext,
+      candidateArtifact: req.body?.candidateArtifact,
+      validationDiagnostics: req.body?.validationDiagnostics,
+      repairMode: req.body?.repairMode,
     });
     jsonOk(res, payload);
   }));
@@ -839,6 +845,12 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       currentArtifact: req.body?.currentArtifact,
       viewportSummary: req.body?.viewportSummary,
       entityContext: req.body?.entityContext,
+      scriptModuleContext: req.body?.scriptModuleContext,
+      scriptTargetContext: req.body?.scriptTargetContext,
+      scriptLibraryContext: req.body?.scriptLibraryContext,
+      candidateArtifact: req.body?.candidateArtifact,
+      validationDiagnostics: req.body?.validationDiagnostics,
+      repairMode: req.body?.repairMode,
     });
     jsonOk(res, payload);
   }));

@@ -248,3 +248,40 @@ scene_start -> set_screen_state to score_screen path card.type value fire
   assert.equal(compiled.rules[1].payload.path, "card.type");
   assert.equal(compiled.rules[1].payload.value, "fire");
 });
+
+test("script.runtime functions compile custom constants and per-tick program bodies", () => {
+  const sceneDoc = {
+    players: [{ id: "player_one" }],
+    primitives: [{ id: "sphere" }],
+  };
+  const entityAliases = new Map([
+    ["player_one", "player_one"],
+    ["sphere", "sphere"],
+  ]);
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[chase]: Sphere Chase
+@module script.runtime
+@target sphere
+@set chase_speed 12
+@set stop_distance 1.5
+
+let target = nearest(players(), self.position)
+if (!target) return
+if (distance(self.position, target.position) <= stop_distance) return
+let direction = normalize(target.position - self.position)
+self.position = self.position + direction * (chase_speed * dt)
+  `, {
+    sceneDoc,
+    entityAliases,
+  });
+
+  assert.deepEqual(compiled.errors, []);
+  assert.equal(compiled.rules.length, 0);
+  assert.equal(compiled.functions[0].module_kind, "script.runtime");
+  assert.equal(compiled.functions[0].programLines.length, 5);
+  assert.equal(compiled.script_config.runtime_scripts.length, 1);
+  assert.equal(compiled.script_config.runtime_scripts[0].constants.chase_speed, 12);
+  assert.equal(compiled.script_config.runtime_scripts[0].program_ast.body[0].type, "VariableDeclaration");
+  assert.equal(compiled.script_config.runtime_scripts[0].program_ast.body[3].type, "VariableDeclaration");
+  assert.equal(compiled.script_config.runtime_scripts[0].program_ast.body[4].type, "AssignmentStatement");
+});
