@@ -66,7 +66,7 @@ async function syncSessionState(session = null) {
     renderAuthState({
       state: "signed-out",
       badge: "Guest mode",
-      text: "You are not signed in. Public World works now. Sign in when you want private worlds and nearby sharing.",
+      text: "You are browsing as a guest. Public World is ready now. Sign in if you want private rooms.",
       linkLabel: "Sign in for Private Worlds",
     });
     return;
@@ -88,8 +88,8 @@ async function syncSessionState(session = null) {
     state: "signed-in",
     badge: "Signed in",
     text: username
-      ? `Signed in as @${username}. Private Worlds and nearby sharing are ready.`
-      : "Signed in. Private Worlds and nearby sharing are ready.",
+      ? `Signed in as @${username}. Public World and Private Worlds are ready.`
+      : "Signed in. Public World and Private Worlds are ready.",
     linkLabel: "Open Private Worlds",
   });
 }
@@ -98,7 +98,7 @@ async function initAuthState() {
   renderAuthState({
     state: "checking",
     badge: "Checking account",
-    text: "Looking for your Mauworld session. Public World works either way.",
+    text: "Checking your account. Public World is available either way.",
     linkLabel: "Private Worlds",
   });
 
@@ -115,7 +115,7 @@ async function initAuthState() {
     renderAuthState({
       state: "error",
       badge: "Status unavailable",
-      text: "Could not confirm your login right now. Public World is still available.",
+      text: "We could not confirm your login right now. Public World is still available.",
       linkLabel: "Private Worlds",
     });
   }
