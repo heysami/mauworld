@@ -13,8 +13,8 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/social/styles.css" />
-    <link rel="stylesheet" href="/social/world.css?v=20260422gamelibraryseparate1" />
-    <link rel="stylesheet" href="/social/private-worlds.css?v=20260422aiconsistency3" />
+    <link rel="stylesheet" href="/social/world.css?v=20260422fullrelease1" />
+    <link rel="stylesheet" href="/social/private-worlds.css?v=20260422fullrelease1" />
   </head>
   <body class="world-body private-worlds-body is-play-mode">
     <main class="world-page private-worlds-shell">
@@ -55,7 +55,14 @@
 
         <div class="pw-mau-panel__session">
           <span data-private-session-label>Sign in to open your private worlds.</span>
-          <button type="button" class="pw-ghost-button" data-private-open-access>Sign In</button>
+          <button type="button" class="pw-ghost-button pw-session-trigger" data-private-open-access aria-label="Sign in">
+            <span class="pw-session-trigger__icon" data-private-open-access-icon hidden aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.69-8 6v1h16v-1c0-3.31-3.58-6-8-6Z" fill="currentColor"/>
+              </svg>
+            </span>
+            <span data-private-open-access-label>Sign In</span>
+          </button>
         </div>
 
         <section class="pw-mode-strip" aria-label="World mode">
@@ -73,6 +80,9 @@
               <span>Editing scene</span>
               <select data-private-build-scene-select aria-label="Choose scene to edit in build mode"></select>
             </label>
+            <div class="pw-action-grid">
+              <button type="button" data-private-panel-library disabled>Library</button>
+            </div>
           </div>
           <div class="pw-mode-strip__runtime">
             <div class="pw-action-grid pw-action-grid--runtime" data-private-runtime-actions>
@@ -265,7 +275,6 @@
               <div class="pw-action-grid pw-action-grid--world">
                 <button type="button" data-private-copy-link disabled>Copy Entry</button>
                 <button type="button" data-private-native-share disabled>Share Entry</button>
-                <button type="button" data-private-panel-library disabled>Library</button>
                 <button type="button" data-private-panel-export disabled>Export</button>
               </div>
             </div>
@@ -289,6 +298,8 @@
                   <span>Provider</span>
                   <select name="reasoningProvider">
                     <option value="openai">OpenAI</option>
+                    <option value="anthropic">Claude</option>
+                    <option value="google">Google Gemini</option>
                   </select>
                 </label>
                 <label>
@@ -377,6 +388,26 @@
                 </label>
               </div>
               <button type="submit" data-save-collaborator disabled>Add Editor</button>
+            </form>
+            <form class="pw-collaborator-form pw-world-access-form" data-world-access-form>
+              <div class="pw-panel__header">
+                <div>
+                  <h3>Viewer export policy</h3>
+                  <p class="pw-world-section__copy">Choose whether signed-in people who are not editors can export or fork this world.</p>
+                </div>
+              </div>
+              <label class="pw-checkbox">
+                <input type="checkbox" name="allowNonEditorExport" data-world-access-export />
+                <span>Allow non-editors to export a package</span>
+              </label>
+              <label class="pw-checkbox">
+                <input type="checkbox" name="allowNonEditorFork" data-world-access-fork />
+                <span>Allow non-editors to fork into their own private copy</span>
+              </label>
+              <div class="pw-inline-actions">
+                <button type="button" data-save-world-access disabled>Save world access</button>
+              </div>
+              <p class="pw-status" data-world-access-status aria-live="polite"></p>
             </form>
             <div class="pw-collaborator-list" data-collaborator-list></div>
           </section>
@@ -521,21 +552,92 @@
               </div>
             </form>
 
-            <form class="pw-profile-form" data-profile-form hidden>
-              <label>
-                <span>Username</span>
-                <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
-              </label>
-              <label>
-                <span>Display Name</span>
-                <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
-              </label>
-              <button type="submit">Save Profile</button>
-            </form>
+          </section>
 
-            <div class="pw-inline-actions pw-account-actions" data-account-actions hidden>
-              <button type="button" class="is-muted" data-account-signout>Sign Out</button>
+          <section class="pw-launcher-section" data-launcher-section="profile" hidden>
+            <div class="pw-launcher-profile__tabs" role="tablist" aria-label="My profile sections">
+              <button type="button" class="world-panel__tab is-active" data-profile-launcher-tab="account" role="tab" aria-selected="true">Account</button>
+              <button type="button" class="world-panel__tab" data-profile-launcher-tab="worlds" role="tab" aria-selected="false">Private Worlds</button>
+              <button type="button" class="world-panel__tab" data-profile-launcher-tab="games" role="tab" aria-selected="false">Game Library</button>
+              <button type="button" class="world-panel__tab" data-profile-launcher-tab="resources" role="tab" aria-selected="false">Shared Resources</button>
             </div>
+
+            <section class="pw-launcher-profile__pane" data-profile-pane="account" role="tabpanel">
+              <div class="pw-panel__header">
+                <div>
+                  <h2>Account</h2>
+                  <p class="pw-launcher-section__copy">Edit your profile here, or sign out when you are done.</p>
+                </div>
+              </div>
+              <form class="pw-profile-form" data-profile-form hidden>
+                <label>
+                  <span>Username</span>
+                  <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
+                </label>
+                <label>
+                  <span>Display Name</span>
+                  <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
+                </label>
+                <button type="submit">Save Profile</button>
+              </form>
+
+              <div class="pw-inline-actions pw-account-actions" data-account-actions hidden>
+                <button type="button" class="is-muted" data-account-signout>Sign Out</button>
+              </div>
+            </section>
+
+            <section class="pw-launcher-profile__pane" data-profile-pane="worlds" role="tabpanel" hidden>
+              <div class="pw-panel__header">
+                <div>
+                  <h2>Private worlds</h2>
+                  <p class="pw-launcher-section__copy">Jump into your saved worlds, create a new one, or refresh your list.</p>
+                </div>
+              </div>
+              <div class="pw-launcher-browser__toolbar">
+                <label class="pw-search">
+                  <span>Search</span>
+                  <input type="search" data-profile-world-search placeholder="Search your private worlds" />
+                </label>
+                <div class="pw-inline-actions pw-launcher-actions">
+                  <button type="button" data-profile-open-create-world>Create</button>
+                  <button type="button" class="is-muted" data-profile-refresh-worlds>Refresh</button>
+                </div>
+              </div>
+              <div class="world-results pw-launcher-browser__results" data-profile-world-list></div>
+            </section>
+
+            <section class="pw-launcher-profile__pane" data-profile-pane="games" role="tabpanel" hidden>
+              <div class="pw-panel__header">
+                <div>
+                  <h2>Game library</h2>
+                  <p class="pw-launcher-section__copy">Open your saved games, generate new ones, or import packages before sharing them nearby.</p>
+                </div>
+              </div>
+              <div class="pw-profile-card" data-profile-game-summary></div>
+              <div class="pw-inline-actions">
+                <button type="button" data-profile-open-game-library>Open Game Library</button>
+              </div>
+            </section>
+
+            <section class="pw-launcher-profile__pane" data-profile-pane="resources" role="tabpanel" hidden>
+              <div class="pw-panel__header">
+                <div>
+                  <h2>Shared resources</h2>
+                  <p class="pw-launcher-section__copy">Browse textures, models, sounds, and video textures you can reuse across your private worlds.</p>
+                </div>
+              </div>
+              <div class="pw-launcher-browser__toolbar">
+                <label class="pw-search">
+                  <span>Search</span>
+                  <input type="search" data-profile-resource-search placeholder="Search shared resources" />
+                </label>
+                <div class="pw-inline-actions pw-launcher-actions">
+                  <button type="button" class="is-muted" data-profile-refresh-resources>Refresh</button>
+                </div>
+              </div>
+              <p class="pw-status" data-profile-resource-status aria-live="polite"></p>
+              <div class="pw-profile-resource-list" data-profile-resource-list></div>
+            </section>
           </section>
         </div>
         <p class="pw-status pw-launcher__status" data-launcher-status data-auth-status aria-live="polite"></p>
@@ -655,6 +757,10 @@
         <button type="button" class="pw-tool" data-add-trigger disabled>
           <strong>Trigger</strong>
           <span>Invisible zone</span>
+        </button>
+        <button type="button" class="pw-tool" data-add-sound disabled>
+          <strong>Sound</strong>
+          <span>Spatial audio source</span>
         </button>
         <button type="button" class="pw-tool" data-add-particle disabled>
           <strong>Effect</strong>
@@ -824,6 +930,7 @@
                     <option value="screen">Screens</option>
                     <option value="text">3D Text</option>
                     <option value="trigger">Trigger Zones</option>
+                    <option value="sound">Sounds</option>
                     <option value="particle">Particles</option>
                     <option value="prefab_instance">Prefab Instances</option>
                   </select>
@@ -850,12 +957,16 @@
                   <div class="pw-inline-actions">
                     <button type="button" class="is-muted" data-asset-generate-texture disabled>New texture</button>
                     <button type="button" class="is-muted" data-asset-generate-model disabled>New model</button>
+                    <button type="button" class="is-muted" data-asset-upload-video disabled>Upload video</button>
+                    <button type="button" class="is-muted" data-asset-upload-sound disabled>Upload sound</button>
                   </div>
                 </div>
+                <input type="file" accept="video/*" data-asset-upload-video-input hidden />
+                <input type="file" accept="audio/*" data-asset-upload-sound-input hidden />
                 <div class="pw-asset-context" data-asset-context hidden></div>
                 <label class="pw-entity-search">
                   <span>Find asset</span>
-                  <input type="search" data-asset-search placeholder="Search textures and models" />
+                  <input type="search" data-asset-search placeholder="Search textures, video textures, models, and sounds" />
                 </label>
                 <label class="pw-entity-filter">
                   <span>Type</span>
@@ -863,6 +974,7 @@
                     <option value="all">All assets</option>
                     <option value="texture">Textures</option>
                     <option value="model">Models</option>
+                    <option value="sound">Sounds</option>
                   </select>
                 </label>
                 <p class="pw-entity-search__hint" data-asset-status>Shared across your private worlds.</p>
@@ -971,6 +1083,6 @@
         }
       }
     </script>
-    <script type="module" src="/social/private-worlds.js?v=20260422scriptruntime1"></script>
+    <script type="module" src="/social/private-worlds.js?v=20260422fullrelease1"></script>
   </body>
 </html>

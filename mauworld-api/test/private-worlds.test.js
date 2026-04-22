@@ -264,6 +264,48 @@ test("normalizeSceneDoc preserves texture asset ids on materials", () => {
   assert.equal(scene.primitives[0].material.texture_preset, "none");
 });
 
+test("normalizeSceneDoc preserves video texture ids and animation playback settings", () => {
+  const scene = normalizeSceneDoc({
+    primitives: [
+      {
+        id: "holo_sign",
+        asset_id: "asset_model_sign",
+        animation_clip: "Idle",
+        animation_autoplay: true,
+        animation_loop: false,
+        animation_speed: 1.75,
+        material: {
+          color: "#ffffff",
+          video_asset_id: "asset_video_screen",
+        },
+      },
+    ],
+    players: [
+      {
+        id: "hero",
+        asset_id: "asset_model_player",
+        animation_clip: "Run",
+        animation_autoplay: true,
+        animation_speed: 0.8,
+      },
+    ],
+  });
+
+  assert.equal(scene.primitives[0].material.video_asset_id, "asset_video_screen");
+  assert.equal(scene.primitives[0].animation_clip, "Idle");
+  assert.equal(scene.primitives[0].animation_autoplay, true);
+  assert.equal(scene.primitives[0].animation_loop, false);
+  assert.equal(scene.primitives[0].animation_speed, 1.75);
+  assert.equal(scene.players[0].animation_clip, "Run");
+  assert.equal(scene.players[0].animation_autoplay, true);
+  assert.equal(scene.players[0].animation_loop, true);
+  assert.equal(scene.players[0].animation_speed, 0.8);
+  assert.deepEqual(
+    new Set(collectPrivateWorldAssetIds(scene)),
+    new Set(["asset_model_sign", "asset_video_screen", "asset_model_player"]),
+  );
+});
+
 test("normalizeSceneDoc keeps primitive model skin asset ids and collects their linked assets", () => {
   const scene = normalizeSceneDoc({
     primitives: [
@@ -313,6 +355,35 @@ test("normalizeSceneDoc keeps player appearance asset ids and collects their lin
   assert.deepEqual(
     new Set(collectPrivateWorldAssetIds(scene)),
     new Set(["asset_model_player", "asset_texture_player"]),
+  );
+});
+
+test("normalizeSceneDoc keeps sounds and collects their linked assets", () => {
+  const scene = normalizeSceneDoc({
+    sounds: [
+      {
+        id: "alarm_sound",
+        label: "Alarm",
+        asset_id: "asset_sound_alarm",
+        autoplay: true,
+        loop: true,
+        spatial: false,
+        volume: 0.65,
+        max_distance: 42,
+      },
+    ],
+  });
+
+  assert.equal(scene.sounds.length, 1);
+  assert.equal(scene.sounds[0].asset_id, "asset_sound_alarm");
+  assert.equal(scene.sounds[0].autoplay, true);
+  assert.equal(scene.sounds[0].loop, true);
+  assert.equal(scene.sounds[0].spatial, false);
+  assert.equal(scene.sounds[0].volume, 0.65);
+  assert.equal(scene.sounds[0].max_distance, 42);
+  assert.deepEqual(
+    new Set(collectPrivateWorldAssetIds(scene)),
+    new Set(["asset_sound_alarm"]),
   );
 });
 
@@ -491,6 +562,8 @@ test("export validation preserves prefab docs and locked lineage credits", () =>
       about: "A social room",
       max_viewers: 20,
       max_players: 8,
+      allow_non_editor_export: true,
+      allow_non_editor_fork: false,
       origin_world_id: "mw_origin123",
       origin_creator_username: "maker",
       origin_world_name: "Lantern Hall",
@@ -525,6 +598,8 @@ test("export validation preserves prefab docs and locked lineage credits", () =>
   assert.equal(parsed.credits.origin_world_id, "mw_origin123");
   assert.equal(parsed.credits.origin_creator_username, "maker");
   assert.equal(parsed.world.default_scene_name, "Main Scene");
+  assert.equal(parsed.world.allow_non_editor_export, true);
+  assert.equal(parsed.world.allow_non_editor_fork, false);
   assert.equal(parsed.prefabs.length, 1);
   assert.equal(parsed.prefabs[0].prefab_doc.primitives[0].id, "primitive_portal");
   assert.equal(parsed.prefabs[0].prefab_doc.texts[0].id, "text3d_text-portal");
@@ -912,4 +987,36 @@ test("compileSceneDoc keeps primitive model skins attached to runtime dynamic ob
   assert.equal(compiled.runtime.dynamic_objects[0].entity_kind, "primitive");
   assert.equal(compiled.runtime.dynamic_objects[0].asset_id, "asset_model_crate");
   assert.deepEqual(compiled.runtime.dynamic_objects[0].collider_scale, { x: 3, y: 2, z: 4 });
+});
+
+test("compileSceneDoc keeps sound resources in runtime scene data and stats", () => {
+  const compiled = compileSceneDoc({
+    sounds: [
+      {
+        id: "alarm_sound",
+        asset_id: "asset_sound_alarm",
+        position: { x: 2, y: 3, z: 4 },
+        volume: 0.6,
+        loop: true,
+        autoplay: true,
+        spatial: false,
+        max_distance: 64,
+      },
+    ],
+  }, {
+    world_type: "room",
+    width: 40,
+    length: 20,
+    height: 10,
+  });
+
+  assert.equal(compiled.stats.sound_count, 1);
+  assert.equal(compiled.runtime.resolved_scene_doc.sounds.length, 1);
+  assert.equal(compiled.runtime.sounds.length, 1);
+  assert.equal(compiled.runtime.sounds[0].id, compiled.runtime.resolved_scene_doc.sounds[0].id);
+  assert.match(compiled.runtime.sounds[0].id, /^sound_/);
+  assert.equal(compiled.runtime.sounds[0].asset_id, "asset_sound_alarm");
+  assert.equal(compiled.runtime.sounds[0].playing, true);
+  assert.equal(compiled.runtime.sounds[0].play_revision, 1);
+  assert.equal(compiled.runtime.sounds[0].spatial, false);
 });

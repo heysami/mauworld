@@ -79,6 +79,8 @@ const ALLOWED_RULE_ACTIONS = new Set([
   "set_material",
   "set_visibility",
   "toggle_particles",
+  "play_sound",
+  "stop_sound",
   "set_text",
   "set_screen_state",
   "start_scene",
@@ -369,7 +371,22 @@ function sanitizeMaterial(input = {}, fallbackColor = "#c8d0d8") {
     color: sanitizeColor(input.color, fallbackColor),
     texture_preset: sanitizeTexturePreset(input.texture_preset ?? input.texturePreset, "none"),
     texture_asset_id: String(input.texture_asset_id ?? input.textureAssetId ?? "").trim() || null,
+    video_asset_id: String(input.video_asset_id ?? input.videoAssetId ?? "").trim() || null,
     emissive_intensity: Number(clampNumber(input.emissive_intensity ?? input.emissiveIntensity, 0, 0, 8).toFixed(4)),
+  };
+}
+
+function sanitizeAnimationSettings(input = {}) {
+  return {
+    animation_clip: String(input.animation_clip ?? input.animationClip ?? "").trim() || null,
+    animation_autoplay: input.animation_autoplay === true || input.animationAutoplay === true,
+    animation_loop: input.animation_loop !== false && input.animationLoop !== false,
+    animation_speed: Number(clampNumber(
+      input.animation_speed ?? input.animationSpeed,
+      1,
+      0,
+      4,
+    ).toFixed(4)),
   };
 }
 
@@ -407,6 +424,7 @@ function sanitizePrimitiveEntry(entry = {}, index = 0, options = {}) {
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
     particle_effect: String(entry.particle_effect ?? entry.particleEffect ?? "").trim() || null,
     trail_effect: String(entry.trail_effect ?? entry.trailEffect ?? "").trim() || null,
+    ...sanitizeAnimationSettings(entry),
   };
 }
 
@@ -442,6 +460,7 @@ function sanitizeModelEntry(entry = {}, index = 0, options = {}) {
       : "rigid",
     invisible: entry.invisible === true,
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
+    ...sanitizeAnimationSettings(entry),
   };
 }
 
@@ -630,6 +649,7 @@ function sanitizePlayerEntry(entry = {}, index = 0, options = {}) {
     jump_enabled: jumpEnabled,
     body_mode: normalizedBodyMode,
     occupiable: entry.occupiable !== false,
+    ...sanitizeAnimationSettings(entry),
   };
 }
 
@@ -692,6 +712,22 @@ function sanitizeParticleEntry(entry = {}, index = 0, options = {}) {
     target_id: String(entry.target_id ?? entry.targetId ?? "").trim() || null,
     enabled: entry.enabled !== false,
     color: sanitizeColor(entry.color, "#ff5a7a"),
+  };
+}
+
+function sanitizeSoundEntry(entry = {}, index = 0, options = {}) {
+  return {
+    id: ensureEntityId("sound", entry.id || `sound-${index + 1}`, options),
+    instance_id: String(entry.instance_id ?? entry.instanceId ?? "").trim() || null,
+    label: String(entry.label ?? `Sound ${index + 1}`).trim().slice(0, 80) || `Sound ${index + 1}`,
+    asset_id: String(entry.asset_id ?? entry.assetId ?? "").trim() || null,
+    position: sanitizeVector3(entry.position, { x: 0, y: 1.5, z: 0 }),
+    volume: Number(clampNumber(entry.volume, 0.85, 0, 1).toFixed(4)),
+    loop: entry.loop === true,
+    autoplay: entry.autoplay === true,
+    spatial: entry.spatial !== false,
+    max_distance: Number(clampNumber(entry.max_distance ?? entry.maxDistance, 24, 1, 512).toFixed(4)),
+    group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
   };
 }
 
@@ -945,6 +981,13 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}, options = {}) 
     instance_id: instance.id,
     target_id: resolveEntityAlias(aliasMap, entry.target_id),
   }));
+  const sounds = doc.sounds.map((entry) => ({
+    ...entry,
+    id: registerId(entry.id),
+    instance_id: instance.id,
+    position: transformPosition(entry.position, instance),
+    group_id: instance.id,
+  }));
   const rules = doc.rules.map((entry) => {
     const payload = cloneJson(entry.payload ?? {});
     if (payload.target_id || payload.targetId) {
@@ -958,6 +1001,10 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}, options = {}) 
     if (payload.text_id || payload.textId) {
       payload.text_id = resolveEntityAlias(aliasMap, payload.text_id ?? payload.textId);
       delete payload.textId;
+    }
+    if (payload.sound_id || payload.soundId) {
+      payload.sound_id = resolveEntityAlias(aliasMap, payload.sound_id ?? payload.soundId);
+      delete payload.soundId;
     }
     return {
       ...entry,
@@ -978,6 +1025,7 @@ function instantiatePrefabSceneDoc(prefabDoc = {}, instance = {}, options = {}) 
     texts,
     trigger_zones,
     particles,
+    sounds,
     rules,
   };
 }
@@ -1004,6 +1052,7 @@ function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = [], options = 
     prefabs: cloneJson(doc.prefabs),
     prefab_instances: cloneJson(doc.prefab_instances ?? []),
     particles: cloneJson(doc.particles),
+    sounds: cloneJson(doc.sounds),
     rules: cloneJson(doc.rules),
     script_dsl: doc.script_dsl,
   };
@@ -1028,6 +1077,7 @@ function flattenSceneWithPrefabInstances(sceneDoc = {}, prefabs = [], options = 
     flattened.texts.push(...instanced.texts);
     flattened.trigger_zones.push(...instanced.trigger_zones);
     flattened.particles.push(...instanced.particles);
+    flattened.sounds.push(...instanced.sounds);
     flattened.rules.push(...instanced.rules);
   }
   return flattened;
@@ -1053,6 +1103,7 @@ export function createDefaultSceneDoc() {
     prefabs: [],
     prefab_instances: [],
     particles: [],
+    sounds: [],
     rules: [],
     script_dsl: "",
   };
@@ -1071,6 +1122,7 @@ export function buildSceneEntityAliasMap(sourceSceneDoc = {}, normalizedSceneDoc
     ["trigger_zones", normalizedSceneDoc?.trigger_zones ?? []],
     ["prefab_instances", normalizedSceneDoc?.prefab_instances ?? []],
     ["particles", normalizedSceneDoc?.particles ?? []],
+    ["sounds", normalizedSceneDoc?.sounds ?? []],
   ];
   for (const [key, normalizedEntries] of collections) {
     const sourceEntries = Array.isArray(sourceSceneDoc?.[key]) ? sourceSceneDoc[key] : [];
@@ -1158,6 +1210,11 @@ export function normalizeSceneDoc(input = {}, options = {}) {
       target_id: resolveEntityAlias(entityAliases, value.target_id),
     };
   });
+  const sounds = (Array.isArray(source.sounds) ? source.sounds : []).slice(0, 256).map((entry, index) => {
+    const value = sanitizeSoundEntry(entry, index, normalizationOptions);
+    rememberEntityAlias(entityAliases, entry?.id, value.id);
+    return value;
+  });
   const rules = (Array.isArray(source.rules) ? source.rules : []).slice(0, 256).map((entry, index) => {
     const value = sanitizeRuleEntry(entry, index, normalizationOptions);
     const payload = cloneJson(value.payload ?? {});
@@ -1175,6 +1232,11 @@ export function normalizeSceneDoc(input = {}, options = {}) {
       const mappedTextId = resolveEntityAlias(entityAliases, payload.text_id ?? payload.textId);
       payload.text_id = mappedTextId;
       delete payload.textId;
+    }
+    if (payload.sound_id || payload.soundId) {
+      const mappedSoundId = resolveEntityAlias(entityAliases, payload.sound_id ?? payload.soundId);
+      payload.sound_id = mappedSoundId;
+      delete payload.soundId;
     }
     return {
       ...value,
@@ -1203,6 +1265,7 @@ export function normalizeSceneDoc(input = {}, options = {}) {
     prefabs,
     prefab_instances: prefabInstances,
     particles,
+    sounds,
     rules,
     script_dsl: scriptDsl,
   };
@@ -1228,6 +1291,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
     ...resolvedDoc.trigger_zones,
     ...resolvedDoc.prefab_instances,
     ...resolvedDoc.particles,
+    ...resolvedDoc.sounds,
   ]) {
     rememberEntityAlias(entityAliases, entry?.id, entry?.id);
   }
@@ -1274,6 +1338,7 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       trigger_zone_count: resolvedDoc.trigger_zones.length,
       prefab_count: doc.prefabs.length,
       prefab_instance_count: resolvedDoc.prefab_instances?.length ?? 0,
+      sound_count: resolvedDoc.sounds.length,
       rule_count: resolvedDoc.rules.length,
       dsl_rule_count: dsl.rules.length,
     },
@@ -1357,6 +1422,20 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
       dsl_errors: dsl.errors,
       script_config: dsl.script_config,
       particles: resolvedDoc.particles,
+      sounds: resolvedDoc.sounds.map((entry) => ({
+        id: entry.id,
+        instance_id: entry.instance_id ?? null,
+        label: entry.label,
+        asset_id: entry.asset_id ?? null,
+        position: entry.position,
+        volume: entry.volume,
+        loop: entry.loop === true,
+        autoplay: entry.autoplay === true,
+        spatial: entry.spatial !== false,
+        max_distance: entry.max_distance,
+        playing: entry.autoplay === true,
+        play_revision: entry.autoplay === true ? 1 : 0,
+      })),
       resolved_scene_doc: resolvedDoc,
     },
     miniature: {
@@ -1421,6 +1500,10 @@ function collectAssetIdsFromMaterial(material = {}, assetIds = new Set()) {
   if (textureAssetId) {
     assetIds.add(textureAssetId);
   }
+  const videoAssetId = String(material?.video_asset_id ?? "").trim();
+  if (videoAssetId) {
+    assetIds.add(videoAssetId);
+  }
   return assetIds;
 }
 
@@ -1435,6 +1518,7 @@ export function collectPrivateWorldAssetIds(sceneDoc = {}) {
     normalized.players,
     normalized.screens,
     normalized.texts,
+    normalized.sounds,
   ]) {
     for (const entry of collection) {
       collectAssetIdsFromMaterial(entry.material, assetIds);
@@ -1455,6 +1539,11 @@ export function collectPrivateWorldAssetIds(sceneDoc = {}) {
       assetIds.add(entry.asset_id);
     }
   }
+  for (const entry of normalized.sounds) {
+    if (entry.asset_id) {
+      assetIds.add(entry.asset_id);
+    }
+  }
   return Array.from(assetIds);
 }
 
@@ -1471,7 +1560,7 @@ function sanitizeAssetManifestEntry(entry = {}, index = 0) {
     : [];
   return {
     source_asset_id: sourceAssetId,
-    asset_type: assetType === "model" ? "model" : "texture",
+    asset_type: assetType === "model" ? "model" : assetType === "sound" ? "sound" : "texture",
     name: String(entry.name ?? `Asset ${index + 1}`).trim().slice(0, 120) || `Asset ${index + 1}`,
     status: String(entry.status ?? "ready").trim().toLowerCase() || "ready",
     provider: String(entry.provider ?? "").trim().toLowerCase() || null,
@@ -1509,6 +1598,8 @@ export function buildPrivateWorldExportPackage(input = {}) {
       about: input.world.about,
       max_viewers: input.world.max_viewers,
       max_players: input.world.max_players,
+      allow_non_editor_export: input.world.allow_non_editor_export === true,
+      allow_non_editor_fork: input.world.allow_non_editor_fork === true,
       default_scene_name: input.defaultSceneName ?? null,
       lineage: {
         origin_world_id: input.world.origin_world_id ?? input.world.world_id,
@@ -1566,6 +1657,8 @@ export function validatePrivateWorldExportPackage(input = {}) {
       about,
       max_viewers: clampInteger(world.max_viewers, PRIVATE_WORLD_LIMITS.maxViewers, 1, 100),
       max_players: clampInteger(world.max_players, PRIVATE_WORLD_LIMITS.maxPlayers, 1, PRIVATE_WORLD_LIMITS.maxPlayers),
+      allow_non_editor_export: world.allow_non_editor_export === true,
+      allow_non_editor_fork: world.allow_non_editor_fork === true,
       default_scene_name: String(world.default_scene_name ?? "").trim() || scenes[0].name,
       lineage: {
         origin_world_id: String(world.lineage?.origin_world_id ?? input.credits?.origin_world_id ?? "").trim() || null,

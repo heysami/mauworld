@@ -1,7 +1,8 @@
 import { HttpError } from "./http.js";
 import { assertSafePublicText, stripMarkdown } from "./text.js";
-
-const DEFAULT_OPENAI_TEXT_MODEL = "gpt-5.4-mini";
+import {
+  generateTextReasoning,
+} from "./text-reasoning-providers.js";
 const DEFAULT_GAME_ASPECT_RATIO = 16 / 9;
 const MAX_GAME_PROMPT_CHARS = 4000;
 const MAX_SOURCE_HTML_CHARS = 200_000;
@@ -286,53 +287,6 @@ function deriveWorldGamePrompt(input = {}, fieldName = "prompt") {
   return fromMessages;
 }
 
-function extractTextFromResponse(payload = {}) {
-  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
-    return payload.output_text.trim();
-  }
-  const chunks = [];
-  for (const item of payload.output ?? []) {
-    for (const content of item.content ?? []) {
-      if (content.type === "output_text" && typeof content.text === "string") {
-        chunks.push(content.text);
-      }
-    }
-  }
-  return chunks.join("\n").trim();
-}
-
-async function callOpenAiResponses(options = {}) {
-  const apiKey = String(options.apiKey ?? "").trim();
-  if (!apiKey) {
-    throw new HttpError(400, "Missing text reasoning API key");
-  }
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: String(options.model ?? DEFAULT_OPENAI_TEXT_MODEL).trim() || DEFAULT_OPENAI_TEXT_MODEL,
-      input: options.prompt,
-    }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new HttpError(502, "AI provider request failed", payload?.error?.message || null);
-  }
-  const text = extractTextFromResponse(payload);
-  if (!text) {
-    throw new HttpError(502, "AI provider returned no game output");
-  }
-  return {
-    provider: "openai",
-    model: String(options.model ?? DEFAULT_OPENAI_TEXT_MODEL).trim() || DEFAULT_OPENAI_TEXT_MODEL,
-    text,
-    raw: payload,
-  };
-}
-
 function parseJsonCandidate(source = "") {
   const trimmed = String(source ?? "").trim();
   if (!trimmed) {
@@ -586,11 +540,8 @@ function buildGameGenerationPrompt(input = {}) {
 }
 
 export async function brainstormWorldGameWithAi(options = {}) {
-  const provider = String(options.provider ?? "openai").trim().toLowerCase() || "openai";
-  if (provider !== "openai") {
-    throw new HttpError(400, `Unsupported text reasoning provider: ${provider}`);
-  }
-  const generated = await callOpenAiResponses({
+  const generated = await generateTextReasoning({
+    provider: options.provider ?? "openai",
     apiKey: options.apiKey,
     model: options.model,
     prompt: buildGameBrainstormPrompt(options),
@@ -607,11 +558,8 @@ export async function brainstormWorldGameWithAi(options = {}) {
 }
 
 export async function generateWorldGameFromAi(options = {}) {
-  const provider = String(options.provider ?? "openai").trim().toLowerCase() || "openai";
-  if (provider !== "openai") {
-    throw new HttpError(400, `Unsupported text reasoning provider: ${provider}`);
-  }
-  const generated = await callOpenAiResponses({
+  const generated = await generateTextReasoning({
+    provider: options.provider ?? "openai",
     apiKey: options.apiKey,
     model: options.model,
     prompt: buildGameGenerationPrompt(options),

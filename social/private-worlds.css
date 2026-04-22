@@ -277,6 +277,46 @@ body.private-worlds-body.is-world-entry-loading .pw-inspector {
   line-height: 1.4;
 }
 
+.pw-session-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.pw-session-trigger.is-profile-icon {
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+}
+
+.pw-session-trigger__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.pw-session-trigger__icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.pw-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .pw-mode-strip {
   display: grid;
   gap: 10px;
@@ -664,11 +704,61 @@ body.private-worlds-body.is-auth-gated .pw-launcher {
   align-content: start;
 }
 
+.pw-launcher-profile__tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pw-launcher-profile__pane {
+  display: grid;
+  gap: 12px;
+}
+
+.pw-launcher-profile__pane[hidden] {
+  display: none !important;
+}
+
 .pw-launcher-section__copy {
   margin: 4px 0 0;
   color: var(--pw-muted);
   font-size: 0.84rem;
   line-height: 1.45;
+}
+
+.pw-profile-card,
+.pw-profile-resource-list {
+  min-width: 0;
+}
+
+.pw-profile-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: var(--pw-surface);
+}
+
+.pw-profile-card strong,
+.pw-profile-card p {
+  margin: 0;
+}
+
+.pw-profile-card p {
+  color: var(--pw-muted);
+  line-height: 1.5;
+}
+
+.pw-profile-resource-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pw-profile-resource-list .pw-prefab-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
 }
 
 .pw-launcher-actions {
@@ -2044,9 +2134,14 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
 .pw-world-form,
 .pw-import-form,
 .pw-resolve-form,
-.pw-collaborator-form {
+.pw-collaborator-form,
+.pw-world-access-form {
   display: grid;
   gap: 12px;
+}
+
+.pw-world-access-form {
+  margin-top: 12px;
 }
 
 .pw-scene-form__actions {
@@ -2379,6 +2474,14 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
 
 .pw-checkbox input {
   width: auto;
+}
+
+.pw-checkbox span {
+  color: var(--pw-text);
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .pw-prefab-card {

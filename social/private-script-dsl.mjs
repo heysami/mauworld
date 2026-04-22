@@ -51,6 +51,8 @@ const DEFAULT_WORLD_FRICTION = 0.4;
 const DEFAULT_WORLD_RESTITUTION = 0;
 const DEFAULT_WORLD_TERMINAL_VELOCITY = 120;
 const SCRIPT_RUNTIME_MODULE_KIND = "script.runtime";
+const DEFAULT_SCRIPT_RUNTIME_RUN_MODE = "every_tick";
+const SCRIPT_RUNTIME_RUN_MODES = new Set(["every_tick", "on_call"]);
 const SCRIPT_RUNTIME_RESERVED_IDENTIFIERS = new Set([
   "if",
   "let",
@@ -74,6 +76,9 @@ const SCRIPT_RUNTIME_RESERVED_IDENTIFIERS = new Set([
   "clamp",
   "min",
   "max",
+  "call",
+  "play_sound",
+  "stop_sound",
 ]);
 
 const ALLOWED_RULE_TRIGGERS = new Set([
@@ -93,6 +98,8 @@ const ALLOWED_RULE_ACTIONS = new Set([
   "set_material",
   "set_visibility",
   "toggle_particles",
+  "play_sound",
+  "stop_sound",
   "set_text",
   "set_screen_state",
   "start_scene",
@@ -234,6 +241,7 @@ const PRIVATE_WORLD_TARGET_COLLECTIONS = [
   { key: "trigger_zones", kind: "trigger" },
   { key: "prefab_instances", kind: "prefab_instance" },
   { key: "particles", kind: "particle" },
+  { key: "sounds", kind: "sound" },
 ];
 
 const PREFAB_INSTANCE_RULE_ACTIONS = new Set([
@@ -592,6 +600,20 @@ export function serializePrivateWorldModuleFunctionBody(moduleConfig = {}) {
     `@enabled ${enabled ? "true" : "false"}`,
   ].filter(Boolean);
   if (moduleKind === SCRIPT_RUNTIME_MODULE_KIND) {
+    const runMode = normalizeScriptRuntimeRunMode(moduleConfig?.run_mode ?? moduleConfig?.runMode ?? "");
+    if (runMode && runMode !== DEFAULT_SCRIPT_RUNTIME_RUN_MODE) {
+      lines.push(`@run ${runMode}`);
+    }
+    for (const inputEntry of Array.isArray(moduleConfig?.inputs) ? moduleConfig.inputs : []) {
+      const inputName = String(inputEntry?.name ?? "").trim();
+      if (!isValidScriptRuntimeIdentifier(inputName)) {
+        continue;
+      }
+      const hasDefault = inputEntry?.has_default === true || Object.hasOwn(inputEntry ?? {}, "default_value");
+      lines.push(hasDefault
+        ? `@input ${inputName} ${formatScriptRuntimeDirectiveValue(inputEntry.default_value)}`
+        : `@input ${inputName}`);
+    }
     for (const [name, value] of Object.entries(moduleConfig?.params ?? {})) {
       if (!isValidScriptRuntimeIdentifier(name)) {
         continue;
@@ -729,6 +751,24 @@ function parseDirectiveValue(param = "", rawValue = "") {
 
 function isValidScriptRuntimeIdentifier(value = "") {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value ?? "").trim());
+}
+
+function normalizeScriptRuntimeRunMode(value = "") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return DEFAULT_SCRIPT_RUNTIME_RUN_MODE;
+  }
+  if (normalized === "tick" || normalized === "always") {
+    return "every_tick";
+  }
+  if (normalized === "call") {
+    return "on_call";
+  }
+  return SCRIPT_RUNTIME_RUN_MODES.has(normalized) ? normalized : "";
+}
+
+function normalizeScriptRuntimeFunctionLookupKey(value = "") {
+  return String(value ?? "").trim().toLowerCase();
 }
 
 function parseScriptRuntimeDirectiveValue(rawValue = "") {
@@ -1450,6 +1490,9 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
   let enabled = null;
   const params = {};
   const bindings = {};
+  let runtimeRunMode = DEFAULT_SCRIPT_RUNTIME_RUN_MODE;
+  const runtimeInputs = [];
+  const runtimeInputNames = new Set();
 
   for (const [lineIndex, rawLine] of rawLines.entries()) {
     const trimmed = rawLine.trim();
@@ -1470,7 +1513,7 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     const directiveTokens = tokenizeDslSegment(trimmed.slice(1));
     const directive = String(directiveTokens.shift() ?? "").trim().toLowerCase();
     const name = String(directiveTokens[0] ?? "").trim().toLowerCase();
-    const rawValue = directive === "set" || directive === "bind"
+    const rawValue = directive === "set" || directive === "bind" || directive === "input"
       ? String(directiveTokens.slice(1).join(" ") ?? "").trim()
       : String(directiveTokens.join(" ") ?? "").trim();
     const rest = directiveTokens.join(" ").trim();
@@ -1510,6 +1553,53 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     }
     if (directive === "enabled") {
       enabled = parseDirectiveBooleanValue(rest, true);
+      continue;
+    }
+    if (directive === "run") {
+      const normalizedRunMode = normalizeScriptRuntimeRunMode(rest);
+      if (!normalizedRunMode) {
+        errors.push({ line: lineIndex + 1, message: `Directive \`@run\` must be one of: ${Array.from(SCRIPT_RUNTIME_RUN_MODES).join(", ")}.` });
+        continue;
+      }
+      runtimeRunMode = normalizedRunMode;
+      continue;
+    }
+    if (directive === "input") {
+      const inputName = String(directiveTokens.shift() ?? "").trim();
+      const inputValueText = directiveTokens.join(" ").trim();
+      if (!inputName) {
+        errors.push({ line: lineIndex + 1, message: "Directive `@input` requires a parameter name." });
+        continue;
+      }
+      if (!isValidScriptRuntimeIdentifier(inputName)) {
+        errors.push({ line: lineIndex + 1, message: `Script input \`${inputName}\` must be a valid identifier.` });
+        continue;
+      }
+      if (SCRIPT_RUNTIME_RESERVED_IDENTIFIERS.has(inputName)) {
+        errors.push({ line: lineIndex + 1, message: `Script input \`${inputName}\` is reserved by script.runtime.` });
+        continue;
+      }
+      if (runtimeInputNames.has(inputName)) {
+        errors.push({ line: lineIndex + 1, message: `Script input \`${inputName}\` is already declared.` });
+        continue;
+      }
+      let defaultValue = null;
+      let hasDefault = false;
+      if (inputValueText) {
+        defaultValue = parseScriptRuntimeDirectiveValue(inputValueText);
+        if (defaultValue == null && inputValueText !== "null") {
+          errors.push({ line: lineIndex + 1, message: `Directive \`@input ${inputName}\` has an invalid default value.` });
+          continue;
+        }
+        hasDefault = true;
+      }
+      runtimeInputNames.add(inputName);
+      runtimeInputs.push({
+        name: inputName,
+        has_default: hasDefault,
+        default_value: defaultValue,
+        lineNumber: lineIndex + 1,
+      });
       continue;
     }
     if (directive === "set") {
@@ -1572,9 +1662,9 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
       const allowedTargetScopes = Array.isArray(moduleDefinition.allowed_target_scopes)
         ? moduleDefinition.allowed_target_scopes
         : ["scene", "entity"];
-      if (!targetScope || !targetId) {
+      if ((!targetScope || !targetId) && runtimeRunMode !== "on_call") {
         errors.push({ line: targetLineNumber || 1, message: `Module \`${moduleKind}\` requires an explicit scene or entity target.` });
-      } else if (!allowedTargetScopes.includes(targetScope)) {
+      } else if (targetScope && !allowedTargetScopes.includes(targetScope)) {
         errors.push({ line: targetLineNumber || 1, message: `Module \`${moduleKind}\` cannot target ${targetScope}.` });
       }
     }
@@ -1634,6 +1724,10 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
         if (!bindingDefinition) {
           errors.push({ line: directive.lineNumber, message: `Binding \`${directive.name || "(empty)"}\` is not supported by module \`${moduleKind}\`.` });
         }
+      } else if (directive.directive === "run" && moduleKind !== SCRIPT_RUNTIME_MODULE_KIND) {
+        errors.push({ line: directive.lineNumber, message: `Directive \`@run\` is only supported by module \`${SCRIPT_RUNTIME_MODULE_KIND}\`.` });
+      } else if (directive.directive === "input" && moduleKind !== SCRIPT_RUNTIME_MODULE_KIND) {
+        errors.push({ line: directive.lineNumber, message: `Directive \`@input\` is only supported by module \`${SCRIPT_RUNTIME_MODULE_KIND}\`.` });
       }
     }
   }
@@ -1669,8 +1763,157 @@ function parseScriptFunctionDirectives(entry = {}, index = 0, options = {}) {
     programLines,
     programSource: programLines.map((line) => line.line).join("\n").trim(),
     programAst,
+    run_mode: runtimeRunMode,
+    inputs: runtimeInputs,
     errors,
   };
+}
+
+function walkScriptRuntimeExpression(expression = null, visitor = () => {}) {
+  if (!expression) {
+    return;
+  }
+  visitor(expression);
+  if (expression.type === "UnaryExpression") {
+    walkScriptRuntimeExpression(expression.argument, visitor);
+    return;
+  }
+  if (expression.type === "BinaryExpression" || expression.type === "LogicalExpression") {
+    walkScriptRuntimeExpression(expression.left, visitor);
+    walkScriptRuntimeExpression(expression.right, visitor);
+    return;
+  }
+  if (expression.type === "MemberExpression") {
+    walkScriptRuntimeExpression(expression.object, visitor);
+    return;
+  }
+  if (expression.type === "CallExpression") {
+    walkScriptRuntimeExpression(expression.callee, visitor);
+    for (const argument of expression.arguments ?? []) {
+      walkScriptRuntimeExpression(argument, visitor);
+    }
+  }
+}
+
+function walkScriptRuntimeStatement(statement = null, visitor = () => {}) {
+  if (!statement) {
+    return;
+  }
+  visitor(statement);
+  if (statement.type === "Program" || statement.type === "BlockStatement") {
+    for (const entry of statement.body ?? []) {
+      walkScriptRuntimeStatement(entry, visitor);
+    }
+    return;
+  }
+  if (statement.type === "VariableDeclaration") {
+    walkScriptRuntimeExpression(statement.init, visitor);
+    return;
+  }
+  if (statement.type === "AssignmentStatement") {
+    walkScriptRuntimeExpression(statement.target, visitor);
+    walkScriptRuntimeExpression(statement.value, visitor);
+    return;
+  }
+  if (statement.type === "ExpressionStatement") {
+    walkScriptRuntimeExpression(statement.expression, visitor);
+    return;
+  }
+  if (statement.type === "IfStatement") {
+    walkScriptRuntimeExpression(statement.test, visitor);
+    walkScriptRuntimeStatement(statement.consequent, visitor);
+    walkScriptRuntimeStatement(statement.alternate, visitor);
+    return;
+  }
+  if (statement.type === "ReturnStatement") {
+    walkScriptRuntimeExpression(statement.argument, visitor);
+  }
+}
+
+function collectScriptRuntimeCallDiagnostics(functions = []) {
+  const diagnostics = [];
+  const functionsByLookup = new Map();
+  const allFunctionsByLookup = new Map();
+  for (const entry of functions) {
+    const functionIdKey = normalizeScriptRuntimeFunctionLookupKey(entry?.id);
+    const functionNameKey = normalizeScriptRuntimeFunctionLookupKey(entry?.name);
+    if (functionIdKey) {
+      allFunctionsByLookup.set(functionIdKey, entry);
+    }
+    if (functionNameKey && !allFunctionsByLookup.has(functionNameKey)) {
+      allFunctionsByLookup.set(functionNameKey, entry);
+    }
+    if (entry?.module_kind !== SCRIPT_RUNTIME_MODULE_KIND) {
+      continue;
+    }
+    if (functionIdKey) {
+      functionsByLookup.set(functionIdKey, entry);
+    }
+    if (functionNameKey && !functionsByLookup.has(functionNameKey)) {
+      functionsByLookup.set(functionNameKey, entry);
+    }
+  }
+  for (const functionEntry of functions) {
+    if (functionEntry?.module_kind !== SCRIPT_RUNTIME_MODULE_KIND || !functionEntry?.programAst) {
+      continue;
+    }
+    walkScriptRuntimeStatement(functionEntry.programAst, (node) => {
+      if (node?.type !== "CallExpression" || node?.callee?.type !== "Identifier" || node.callee.name !== "call") {
+        return;
+      }
+      const line = Number(node.line ?? 1) || 1;
+      if ((node.arguments?.length ?? 0) < 1) {
+        diagnostics.push({
+          line,
+          message: "`call(...)` requires a function id or name as its first argument.",
+          function_id: functionEntry.id,
+          function_name: functionEntry.name,
+        });
+        return;
+      }
+      const targetArgument = node.arguments[0] ?? null;
+      if (!targetArgument || targetArgument.type !== "Literal" || typeof targetArgument.value !== "string") {
+        return;
+      }
+      const lookupKey = normalizeScriptRuntimeFunctionLookupKey(targetArgument.value);
+      if (!lookupKey) {
+        diagnostics.push({
+          line,
+          message: "`call(...)` requires a non-empty function id or name.",
+          function_id: functionEntry.id,
+          function_name: functionEntry.name,
+        });
+        return;
+      }
+      const calledEntry = functionsByLookup.get(lookupKey) ?? null;
+      const matchedNonRuntimeEntry = allFunctionsByLookup.get(lookupKey) ?? null;
+      if (!calledEntry) {
+        diagnostics.push({
+          line,
+          message: matchedNonRuntimeEntry
+            ? `Script call target \`${targetArgument.value}\` is not a \`${SCRIPT_RUNTIME_MODULE_KIND}\` function.`
+            : `Script call references missing function \`${targetArgument.value}\`.`,
+          function_id: functionEntry.id,
+          function_name: functionEntry.name,
+        });
+        return;
+      }
+      const inputCount = Array.isArray(calledEntry.inputs) ? calledEntry.inputs.length : 0;
+      const requiredInputCount = (calledEntry.inputs ?? []).filter((entry) => entry?.has_default !== true).length;
+      const providedInputCount = Math.max(0, (node.arguments?.length ?? 0) - 1);
+      if (providedInputCount < requiredInputCount || providedInputCount > inputCount) {
+        diagnostics.push({
+          line,
+          message: providedInputCount < requiredInputCount
+            ? `Script call \`${targetArgument.value}\` expects at least ${requiredInputCount} argument${requiredInputCount === 1 ? "" : "s"} after the function id, but received ${providedInputCount}.`
+            : `Script call \`${targetArgument.value}\` accepts at most ${inputCount} argument${inputCount === 1 ? "" : "s"} after the function id, but received ${providedInputCount}.`,
+          function_id: functionEntry.id,
+          function_name: functionEntry.name,
+        });
+      }
+    });
+  }
+  return diagnostics;
 }
 
 function compileRuleLine(line = "", index = 0, options = {}) {
@@ -2100,6 +2343,8 @@ function buildScriptConfigModules(functions = []) {
       enabled: entry.enabled,
       params: cloneJson(entry.params),
       bindings: cloneJson(entry.bindings),
+      run_mode: entry.run_mode ?? DEFAULT_SCRIPT_RUNTIME_RUN_MODE,
+      input_count: Array.isArray(entry.inputs) ? entry.inputs.length : 0,
       rule_count: entry.ruleLines.length,
       program_line_count: Array.isArray(entry.programLines) ? entry.programLines.length : 0,
     }));
@@ -2118,6 +2363,8 @@ function applyScriptRuntimeModule(scriptConfig, functionEntry) {
     target_kind: functionEntry.target_kind ?? null,
     enabled: functionEntry.enabled !== false,
     constants: cloneJson(functionEntry.params),
+    run_mode: functionEntry.run_mode ?? DEFAULT_SCRIPT_RUNTIME_RUN_MODE,
+    inputs: cloneJson(functionEntry.inputs ?? []),
     program_source: String(functionEntry.programSource ?? "").trim(),
     program_ast: cloneJson(functionEntry.programAst),
     program_line_count: Array.isArray(functionEntry.programLines) ? functionEntry.programLines.length : 0,
@@ -2178,6 +2425,7 @@ export function compilePrivateWorldScriptDsl(input, options = {}) {
       }
     }
   }
+  errors.push(...collectScriptRuntimeCallDiagnostics(functions));
   const scriptConfig = buildPrivateWorldScriptConfig(functions, rules, options);
   return {
     rules,

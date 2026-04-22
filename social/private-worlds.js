@@ -1,5 +1,6 @@
 import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { GLTFLoader } from "https://unpkg.com/three@0.165.0/examples/jsm/loaders/GLTFLoader.js";
+import { clone as cloneSkinnedScene } from "https://unpkg.com/three@0.165.0/examples/jsm/utils/SkeletonUtils.js";
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 import { createPatternedMaterial } from "./private-world-materials.js";
 import {
@@ -93,8 +94,9 @@ const TOOL_PRESET_STORAGE_KEY = "mauworldPrivateWorldToolPresets";
 const TOOL_PRESET_PANEL_COLLAPSED_STORAGE_KEY = "mauworldPrivateWorldToolPresetPanelCollapsed";
 const RUNTIME_INPUT_KEYS = new Set(["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "space", "shift"]);
 const RUNTIME_MOVEMENT_INPUT_KEYS = new Set(["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
-const LAUNCHER_TABS = new Set(["worlds", "access"]);
+const LAUNCHER_TABS = new Set(["worlds", "access", "profile"]);
 const LAUNCHER_WORLD_BROWSER_TABS = new Set(["mine", "all"]);
+const PROFILE_LAUNCHER_TABS = new Set(["account", "worlds", "games", "resources"]);
 const PRIVATE_PANEL_TABS = new Set(["chat", "share", "live", "world"]);
 const SCENE_DRAWER_TABS = new Set(["scenes", "items", "assets", "prefabs", "logic"]);
 const WORLD_PANEL_SECTIONS = new Set(["overview", "ai", "editors", "feed"]);
@@ -232,6 +234,7 @@ const BUILD_PLACEMENT_SHORTCUTS = new Map([
   ["4", "screen"],
   ["5", "text"],
   ["6", "trigger"],
+  ["7", "sound"],
 ]);
 const BUILD_TRANSFORM_SHORTCUTS = new Map([
   ["q", "move"],
@@ -245,14 +248,21 @@ const BUILD_TRANSFORM_AXIS_SHORTCUTS = new Map([
   ["2", "z"],
   ["3", "y"],
 ]);
-const TOOL_PRESET_KINDS = ["voxel", "primitive", "player", "screen", "text", "trigger"];
+const TOOL_PRESET_KINDS = ["voxel", "primitive", "player", "screen", "text", "trigger", "sound"];
 const AI_PROVIDER_SESSION_KEYS = {
   reasoning: AI_REASONING_STORAGE_KEY,
   image: AI_IMAGE_STORAGE_KEY,
   model: AI_MODEL_STORAGE_KEY,
 };
+const TEXT_REASONING_PROVIDER_DEFAULT_MODELS = {
+  openai: "gpt-5.4-mini",
+  anthropic: "claude-sonnet-4-20250514",
+  google: "gemini-2.5-flash",
+};
 const MATERIALIZABLE_ENTITY_KINDS = new Set(["voxel", "primitive", "panel", "model", "player", "screen", "text"]);
 const MODEL_ASSET_TARGET_ENTITY_KINDS = new Set(["primitive", "model", "player"]);
+const SOUND_ASSET_TARGET_ENTITY_KINDS = new Set(["sound"]);
+const VIDEO_TEXTURE_TARGET_ENTITY_KINDS = new Set(["primitive", "panel", "model"]);
 const FACING_MODE_OPTIONS = [
   { value: "fixed", label: "Fixed" },
   { value: "billboard", label: "Billboard" },
@@ -262,6 +272,7 @@ const FACING_MODE_OPTIONS = [
 const gltfLoader = new GLTFLoader();
 const previewTextureAssetCache = new Map();
 const previewModelAssetCache = new Map();
+const previewVideoAssetCache = new Map();
 const TOOL_PRESET_BUILTINS = {
   voxel: [
     {
@@ -529,6 +540,36 @@ const TOOL_PRESET_BUILTINS = {
       },
     },
   ],
+  sound: [
+    {
+      id: "ambient-loop",
+      name: "Ambient Loop",
+      builtin: true,
+      entry: {
+        label: "Ambient Sound",
+        asset_id: "",
+        volume: 0.75,
+        loop: true,
+        autoplay: true,
+        spatial: true,
+        max_distance: 36,
+      },
+    },
+    {
+      id: "triggered-one-shot",
+      name: "Triggered One-Shot",
+      builtin: true,
+      entry: {
+        label: "Cue Sound",
+        asset_id: "",
+        volume: 0.9,
+        loop: false,
+        autoplay: false,
+        spatial: true,
+        max_distance: 24,
+      },
+    },
+  ],
 };
 const PRIVATE_WORLD_STYLE = {
   background: "#fbfcff",
@@ -649,6 +690,18 @@ const elements = {
   authStatus: document.querySelector("[data-auth-status]"),
   accessHeading: document.querySelector("[data-access-heading]"),
   accessNote: document.querySelector("[data-access-note]"),
+  profileLauncherTabButtons: [...document.querySelectorAll("[data-profile-launcher-tab]")],
+  profileLauncherPanes: [...document.querySelectorAll("[data-profile-pane]")],
+  profileWorldSearch: document.querySelector("[data-profile-world-search]"),
+  profileWorldList: document.querySelector("[data-profile-world-list]"),
+  profileOpenCreateWorld: document.querySelector("[data-profile-open-create-world]"),
+  profileRefreshWorlds: document.querySelector("[data-profile-refresh-worlds]"),
+  profileGameSummary: document.querySelector("[data-profile-game-summary]"),
+  profileOpenGameLibrary: document.querySelector("[data-profile-open-game-library]"),
+  profileResourceSearch: document.querySelector("[data-profile-resource-search]"),
+  profileResourceStatus: document.querySelector("[data-profile-resource-status]"),
+  profileResourceList: document.querySelector("[data-profile-resource-list]"),
+  profileRefreshResources: document.querySelector("[data-profile-refresh-resources]"),
   profileForm: document.querySelector("[data-profile-form]"),
   accountActions: document.querySelector("[data-account-actions]"),
   accountSignout: document.querySelector("[data-account-signout]"),
@@ -670,6 +723,8 @@ const elements = {
   sceneModeBadgeLabel: document.querySelector("[data-private-scene-mode-badge-label]"),
   panelSessionLabel: document.querySelector("[data-private-session-label]"),
   panelOpenAccess: document.querySelector("[data-private-open-access]"),
+  panelOpenAccessIcon: document.querySelector("[data-private-open-access-icon]"),
+  panelOpenAccessLabel: document.querySelector("[data-private-open-access-label]"),
   panelChatComposer: document.querySelector("[data-private-chat-composer]"),
   panelChatInput: document.querySelector("[data-private-chat-input]"),
   panelChatReactions: document.querySelector(".world-chat-reactions"),
@@ -761,6 +816,10 @@ const elements = {
   assetSections: document.querySelector("[data-asset-sections]"),
   assetGenerateTexture: document.querySelector("[data-asset-generate-texture]"),
   assetGenerateModel: document.querySelector("[data-asset-generate-model]"),
+  assetUploadVideo: document.querySelector("[data-asset-upload-video]"),
+  assetUploadVideoInput: document.querySelector("[data-asset-upload-video-input]"),
+  assetUploadSound: document.querySelector("[data-asset-upload-sound]"),
+  assetUploadSoundInput: document.querySelector("[data-asset-upload-sound-input]"),
   prefabList: document.querySelector("[data-prefab-list]"),
   prefabDetail: document.querySelector("[data-prefab-detail]"),
   prefabSearch: document.querySelector("[data-prefab-search]"),
@@ -776,6 +835,11 @@ const elements = {
   collaboratorForm: document.querySelector("[data-collaborator-form]"),
   saveCollaborator: document.querySelector("[data-save-collaborator]"),
   collaboratorList: document.querySelector("[data-collaborator-list]"),
+  worldAccessForm: document.querySelector("[data-world-access-form]"),
+  worldAccessExport: document.querySelector("[data-world-access-export]"),
+  worldAccessFork: document.querySelector("[data-world-access-fork]"),
+  saveWorldAccess: document.querySelector("[data-save-world-access]"),
+  worldAccessStatus: document.querySelector("[data-world-access-status]"),
   aiForm: document.querySelector("[data-ai-form]"),
   aiStatus: document.querySelector("[data-ai-status]"),
   aiOutput: document.querySelector("[data-ai-output]"),
@@ -806,6 +870,7 @@ const elements = {
   addScreen: document.querySelector("[data-add-screen]"),
   addText: document.querySelector("[data-add-text]"),
   addTrigger: document.querySelector("[data-add-trigger]"),
+  addSound: document.querySelector("[data-add-sound]"),
   addParticle: document.querySelector("[data-add-particle]"),
   addRule: document.querySelector("[data-add-rule]"),
   toolPresetPanel: document.querySelector("[data-tool-preset-panel]"),
@@ -924,6 +989,18 @@ function createBaseToolPresetEntry(kind) {
       rotation: { x: 0, y: 0, z: 0 },
       scale: { x: 2, y: 2, z: 2 },
       invisible: true,
+    };
+  }
+  if (kind === "sound") {
+    return {
+      label: "Sound",
+      asset_id: "",
+      volume: 0.85,
+      loop: false,
+      autoplay: false,
+      spatial: true,
+      max_distance: 24,
+      group_id: "",
     };
   }
   return {};
@@ -1076,6 +1153,8 @@ const state = {
   worlds: [],
   worldsLoading: false,
   worldsError: "",
+  profileWorldQuery: "",
+  profileLauncherTab: "account",
   selectedWorld: null,
   selectedSceneId: "",
   sceneDrawerFocusId: "",
@@ -1094,6 +1173,9 @@ const state = {
   assetsLoading: false,
   assetQuery: "",
   assetFilterType: "all",
+  profileAssets: [],
+  profileAssetsLoading: false,
+  profileResourceQuery: "",
   sceneDrafts: new Map(),
   screenAiPromptDrafts: new Map(),
   screenPreviewDrafts: new Map(),
@@ -1119,6 +1201,7 @@ const state = {
   runtimeSnapshot: null,
   runtimeSnapshotSourcePriority: 0,
   runtimeSnapshotWorldKey: "",
+  privateWorldSoundPlayers: new Map(),
   pressedRuntimeKeys: new Set(),
   runtimeJumpPulseSeq: 0,
   runtimeJumpPulseAt: 0,
@@ -2028,6 +2111,13 @@ function setPrivatePanelTab(tab, options = {}) {
   settleHorizontalScroll(elements.panelRoot);
 }
 
+function syncCreateWorldDialogVisibility() {
+  document.body.classList.toggle("is-create-world-dialog-open", state.createWorldDialogOpen === true);
+  if (elements.createWorldDialog) {
+    elements.createWorldDialog.hidden = !(state.createWorldDialogOpen && canShowCreateWorldDialog());
+  }
+}
+
 function updateShellState() {
   const activePlacementTool = getActivePlacementTool();
   const activePrefabPlacementId = getActivePrefabPlacementId();
@@ -2037,7 +2127,6 @@ function updateShellState() {
   document.body.classList.toggle("is-launcher-open", state.launcherOpen === true);
   document.body.classList.toggle("is-auth-gated", authGated);
   document.body.classList.toggle("is-world-entry-loading", state.entryLoading === true);
-  document.body.classList.toggle("is-create-world-dialog-open", state.createWorldDialogOpen === true);
   document.body.classList.toggle("is-scene-drawer-open", state.sceneDrawerOpen === true);
   document.body.classList.toggle("is-ai-dialog-open", state.aiDialog.open === true);
   document.body.classList.toggle("is-signed-in", Boolean(state.session));
@@ -2075,9 +2164,7 @@ function updateShellState() {
   if (elements.launcherClose) {
     elements.launcherClose.hidden = authGated;
   }
-  if (elements.createWorldDialog) {
-    elements.createWorldDialog.hidden = !(state.createWorldDialogOpen && state.launcherTab === "worlds" && state.session);
-  }
+  syncCreateWorldDialogVisibility();
   setLauncherTab(state.launcherTab);
   setPrivatePanelTab(state.privatePanelTab, { syncMode: false });
   renderToolPresetPanel();
@@ -2099,7 +2186,7 @@ function setLauncherOpen(open) {
 }
 
 function setCreateWorldDialogOpen(open) {
-  state.createWorldDialogOpen = open === true && state.session && state.launcherTab === "worlds";
+  state.createWorldDialogOpen = open === true && canShowCreateWorldDialog();
   if (state.createWorldDialogOpen) {
     state.launcherOpen = true;
     state.sceneDrawerOpen = false;
@@ -3929,7 +4016,20 @@ function getPreferredLauncherTab() {
   return state.session ? "worlds" : "access";
 }
 
+function canShowCreateWorldDialog(launcherTab = state.launcherTab, profileTab = state.profileLauncherTab) {
+  if (!state.session) {
+    return false;
+  }
+  if (launcherTab === "worlds") {
+    return true;
+  }
+  return launcherTab === "profile" && normalizeProfileLauncherTab(profileTab) === "worlds";
+}
+
 function getLauncherTitle() {
+  if (state.launcherTab === "profile") {
+    return "My Profile";
+  }
   if (state.launcherTab === "access") {
     if (!state.authReady) {
       return "Checking Account";
@@ -3993,9 +4093,10 @@ function setLauncherWorldTab(tab, options = {}) {
 function setLauncherTab(tab) {
   const nextTab = LAUNCHER_TABS.has(tab) ? tab : getPreferredLauncherTab();
   state.launcherTab = nextTab;
-  if (nextTab !== "worlds" || !state.session) {
+  if (!canShowCreateWorldDialog(nextTab, state.profileLauncherTab)) {
     state.createWorldDialogOpen = false;
   }
+  syncCreateWorldDialogVisibility();
   for (const section of elements.launcherSections ?? []) {
     const active = section.getAttribute("data-launcher-section") === nextTab;
     section.hidden = !active;
@@ -4003,6 +4104,10 @@ function setLauncherTab(tab) {
   }
   renderLauncherTitle();
   renderLauncherWorldTabs();
+  renderProfileLauncher();
+  if (nextTab === "profile") {
+    loadProfileLauncherData();
+  }
 }
 
 function getPrimaryViewerSpawnPlayer(world = state.selectedWorld) {
@@ -4338,6 +4443,7 @@ const ENTITY_COLLECTIONS = [
   { kind: "screen", key: "screens", label: "Screens", singular: "Screen" },
   { kind: "text", key: "texts", label: "3D Text", singular: "3D Text" },
   { kind: "trigger", key: "trigger_zones", label: "Trigger Zones", singular: "Trigger Zone" },
+  { kind: "sound", key: "sounds", label: "Sounds", singular: "Sound" },
   { kind: "particle", key: "particles", label: "Particles", singular: "Particle" },
   { kind: "prefab_instance", key: "prefab_instances", label: "Prefab Instances", singular: "Prefab Instance" },
 ];
@@ -4389,6 +4495,7 @@ function isPlacementToolKind(kind) {
     || kind === "primitive"
     || kind === "panel"
     || kind === "player"
+    || kind === "sound"
     || kind === "screen"
     || kind === "text"
     || kind === "trigger";
@@ -4459,6 +4566,9 @@ function buildToolPresetDisplayName(kind) {
   }
   if (kind === "player") {
     return "Player";
+  }
+  if (kind === "sound") {
+    return "Sound";
   }
   if (kind === "model") {
     return "Model";
@@ -4977,6 +5087,9 @@ function getDisplayNameForEntity(kind, entry = {}, index = 0) {
   if (kind === "trigger") {
     return entry.label || entry.id || `Trigger ${index + 1}`;
   }
+  if (kind === "sound") {
+    return entry.label || entry.id || `Sound ${index + 1}`;
+  }
   if (kind === "particle") {
     return entry.effect || entry.id || `Particle ${index + 1}`;
   }
@@ -5029,6 +5142,9 @@ function buildCompactEntityTitle(kind, entry = {}, index = 0) {
   if (kind === "trigger") {
     return `Trigger ${index + 1}`;
   }
+  if (kind === "sound") {
+    return `Sound ${index + 1}`;
+  }
   if (kind === "particle") {
     return `Particle ${index + 1}`;
   }
@@ -5056,6 +5172,7 @@ const GROUP_PREFAB_SUPPORTED_KINDS = new Set([
   "screen",
   "text",
   "trigger",
+  "sound",
 ]);
 
 function canConvertSelectionToGroupPrefab(selectedEntities = []) {
@@ -5132,6 +5249,35 @@ function getAiProviderFieldNames(group) {
   };
 }
 
+function normalizeTextReasoningProviderName(value = "") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "claude" || normalized === "anthropic") {
+    return "anthropic";
+  }
+  if (normalized === "gemini" || normalized === "google") {
+    return "google";
+  }
+  return normalized || "openai";
+}
+
+function getDefaultAiModelForGroup(group, provider = "") {
+  if (group === "reasoning") {
+    return TEXT_REASONING_PROVIDER_DEFAULT_MODELS[normalizeTextReasoningProviderName(provider)] || TEXT_REASONING_PROVIDER_DEFAULT_MODELS.openai;
+  }
+  return group === "image" ? "gpt-image-1" : "meshy-4";
+}
+
+function maybeAdoptAiProviderDefaultModel(group, providerField = null, modelField = null) {
+  if (group !== "reasoning" || !providerField || !modelField) {
+    return;
+  }
+  const currentValue = String(modelField.value ?? "").trim();
+  if (currentValue && !Object.values(TEXT_REASONING_PROVIDER_DEFAULT_MODELS).includes(currentValue)) {
+    return;
+  }
+  modelField.value = getDefaultAiModelForGroup(group, providerField.value);
+}
+
 function readAiProviderState(group) {
   const storageKey = AI_PROVIDER_SESSION_KEYS[group];
   if (!storageKey) {
@@ -5139,8 +5285,11 @@ function readAiProviderState(group) {
   }
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(storageKey) || "{}");
+    const provider = group === "reasoning"
+      ? normalizeTextReasoningProviderName(parsed.provider ?? "openai")
+      : String(parsed.provider ?? "").trim() || (group === "model" ? "meshy" : "openai");
     return {
-      provider: String(parsed.provider ?? "openai").trim() || "openai",
+      provider,
       model: String(parsed.model ?? "").trim(),
       apiKey: String(parsed.apiKey ?? "").trim(),
     };
@@ -5173,8 +5322,11 @@ function writeAiProviderState(group, value = {}) {
 function getAiProviderState(group) {
   const names = getAiProviderFieldNames(group);
   const stored = readAiProviderState(group);
+  const providerValue = String(elements.aiForm?.elements?.[names.provider]?.value ?? stored.provider ?? "").trim()
+    || stored.provider
+    || (group === "model" ? "meshy" : "openai");
   return {
-    provider: String(elements.aiForm?.elements?.[names.provider]?.value ?? stored.provider ?? "").trim() || stored.provider || (group === "model" ? "meshy" : "openai"),
+    provider: group === "reasoning" ? normalizeTextReasoningProviderName(providerValue) : providerValue,
     model: String(elements.aiForm?.elements?.[names.model]?.value ?? stored.model ?? "").trim() || stored.model || "",
     apiKey: String(elements.aiForm?.elements?.[names.apiKey]?.value ?? stored.apiKey ?? "").trim() || stored.apiKey || "",
   };
@@ -5189,7 +5341,7 @@ function syncAiProviderFormFromSession() {
     }
     if (elements.aiForm?.elements?.[names.model] && !elements.aiForm.elements[names.model].value) {
       elements.aiForm.elements[names.model].value = value.model
-        || (group === "reasoning" ? "gpt-5.4-mini" : group === "image" ? "gpt-image-1" : "meshy-4");
+        || getDefaultAiModelForGroup(group, value.provider);
     }
     if (elements.aiForm?.elements?.[names.apiKey]) {
       elements.aiForm.elements[names.apiKey].value = value.apiKey || "";
@@ -5209,7 +5361,93 @@ function setAiBuilderStatus(text = "", tone = "") {
   }
 }
 
+function setFormControlsDisabled(form, disabled) {
+  if (!form?.elements) {
+    return;
+  }
+  for (const control of Array.from(form.elements)) {
+    if (!control || typeof control.disabled !== "boolean") {
+      continue;
+    }
+    control.disabled = disabled;
+  }
+}
+
+function getWorldAccessPolicy(world = state.selectedWorld) {
+  return {
+    allowNonEditorExport:
+      world?.access_policy?.allow_non_editor_export === true
+      || world?.allow_non_editor_export === true,
+    allowNonEditorFork:
+      world?.access_policy?.allow_non_editor_fork === true
+      || world?.allow_non_editor_fork === true,
+  };
+}
+
+function buildWorldAccessPolicySummary(policy = getWorldAccessPolicy()) {
+  const exportLabel = policy.allowNonEditorExport ? "can export packages" : "cannot export packages";
+  const forkLabel = policy.allowNonEditorFork ? "can fork this world" : "cannot fork this world";
+  return `Signed-in non-editors ${exportLabel} and ${forkLabel}.`;
+}
+
+function setWorldAccessStatus(text = "", tone = "") {
+  if (!elements.worldAccessStatus) {
+    return;
+  }
+  elements.worldAccessStatus.textContent = String(text ?? "");
+  if (tone) {
+    elements.worldAccessStatus.dataset.tone = tone;
+  } else {
+    delete elements.worldAccessStatus.dataset.tone;
+  }
+}
+
+function syncWorldAccessControlsFromWorld(world = state.selectedWorld) {
+  if (!world) {
+    setWorldAccessStatus("Open a world to configure viewer export and fork access.");
+  }
+  const policy = getWorldAccessPolicy(world);
+  if (elements.worldAccessExport) {
+    elements.worldAccessExport.checked = policy.allowNonEditorExport;
+  }
+  if (elements.worldAccessFork) {
+    elements.worldAccessFork.checked = policy.allowNonEditorFork;
+  }
+  if (world) {
+    const suffix = isEditor() ? "" : " Only editors can change this.";
+    setWorldAccessStatus(`${buildWorldAccessPolicySummary(policy)}${suffix}`);
+  }
+}
+
+function updateWorldAccessControlsState() {
+  const hasWorld = Boolean(state.selectedWorld);
+  const canEdit = isEditor();
+  const policy = getWorldAccessPolicy();
+  const exportChecked = elements.worldAccessExport?.checked === true;
+  const forkChecked = elements.worldAccessFork?.checked === true;
+  if (elements.worldAccessExport) {
+    elements.worldAccessExport.disabled = !hasWorld || !canEdit;
+  }
+  if (elements.worldAccessFork) {
+    elements.worldAccessFork.disabled = !hasWorld || !canEdit;
+  }
+  if (elements.saveWorldAccess) {
+    elements.saveWorldAccess.disabled =
+      !hasWorld
+      || !canEdit
+      || (policy.allowNonEditorExport === exportChecked && policy.allowNonEditorFork === forkChecked);
+  }
+}
+
 function refreshAiBuilderStatus() {
+  if (!state.selectedWorld) {
+    setAiBuilderStatus("Open a world to use AI Builder.", "error");
+    return;
+  }
+  if (!isEditor()) {
+    setAiBuilderStatus("Only editors can use AI Builder in this world.", "error");
+    return;
+  }
   const reasoning = getAiProviderState("reasoning");
   const image = getAiProviderState("image");
   const model = getAiProviderState("model");
@@ -5596,6 +5834,7 @@ function buildSceneLogicEntityContext() {
     ["trigger_zones", "Trigger zones", "trigger"],
     ["texts", "Texts", "text"],
     ["particles", "Particles", "particle"],
+    ["sounds", "Sounds", "sound"],
     ["screens", "Screens", "screen"],
   ];
   const lines = [];
@@ -5638,10 +5877,13 @@ function buildSceneLogicModuleContext() {
         `${moduleKind} [scope=scene|entity]`,
         "params: custom @set constants with literal values (number, boolean, string, vector3)",
         "bindings: (none)",
-        "program: line-based scripting statements run every tick",
+        "directives: @run every_tick|on_call, @input name [default], @set constant value",
+        "targeting: use @target scene or @target <entity_id>; @run on_call helpers may omit @target and inherit the caller self",
+        "program: line-based scripting statements; every_tick scripts auto-run, on_call scripts run through call(...)",
         "syntax: let name = expr · if (expr) return · if (expr) { ... } · assignment like self.position = expr",
         "expressions: identifiers, property access, function calls, + - * /, comparisons, &&, ||, !",
-        "builtins: entity(id), entities(kind), players(), nearest(list, from), sort_by_distance(list, from), distance(a, b), normalize(v), length(v), vec(x,y,z), clamp(v,min,max), min(...), max(...), move_toward(from,to,max_step,stop_distance)",
+        "builtins: entity(id), entities(kind), players(), nearest(list, from), sort_by_distance(list, from), distance(a, b), normalize(v), length(v), vec(x,y,z), clamp(v,min,max), min(...), max(...), move_toward(from,to,max_step,stop_distance), call(function_id_or_name, ...args), play_sound(sound), stop_sound(sound)",
+        "returns: use return <expr>; called scripts can return values to the caller",
       ].join("\n"));
       continue;
     }
@@ -5658,7 +5900,7 @@ function buildSceneLogicModuleContext() {
     ].join("\n"));
   }
   blocks.push("rule_triggers: zone_enter, zone_exit, key_press, timer, scene_start, all_players_ready");
-  blocks.push("rule_actions: apply_force, teleport, move_platform, switch_scene, set_material, set_visibility, toggle_particles, set_text, set_screen_state, start_scene");
+  blocks.push("rule_actions: apply_force, teleport, move_platform, switch_scene, set_material, set_visibility, toggle_particles, play_sound, stop_sound, set_text, set_screen_state, start_scene");
   return blocks.join("\n\n");
 }
 
@@ -5829,7 +6071,7 @@ function buildAiRequestOptions(dialog = state.aiDialog) {
   const isWorldScriptArtifact = dialog.artifactType === "world_script";
   return {
     provider: reasoning.provider,
-    model: reasoning.model || "gpt-5.4-mini",
+    model: reasoning.model || getDefaultAiModelForGroup("reasoning", reasoning.provider),
     apiKey: reasoning.apiKey,
     artifactType: dialog.artifactType,
     worldName: state.selectedWorld.name,
@@ -7172,6 +7414,14 @@ function setPrivateBrowserOverlayOpen(open) {
   });
 }
 
+function getActivePrivateBrowserShareModeFromUi() {
+  const activeButton = (elements.panelBrowserShareModes ?? []).find((button) =>
+    button?.getAttribute?.("aria-pressed") === "true"
+    || button?.classList?.contains?.("is-active"));
+  const activeMode = String(activeButton?.getAttribute?.("data-private-browser-share-mode") ?? "").trim();
+  return normalizeBrowserShareKind(activeMode, "");
+}
+
 function getLocalPrivateBrowserSession() {
   return state.localBrowserSessionId ? state.browserSessions.get(state.localBrowserSessionId) ?? null : null;
 }
@@ -8100,11 +8350,12 @@ const privateBrowserShareFeature = createNearbyDisplayShareFeature({
   modeAttribute: "data-private-browser-share-mode",
   titleInput: elements.panelBrowserShareTitle,
   launchButton: elements.panelBrowserLaunch,
-  getMode: () => state.browserShareMode,
+  getMode: () => getActivePrivateBrowserShareModeFromUi() || state.browserShareMode,
   setMode(mode) {
     state.browserShareMode = mode;
   },
   onModeChanged() {
+    state.browserShareMode = getActivePrivateBrowserShareModeFromUi() || state.browserShareMode;
     if (state.browserShareMode === "game" && state.browserOverlayOpen) {
       setPrivateBrowserOverlayOpen(false);
     }
@@ -8967,6 +9218,7 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
 }
 
 function updatePrivateBrowserPanel() {
+  state.browserShareMode = getActivePrivateBrowserShareModeFromUi() || normalizeBrowserShareKind(state.browserShareMode, "screen");
   for (const [sessionId, localShare] of [...state.localBrowserShares.entries()]) {
     if (isLocalDisplayShareActive(localShare)) {
       continue;
@@ -9412,6 +9664,11 @@ async function runRefreshAuthState() {
   if (!state.session) {
     await releaseSceneLock();
     state.profile = null;
+    state.profileLauncherTab = "account";
+    state.profileWorldQuery = "";
+    state.profileAssets = [];
+    state.profileAssetsLoading = false;
+    state.profileResourceQuery = "";
     state.publicWorlds = [];
     state.publicWorldsLoading = false;
     state.publicWorldsError = "";
@@ -9440,7 +9697,7 @@ async function runRefreshAuthState() {
     state.buildSuppressedClick = null;
     resetPrivateBrowserState({ disconnectController: true, stopTracks: true });
     setEntryLoading(false);
-    renderProfile();
+    renderProfileLauncher();
     renderLauncherWorldBrowser();
     renderSelectedWorld();
     renderAssetsLibrary();
@@ -9455,11 +9712,14 @@ async function runRefreshAuthState() {
     renderLauncherWorldBrowser();
     const payload = await apiFetch("/private/profile");
     state.profile = payload.profile;
-    renderProfile();
+    renderProfileLauncher();
     renderAccessSection();
     renderSessionSummary();
     await loadWorlds();
     void loadAssets();
+    if (state.launcherTab === "profile" && state.profileLauncherTab === "resources") {
+      void loadProfileAssets();
+    }
     const launch = getLaunchRequest();
     const launcherIntent = getLauncherIntent();
     const hasLaunchRequest = Boolean(launch.worldId && launch.creatorUsername);
@@ -9511,17 +9771,17 @@ async function refreshAuthState() {
 function renderProfile() {
   if (!state.authReady || !state.session || !state.profile) {
     elements.profileForm.hidden = true;
+    elements.accountActions.hidden = true;
     return;
   }
   elements.profileForm.hidden = false;
+  elements.accountActions.hidden = false;
   elements.profileForm.elements.username.value = state.profile.username || "";
   elements.profileForm.elements.displayName.value = state.profile.display_name || "";
 }
 
 function renderAccessSection() {
-  const authReady = state.authReady === true;
-  const signedIn = Boolean(state.session);
-  if (!authReady) {
+  if (state.authReady !== true) {
     if (elements.accessHeading) {
       elements.accessHeading.textContent = "Checking account";
     }
@@ -9531,33 +9791,235 @@ function renderAccessSection() {
     if (elements.authForm) {
       elements.authForm.hidden = true;
     }
-    if (elements.profileForm) {
-      elements.profileForm.hidden = true;
-    }
-    if (elements.accountActions) {
-      elements.accountActions.hidden = true;
-    }
+    elements.authForm.hidden = true;
     renderLauncherTitle();
     return;
   }
   if (elements.accessHeading) {
-    elements.accessHeading.textContent = signedIn ? "Account" : "Sign in";
+    elements.accessHeading.textContent = "Sign in";
   }
   if (elements.accessNote) {
-    elements.accessNote.textContent = signedIn
-      ? "Edit your profile here, or sign out when you are done."
-      : "There is no shared demo login here. Use your own email and password, or create an account first.";
+    elements.accessNote.textContent = "There is no shared demo login here. Use your own email and password, or create an account first.";
   }
   if (elements.authForm) {
-    elements.authForm.hidden = signedIn;
-  }
-  if (!signedIn && elements.profileForm) {
-    elements.profileForm.hidden = true;
-  }
-  if (elements.accountActions) {
-    elements.accountActions.hidden = !signedIn;
+    elements.authForm.hidden = Boolean(state.session);
   }
   renderLauncherTitle();
+}
+
+function normalizeProfileLauncherTab(tab = "") {
+  return PROFILE_LAUNCHER_TABS.has(tab) ? tab : "account";
+}
+
+function buildProfileAssetSummary(asset = {}) {
+  const typeLabel = asset.asset_type === "model"
+    ? "Model"
+    : asset.asset_type === "sound"
+      ? "Sound"
+      : isVideoTextureAsset(asset)
+        ? "Video Texture"
+        : "Texture";
+  return {
+    title: asset.name || asset.id || "Untitled asset",
+    meta: `${typeLabel} · ${buildAssetSummary(asset)}`,
+    note: asset.intended_use || asset.world_context_summary || "Ready across your private worlds.",
+    thumbnail: getPrivateAssetFile(asset, asset.asset_type === "model" ? "thumbnail" : "base_color"),
+  };
+}
+
+function renderProfileWorldBrowser() {
+  if (!elements.profileWorldList) {
+    return;
+  }
+  if (!state.session) {
+    elements.profileWorldList.innerHTML = '<div class="pw-world-card"><p>Sign in to load your private worlds.</p></div>';
+    return;
+  }
+  if (elements.profileWorldSearch && elements.profileWorldSearch.value !== state.profileWorldQuery) {
+    elements.profileWorldSearch.value = state.profileWorldQuery;
+  }
+  if (state.worldsLoading) {
+    elements.profileWorldList.innerHTML = [
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+    ].join("");
+    return;
+  }
+  if (state.worldsError) {
+    elements.profileWorldList.innerHTML = `<p class="world-empty">${htmlEscape(state.worldsError)}</p>`;
+    return;
+  }
+  const query = String(state.profileWorldQuery ?? "").trim().toLowerCase();
+  const worlds = (state.worlds ?? []).filter((world) => {
+    if (!query) {
+      return true;
+    }
+    const haystack = [
+      world.name,
+      world.about,
+      world.world_type,
+      world.template_size,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+  if (!worlds.length) {
+    elements.profileWorldList.innerHTML = query
+      ? '<p class="world-empty">No private worlds match that search.</p>'
+      : '<div class="pw-world-card"><p>No private worlds yet. Create one to get started.</p></div>';
+    return;
+  }
+  elements.profileWorldList.innerHTML = buildPrivateWorldBrowserResultsMarkup(worlds, {
+    selectedKey: state.selectedWorld ? getPrivateWorldBrowserKey(state.selectedWorld) : "",
+    resultDataAttribute: "data-profile-world-result",
+    includeStatus: true,
+  });
+}
+
+function renderProfileGameLibrarySummary() {
+  if (!elements.profileGameSummary) {
+    return;
+  }
+  if (!state.session) {
+    elements.profileGameSummary.innerHTML = '<p>Sign in to open your saved games and nearby share packages.</p>';
+    return;
+  }
+  const selectedGame = getSelectedPrivateWorldGame();
+  const liveSession = getLocalPrivateGameSession();
+  if (liveSession) {
+    elements.profileGameSummary.innerHTML = `
+      <strong>${htmlEscape(getGameSessionTitle(liveSession))}</strong>
+      <p>${htmlEscape(liveSession.started ? "Your nearby game match is live right now." : "Your nearby game lobby is open and ready for seats.")}</p>
+    `;
+    return;
+  }
+  if (selectedGame) {
+    elements.profileGameSummary.innerHTML = `
+      <strong>${htmlEscape(getPrivateSavedGameTitle(selectedGame))}</strong>
+      <p>${htmlEscape(selectedGame.manifest?.summary || selectedGame.prompt || "Open the game library to refine, export, or share this game nearby.")}</p>
+    `;
+    return;
+  }
+  elements.profileGameSummary.innerHTML = `
+    <strong>No game selected</strong>
+    <p>Open your game library to generate new games, import packages, or pick one for nearby sharing.</p>
+  `;
+}
+
+function renderProfileResourcesBrowser() {
+  if (!elements.profileResourceList) {
+    return;
+  }
+  if (!state.session) {
+    elements.profileResourceList.innerHTML = '<div class="pw-world-card"><p>Sign in to load shared resources.</p></div>';
+    if (elements.profileResourceStatus) {
+      elements.profileResourceStatus.textContent = "";
+    }
+    return;
+  }
+  if (elements.profileResourceSearch && elements.profileResourceSearch.value !== state.profileResourceQuery) {
+    elements.profileResourceSearch.value = state.profileResourceQuery;
+  }
+  if (state.profileAssetsLoading) {
+    elements.profileResourceList.innerHTML = [
+      '<article class="pw-prefab-card"><p class="pw-builder-empty">Loading shared resources...</p></article>',
+      '<article class="pw-prefab-card"><p class="pw-builder-empty">Loading shared resources...</p></article>',
+    ].join("");
+    if (elements.profileResourceStatus) {
+      elements.profileResourceStatus.textContent = "Loading shared resources...";
+    }
+    return;
+  }
+  const query = String(state.profileResourceQuery ?? "").trim().toLowerCase();
+  const assets = (state.profileAssets ?? []).filter((asset) => {
+    if (!query) {
+      return true;
+    }
+    const haystack = [
+      asset.name,
+      asset.asset_type,
+      asset.provider,
+      asset.intended_use,
+      asset.world_context_summary,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+  if (elements.profileResourceStatus) {
+    elements.profileResourceStatus.textContent = `${assets.length} shared resource${assets.length === 1 ? "" : "s"} shown.`;
+  }
+  if (!assets.length) {
+    elements.profileResourceList.innerHTML = query
+      ? '<div class="pw-world-card"><p>No shared resources match that search.</p></div>'
+      : '<div class="pw-world-card"><p>No shared resources yet. Generate or upload assets from a private world first.</p></div>';
+    return;
+  }
+  elements.profileResourceList.innerHTML = assets.map((asset) => {
+    const summary = buildProfileAssetSummary(asset);
+    return `
+      <article class="pw-prefab-card">
+        <div class="pw-prefab-card__head">
+          <strong>${htmlEscape(summary.title)}</strong>
+          <span>${htmlEscape(asset.asset_type === "model" ? "model" : asset.asset_type === "sound" ? "sound" : isVideoTextureAsset(asset) ? "video texture" : "texture")}</span>
+        </div>
+        ${summary.thumbnail?.url
+          ? `<img class="pw-asset-thumb" src="${htmlEscape(summary.thumbnail.url)}" alt="${htmlEscape(summary.title)}" />`
+          : asset.asset_type === "sound"
+            ? '<div class="pw-asset-thumb pw-asset-thumb--empty">audio</div>'
+            : isVideoTextureAsset(asset)
+              ? '<div class="pw-asset-thumb pw-asset-thumb--empty">video</div>'
+              : ""}
+        <p>${htmlEscape(summary.meta)}</p>
+        <small>${htmlEscape(summary.note)}</small>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderProfileLauncherTabs() {
+  const activeTab = normalizeProfileLauncherTab(state.profileLauncherTab);
+  state.profileLauncherTab = activeTab;
+  for (const button of elements.profileLauncherTabButtons ?? []) {
+    const isActive = button.getAttribute("data-profile-launcher-tab") === activeTab;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  }
+  for (const pane of elements.profileLauncherPanes ?? []) {
+    pane.hidden = pane.getAttribute("data-profile-pane") !== activeTab;
+  }
+}
+
+function renderProfileLauncher() {
+  renderProfileLauncherTabs();
+  renderProfile();
+  renderProfileWorldBrowser();
+  renderProfileGameLibrarySummary();
+  renderProfileResourcesBrowser();
+}
+
+function loadProfileLauncherData(tab = state.profileLauncherTab) {
+  const activeTab = normalizeProfileLauncherTab(tab);
+  if (!state.session) {
+    return;
+  }
+  if (activeTab === "worlds") {
+    void loadWorlds();
+  }
+  if (activeTab === "resources") {
+    void loadProfileAssets();
+  }
+}
+
+function setProfileLauncherTab(tab, options = {}) {
+  state.profileLauncherTab = normalizeProfileLauncherTab(tab);
+  if (!canShowCreateWorldDialog(state.launcherTab, state.profileLauncherTab)) {
+    state.createWorldDialogOpen = false;
+  }
+  syncCreateWorldDialogVisibility();
+  renderProfileLauncher();
+  if (options.load === false) {
+    return;
+  }
+  loadProfileLauncherData(state.profileLauncherTab);
 }
 
 function renderSessionSummary() {
@@ -9566,23 +10028,55 @@ function renderSessionSummary() {
   }
   if (!state.authReady) {
     elements.panelSessionLabel.textContent = "Checking your account.";
-    elements.panelOpenAccess.textContent = "Loading";
+    elements.panelOpenAccess.classList.remove("is-profile-icon");
+    if (elements.panelOpenAccessIcon) {
+      elements.panelOpenAccessIcon.hidden = true;
+    }
+    if (elements.panelOpenAccessLabel) {
+      elements.panelOpenAccessLabel.classList.remove("pw-visually-hidden");
+      elements.panelOpenAccessLabel.textContent = "Loading";
+    }
+    elements.panelOpenAccess.setAttribute("aria-label", "Loading account");
     elements.panelOpenAccess.disabled = true;
     return;
   }
   elements.panelOpenAccess.disabled = false;
   if (state.session && state.profile) {
     elements.panelSessionLabel.textContent = `Signed in as @${state.profile.username || "user"}.`;
-    elements.panelOpenAccess.textContent = "Account";
+    elements.panelOpenAccess.classList.add("is-profile-icon");
+    if (elements.panelOpenAccessIcon) {
+      elements.panelOpenAccessIcon.hidden = false;
+    }
+    if (elements.panelOpenAccessLabel) {
+      elements.panelOpenAccessLabel.classList.add("pw-visually-hidden");
+      elements.panelOpenAccessLabel.textContent = "My profile";
+    }
+    elements.panelOpenAccess.setAttribute("aria-label", "Open my profile");
     return;
   }
   if (state.session) {
     elements.panelSessionLabel.textContent = "Signed in.";
-    elements.panelOpenAccess.textContent = "Account";
+    elements.panelOpenAccess.classList.add("is-profile-icon");
+    if (elements.panelOpenAccessIcon) {
+      elements.panelOpenAccessIcon.hidden = false;
+    }
+    if (elements.panelOpenAccessLabel) {
+      elements.panelOpenAccessLabel.classList.add("pw-visually-hidden");
+      elements.panelOpenAccessLabel.textContent = "My profile";
+    }
+    elements.panelOpenAccess.setAttribute("aria-label", "Open my profile");
     return;
   }
   elements.panelSessionLabel.textContent = "Sign in to open your private worlds.";
-  elements.panelOpenAccess.textContent = "Sign In";
+  elements.panelOpenAccess.classList.remove("is-profile-icon");
+  if (elements.panelOpenAccessIcon) {
+    elements.panelOpenAccessIcon.hidden = true;
+  }
+  if (elements.panelOpenAccessLabel) {
+    elements.panelOpenAccessLabel.classList.remove("pw-visually-hidden");
+    elements.panelOpenAccessLabel.textContent = "Sign In";
+  }
+  elements.panelOpenAccess.setAttribute("aria-label", "Sign in");
 }
 
 async function loadWorlds() {
@@ -9591,11 +10085,13 @@ async function loadWorlds() {
     state.worldsError = "";
     state.worlds = [];
     renderLauncherWorldBrowser();
+    renderProfileWorldBrowser();
     return;
   }
   state.worldsLoading = true;
   state.worldsError = "";
   renderLauncherWorldBrowser();
+  renderProfileWorldBrowser();
   try {
     const payload = await apiFetch("/private/worlds", {
       search: {
@@ -9609,7 +10105,8 @@ async function loadWorlds() {
   } finally {
     state.worldsLoading = false;
     renderLauncherWorldBrowser();
-    if (state.launcherOpen && !state.selectedWorld && !state.worldsError) {
+    renderProfileWorldBrowser();
+    if (state.launcherOpen && state.launcherTab !== "profile" && !state.selectedWorld && !state.worldsError) {
       setLauncherTab(getPreferredLauncherTab());
     }
   }
@@ -9638,6 +10135,117 @@ async function loadAssets() {
     state.assetsLoading = false;
     renderAssetsLibrary();
   }
+}
+
+async function loadProfileAssets() {
+  if (!state.session) {
+    state.profileAssetsLoading = false;
+    state.profileAssets = [];
+    renderProfileResourcesBrowser();
+    return;
+  }
+  state.profileAssetsLoading = true;
+  renderProfileResourcesBrowser();
+  try {
+    const payload = await apiFetch("/private/assets", {
+      search: {
+        q: state.profileResourceQuery || "",
+      },
+    });
+    state.profileAssets = payload.assets ?? [];
+  } catch (_error) {
+    state.profileAssets = [];
+  } finally {
+    state.profileAssetsLoading = false;
+    renderProfileResourcesBrowser();
+  }
+}
+
+function readFileAsDataUrl(file, label = "file") {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read that ${label}.`));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadPrivateSoundAsset(file, options = {}) {
+  if (!state.session || !state.selectedWorld) {
+    throw new Error("Sign in and open a world before uploading sounds.");
+  }
+  const dataUrl = await readFileAsDataUrl(file, "audio file");
+  const target = options.target ?? getSelectedSoundAttachTarget();
+  const payload = await apiFetch("/private/assets/upload-sound", {
+    method: "POST",
+    body: {
+      name: options.name ?? file.name.replace(/\.[^.]+$/, "") || "Sound Asset",
+      file_name: file.name || "sound-asset.mp3",
+      content_type: file.type || "audio/mpeg",
+      data_url: dataUrl,
+      intended_use: options.intendedUse ?? (target ? `Sound for ${target.title}` : "Private world sound"),
+      world_context_summary: options.worldContextSummary ?? `Uploaded for ${state.selectedWorld.name}.`,
+      worldId: state.selectedWorld.world_id,
+      worldName: state.selectedWorld.name,
+      targetLabel: target?.title ?? "",
+    },
+  });
+  await loadAssets();
+  const assetId = payload?.asset?.id || "";
+  if (assetId && target) {
+    applySoundAssetToSelection(assetId, {
+      targetKind: target.kind,
+      targetId: target.id,
+    });
+  }
+  setSceneDrawerOpen(true);
+  setSceneDrawerTab("assets");
+  state.assetFilterType = "sound";
+  if (elements.assetTypeFilter) {
+    elements.assetTypeFilter.value = "sound";
+  }
+  setStatus(`Uploaded sound asset ${payload?.asset?.name || file.name}.`);
+  pushEvent("asset:sound-uploaded", payload?.asset?.name || file.name);
+  return payload?.asset ?? null;
+}
+
+async function uploadPrivateVideoTextureAsset(file, options = {}) {
+  if (!state.session || !state.selectedWorld) {
+    throw new Error("Sign in and open a world before uploading video textures.");
+  }
+  const dataUrl = await readFileAsDataUrl(file, "video file");
+  const target = options.target ?? getSelectedTextureAttachTarget();
+  const payload = await apiFetch("/private/assets/upload-video-texture", {
+    method: "POST",
+    body: {
+      name: options.name ?? file.name.replace(/\.[^.]+$/, "") || "Video Texture",
+      file_name: file.name || "video-texture.mp4",
+      content_type: file.type || "video/mp4",
+      data_url: dataUrl,
+      intended_use: options.intendedUse ?? (target ? `Video texture for ${target.title}` : "Private world video texture"),
+      world_context_summary: options.worldContextSummary ?? `Uploaded for ${state.selectedWorld.name}.`,
+      worldId: state.selectedWorld.world_id,
+      worldName: state.selectedWorld.name,
+      targetLabel: target?.title ?? "",
+    },
+  });
+  await loadAssets();
+  const assetId = payload?.asset?.id || "";
+  if (assetId && target) {
+    applyTextureAssetToSelection(assetId, {
+      targetKind: target.kind,
+      targetId: target.id,
+    });
+  }
+  setSceneDrawerOpen(true);
+  setSceneDrawerTab("assets");
+  state.assetFilterType = "texture";
+  if (elements.assetTypeFilter) {
+    elements.assetTypeFilter.value = "texture";
+  }
+  setStatus(`Uploaded video texture ${payload?.asset?.name || file.name}.`);
+  pushEvent("asset:video-texture-uploaded", payload?.asset?.name || file.name);
+  return payload?.asset ?? null;
 }
 
 async function loadPublicWorlds() {
@@ -9706,6 +10314,7 @@ function buildMetaRows(world) {
   if (!world) {
     return [];
   }
+  const accessPolicy = getWorldAccessPolicy(world);
   const creatorUsername = String(world.creator?.username ?? world.creator_username ?? "").trim();
   const creatorDisplayName = String(world.creator?.display_name ?? world.creator_display_name ?? creatorUsername).trim();
   const dimensions = [world.width, world.length, world.height]
@@ -9749,6 +10358,10 @@ function buildMetaRows(world) {
     { label: "Type", value: typeParts.join(" · ") || "Not set" },
     { label: "Viewers", value: viewerLabel },
     { label: "Entry", value: isActive ? "Copy Entry above to jump straight in." : "Inactive right now. The entry link still resolves it." },
+    {
+      label: "Viewer package access",
+      value: `${accessPolicy.allowNonEditorExport ? "Export on" : "Export off"} · ${accessPolicy.allowNonEditorFork ? "Fork on" : "Fork off"}`,
+    },
     {
       label: "Lineage",
       value: lineageImported
@@ -11364,6 +11977,7 @@ function getRuntimeSnapshotWorldKey(world = state.selectedWorld) {
 }
 
 function clearRuntimeSnapshot() {
+  stopPrivateWorldSoundPlayers();
   state.runtimeSnapshot = null;
   state.runtimeSnapshotSourcePriority = 0;
   state.runtimeSnapshotWorldKey = "";
@@ -11477,6 +12091,7 @@ function buildPrivateScriptDslEntityAliasMap(sceneDoc = {}) {
     ...(sceneDoc?.trigger_zones ?? []),
     ...(sceneDoc?.prefab_instances ?? []),
     ...(sceneDoc?.particles ?? []),
+    ...(sceneDoc?.sounds ?? []),
   ];
   return new Map(
     entityEntries
@@ -14571,7 +15186,106 @@ function buildFacingModeEditor(entry = {}, note = "Fixed uses the saved rotation
   `;
 }
 
+function isVideoTextureAsset(asset = {}) {
+  if (!asset || asset.asset_type !== "texture") {
+    return false;
+  }
+  const videoFile = getPrivateAssetFile(asset, "base_color_video");
+  if (videoFile?.url) {
+    return true;
+  }
+  return String(asset?.context?.media_kind ?? "").trim().toLowerCase() === "video_texture";
+}
+
+function canApplyVideoTextureToRef(targetKind = "", targetId = "") {
+  const normalizedTargetKind = String(targetKind ?? "").trim();
+  const normalizedTargetId = String(targetId ?? "").trim();
+  if (!normalizedTargetId || !VIDEO_TEXTURE_TARGET_ENTITY_KINDS.has(normalizedTargetKind)) {
+    return false;
+  }
+  return canApplyTextureToRef(normalizedTargetKind, normalizedTargetId);
+}
+
+function canApplyTextureAssetToTarget(asset = null, target = null) {
+  if (!asset || asset.asset_type !== "texture" || !target?.kind || !target?.id) {
+    return false;
+  }
+  if (isVideoTextureAsset(asset)) {
+    return canApplyVideoTextureToRef(target.kind, target.id);
+  }
+  return canApplyTextureToRef(target.kind, target.id);
+}
+
+function getMaterialAppearanceLabel(material = {}) {
+  if (String(material?.video_asset_id ?? material?.videoAssetId ?? "").trim()) {
+    return "video texture";
+  }
+  if (String(material?.texture_asset_id ?? material?.textureAssetId ?? "").trim()) {
+    return "asset texture";
+  }
+  return material?.texture_preset || "none";
+}
+
+function getRenderableAnimationSettings(entry = {}) {
+  return {
+    clip: String(entry?.animation_clip ?? entry?.animationClip ?? "").trim(),
+    autoplay: entry?.animation_autoplay === true || entry?.animationAutoplay === true,
+    loop: entry?.animation_loop !== false && entry?.animationLoop !== false,
+    speed: clampNumber(
+      entry?.animation_speed ?? entry?.animationSpeed,
+      1,
+      0,
+      4,
+    ),
+  };
+}
+
+function buildModelAnimationEditor(entry = {}, options = {}) {
+  const targetKind = String(options.targetKind ?? "").trim();
+  const assetId = String(entry?.asset_id ?? entry?.assetId ?? "").trim();
+  if (!assetId || !MODEL_ASSET_TARGET_ENTITY_KINDS.has(targetKind)) {
+    return "";
+  }
+  const settings = getRenderableAnimationSettings(entry);
+  return `
+    <section class="pw-material-texture-card">
+      <div class="pw-material-texture-card__body">
+        <span class="pw-material-texture-card__eyebrow">GLB Animation</span>
+        <strong>Playback</strong>
+        <p class="pw-material-texture-card__summary">Leave Clip blank to use the first animation inside the GLB. Autoplay is off by default so older worlds stay visually stable until you enable it.</p>
+      </div>
+      <div class="pw-inspector-grid pw-inspector-grid--2">
+        <div>
+          <label>
+            <span>Clip</span>
+            <input type="text" data-entity-field="animation_clip" data-value-type="text" value="${htmlEscape(settings.clip)}" placeholder="first clip" />
+          </label>
+        </div>
+        <div>
+          <label>
+            <span>Speed</span>
+            <input type="number" min="0" max="4" step="0.1" data-entity-field="animation_speed" data-value-type="number" value="${htmlEscape(settings.speed)}" />
+          </label>
+        </div>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="animation_autoplay" data-value-type="checkbox" ${settings.autoplay ? "checked" : ""} />
+        <span>Autoplay animation</span>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="animation_loop" data-value-type="checkbox" ${settings.loop ? "checked" : ""} />
+        <span>Loop animation</span>
+      </div>
+    </section>
+  `;
+}
+
 function buildEntitySummary(kind, entry = {}) {
+  if (kind === "sound") {
+    const assetLabel = entry.asset_id ? "audio linked" : "no audio";
+    const spatialLabel = entry.spatial === false ? "global" : `spatial ${Number(entry.max_distance ?? 24).toFixed(0)}`;
+    return `${describeVector3(entry.position)} · ${assetLabel} · vol ${Number(entry.volume ?? 0.85).toFixed(2)} · ${entry.loop ? "loop" : "one-shot"} · ${entry.autoplay ? "autoplay" : "manual"} · ${spatialLabel}`;
+  }
   if (kind === "particle") {
     return `${entry.target_id || "no target"} · ${describeVector3(entry.position)} · ${entry.enabled === false ? "off" : "on"}`;
   }
@@ -14580,26 +15294,26 @@ function buildEntitySummary(kind, entry = {}) {
   }
   if (kind === "model") {
     const bounds = entry.bounds ?? { x: 1, y: 1, z: 1 };
-    const textureLabel = entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none");
+    const textureLabel = getMaterialAppearanceLabel(entry.material);
     return `${describeVector3(entry.position)} · ${textureLabel} · ${Number(bounds.x ?? 1).toFixed(1)} x ${Number(bounds.y ?? 1).toFixed(1)} x ${Number(bounds.z ?? 1).toFixed(1)}`;
   }
   if (kind === "primitive" && isPrimitivePanelShape(entry)) {
     const scale = getPrimitivePanelDimensions(entry);
     const appearanceLabel = entry.asset_id
       ? "model asset"
-      : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"));
+      : getMaterialAppearanceLabel(entry.material);
     return `${describeVector3(entry.position)} · ${getFacingModeLabel(entry.facing_mode)} · ${appearanceLabel} · ${Number(scale.x ?? 4).toFixed(1)} x ${Number(scale.y ?? 2.25).toFixed(1)}`;
   }
   if (kind === "primitive") {
     const scale = entry.scale ?? { x: 1, y: 1, z: 1 };
     const appearanceLabel = entry.asset_id
       ? "model asset"
-      : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"));
+      : getMaterialAppearanceLabel(entry.material);
     return `${describeVector3(entry.position)} · ${entry.shape || "box"} · ${appearanceLabel} · ${Number(scale.x ?? 1).toFixed(1)} x ${Number(scale.y ?? 1).toFixed(1)} x ${Number(scale.z ?? 1).toFixed(1)}`;
   }
   if (kind === "panel") {
     const scale = entry.scale ?? { x: 4, y: 2.25, z: 0.1 };
-    const textureLabel = entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none");
+    const textureLabel = getMaterialAppearanceLabel(entry.material);
     return `${describeVector3(entry.position)} · ${getFacingModeLabel(entry.facing_mode)} · ${textureLabel} · ${Number(scale.x ?? 4).toFixed(1)} x ${Number(scale.y ?? 2.25).toFixed(1)}`;
   }
   if (kind === "screen") {
@@ -14611,7 +15325,7 @@ function buildEntitySummary(kind, entry = {}) {
   if (kind === "player") {
     const appearanceSummary = entry.asset_id
       ? "model asset"
-      : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"));
+      : getMaterialAppearanceLabel(entry.material);
     return `${describeVector3(entry.position)} · ${entry.camera_mode || "third_person"} · ${appearanceSummary} · scale ${Number(entry.scale ?? 1).toFixed(1)}`;
   }
   const details = [];
@@ -14808,11 +15522,17 @@ function buildMaterialEditor(material = {}, options = {}) {
   const allowEmission = options.allowEmission === true;
   const textureTargetKind = String(options.textureTargetKind ?? "").trim();
   const textureTargetId = String(options.textureTargetId ?? "").trim();
+  const allowVideoTexture = options.allowVideoTexture === true;
   const linkedTextureId = String(material.texture_asset_id ?? "").trim();
   const linkedTexture = linkedTextureId ? getPrivateAssetById(linkedTextureId) : null;
   const linkedTextureThumb = getPrivateAssetFile(linkedTexture, "base_color");
   const canChooseTexture = Boolean(textureTargetKind && textureTargetId && canApplyTextureToRef(textureTargetKind, textureTargetId));
+  const linkedVideoId = String(material.video_asset_id ?? material.videoAssetId ?? "").trim();
+  const linkedVideo = linkedVideoId ? getPrivateAssetById(linkedVideoId) : null;
+  const canChooseVideo = allowVideoTexture
+    && Boolean(textureTargetKind && textureTargetId && canApplyVideoTextureToRef(textureTargetKind, textureTargetId));
   const textureActionsDisabled = !canChooseTexture || !state.session || !state.selectedWorld || !isEditor() || state.mode !== "build";
+  const videoActionsDisabled = !canChooseVideo || !state.session || !state.selectedWorld || !isEditor() || state.mode !== "build";
   const textureTitle = linkedTexture?.name
     || (linkedTextureId ? "Linked texture asset" : "No custom texture linked");
   const textureSummary = linkedTexture
@@ -14832,6 +15552,24 @@ function buildMaterialEditor(material = {}, options = {}) {
         <button type="button" data-open-texture-library ${textureActionsDisabled ? "disabled" : ""}>Choose from library</button>
         <button type="button" class="is-muted" data-generate-texture-from-inspector ${textureActionsDisabled ? "disabled" : ""}>Generate with AI</button>
         ${linkedTextureId ? `<button type="button" class="is-muted" data-clear-texture-asset-path="${htmlEscape(fieldPrefix)}" ${textureActionsDisabled ? "disabled" : ""}>Clear</button>` : ""}
+      </div>
+    `
+    : "";
+  const videoIdNote = linkedVideoId
+    ? `<small class="pw-material-texture-card__id">${htmlEscape(linkedVideoId)}</small>`
+    : "";
+  const videoTitle = linkedVideo?.name
+    || (linkedVideoId ? "Linked video texture" : "No video texture linked");
+  const videoSummary = linkedVideo
+    ? (linkedVideo.intended_use || linkedVideo.world_context_summary || buildAssetSummary(linkedVideo))
+    : linkedVideoId
+      ? `Video texture asset ${linkedVideoId} is linked here, but it is not available in your library right now.`
+      : "Movie textures stretch one looping video across the surface. Audio stays muted here, so pair it with a Sound item when you want audible playback.";
+  const videoActions = canChooseVideo
+    ? `
+      <div class="pw-inline-actions pw-material-texture-card__actions">
+        <button type="button" data-open-video-texture-library ${videoActionsDisabled ? "disabled" : ""}>Choose from library</button>
+        ${linkedVideoId ? `<button type="button" class="is-muted" data-clear-video-asset-path="${htmlEscape(fieldPrefix)}" ${videoActionsDisabled ? "disabled" : ""}>Clear</button>` : ""}
       </div>
     `
     : "";
@@ -14864,6 +15602,20 @@ function buildMaterialEditor(material = {}, options = {}) {
       </div>
       ${textureActions}
     </section>
+    ${allowVideoTexture ? `
+      <section class="pw-material-texture-card">
+        <div class="pw-material-texture-card__row">
+          <div class="pw-material-texture-card__thumb pw-material-texture-card__thumb--empty" aria-hidden="true">video</div>
+          <div class="pw-material-texture-card__body">
+            <span class="pw-material-texture-card__eyebrow">Video Texture</span>
+            <strong>${htmlEscape(videoTitle)}</strong>
+            <p class="pw-material-texture-card__summary">${htmlEscape(videoSummary)}</p>
+            ${videoIdNote}
+          </div>
+        </div>
+        ${videoActions}
+      </section>
+    ` : ""}
     ${allowEmission ? `
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
@@ -14883,6 +15635,7 @@ function getPrivatePlayerDefaultMaterial(playerLike = {}) {
     color: bodyMode === "ghost" ? "#6dd3ff" : "#ff8e4f",
     texture_preset: "none",
     texture_asset_id: null,
+    video_asset_id: null,
     emissive_intensity: 0,
   };
 }
@@ -14896,6 +15649,7 @@ function getResolvedPrivatePlayerMaterial(playerLike = {}, options = {}) {
     color: String(material.color ?? "").trim() || fallback.color,
     texture_preset: String(material.texture_preset ?? material.texturePreset ?? "").trim() || fallback.texture_preset,
     texture_asset_id: String(material.texture_asset_id ?? material.textureAssetId ?? "").trim() || fallback.texture_asset_id,
+    video_asset_id: String(material.video_asset_id ?? material.videoAssetId ?? "").trim() || fallback.video_asset_id,
     emissive_intensity: Math.max(
       0,
       Number(material.emissive_intensity ?? material.emissiveIntensity ?? fallback.emissive_intensity ?? 0) || 0,
@@ -15045,6 +15799,119 @@ function buildModelAssetEditor(assetId = "", options = {}) {
   `;
 }
 
+function canApplySoundAssetToRef(targetKind = "", targetId = "") {
+  const normalizedTargetKind = String(targetKind ?? "").trim();
+  const normalizedTargetId = String(targetId ?? "").trim();
+  if (!normalizedTargetId || !SOUND_ASSET_TARGET_ENTITY_KINDS.has(normalizedTargetKind)) {
+    return false;
+  }
+  try {
+    const sceneDoc = parseSceneTextarea();
+    return Boolean(findEntityByRef(sceneDoc, { kind: normalizedTargetKind, id: normalizedTargetId })?.entry);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function getSelectedSoundAttachTarget() {
+  const targetKind = String(state.builderSelection?.kind ?? "").trim();
+  const targetId = String(state.builderSelection?.id ?? "").trim();
+  if (!targetKind || !targetId || !SOUND_ASSET_TARGET_ENTITY_KINDS.has(targetKind)) {
+    return null;
+  }
+  try {
+    const sceneDoc = parseSceneTextarea();
+    const found = findEntityByRef(sceneDoc, { kind: targetKind, id: targetId });
+    if (!found?.entry) {
+      return null;
+    }
+    return {
+      kind: targetKind,
+      id: targetId,
+      entry: found.entry,
+      index: found.index,
+      name: getDisplayNameForEntity(targetKind, found.entry, found.index),
+      title: buildCompactEntityTitle(targetKind, found.entry, found.index),
+      meta: [
+        getEntityCollection(targetKind)?.singular || "Item",
+        found.entry?.id ? truncatePrivateUiLabel(found.entry.id, 72) : "",
+      ].filter(Boolean).join(" · "),
+      summary: buildEntitySummary(targetKind, found.entry),
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function applySoundAssetToSelection(assetId, options = {}) {
+  const targetKind = String(options.targetKind ?? state.builderSelection?.kind ?? "").trim();
+  const targetId = String(options.targetId ?? state.builderSelection?.id ?? "").trim();
+  const asset = getPrivateAssetById(assetId);
+  if (!asset || asset.asset_type !== "sound" || !canApplySoundAssetToRef(targetKind, targetId)) {
+    return false;
+  }
+  mutateSceneDoc((sceneDoc) => {
+    const found = findEntityByRef(sceneDoc, { kind: targetKind, id: targetId });
+    if (!found?.entry) {
+      return;
+    }
+    found.entry.asset_id = asset.id;
+  });
+  pushEvent("asset:sound-applied", asset.name || asset.id);
+  return true;
+}
+
+function clearSoundAssetFromSelection(path = "asset_id") {
+  const normalizedPath = String(path ?? "asset_id").trim() || "asset_id";
+  updateSelectedEntityField(normalizedPath, "", "text");
+}
+
+function buildSoundAssetEditor(assetId = "", options = {}) {
+  const normalizedAssetId = String(assetId ?? "").trim();
+  const fieldPath = String(options.path ?? "asset_id").trim() || "asset_id";
+  const targetKind = String(options.targetKind ?? "").trim();
+  const targetId = String(options.targetId ?? "").trim();
+  const asset = normalizedAssetId ? getPrivateAssetById(normalizedAssetId) : null;
+  const audioFile = getPrivateAssetFile(asset, "audio");
+  const canChooseSound = Boolean(targetKind && targetId && canApplySoundAssetToRef(targetKind, targetId));
+  const disabled = !canChooseSound || !state.session || !state.selectedWorld || !isEditor() || state.mode !== "build";
+  const title = asset?.name
+    || (normalizedAssetId ? "Linked sound asset" : "No sound linked");
+  const summary = asset
+    ? (asset.intended_use || asset.world_context_summary || buildAssetSummary(asset))
+    : normalizedAssetId
+      ? `Sound asset ${normalizedAssetId} is linked here, but it is not available in your library right now.`
+      : "Choose a sound asset from your library or upload an audio file.";
+  const idNote = normalizedAssetId
+    ? `<small class="pw-material-texture-card__id">${htmlEscape(normalizedAssetId)}</small>`
+    : "";
+  const preview = audioFile?.filename
+    ? `<div class="pw-material-texture-card__thumb pw-material-texture-card__thumb--empty" aria-hidden="true">audio</div>`
+    : `<div class="pw-material-texture-card__thumb pw-material-texture-card__thumb--empty" aria-hidden="true">sound</div>`;
+  const actions = canChooseSound
+    ? `
+      <div class="pw-inline-actions pw-material-texture-card__actions">
+        <button type="button" data-open-sound-library ${disabled ? "disabled" : ""}>Choose from library</button>
+        ${normalizedAssetId ? `<button type="button" class="is-muted" data-clear-sound-asset-path="${htmlEscape(fieldPath)}" ${disabled ? "disabled" : ""}>Clear</button>` : ""}
+      </div>
+    `
+    : "";
+  return `
+    <section class="pw-material-texture-card">
+      <div class="pw-material-texture-card__row">
+        ${preview}
+        <div class="pw-material-texture-card__body">
+          <span class="pw-material-texture-card__eyebrow">Sound</span>
+          <strong>${htmlEscape(title)}</strong>
+          <p class="pw-material-texture-card__summary">${htmlEscape(summary)}</p>
+          ${idNote}
+        </div>
+      </div>
+      ${actions}
+    </section>
+  `;
+}
+
 function getPrivateAssetById(assetId = "") {
   const normalizedAssetId = String(assetId ?? "").trim();
   if (!normalizedAssetId) {
@@ -15106,7 +15973,11 @@ function getSelectedTextureAttachTarget() {
 function applyTextureAssetToSelection(assetId, options = {}) {
   const targetKind = String(options.targetKind ?? state.builderSelection?.kind ?? "").trim();
   const targetId = String(options.targetId ?? state.builderSelection?.id ?? "").trim();
-  if (!assetId || !canApplyTextureToRef(targetKind, targetId)) {
+  const asset = getPrivateAssetById(assetId);
+  if (!asset || asset.asset_type !== "texture") {
+    return false;
+  }
+  if (isVideoTextureAsset(asset) ? !canApplyVideoTextureToRef(targetKind, targetId) : !canApplyTextureToRef(targetKind, targetId)) {
     return false;
   }
   mutateSceneDoc((sceneDoc) => {
@@ -15119,10 +15990,11 @@ function applyTextureAssetToSelection(assetId, options = {}) {
         ? getPrivatePlayerDefaultMaterial(found.entry)
         : { color: "#c8d0d8", texture_preset: "none", emissive_intensity: 0 }
     );
-    found.entry.material.texture_asset_id = assetId;
+    found.entry.material.texture_asset_id = isVideoTextureAsset(asset) ? null : assetId;
+    found.entry.material.video_asset_id = isVideoTextureAsset(asset) ? assetId : null;
     found.entry.material.texture_preset = "none";
   });
-  pushEvent("asset:texture-applied", assetId);
+  pushEvent(isVideoTextureAsset(asset) ? "asset:video-texture-applied" : "asset:texture-applied", assetId);
   return true;
 }
 
@@ -15130,6 +16002,11 @@ function clearTextureAssetFromSelection(pathPrefix = "material.") {
   const normalizedPrefix = String(pathPrefix ?? "material.").trim() || "material.";
   updateSelectedEntityField(`${normalizedPrefix}texture_asset_id`, "", "text", { renderBuilder: false });
   updateSelectedEntityField(`${normalizedPrefix}texture_preset`, "none", "text");
+}
+
+function clearVideoTextureAssetFromSelection(pathPrefix = "material.") {
+  const normalizedPrefix = String(pathPrefix ?? "material.").trim() || "material.";
+  updateSelectedEntityField(`${normalizedPrefix}video_asset_id`, "", "text");
 }
 
 function placeModelAsset(assetId, options = {}) {
@@ -15169,10 +16046,18 @@ function placeModelAsset(assetId, options = {}) {
 function buildAssetSummary(asset = {}) {
   const fileRoles = (asset.files ?? []).map((file) => String(file.role ?? "").trim()).filter(Boolean);
   const roleSummary = fileRoles.slice(0, 3).join(", ") || "no files";
+  const videoContentType = String(getPrivateAssetFile(asset, "base_color_video")?.content_type || "").trim().toLowerCase();
+  const videoSummary = videoContentType
+    ? `${videoContentType.replace(/^video\//, "")} video`
+    : "video texture";
   return [
     asset.asset_type === "model"
       ? `${Number(asset.bounds?.x ?? 1).toFixed(1)} x ${Number(asset.bounds?.y ?? 1).toFixed(1)} x ${Number(asset.bounds?.z ?? 1).toFixed(1)}`
-      : "texture",
+      : asset.asset_type === "sound"
+        ? `${(getPrivateAssetFile(asset, "audio")?.content_type || "audio").replace(/^audio\//, "")}`
+        : isVideoTextureAsset(asset)
+          ? videoSummary
+          : "texture",
     asset.provider || "manual",
     roleSummary,
     asset.status || "ready",
@@ -15236,6 +16121,32 @@ function openTextureAssetLibrary(options = {}) {
   return true;
 }
 
+function openVideoTextureLibrary(options = {}) {
+  const target = getSelectedTextureAttachTarget();
+  if (!target || !canApplyVideoTextureToRef(target.kind, target.id)) {
+    setStatus("Select one panel, object, or model first, then choose a video texture for it.");
+    return false;
+  }
+  state.assetFilterType = "texture";
+  if (options.resetQuery !== false) {
+    state.assetQuery = "";
+  }
+  if (elements.assetTypeFilter) {
+    elements.assetTypeFilter.value = "texture";
+  }
+  if (elements.assetSearch) {
+    elements.assetSearch.value = state.assetQuery;
+  }
+  setSceneDrawerOpen(true);
+  setSceneDrawerTab("assets");
+  setStatus(`Choose a video texture for ${target.title}.`);
+  void loadAssets();
+  window.requestAnimationFrame(() => {
+    elements.assetSearch?.focus?.();
+  });
+  return true;
+}
+
 function openModelAssetLibrary(options = {}) {
   const target = getSelectedModelAttachTarget();
   if (!target) {
@@ -15262,16 +16173,46 @@ function openModelAssetLibrary(options = {}) {
   return true;
 }
 
+function openSoundAssetLibrary(options = {}) {
+  const target = getSelectedSoundAttachTarget();
+  if (!target) {
+    setStatus("Select one sound item first, then choose a sound asset for it.");
+    return false;
+  }
+  state.assetFilterType = "sound";
+  if (options.resetQuery !== false) {
+    state.assetQuery = "";
+  }
+  if (elements.assetTypeFilter) {
+    elements.assetTypeFilter.value = "sound";
+  }
+  if (elements.assetSearch) {
+    elements.assetSearch.value = state.assetQuery;
+  }
+  setSceneDrawerOpen(true);
+  setSceneDrawerTab("assets");
+  setStatus(`Choose a sound for ${target.title}.`);
+  void loadAssets();
+  window.requestAnimationFrame(() => {
+    elements.assetSearch?.focus?.();
+  });
+  return true;
+}
+
 function renderAssetsLibrary() {
   if (!elements.assetSections) {
     return;
   }
   const activeTextureTarget = getSelectedTextureAttachTarget();
   const activeModelTarget = getSelectedModelAttachTarget();
+  const activeSoundTarget = getSelectedSoundAttachTarget();
   const filterType = String(state.assetFilterType ?? "all").trim() || "all";
-  const showAssetContext = filterType === "model"
-    ? Boolean(activeModelTarget)
-    : Boolean(activeTextureTarget);
+  const activeAssetTarget = filterType === "model"
+    ? activeModelTarget
+    : filterType === "sound"
+      ? activeSoundTarget
+      : activeTextureTarget;
+  const showAssetContext = Boolean(activeAssetTarget);
   if (elements.assetSearch && elements.assetSearch.value !== String(state.assetQuery ?? "")) {
     elements.assetSearch.value = String(state.assetQuery ?? "");
   }
@@ -15280,11 +16221,19 @@ function renderAssetsLibrary() {
   }
   if (elements.assetContext) {
     if (showAssetContext) {
-      const contextTarget = filterType === "model" ? activeModelTarget : activeTextureTarget;
-      const contextLabel = filterType === "model" ? "Model target" : "Texture target";
+      const contextTarget = activeAssetTarget;
+      const contextLabel = filterType === "model"
+        ? "Model target"
+        : filterType === "sound"
+          ? "Sound target"
+          : "Texture target";
       const contextHint = filterType === "model"
         ? "Choose a library model to use here, or generate a new one with AI."
-        : "Choose a library texture to attach it here, or generate a new one with AI.";
+        : filterType === "sound"
+          ? "Choose a library sound to attach here, or upload a new audio file."
+          : (canApplyVideoTextureToRef(contextTarget.kind, contextTarget.id)
+              ? "Choose an image texture or looping video texture for this surface, or generate a new image texture with AI."
+              : "Choose a library texture to attach here, or generate a new one with AI.");
       elements.assetContext.hidden = false;
       elements.assetContext.innerHTML = `
         <span>${htmlEscape(contextLabel)}</span>
@@ -15335,22 +16284,42 @@ function renderAssetsLibrary() {
   }
   elements.assetSections.innerHTML = assets.map((asset) => {
     const isReady = String(asset.status ?? "ready").trim().toLowerCase() === "ready";
-    const canApplyTexture = isReady && asset.asset_type === "texture" && Boolean(activeTextureTarget);
+    const canApplyTexture = isReady && asset.asset_type === "texture" && canApplyTextureAssetToTarget(asset, activeTextureTarget);
     const canApplyModel = isReady && asset.asset_type === "model" && Boolean(activeModelTarget);
+    const canApplySound = isReady && asset.asset_type === "sound" && Boolean(activeSoundTarget);
     const thumbnail = getPrivateAssetFile(asset, asset.asset_type === "model" ? "thumbnail" : "base_color");
+    const textureActionLabel = isVideoTextureAsset(asset)
+      ? (canApplyTexture ? "Attach to selected surface" : "Pick panel, object, or model")
+      : (canApplyTexture ? "Attach to selected item" : "Pick a material item");
     return `
       <article class="pw-prefab-card">
         <div class="pw-prefab-card__head">
           <strong>${htmlEscape(asset.name || asset.id)}</strong>
-          <span>${htmlEscape(asset.asset_type === "model" ? "Model" : "Texture")}</span>
+          <span>${htmlEscape(
+            asset.asset_type === "model"
+              ? "Model"
+              : asset.asset_type === "sound"
+                ? "Sound"
+                : isVideoTextureAsset(asset)
+                  ? "Video Texture"
+                  : "Texture"
+          )}</span>
         </div>
-        ${thumbnail?.url ? `<img class="pw-asset-thumb" src="${htmlEscape(thumbnail.url)}" alt="${htmlEscape(asset.name || asset.id)}" />` : ""}
+        ${thumbnail?.url
+          ? `<img class="pw-asset-thumb" src="${htmlEscape(thumbnail.url)}" alt="${htmlEscape(asset.name || asset.id)}" />`
+          : asset.asset_type === "sound"
+            ? `<div class="pw-asset-thumb pw-asset-thumb--empty">audio</div>`
+            : isVideoTextureAsset(asset)
+              ? `<div class="pw-asset-thumb pw-asset-thumb--empty">video</div>`
+            : ""}
         <p>${htmlEscape(buildAssetSummary(asset))}</p>
         <small>${htmlEscape(asset.intended_use || asset.world_context_summary || "Ready across your private worlds.")}</small>
         <div class="pw-inline-actions">
           ${asset.asset_type === "texture"
-            ? `<button type="button" ${canApplyTexture ? `data-apply-texture-asset="${htmlEscape(asset.id)}"` : "disabled"}>${!isReady ? "Waiting for ready" : canApplyTexture ? "Attach to selected item" : "Pick a material item"}</button>`
-            : `
+            ? `<button type="button" ${canApplyTexture ? `data-apply-texture-asset="${htmlEscape(asset.id)}"` : "disabled"}>${!isReady ? "Waiting for ready" : textureActionLabel}</button>`
+            : asset.asset_type === "sound"
+              ? `<button type="button" ${canApplySound ? `data-apply-sound-asset="${htmlEscape(asset.id)}"` : "disabled"}>${!isReady ? "Waiting for ready" : canApplySound ? "Attach to selected sound" : "Pick a sound item"}</button>`
+              : `
               ${canApplyModel ? `<button type="button" data-apply-model-asset="${htmlEscape(asset.id)}">${htmlEscape(getModelAssetTargetActionLabel(activeModelTarget))}</button>` : ""}
               <button type="button" ${isReady ? `data-place-model-asset="${htmlEscape(asset.id)}"` : "disabled"}>${isReady ? "Place in world" : "Waiting for ready"}</button>
             `}
@@ -15362,7 +16331,7 @@ function renderAssetsLibrary() {
 
 function buildTargetOptions(sceneDoc, selectedValue = "") {
   const options = [];
-  for (const config of ENTITY_COLLECTIONS.filter((entry) => entry.kind !== "particle")) {
+  for (const config of ENTITY_COLLECTIONS.filter((entry) => entry.kind !== "particle" && entry.kind !== "sound")) {
     for (const entry of getEntityArray(sceneDoc, config.key)) {
       options.push({
         value: entry.id,
@@ -15408,14 +16377,14 @@ function buildToolPresetSummary(kind, entry = {}) {
         "panel",
         getFacingModeLabel(entry.facing_mode),
         `${roundPrivateValue(panelScale.x ?? 4, 1)} x ${roundPrivateValue(panelScale.y ?? 2.25, 1)}`,
-        entry.asset_id ? "model asset" : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none")),
+        entry.asset_id ? "model asset" : getMaterialAppearanceLabel(entry.material),
         ...extra,
       ].join(" · ");
     }
     return [
       entry.shape || "box",
       entry.rigid_mode || "rigid",
-      entry.asset_id ? "model asset" : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none")),
+      entry.asset_id ? "model asset" : getMaterialAppearanceLabel(entry.material),
       `${roundPrivateValue(scale.x ?? 1, 1)} x ${roundPrivateValue(scale.y ?? 1, 1)} x ${roundPrivateValue(scale.z ?? 1, 1)}`,
       ...extra,
     ].join(" · ");
@@ -15432,7 +16401,7 @@ function buildToolPresetSummary(kind, entry = {}) {
     return [
       getFacingModeLabel(entry.facing_mode),
       `${roundPrivateValue(scale.x ?? 4, 1)} x ${roundPrivateValue(scale.y ?? 2.25, 1)}`,
-      entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"),
+      getMaterialAppearanceLabel(entry.material),
       ...extra,
     ].join(" · ");
   }
@@ -15440,7 +16409,7 @@ function buildToolPresetSummary(kind, entry = {}) {
     const movementSummary = isPlayerMovementEnabled(entry) ? "movement on" : "look only";
     const appearanceSummary = entry.asset_id
       ? "model asset"
-      : (entry.material?.texture_asset_id ? "asset texture" : (entry.material?.texture_preset || "none"));
+      : getMaterialAppearanceLabel(entry.material);
     return `${entry.camera_mode || "third_person"} · ${entry.body_mode || "rigid"} · ${movementSummary} · ${appearanceSummary} · scale ${roundPrivateValue(entry.scale ?? 1, 1)}`;
   }
   if (kind === "screen") {
@@ -15453,6 +16422,12 @@ function buildToolPresetSummary(kind, entry = {}) {
   if (kind === "trigger") {
     const scale = entry.scale ?? { x: 2, y: 2, z: 2 };
     return `${entry.label || "Trigger"} · ${roundPrivateValue(scale.x ?? 2, 1)} x ${roundPrivateValue(scale.y ?? 2, 1)} x ${roundPrivateValue(scale.z ?? 2, 1)}`;
+  }
+  if (kind === "sound") {
+    const assetSummary = entry.asset_id ? "audio linked" : "no audio";
+    const playbackSummary = entry.loop ? "loop" : "one-shot";
+    const spatialSummary = entry.spatial === false ? "global" : `spatial ${roundPrivateValue(entry.max_distance ?? 24, 1)}`;
+    return `${assetSummary} · vol ${roundPrivateValue(entry.volume ?? 0.85, 2)} · ${playbackSummary} · ${spatialSummary}`;
   }
   return "";
 }
@@ -15568,6 +16543,7 @@ function getPrefabEntryCounts(prefabDoc = {}) {
     player: (prefabDoc.players ?? []).length,
     text: (prefabDoc.texts ?? []).length,
     trigger: (prefabDoc.trigger_zones ?? []).length,
+    sound: (prefabDoc.sounds ?? []).length,
     particle: (prefabDoc.particles ?? []).length,
     prefab_instance: (prefabDoc.prefab_instances ?? []).length,
   };
@@ -15598,6 +16574,9 @@ function getPrefabTypeSummary(counts = {}) {
   }
   if (counts.trigger) {
     labels.push("triggers");
+  }
+  if (counts.sound) {
+    labels.push("sounds");
   }
   if (counts.particle) {
     labels.push("effects");
@@ -15666,6 +16645,10 @@ function getEntityApproxRenderSize(kind, entry = {}) {
       Math.max(0.2, Number(entry.scale?.z ?? 2) || 2),
     );
   }
+  if (kind === "sound") {
+    const radius = Math.max(0.35, (Number(entry.max_distance ?? 24) || 24) * 0.035);
+    return new THREE.Vector3(radius * 2, radius * 2, radius * 2);
+  }
   if (kind === "particle") {
     return new THREE.Vector3(
       Math.max(0.3, Number(entry.scale?.x ?? 1) || 1) * 1.4,
@@ -15715,6 +16698,7 @@ function getPrefabDocBounds(prefabDoc = {}, visitedIds = new Set()) {
     ["player", prefabDoc.players ?? []],
     ["text", prefabDoc.texts ?? []],
     ["trigger", prefabDoc.trigger_zones ?? []],
+    ["sound", prefabDoc.sounds ?? []],
     ["particle", prefabDoc.particles ?? []],
     ["prefab_instance", prefabDoc.prefab_instances ?? []],
   ];
@@ -15828,7 +16812,8 @@ function renderEntityInspector(sceneDoc, selected = null) {
   if (kind === "voxel") {
     elements.entityEditor.innerHTML = `
       <p class="pw-inspector-note">Solid static voxel. Pattern presets render directly in the preview. Invisible voxels stay translucent in Build mode so you can still grab and edit them.</p>
-      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
+      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id, allowVideoTexture: true })}
+      ${buildModelAnimationEditor(entry, { targetKind: kind })}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
       <div class="pw-inspector-grid pw-inspector-grid--2">
@@ -15869,7 +16854,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
         </div>
       </div>
       ${buildModelAssetEditor(entry.asset_id, { targetKind: kind, targetId: entry.id })}
-      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
+      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id, allowVideoTexture: true })}
       ${primitiveFacingEditor}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
@@ -15939,7 +16924,8 @@ function renderEntityInspector(sceneDoc, selected = null) {
         <span>Label</span>
         <input type="text" data-entity-field="label" data-value-type="text" value="${htmlEscape(entry.label || "")}" />
       </label>
-      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id })}
+      ${buildMaterialEditor(entry.material, { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id, allowVideoTexture: true })}
+      ${buildModelAnimationEditor(entry, { targetKind: kind })}
       ${buildFacingModeEditor(entry)}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
@@ -16049,6 +17035,7 @@ function renderEntityInspector(sceneDoc, selected = null) {
         getResolvedPrivatePlayerMaterial(entry),
         { allowEmission: true, textureTargetKind: kind, textureTargetId: entry.id },
       )}
+      ${buildModelAnimationEditor(entry, { targetKind: kind })}
       <div class="pw-inspector-grid pw-inspector-grid--2">
         <div>
           <label>
@@ -16210,6 +17197,45 @@ function renderEntityInspector(sceneDoc, selected = null) {
       <div class="pw-checkbox">
         <input type="checkbox" data-entity-field="invisible" data-value-type="checkbox" ${entry.invisible !== false ? "checked" : ""} />
         <span>Invisible in play</span>
+      </div>
+    `;
+    return;
+  }
+
+  if (kind === "sound") {
+    elements.entityEditor.innerHTML = `
+      <p class="pw-inspector-note">Sounds are invisible in play but can be triggered by rules or script.runtime. Spatial sounds fade by distance from the listener camera, while global sounds ignore distance.</p>
+      <label>
+        <span>Label</span>
+        <input type="text" data-entity-field="label" data-value-type="text" value="${htmlEscape(entry.label || "")}" />
+      </label>
+      ${buildSoundAssetEditor(entry.asset_id, { targetKind: kind, targetId: entry.id })}
+      <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
+      <div class="pw-inspector-grid pw-inspector-grid--2">
+        <div>
+          <label>
+            <span>Volume</span>
+            <input type="number" min="0" max="1" step="0.05" data-entity-field="volume" data-value-type="number" value="${htmlEscape(entry.volume ?? 0.85)}" />
+          </label>
+        </div>
+        <div>
+          <label>
+            <span>Max Distance</span>
+            <input type="number" min="1" max="512" step="0.5" data-entity-field="max_distance" data-value-type="number" value="${htmlEscape(entry.max_distance ?? 24)}" ${entry.spatial === false ? "disabled" : ""} />
+          </label>
+        </div>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="loop" data-value-type="checkbox" ${entry.loop === true ? "checked" : ""} />
+        <span>Loop</span>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="autoplay" data-value-type="checkbox" ${entry.autoplay === true ? "checked" : ""} />
+        <span>Autoplay when the scene starts</span>
+      </div>
+      <div class="pw-checkbox">
+        <input type="checkbox" data-entity-field="spatial" data-value-type="checkbox" ${entry.spatial !== false ? "checked" : ""} />
+        <span>Use spatial falloff</span>
       </div>
     `;
     return;
@@ -17255,14 +18281,28 @@ function renderSelectedWorld() {
   for (const button of elements.sceneAddButtons ?? []) {
     button.disabled = !hasWorld || !canEdit || state.mode !== "build";
   }
+  setFormControlsDisabled(elements.collaboratorForm, !hasWorld || !canEdit);
+  setFormControlsDisabled(elements.worldAccessForm, !hasWorld || !canEdit);
+  setFormControlsDisabled(elements.aiForm, !hasWorld || !canEdit);
+  syncWorldAccessControlsFromWorld();
+  updateWorldAccessControlsState();
+  if (elements.aiOutput) {
+    elements.aiOutput.readOnly = !hasWorld || !canEdit;
+  }
   elements.saveCollaborator.disabled = !hasWorld || !canEdit;
-  elements.generateHtml.disabled = !hasWorld || !state.session;
-  elements.generateScript.disabled = !hasWorld || !state.session;
+  elements.generateHtml.disabled = !hasWorld || !state.session || !canEdit;
+  elements.generateScript.disabled = !hasWorld || !state.session || !canEdit;
   if (elements.assetGenerateTexture) {
     elements.assetGenerateTexture.disabled = !hasWorld || !state.session || !canEdit || state.mode !== "build";
   }
   if (elements.assetGenerateModel) {
     elements.assetGenerateModel.disabled = !hasWorld || !state.session || !canEdit || state.mode !== "build";
+  }
+  if (elements.assetUploadVideo) {
+    elements.assetUploadVideo.disabled = !hasWorld || !state.session || !canEdit || state.mode !== "build";
+  }
+  if (elements.assetUploadSound) {
+    elements.assetUploadSound.disabled = !hasWorld || !state.session || !canEdit || state.mode !== "build";
   }
   for (const button of elements.worldSectionJumpButtons ?? []) {
     button.disabled = !hasWorld;
@@ -17303,7 +18343,7 @@ function renderSelectedWorld() {
     elements.panelLibrary.disabled = !hasWorld || !canEdit || state.mode !== "build";
   }
   if (elements.panelExport) {
-    elements.panelExport.disabled = !hasWorld || !state.session;
+    elements.panelExport.disabled = !hasWorld || !state.session || state.selectedWorld?.permissions?.can_export !== true;
   }
   renderPrivateRuntimeActions();
   if (elements.panelShareCopy) {
@@ -17323,6 +18363,7 @@ function renderSelectedWorld() {
     elements.addScreen,
     elements.addText,
     elements.addTrigger,
+    elements.addSound,
     elements.addParticle,
     elements.addRule,
   ]) {
@@ -20584,6 +21625,25 @@ function buildPlacementEntry(kind, sceneDoc, placement) {
       },
     };
   }
+  if (kind === "sound") {
+    const nextId = `sound_${(sceneDoc.sounds?.length ?? 0) + 1}`;
+    const presetEntry = extractToolPresetEntry(kind, getToolPreset(kind)?.entry);
+    return {
+      kind,
+      id: nextId,
+      push() {
+        sceneDoc.sounds = sceneDoc.sounds || [];
+        sceneDoc.sounds.push({
+          id: nextId,
+          position: deepClone(placement.position),
+          ...deepClone(presetEntry),
+          label: presetEntry.label && !/^sound(?:\s+\d+)?$/i.test(String(presetEntry.label).trim())
+            ? presetEntry.label
+            : `Sound ${(sceneDoc.sounds?.length ?? 0) + 1}`,
+        });
+      },
+    };
+  }
   return null;
 }
 
@@ -21415,6 +22475,7 @@ function ensurePreview() {
     entityMeshes: new Map(),
     billboards: [],
     effectSystems: [],
+    animationMixers: [],
     animatedChatBubbleGhosts: [],
     trailPuffs: [],
     presenceEntries: new Map(),
@@ -21477,6 +22538,8 @@ function ensurePreview() {
     updatePrivateRemoteBrowserAudioMix();
     updatePrivateChatBubbleGhosts(state.preview, deltaSeconds, state.preview.camera);
     updatePreviewEffects(state.preview, timestamp / 1000);
+    updatePreviewAnimationMixers(state.preview, deltaSeconds);
+    syncPrivateWorldSoundPlayers(state.preview);
     updateViewerTrailPuffs(state.preview, deltaSeconds);
     updatePrivateWorldBillboards(state.preview);
     renderPreviewScene(state.preview);
@@ -21780,6 +22843,8 @@ function clearPreviewRoot() {
   preview.transformPickables = [];
   preview.entityMeshes.clear();
   preview.billboards = [];
+  disposePreviewAnimationMixers(preview);
+  pauseCachedPreviewVideoAssets();
   disposePreviewEffects(preview);
   for (const child of [...preview.root.children]) {
     preview.root.remove(child);
@@ -21796,8 +22861,35 @@ function disposePreviewEffects(preview) {
   preview.effectSystems = [];
 }
 
+function disposePreviewAnimationMixers(preview) {
+  for (const entry of preview?.animationMixers ?? []) {
+    try {
+      entry?.mixer?.stopAllAction?.();
+      if (entry?.root) {
+        entry.mixer?.uncacheRoot?.(entry.root);
+      }
+    } catch (_error) {
+      // ignore mixer disposal failures
+    }
+  }
+  if (preview) {
+    preview.animationMixers = [];
+  }
+}
+
 function disposeOwnedPreviewTexture(texture) {
   if (texture?.userData?.privateWorldOwnedPreviewTexture === true) {
+    const mediaElement = texture.userData.privateWorldOwnedPreviewMediaElement ?? null;
+    if (mediaElement) {
+      try {
+        mediaElement.pause?.();
+        mediaElement.removeAttribute?.("src");
+        mediaElement.load?.();
+        mediaElement.remove?.();
+      } catch (_error) {
+        // ignore preview media disposal failures
+      }
+    }
     texture.dispose?.();
   }
 }
@@ -21953,7 +23045,7 @@ function cloneMaterialForPreview(material) {
 }
 
 function clonePreviewModelScene(scene) {
-  const clone = scene.clone(true);
+  const clone = cloneSkinnedScene(scene);
   clone.traverse((node) => {
     if (!node.isMesh) {
       return;
@@ -21965,6 +23057,41 @@ function clonePreviewModelScene(scene) {
     }
   });
   return clone;
+}
+
+function updatePreviewAnimationMixers(preview, deltaSeconds) {
+  for (const entry of preview?.animationMixers ?? []) {
+    entry?.mixer?.update?.(deltaSeconds);
+  }
+}
+
+function registerPreviewModelAnimations(preview, root, clips = [], animationSettings = {}) {
+  if (!preview || !root || !Array.isArray(clips) || clips.length === 0) {
+    return null;
+  }
+  const autoplay = animationSettings?.autoplay === true;
+  if (!autoplay) {
+    return null;
+  }
+  const preferredClip = String(animationSettings?.clip ?? "").trim();
+  const selectedClip = (preferredClip
+    ? clips.find((clip) => String(clip?.name ?? "").trim() === preferredClip)
+    : null) ?? clips[0];
+  if (!selectedClip) {
+    return null;
+  }
+  const mixer = new THREE.AnimationMixer(root);
+  const action = mixer.clipAction(selectedClip);
+  action.reset();
+  action.clampWhenFinished = animationSettings?.loop === false;
+  action.setLoop(animationSettings?.loop === false ? THREE.LoopOnce : THREE.LoopRepeat, animationSettings?.loop === false ? 1 : Infinity);
+  action.play();
+  mixer.timeScale = clampNumber(animationSettings?.speed, 1, 0, 4);
+  preview.animationMixers.push({
+    mixer,
+    root,
+  });
+  return mixer;
 }
 
 async function loadTextureFromUrl(url) {
@@ -21988,6 +23115,99 @@ function getTextureAssetRepeat(scale = { x: 1, y: 1, z: 1 }) {
     x: Math.max(1, Number(scale?.x ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
     y: Math.max(1, Number(scale?.z ?? scale?.y ?? PRIVATE_WORLD_BLOCK_UNIT) / PRIVATE_WORLD_BLOCK_UNIT),
   };
+}
+
+function disposePreviewVideoAssetRecord(record = null) {
+  if (!record) {
+    return;
+  }
+  try {
+    record.video?.pause?.();
+    record.video?.removeAttribute?.("src");
+    record.video?.load?.();
+    record.video?.remove?.();
+  } catch (_error) {
+    // ignore preview video disposal failures
+  }
+  record.texture?.dispose?.();
+}
+
+function pauseCachedPreviewVideoAssets() {
+  for (const record of previewVideoAssetCache.values()) {
+    try {
+      record.video?.pause?.();
+    } catch (_error) {
+      // ignore preview video pause failures
+    }
+  }
+}
+
+function ensurePreviewVideoAssetRecord(assetId = "") {
+  const normalizedAssetId = String(assetId ?? "").trim();
+  if (!normalizedAssetId) {
+    return null;
+  }
+  const asset = getPrivateAssetById(normalizedAssetId);
+  const videoFile = getPrivateAssetFile(asset, "base_color_video");
+  if (!videoFile?.url) {
+    return null;
+  }
+  const cached = previewVideoAssetCache.get(normalizedAssetId);
+  if (cached && cached.url === videoFile.url) {
+    const playResult = cached.video?.play?.();
+    if (playResult && typeof playResult.catch === "function") {
+      playResult.catch(() => {});
+    }
+    return cached;
+  }
+  if (cached) {
+    disposePreviewVideoAssetRecord(cached);
+    previewVideoAssetCache.delete(normalizedAssetId);
+  }
+  const video = document.createElement("video");
+  video.src = videoFile.url;
+  video.crossOrigin = "anonymous";
+  video.loop = true;
+  video.muted = true;
+  video.defaultMuted = true;
+  video.preload = "auto";
+  video.autoplay = true;
+  video.playsInline = true;
+  video.setAttribute("muted", "");
+  video.setAttribute("playsinline", "");
+  const texture = new THREE.VideoTexture(video);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  const record = {
+    id: normalizedAssetId,
+    url: videoFile.url,
+    video,
+    texture,
+  };
+  previewVideoAssetCache.set(normalizedAssetId, record);
+  const playResult = video.play?.();
+  if (playResult && typeof playResult.catch === "function") {
+    playResult.catch(() => {});
+  }
+  return record;
+}
+
+async function applyVideoAssetMapToMaterial(material, videoAssetId) {
+  if (!material || !videoAssetId) {
+    return;
+  }
+  const record = ensurePreviewVideoAssetRecord(videoAssetId);
+  if (!record?.texture) {
+    return;
+  }
+  disposeOwnedPreviewTexture(material.map);
+  material.map = record.texture;
+  material.color?.set?.("#ffffff");
+  material.needsUpdate = true;
 }
 
 async function applyTextureAssetMapsToMaterial(material, textureAssetId, scale = { x: 1, y: 1, z: 1 }) {
@@ -22059,7 +23279,10 @@ async function loadPreviewModelAssetScene(asset) {
     cached = new Promise((resolve, reject) => {
       gltfLoader.load(
         glbFile.url,
-        (gltf) => resolve(gltf.scene || null),
+        (gltf) => resolve({
+          scene: gltf.scene || null,
+          animations: Array.isArray(gltf.animations) ? gltf.animations : [],
+        }),
         undefined,
         reject,
       );
@@ -22080,6 +23303,9 @@ function makeMaterial(material = {}, scale = { x: 1, y: 1, z: 1 }, { selected = 
   }
   if (material?.texture_asset_id) {
     void applyTextureAssetMapsToMaterial(built, material.texture_asset_id, scale);
+  }
+  if (material?.video_asset_id) {
+    void applyVideoAssetMapToMaterial(built, material.video_asset_id);
   }
   const baseEmissiveIntensity = Math.max(0, Number(material?.emissive_intensity ?? material?.emissiveIntensity ?? 0) || 0);
   if (selected) {
@@ -22118,6 +23344,7 @@ function applyPreviewMaterialToModelScene(object, material = {}, scale = { x: 1,
   }
   const resolvedColor = String(material?.color ?? "").trim();
   const textureAssetId = String(material?.texture_asset_id ?? material?.textureAssetId ?? "").trim();
+  const videoAssetId = String(material?.video_asset_id ?? material?.videoAssetId ?? "").trim();
   const emissiveIntensity = Math.max(0, Number(material?.emissive_intensity ?? material?.emissiveIntensity ?? 0) || 0);
   object.traverse((node) => {
     if (!node.isMesh) {
@@ -22133,6 +23360,9 @@ function applyPreviewMaterialToModelScene(object, material = {}, scale = { x: 1,
       }
       if (textureAssetId) {
         void applyTextureAssetMapsToMaterial(nodeMaterial, textureAssetId, scale);
+      }
+      if (videoAssetId) {
+        void applyVideoAssetMapToMaterial(nodeMaterial, videoAssetId);
       }
       if (nodeMaterial.emissiveIntensity !== undefined) {
         nodeMaterial.emissiveIntensity = Math.max(Number(nodeMaterial.emissiveIntensity || 0), emissiveIntensity);
@@ -22333,6 +23563,181 @@ function createParticleSystem(preview, anchorId, effectName, color, particleId =
   };
 }
 
+function renderSoundMarker(preview, soundEntry = {}, options = {}) {
+  const soundId = String(options.id ?? soundEntry.id ?? "").trim();
+  const position = soundEntry.position ?? { x: 0, y: 1.5, z: 0 };
+  const selected = options.selected === true;
+  const group = new THREE.Group();
+  group.position.set(position.x || 0, position.y || 1.5, position.z || 0);
+  group.userData.privateWorldEntityId = soundId;
+  group.userData.privateWorldEntityKind = "sound";
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 16, 16),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(selected ? "#ffd659" : "#58d5ff"),
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+    }),
+  );
+  core.userData.privateWorldEntityId = soundId;
+  core.userData.privateWorldEntityKind = "sound";
+  const ringRadius = Math.max(0.55, Math.min(2.4, (Number(soundEntry.max_distance ?? 24) || 24) * 0.05));
+  const ring = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.SphereGeometry(ringRadius, 12, 12)),
+    new THREE.LineBasicMaterial({
+      color: new THREE.Color(selected ? "#ffd659" : "#7bdcff"),
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  group.add(core);
+  group.add(ring);
+  group.visible = state.mode === "build" && isEditor();
+  preview.root.add(group);
+  preview.entityMeshes.set(soundId, group);
+  preview.entityPickables.push(core);
+  return group;
+}
+
+function getPrivateWorldSoundListenerPosition(preview = state.preview) {
+  if (preview?.camera?.position) {
+    return {
+      x: Number(preview.camera.position.x ?? 0) || 0,
+      y: Number(preview.camera.position.y ?? 0) || 0,
+      z: Number(preview.camera.position.z ?? 0) || 0,
+    };
+  }
+  return null;
+}
+
+function computePrivateWorldSoundVolume(sound = {}, listenerPosition = null) {
+  const baseVolume = clampNumber(sound.volume, 0.85, 0, 1);
+  if (sound.spatial === false || !listenerPosition) {
+    return baseVolume;
+  }
+  const position = sound.position ?? { x: 0, y: 0, z: 0 };
+  const distance = Math.hypot(
+    (Number(position.x ?? 0) || 0) - listenerPosition.x,
+    (Number(position.y ?? 0) || 0) - listenerPosition.y,
+    (Number(position.z ?? 0) || 0) - listenerPosition.z,
+  );
+  const maxDistance = Math.max(1, Number(sound.max_distance ?? 24) || 24);
+  const falloff = Math.max(0, 1 - (distance / maxDistance));
+  return Number((baseVolume * falloff * falloff).toFixed(4));
+}
+
+function disposePrivateWorldSoundPlayerEntry(entry = null) {
+  const audio = entry?.audio ?? null;
+  if (!audio) {
+    return;
+  }
+  try {
+    audio.pause();
+    audio.src = "";
+    audio.load?.();
+  } catch (_error) {
+    // ignore audio disposal errors
+  }
+}
+
+function stopPrivateWorldSoundPlayers() {
+  for (const entry of state.privateWorldSoundPlayers.values()) {
+    disposePrivateWorldSoundPlayerEntry(entry);
+  }
+  state.privateWorldSoundPlayers.clear();
+}
+
+function ensurePrivateWorldSoundPlayer(sound = {}, asset = null) {
+  const soundId = String(sound.id ?? "").trim();
+  const audioFile = getPrivateAssetFile(asset, "audio");
+  const audioUrl = String(audioFile?.url ?? "").trim();
+  if (!soundId || !audioUrl) {
+    return null;
+  }
+  let entry = state.privateWorldSoundPlayers.get(soundId) ?? null;
+  if (entry?.url !== audioUrl) {
+    disposePrivateWorldSoundPlayerEntry(entry);
+    entry = null;
+  }
+  if (!entry) {
+    const audio = new Audio(audioUrl);
+    audio.preload = "auto";
+    audio.crossOrigin = "anonymous";
+    audio.playsInline = true;
+    entry = {
+      id: soundId,
+      url: audioUrl,
+      audio,
+      lastStartedRevision: 0,
+    };
+    state.privateWorldSoundPlayers.set(soundId, entry);
+  }
+  return entry;
+}
+
+function syncPrivateWorldSoundPlayers(preview = state.preview) {
+  const runtime = state.runtimeSnapshot ?? state.selectedWorld?.active_instance?.runtime ?? null;
+  const activeSceneId = String(runtime?.active_scene_id ?? "").trim();
+  const selectedSceneId = String(state.selectedSceneId ?? "").trim();
+  if (state.mode !== "play" || !runtime || !activeSceneId || activeSceneId !== selectedSceneId) {
+    stopPrivateWorldSoundPlayers();
+    return;
+  }
+  const listenerPosition = getPrivateWorldSoundListenerPosition(preview);
+  const desiredIds = new Set();
+  for (const sound of runtime.sounds ?? []) {
+    const asset = getPrivateAssetById(sound.asset_id);
+    const entry = ensurePrivateWorldSoundPlayer(sound, asset);
+    if (!entry) {
+      continue;
+    }
+    desiredIds.add(entry.id);
+    const audio = entry.audio;
+    audio.loop = sound.loop === true;
+    audio.volume = computePrivateWorldSoundVolume(sound, listenerPosition);
+    const revision = Math.max(0, Number(sound.play_revision ?? 0) || 0);
+    if (sound.playing !== true) {
+      if (!audio.paused || audio.currentTime > 0) {
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch (_error) {
+          // ignore reset failures
+        }
+      }
+      continue;
+    }
+    const shouldStart = sound.loop === true
+      ? audio.paused || revision > entry.lastStartedRevision
+      : revision > entry.lastStartedRevision;
+    if (!shouldStart) {
+      continue;
+    }
+    try {
+      if (revision > entry.lastStartedRevision || sound.loop !== true) {
+        audio.currentTime = 0;
+      }
+    } catch (_error) {
+      // ignore seek failures
+    }
+    const playResult = audio.play?.();
+    if (playResult && typeof playResult.catch === "function") {
+      playResult.catch(() => {});
+    }
+    entry.lastStartedRevision = revision > 0 ? revision : Math.max(1, entry.lastStartedRevision);
+  }
+  for (const [soundId, entry] of state.privateWorldSoundPlayers.entries()) {
+    if (desiredIds.has(soundId)) {
+      continue;
+    }
+    disposePrivateWorldSoundPlayerEntry(entry);
+    state.privateWorldSoundPlayers.delete(soundId);
+  }
+}
+
 function createTrailSystem(preview, anchorId, effectName, color) {
   const historyLength = 18;
   const points = Array.from({ length: historyLength }, () => new THREE.Vector3());
@@ -22518,6 +23923,8 @@ function getRuntimeTransformMaps() {
       prefabInstances: [],
       playerById: new Map(),
       players: [],
+      soundById: new Map(),
+      sounds: [],
       screenById: new Map(),
       screens: [],
     };
@@ -22529,6 +23936,8 @@ function getRuntimeTransformMaps() {
     prefabInstances: runtime.prefab_instances ?? [],
     playerById: new Map((runtime.players ?? []).map((entry) => [entry.id, entry])),
     players: runtime.players ?? [],
+    soundById: new Map((runtime.sounds ?? []).map((entry) => [entry.id, entry])),
+    sounds: runtime.sounds ?? [],
     screenById: new Map((runtime.screens ?? []).map((entry) => [entry.id, entry])),
     screens: runtime.screens ?? [],
   };
@@ -22796,6 +24205,7 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
     ? [
       String(runtimeMaterial.color ?? ""),
       String(runtimeMaterial.texture_asset_id ?? ""),
+      String(runtimeMaterial.video_asset_id ?? ""),
       Number(runtimeMaterial.emissive_intensity ?? runtimeMaterial.emissiveIntensity ?? 0).toFixed(4),
     ].join("|")
     : "";
@@ -22806,6 +24216,9 @@ function applyRuntimeEntryToMesh(mesh, runtimeEntry = {}, options = {}) {
       }
       if (runtimeMaterial.texture_asset_id) {
         void applyTextureAssetMapsToMaterial(material, runtimeMaterial.texture_asset_id, runtimeEntry.scale ?? options.fallbackScale ?? { x: 1, y: 1, z: 1 });
+      }
+      if (runtimeMaterial.video_asset_id) {
+        void applyVideoAssetMapToMaterial(material, runtimeMaterial.video_asset_id);
       }
       if (material.emissiveIntensity !== undefined) {
         material.emissiveIntensity = Math.max(
@@ -22842,6 +24255,7 @@ function applyPrefabInstanceRuntimeAppearance(group, runtimeEntry = {}) {
     ? [
       String(runtimeMaterial.color ?? ""),
       String(runtimeMaterial.texture_asset_id ?? ""),
+      String(runtimeMaterial.video_asset_id ?? ""),
       Number(runtimeMaterial.emissive_intensity ?? runtimeMaterial.emissiveIntensity ?? 0).toFixed(4),
     ].join("|")
     : "";
@@ -22855,6 +24269,9 @@ function applyPrefabInstanceRuntimeAppearance(group, runtimeEntry = {}) {
       }
       if (runtimeMaterial.texture_asset_id) {
         void applyTextureAssetMapsToMaterial(material, runtimeMaterial.texture_asset_id, group.scale ?? { x: 1, y: 1, z: 1 });
+      }
+      if (runtimeMaterial.video_asset_id) {
+        void applyVideoAssetMapToMaterial(material, runtimeMaterial.video_asset_id);
       }
       if (material.emissiveIntensity !== undefined) {
         material.emissiveIntensity = Math.max(
@@ -23332,13 +24749,14 @@ function updatePreviewFromSelection(options = {}) {
       modelGroup.add(placeholder);
       const asset = getPrivateAssetById(model.asset_id);
       if (asset) {
-        void loadPreviewModelAssetScene(asset).then((loadedScene) => {
-          if (!loadedScene || !modelGroup.parent) {
+        void loadPreviewModelAssetScene(asset).then((loadedAsset) => {
+          if (!loadedAsset?.scene || !modelGroup.parent) {
             return;
           }
-          const clone = clonePreviewModelScene(loadedScene);
+          const clone = clonePreviewModelScene(loadedAsset.scene);
           clone.scale.set(bounds.x || 1, bounds.y || 1, bounds.z || 1);
           applyPreviewMaterialToModelScene(clone, getMergedMaterial(model.material), bounds);
+          registerPreviewModelAnimations(preview, clone, loadedAsset.animations, getRenderableAnimationSettings(model));
           placeholder.removeFromParent();
           placeholder.geometry?.dispose?.();
           placeholder.material?.dispose?.();
@@ -23415,6 +24833,16 @@ function updatePreviewFromSelection(options = {}) {
       mesh.scale.set(trigger.scale?.x || 2, trigger.scale?.y || 2, trigger.scale?.z || 2);
       attachPrefabPickable(mesh, metadata ?? { id: trigger.id || `prefab_trigger_${index}`, kind: "trigger" });
       parent.add(mesh);
+    }
+
+    for (const [index, sound] of (prefabDoc.sounds ?? []).entries()) {
+      renderedAny = true;
+      const marker = renderSoundMarker(preview, sound, {
+        id: sound.id || `prefab_sound_${index}`,
+        selected,
+      });
+      marker.position.set(sound.position?.x || 0, sound.position?.y || 1.5, sound.position?.z || 0);
+      parent.add(marker);
     }
 
     for (const nestedInstance of prefabDoc.prefab_instances ?? []) {
@@ -23563,17 +24991,26 @@ function updatePreviewFromSelection(options = {}) {
         root.add(hitTarget);
       }
       const bounds = asset.bounds ?? { x: 1, y: 1, z: 1 };
-      void loadPreviewModelAssetScene(asset).then((loadedScene) => {
-        if (!loadedScene || !root.parent) {
+      void loadPreviewModelAssetScene(asset).then((loadedAsset) => {
+        if (!loadedAsset?.scene || !root.parent) {
           return;
         }
-        const clone = clonePreviewModelScene(loadedScene);
+        const clone = clonePreviewModelScene(loadedAsset.scene);
         clone.scale.set(
           actualPrimitiveSize.x / Math.max(0.1, (resolvedPrimitiveScale.x || 1) * (Number(bounds.x ?? 1) || 1)),
           actualPrimitiveSize.y / Math.max(0.1, (resolvedPrimitiveScale.y || 1) * (Number(bounds.y ?? 1) || 1)),
           actualPrimitiveSize.z / Math.max(0.1, (resolvedPrimitiveScale.z || 1) * (Number(bounds.z ?? 1) || 1)),
         );
         applyPreviewMaterialToModelScene(clone, displayPrimitiveMaterial, actualPrimitiveSize);
+        registerPreviewModelAnimations(
+          preview,
+          clone,
+          loadedAsset.animations,
+          getRenderableAnimationSettings({
+            ...(authoredPrimitive ?? {}),
+            ...(primitiveSource ?? {}),
+          }),
+        );
         fallbackMesh.visible = false;
         root.add(clone);
       }).catch(() => {
@@ -23770,17 +25207,18 @@ function updatePreviewFromSelection(options = {}) {
     const asset = assetId ? getPrivateAssetById(assetId) : null;
     if (asset) {
       const bounds = asset.bounds ?? { x: 1, y: 1, z: 1 };
-      void loadPreviewModelAssetScene(asset).then((loadedScene) => {
-        if (!loadedScene || !root.parent) {
+      void loadPreviewModelAssetScene(asset).then((loadedAsset) => {
+        if (!loadedAsset?.scene || !root.parent) {
           return;
         }
-        const clone = clonePreviewModelScene(loadedScene);
+        const clone = clonePreviewModelScene(loadedAsset.scene);
         clone.scale.set(
           PRIVATE_PLAYER_METRICS.width / Math.max(0.1, Number(bounds.x ?? 1) || 1),
           PRIVATE_PLAYER_METRICS.height / Math.max(0.1, Number(bounds.y ?? 1) || 1),
           PRIVATE_PLAYER_METRICS.width / Math.max(0.1, Number(bounds.z ?? 1) || 1),
         );
         applyPreviewMaterialToModelScene(clone, displayMaterial, visualScale);
+        registerPreviewModelAnimations(preview, clone, loadedAsset.animations, getRenderableAnimationSettings(playerEntry));
         capsule.visible = false;
         root.add(clone);
       }).catch(() => {
@@ -23833,13 +25271,14 @@ function updatePreviewFromSelection(options = {}) {
     });
     const asset = getPrivateAssetById(modelEntry.asset_id);
     if (asset) {
-      void loadPreviewModelAssetScene(asset).then((loadedScene) => {
-        if (!loadedScene || !group.parent) {
+      void loadPreviewModelAssetScene(asset).then((loadedAsset) => {
+        if (!loadedAsset?.scene || !group.parent) {
           return;
         }
-        const clone = clonePreviewModelScene(loadedScene);
+        const clone = clonePreviewModelScene(loadedAsset.scene);
         clone.scale.set(bounds.x || 1, bounds.y || 1, bounds.z || 1);
         applyPreviewMaterialToModelScene(clone, modelEntry.material ?? {}, bounds);
+        registerPreviewModelAnimations(preview, clone, loadedAsset.animations, getRenderableAnimationSettings(modelEntry));
         placeholder.removeFromParent();
         placeholder.geometry?.dispose?.();
         placeholder.material?.dispose?.();
@@ -23901,7 +25340,21 @@ function updatePreviewFromSelection(options = {}) {
 
   for (const model of sceneDoc.models ?? []) {
     const runtimeModel = runtimeTransforms.dynamicById.get(model.id);
-    renderModelMesh(runtimeModel ?? model, {
+    const renderedModelEntry = runtimeModel
+      ? {
+          ...model,
+          ...runtimeModel,
+          material: runtimeModel.material_override
+            ? { ...(runtimeModel.material ?? model.material ?? {}), ...runtimeModel.material_override }
+            : (runtimeModel.material ?? model.material),
+          asset_id: runtimeModel.asset_id ?? model.asset_id ?? null,
+          animation_clip: runtimeModel.animation_clip ?? model.animation_clip ?? null,
+          animation_autoplay: runtimeModel.animation_autoplay === true || model.animation_autoplay === true,
+          animation_loop: runtimeModel.animation_loop ?? model.animation_loop,
+          animation_speed: runtimeModel.animation_speed ?? model.animation_speed,
+        }
+      : model;
+    renderModelMesh(renderedModelEntry, {
       id: model.id,
       selected: isSelected("model", model.id),
       runtimeVisible: runtimeModel?.visible !== false,
@@ -23952,6 +25405,10 @@ function updatePreviewFromSelection(options = {}) {
       on_ground: localPrediction?.onGround ?? runtimePlayer?.on_ground ?? player.on_ground,
       material: renderedPlayerMaterial,
       asset_id: runtimePlayer?.asset_id ?? player.asset_id ?? null,
+      animation_clip: runtimePlayer?.animation_clip ?? player.animation_clip ?? null,
+      animation_autoplay: runtimePlayer?.animation_autoplay === true || player.animation_autoplay === true,
+      animation_loop: runtimePlayer?.animation_loop ?? player.animation_loop,
+      animation_speed: runtimePlayer?.animation_speed ?? player.animation_speed,
       occupied_by_username: runtimePlayer?.occupied_by_username ?? null,
     }, {
       id: resolvedPlayerId || player.id,
@@ -23999,6 +25456,10 @@ function updatePreviewFromSelection(options = {}) {
       jump_enabled: localPrediction?.jumpEnabled ?? runtimePlayer?.jump_enabled,
       on_ground: localPrediction?.onGround ?? runtimePlayer?.on_ground,
       material: renderedPlayerMaterial,
+      animation_clip: runtimePlayer?.animation_clip ?? null,
+      animation_autoplay: runtimePlayer?.animation_autoplay === true,
+      animation_loop: runtimePlayer?.animation_loop,
+      animation_speed: runtimePlayer?.animation_speed,
       occupied_by_username: runtimePlayer?.occupied_by_username ?? null,
     }, {
       id: playerId,
@@ -24153,6 +25614,14 @@ function updatePreviewFromSelection(options = {}) {
     }
     mesh.visible = state.mode === "build" && isEditor();
     preview.root.add(mesh);
+  }
+
+  for (const sound of sceneDoc.sounds ?? []) {
+    const runtimeSound = runtimeTransforms.soundById.get(sound.id) ?? null;
+    renderSoundMarker(preview, runtimeSound ?? sound, {
+      id: sound.id,
+      selected: isSelected("sound", sound.id),
+    });
   }
 
   for (const particle of sceneDoc.particles ?? []) {
@@ -24750,6 +26219,9 @@ async function exportWorld() {
   if (!state.selectedWorld) {
     return;
   }
+  if (state.selectedWorld.permissions?.can_export !== true) {
+    throw new Error("This world only allows editors to export it.");
+  }
   const response = await fetch(mauworldApiUrl(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/export`, {
     creatorUsername: state.selectedWorld.creator.username,
   }), {
@@ -24774,6 +26246,9 @@ async function exportWorld() {
 async function forkSelectedWorld() {
   if (!state.selectedWorld || !state.session) {
     throw new Error("Sign in to fork this world.");
+  }
+  if (state.selectedWorld.permissions?.can_fork !== true) {
+    throw new Error("This world only allows editors to fork it.");
   }
   const response = await fetch(mauworldApiUrl(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}/export`, {
     creatorUsername: state.selectedWorld.creator.username,
@@ -25449,7 +26924,7 @@ function syncRuntimeLookHeading(force = false) {
 
 async function addCollaborator(event) {
   event.preventDefault();
-  if (!state.selectedWorld) {
+  if (!state.selectedWorld || !isEditor()) {
     return;
   }
   const formData = new FormData(elements.collaboratorForm);
@@ -25464,6 +26939,24 @@ async function addCollaborator(event) {
   elements.collaboratorForm.reset();
   pushEvent("collaborator:updated", "Collaborator saved");
   await openWorld(state.selectedWorld.world_id, state.selectedWorld.creator.username, true);
+}
+
+async function saveWorldAccessPolicy() {
+  if (!state.selectedWorld || !isEditor()) {
+    return;
+  }
+  const payload = await apiFetch(`/private/worlds/${encodeURIComponent(state.selectedWorld.world_id)}`, {
+    method: "PATCH",
+    body: {
+      creatorUsername: state.selectedWorld.creator.username,
+      allow_non_editor_export: elements.worldAccessExport?.checked === true,
+      allow_non_editor_fork: elements.worldAccessFork?.checked === true,
+    },
+  });
+  state.selectedWorld = payload.world;
+  renderSelectedWorld();
+  setWorldAccessStatus(buildWorldAccessPolicySummary(getWorldAccessPolicy(payload.world)), "success");
+  setStatus("World access updated.");
 }
 
 function mutateSceneDoc(mutator, options = {}) {
@@ -25503,6 +26996,8 @@ function updateSelectedEntityField(path, rawValue, valueType = "text", options =
       const currentValue = Number(path.split(".").reduce((cursor, key) => cursor?.[key], selected.entry) ?? 0) || 0;
       value = path.endsWith("emissive_intensity")
         ? clampNumber(rawValue, currentValue, 0, 8)
+        : path.endsWith("animation_speed")
+          ? clampNumber(rawValue, currentValue, 0, 4)
         : clampNumber(rawValue, currentValue, -4096, 4096);
     } else if (valueType === "checkbox") {
       value = rawValue === true;
@@ -25513,7 +27008,7 @@ function updateSelectedEntityField(path, rawValue, valueType = "text", options =
     }
     setByPath(selected.entry, path, value);
     if (valueType === "text" && String(value).trim() === "") {
-      if (path === "group_id" || path === "particle_effect" || path === "trail_effect" || path === "prefab_id" || path === "target_id" || path.endsWith("texture_asset_id") || path === "asset_id") {
+      if (path === "group_id" || path === "particle_effect" || path === "trail_effect" || path === "prefab_id" || path === "target_id" || path.endsWith("texture_asset_id") || path.endsWith("video_asset_id") || path === "asset_id" || path === "animation_clip") {
         setByPath(selected.entry, path, null);
       }
       if (path === "overrides.material.texture_preset") {
@@ -25727,7 +27222,7 @@ async function convertSelectionToPrefab() {
   const sceneDoc = parseSceneTextarea();
   const selectedEntities = getSelectedEntities(sceneDoc);
   if (!canConvertSelectionToGroupPrefab(selectedEntities)) {
-    setStatus("Select voxels, objects, panels, models, screens, text, or triggers to create a group prefab.");
+    setStatus("Select voxels, objects, panels, models, screens, text, triggers, or sounds to create a group prefab.");
     return;
   }
   const prefabBaseName = buildGroupPrefabBaseName(selectedEntities);
@@ -25901,6 +27396,10 @@ function attachQuickAddButtons() {
     setPlacementTool("trigger");
   });
 
+  elements.addSound.addEventListener("click", () => {
+    setPlacementTool("sound");
+  });
+
   elements.addParticle.addEventListener("click", () => {
     mutateSceneDoc((sceneDoc) => {
       sceneDoc.particles = sceneDoc.particles || [];
@@ -26028,6 +27527,14 @@ async function generateValidatedAiDialogScriptResult(request = {}) {
 }
 
 function openWorldAiDialog(kind = "html") {
+  if (!state.selectedWorld) {
+    setAiBuilderStatus("Open a world before using AI Builder.", "error");
+    return false;
+  }
+  if (!isEditor()) {
+    setAiBuilderStatus("Only editors can use AI Builder in this world.", "error");
+    return false;
+  }
   const isHtml = kind === "html";
   openAiDialog({
     artifactType: isHtml ? "screen_html" : "world_script",
@@ -26039,6 +27546,7 @@ function openWorldAiDialog(kind = "html") {
       : "Talk through the world logic first. The AI replies with assumptions and questions before you generate the final script.",
     seedPrompt: String(elements.aiForm?.elements?.objective?.value ?? "").trim(),
   });
+  return true;
 }
 
 function openSceneLogicAiDialog(options = {}) {
@@ -26207,7 +27715,7 @@ function bindEvents() {
     resetHorizontalScroll(elements.panelRoot);
   }, { passive: true });
   elements.panelOpenAccess?.addEventListener("click", () => {
-    setLauncherTab("access");
+    setLauncherTab(state.session ? "profile" : "access");
     setLauncherOpen(true);
   });
   for (const button of elements.openCreateWorldButtons ?? []) {
@@ -26396,6 +27904,63 @@ function bindEvents() {
   });
   elements.profileForm.addEventListener("submit", saveProfile);
   elements.createWorldForm.addEventListener("submit", handleCreateWorld);
+  for (const button of elements.profileLauncherTabButtons ?? []) {
+    button.addEventListener("click", () => {
+      setProfileLauncherTab(button.getAttribute("data-profile-launcher-tab") || "account");
+    });
+  }
+  elements.profileWorldSearch?.addEventListener("input", () => {
+    state.profileWorldQuery = String(elements.profileWorldSearch?.value ?? "");
+    renderProfileWorldBrowser();
+  });
+  elements.profileRefreshWorlds?.addEventListener("click", () => {
+    void loadWorlds();
+  });
+  elements.profileOpenCreateWorld?.addEventListener("click", () => {
+    if (!state.session) {
+      setLauncherTab("access");
+      setLauncherOpen(true);
+      return;
+    }
+    setLauncherTab("profile");
+    setProfileLauncherTab("worlds", { load: false });
+    setCreateWorldDialogOpen(true);
+  });
+  elements.profileWorldList?.addEventListener("click", (event) => {
+    const card = event.target.closest("[data-profile-world-result]");
+    if (!card) {
+      return;
+    }
+    const key = card.getAttribute("data-profile-world-result") || "";
+    const world = (state.worlds ?? []).find((entry) => getPrivateWorldBrowserKey(entry) === key);
+    if (!world) {
+      return;
+    }
+    void openWorld(world.world_id, world.creator?.username || world.creator_username || "", true, {
+      entryLoading: true,
+      entryMode: "play",
+      loadingTitle: "Opening private world",
+      loadingNote: "Loading the world you picked.",
+    }).catch((error) => {
+      setStatus(error.message);
+    });
+  });
+  elements.profileOpenGameLibrary?.addEventListener("click", () => {
+    if (!state.session) {
+      setLauncherTab("access");
+      setLauncherOpen(true);
+      return;
+    }
+    setLauncherOpen(false);
+    void openPrivateWorldGameLibrary({ forceRefresh: true });
+  });
+  elements.profileResourceSearch?.addEventListener("input", () => {
+    state.profileResourceQuery = String(elements.profileResourceSearch?.value ?? "");
+    void loadProfileAssets();
+  });
+  elements.profileRefreshResources?.addEventListener("click", () => {
+    void loadProfileAssets();
+  });
   for (const button of elements.launcherWorldTabButtons ?? []) {
     button.addEventListener("click", () => {
       setLauncherWorldTab(button.getAttribute("data-launcher-world-tab") || "mine");
@@ -26607,10 +28172,55 @@ function bindEvents() {
   elements.assetGenerateModel?.addEventListener("click", () => {
     openAssetAiDialog("model");
   });
+  elements.assetUploadVideo?.addEventListener("click", () => {
+    elements.assetUploadVideoInput?.click?.();
+  });
+  elements.assetUploadVideoInput?.addEventListener("change", async () => {
+    const [file] = [...(elements.assetUploadVideoInput.files ?? [])];
+    elements.assetUploadVideoInput.value = "";
+    if (!file) {
+      return;
+    }
+    try {
+      if (elements.assetUploadVideo) {
+        elements.assetUploadVideo.disabled = true;
+      }
+      await uploadPrivateVideoTextureAsset(file);
+    } catch (error) {
+      setStatus(error.message || "Could not upload that video texture.");
+    } finally {
+      renderSelectedWorld();
+    }
+  });
+  elements.assetUploadSound?.addEventListener("click", () => {
+    elements.assetUploadSoundInput?.click?.();
+  });
+  elements.assetUploadSoundInput?.addEventListener("change", async () => {
+    const [file] = [...(elements.assetUploadSoundInput.files ?? [])];
+    elements.assetUploadSoundInput.value = "";
+    if (!file) {
+      return;
+    }
+    try {
+      if (elements.assetUploadSound) {
+        elements.assetUploadSound.disabled = true;
+      }
+      await uploadPrivateSoundAsset(file);
+    } catch (error) {
+      setStatus(error.message || "Could not upload that sound.");
+    } finally {
+      renderSelectedWorld();
+    }
+  });
   elements.assetSections?.addEventListener("click", (event) => {
     const textureButton = event.target.closest("[data-apply-texture-asset]");
     if (textureButton) {
       applyTextureAssetToSelection(textureButton.getAttribute("data-apply-texture-asset"));
+      return;
+    }
+    const soundButton = event.target.closest("[data-apply-sound-asset]");
+    if (soundButton) {
+      applySoundAssetToSelection(soundButton.getAttribute("data-apply-sound-asset"));
       return;
     }
     const applyModelButton = event.target.closest("[data-apply-model-asset]");
@@ -26800,9 +28410,19 @@ function bindEvents() {
       openTextureAssetLibrary();
       return;
     }
+    const openVideoLibraryButton = event.target.closest("[data-open-video-texture-library]");
+    if (openVideoLibraryButton) {
+      openVideoTextureLibrary();
+      return;
+    }
     const openModelLibraryButton = event.target.closest("[data-open-model-library]");
     if (openModelLibraryButton) {
       openModelAssetLibrary();
+      return;
+    }
+    const openSoundLibraryButton = event.target.closest("[data-open-sound-library]");
+    if (openSoundLibraryButton) {
+      openSoundAssetLibrary();
       return;
     }
     const generateTextureButton = event.target.closest("[data-generate-texture-from-inspector]");
@@ -26820,9 +28440,19 @@ function bindEvents() {
       clearTextureAssetFromSelection(clearTextureButton.getAttribute("data-clear-texture-asset-path") || "material.");
       return;
     }
+    const clearVideoButton = event.target.closest("[data-clear-video-asset-path]");
+    if (clearVideoButton) {
+      clearVideoTextureAssetFromSelection(clearVideoButton.getAttribute("data-clear-video-asset-path") || "material.");
+      return;
+    }
     const clearModelButton = event.target.closest("[data-clear-model-asset-path]");
     if (clearModelButton) {
       clearModelAssetFromSelection(clearModelButton.getAttribute("data-clear-model-asset-path") || "asset_id");
+      return;
+    }
+    const clearSoundButton = event.target.closest("[data-clear-sound-asset-path]");
+    if (clearSoundButton) {
+      clearSoundAssetFromSelection(clearSoundButton.getAttribute("data-clear-sound-asset-path") || "asset_id");
       return;
     }
     const screenGenerateButton = event.target.closest("[data-screen-ai-generate]");
@@ -26934,11 +28564,21 @@ function bindEvents() {
       setStatus(error.message);
     });
   });
+  elements.worldAccessForm?.addEventListener("input", () => {
+    updateWorldAccessControlsState();
+  });
+  elements.saveWorldAccess?.addEventListener("click", () => {
+    void saveWorldAccessPolicy().catch((error) => {
+      setWorldAccessStatus(error.message, "error");
+      setStatus(error.message);
+    });
+  });
   syncAiProviderFormFromSession();
   refreshAiBuilderStatus();
   for (const group of ["reasoning", "image", "model"]) {
     const names = getAiProviderFieldNames(group);
     elements.aiForm.elements[names.provider]?.addEventListener("change", () => {
+      maybeAdoptAiProviderDefaultModel(group, elements.aiForm.elements[names.provider], elements.aiForm.elements[names.model]);
       writeAiProviderState(group, getAiProviderState(group));
       refreshAiBuilderStatus();
     });

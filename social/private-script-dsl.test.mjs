@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildPrivateWorldScriptTargetCatalog,
   buildImplicitPrivateWorldScriptConfig,
   compilePrivateWorldScriptDsl,
   parsePrivateWorldScriptFunctions,
@@ -249,6 +250,32 @@ scene_start -> set_screen_state to score_screen path card.type value fire
   assert.equal(compiled.rules[1].payload.value, "fire");
 });
 
+test("sound ids are valid targets and sound rule actions compile", () => {
+  const sceneDoc = {
+    sounds: [{ id: "alarm_sound" }],
+  };
+  const entityAliases = new Map([
+    ["alarm_sound", "alarm_sound"],
+  ]);
+  const compiled = compilePrivateWorldScriptDsl(`
+scene_start -> play_sound to alarm_sound
+timer 2s -> stop_sound to alarm_sound
+  `, {
+    sceneDoc,
+    entityAliases,
+  });
+
+  assert.deepEqual(compiled.errors, []);
+  assert.equal(compiled.rules.length, 2);
+  assert.equal(compiled.rules[0].action, "play_sound");
+  assert.equal(compiled.rules[0].target_id, "alarm_sound");
+  assert.equal(compiled.rules[1].action, "stop_sound");
+  assert.equal(compiled.rules[1].target_id, "alarm_sound");
+
+  const catalog = buildPrivateWorldScriptTargetCatalog(sceneDoc);
+  assert.equal(catalog.get("alarm_sound")?.target_kind, "sound");
+});
+
 test("script.runtime functions compile custom constants and per-tick program bodies", () => {
   const sceneDoc = {
     players: [{ id: "player_one" }],
@@ -284,4 +311,69 @@ self.position = self.position + direction * (chase_speed * dt)
   assert.equal(compiled.script_config.runtime_scripts[0].program_ast.body[0].type, "VariableDeclaration");
   assert.equal(compiled.script_config.runtime_scripts[0].program_ast.body[3].type, "VariableDeclaration");
   assert.equal(compiled.script_config.runtime_scripts[0].program_ast.body[4].type, "AssignmentStatement");
+});
+
+test("script.runtime helper functions compile inputs and on_call mode", () => {
+  const sceneDoc = {
+    players: [{ id: "player_one" }],
+    primitives: [{ id: "sphere" }],
+  };
+  const entityAliases = new Map([
+    ["player_one", "player_one"],
+    ["sphere", "sphere"],
+  ]);
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[chase_step]: Chase Step
+@module script.runtime
+@run on_call
+@input target
+@input max_step 1.25
+@input stop_distance 0.5
+
+if (!target) return false
+self.position = move_toward(self.position, target.position, max_step, stop_distance)
+return true
+  `, {
+    sceneDoc,
+    entityAliases,
+  });
+
+  assert.deepEqual(compiled.errors, []);
+  assert.equal(compiled.functions[0].run_mode, "on_call");
+  assert.equal(compiled.functions[0].inputs.length, 3);
+  assert.equal(compiled.functions[0].inputs[1].default_value, 1.25);
+  assert.equal(compiled.script_config.runtime_scripts[0].run_mode, "on_call");
+  assert.equal(compiled.script_config.runtime_scripts[0].inputs[2].default_value, 0.5);
+});
+
+test("script.runtime call validation catches missing helper arguments", () => {
+  const sceneDoc = {
+    players: [{ id: "player_one" }],
+    primitives: [{ id: "sphere" }],
+  };
+  const entityAliases = new Map([
+    ["player_one", "player_one"],
+    ["sphere", "sphere"],
+  ]);
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[chase_step]: Chase Step
+@module script.runtime
+@run on_call
+@input target
+@input max_step
+
+return true
+
+# function[chase]: Sphere Chase
+@module script.runtime
+@target sphere
+
+let target = nearest(players(), self.position)
+call("chase_step", target)
+  `, {
+    sceneDoc,
+    entityAliases,
+  });
+
+  assert.match(compiled.errors[0]?.message ?? "", /expects at least 2 arguments/i);
 });

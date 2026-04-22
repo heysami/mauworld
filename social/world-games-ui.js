@@ -21,6 +21,27 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value ?? null));
 }
 
+const GAME_TEXT_PROVIDER_DEFAULT_MODELS = {
+  openai: "gpt-5.4-mini",
+  anthropic: "claude-sonnet-4-20250514",
+  google: "gemini-2.5-flash",
+};
+
+function normalizeGameTextProvider(value = "") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "claude" || normalized === "anthropic") {
+    return "anthropic";
+  }
+  if (normalized === "gemini" || normalized === "google") {
+    return "google";
+  }
+  return normalized || "openai";
+}
+
+function getDefaultGameTextModel(provider = "") {
+  return GAME_TEXT_PROVIDER_DEFAULT_MODELS[normalizeGameTextProvider(provider)] || GAME_TEXT_PROVIDER_DEFAULT_MODELS.openai;
+}
+
 function slugToken(value, fallback = "asset", maxLength = 64) {
   const normalized = clipText(value, maxLength)
     .toLowerCase()
@@ -1309,8 +1330,12 @@ export function createWorldGameLibrary(options = {}) {
     status: "",
     games: [],
     selectedGameId: "",
+    provider: normalizeGameTextProvider(readStorage(`${storagePrefix}:provider`, "openai")),
     apiKey: readStorage(`${storagePrefix}:api-key`, ""),
-    model: readStorage(`${storagePrefix}:model`, "gpt-5.4-mini"),
+    model: readStorage(
+      `${storagePrefix}:model`,
+      getDefaultGameTextModel(readStorage(`${storagePrefix}:provider`, "openai")),
+    ),
     aiStatus: "",
     aiStatusTone: "",
     threads: initialThreads,
@@ -1400,6 +1425,7 @@ export function createWorldGameLibrary(options = {}) {
     newThread: overlay.querySelector("[data-game-generator-new-thread]"),
     form: null,
     prompt: null,
+    provider: null,
     apiKey: null,
     model: null,
     send: null,
@@ -1911,12 +1937,20 @@ export function createWorldGameLibrary(options = {}) {
           </label>
           <div class="mw-game-generator__grid">
             <label>
+              <span>Provider</span>
+              <select data-game-generator-provider ${busy ? "disabled" : ""}>
+                <option value="openai" ${state.provider === "openai" ? "selected" : ""}>OpenAI</option>
+                <option value="anthropic" ${state.provider === "anthropic" ? "selected" : ""}>Claude</option>
+                <option value="google" ${state.provider === "google" ? "selected" : ""}>Google Gemini</option>
+              </select>
+            </label>
+            <label>
               <span>AI key</span>
-              <input type="password" data-game-generator-key autocomplete="off" placeholder="sk-..." value="${escapeHtml(state.apiKey)}" ${busy ? "disabled" : ""} />
+              <input type="password" data-game-generator-key autocomplete="off" placeholder="Stored only in this browser session" value="${escapeHtml(state.apiKey)}" ${busy ? "disabled" : ""} />
             </label>
             <label>
               <span>Model</span>
-              <input type="text" data-game-generator-model autocomplete="off" placeholder="gpt-5.4-mini" value="${escapeHtml(state.model)}" ${busy ? "disabled" : ""} />
+              <input type="text" data-game-generator-model autocomplete="off" placeholder="${escapeHtml(getDefaultGameTextModel(state.provider))}" value="${escapeHtml(state.model)}" ${busy ? "disabled" : ""} />
             </label>
           </div>
           <div class="mw-game-generator__actions">
@@ -1929,6 +1963,7 @@ export function createWorldGameLibrary(options = {}) {
     `;
     elements.form = elements.builderContent.querySelector("[data-game-generator-form]");
     elements.prompt = elements.builderContent.querySelector("[data-game-generator-prompt]");
+    elements.provider = elements.builderContent.querySelector("[data-game-generator-provider]");
     elements.apiKey = elements.builderContent.querySelector("[data-game-generator-key]");
     elements.model = elements.builderContent.querySelector("[data-game-generator-model]");
     elements.send = elements.builderContent.querySelector("[data-game-generator-send]");
@@ -1969,6 +2004,20 @@ export function createWorldGameLibrary(options = {}) {
           void handleBrainstormSend();
         }
       }
+    });
+    elements.provider?.addEventListener("change", () => {
+      state.provider = normalizeGameTextProvider(elements.provider.value);
+      writeStorage(`${storagePrefix}:provider`, state.provider);
+      const currentModel = String(elements.model?.value ?? state.model ?? "").trim();
+      if (!currentModel || Object.values(GAME_TEXT_PROVIDER_DEFAULT_MODELS).includes(currentModel)) {
+        const nextModel = getDefaultGameTextModel(state.provider);
+        state.model = nextModel;
+        if (elements.model) {
+          elements.model.value = nextModel;
+        }
+        writeStorage(`${storagePrefix}:model`, nextModel);
+      }
+      renderBuilderContent();
     });
     elements.form?.addEventListener("submit", (event) => {
       void handleGenerate(event);
@@ -2070,8 +2119,9 @@ export function createWorldGameLibrary(options = {}) {
     }
     const activeThread = getActiveThread();
     const prompt = clipText(activeThread.input ?? "", 4000);
+    const provider = normalizeGameTextProvider(elements.provider?.value ?? state.provider ?? "openai");
     const apiKey = String(elements.apiKey?.value ?? state.apiKey ?? "").trim();
-    const model = clipText(elements.model?.value ?? state.model ?? "", 80) || "gpt-5.4-mini";
+    const model = clipText(elements.model?.value ?? state.model ?? "", 80) || getDefaultGameTextModel(provider);
     if (!prompt) {
       setGeneratorStatus("Add a message before sending it to AI.", "error");
       render();
@@ -2084,8 +2134,10 @@ export function createWorldGameLibrary(options = {}) {
     }
     state.aiBusy = true;
     setGeneratorStatus("Sending the current thread to AI...", "working");
+    state.provider = provider;
     state.apiKey = apiKey;
     state.model = model;
+    writeStorage(`${storagePrefix}:provider`, provider);
     writeStorage(`${storagePrefix}:api-key`, apiKey);
     writeStorage(`${storagePrefix}:model`, model);
     activeThread.messages.push({
@@ -2104,7 +2156,7 @@ export function createWorldGameLibrary(options = {}) {
         messages: activeThread.messages,
         apiKey,
         model,
-        provider: "openai",
+        provider,
       });
       const replyText = clipText(payload?.message?.text ?? "", 8000);
       if (replyText) {
@@ -2130,8 +2182,9 @@ export function createWorldGameLibrary(options = {}) {
     }
     const activeThread = getActiveThread();
     const unsentInput = clipText(activeThread.input ?? "", 4000);
+    const provider = normalizeGameTextProvider(elements.provider?.value ?? state.provider ?? "openai");
     const apiKey = String(elements.apiKey?.value ?? state.apiKey ?? "").trim();
-    const model = clipText(elements.model?.value ?? state.model ?? "", 80) || "gpt-5.4-mini";
+    const model = clipText(elements.model?.value ?? state.model ?? "", 80) || getDefaultGameTextModel(provider);
     if (unsentInput) {
       setGeneratorStatus("Send your latest revision to AI first, then generate the final game.", "error");
       render();
@@ -2148,8 +2201,10 @@ export function createWorldGameLibrary(options = {}) {
       return;
     }
     state.generating = true;
+    state.provider = provider;
     state.apiKey = apiKey;
     state.model = model;
+    writeStorage(`${storagePrefix}:provider`, provider);
     writeStorage(`${storagePrefix}:api-key`, apiKey);
     writeStorage(`${storagePrefix}:model`, model);
     setGeneratorStatus("Generating the final nearby game package...", "working");
@@ -2159,7 +2214,7 @@ export function createWorldGameLibrary(options = {}) {
         messages: activeThread.messages,
         apiKey,
         model,
-        provider: "openai",
+        provider,
       });
       if (payload?.game) {
         activeThread.generatedGameId = payload.game.id;

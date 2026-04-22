@@ -1797,6 +1797,10 @@ body.is-world-loading .world-panel {
 }
 
 .world-browser-panel.is-game-mode .world-browser-stage {
+  min-height: 0;
+}
+
+.world-browser-panel.is-game-mode .world-browser-stage.is-active:not(.is-collapsed) {
   min-height: 220px;
 }
 

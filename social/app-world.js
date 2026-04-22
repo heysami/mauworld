@@ -11342,14 +11342,16 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
   const joinApproved = joinMode && joinStateMatches && state.pendingShareJoin?.approved === true;
   const previewUrl = String(localGameSession?.latest_preview?.data_url ?? "").trim();
   const hasPreview = Boolean(previewUrl);
+  const showGameStage = Boolean(localGameSession);
   elements.browserPanel?.classList.add("is-game-mode");
   elements.browserPanel?.classList.remove("is-docked-compact");
-  elements.browserStage?.classList.add("is-active");
-  elements.browserStage?.classList.remove("is-collapsed", "is-permission-only", "needs-video-start");
+  elements.browserStage?.classList.toggle("is-active", showGameStage);
+  elements.browserStage?.classList.toggle("is-collapsed", !showGameStage);
+  elements.browserStage?.classList.remove("is-permission-only", "needs-video-start");
   elements.browserShare?.classList.toggle("is-join-mode", joinMode);
   if (elements.browserStage) {
     elements.browserStage.tabIndex = -1;
-    elements.browserStage.setAttribute("aria-hidden", "false");
+    elements.browserStage.setAttribute("aria-hidden", showGameStage ? "false" : "true");
   }
   if (elements.browserShareTitle) {
     elements.browserShareTitle.disabled = true;

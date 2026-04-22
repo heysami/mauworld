@@ -1,6 +1,8 @@
 import { HttpError } from "./http.js";
+import {
+  generateTextReasoning,
+} from "./text-reasoning-providers.js";
 
-const DEFAULT_OPENAI_TEXT_MODEL = "gpt-5.4-mini";
 const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1";
 const DEFAULT_MESHY_MODEL = "meshy-4";
 const MAX_PROMPT_TEXT = 2400;
@@ -185,6 +187,8 @@ function buildScriptPrompt(input = {}) {
     "Supported directives inside a function:",
     "@module <kind>",
     "@target <player_id|entity_id|scene>",
+    "@run <every_tick|on_call>   // script.runtime only",
+    "@input <name> [default]      // script.runtime only",
     "@set <param> <value>",
     "@bind <binding> <key_or_mouse_token>",
     "@enabled <true|false>",
@@ -202,19 +206,23 @@ function buildScriptPrompt(input = {}) {
     "gravity, default_friction, default_restitution, terminal_velocity.",
     "script.runtime is the real programmable path for math, nearest-target logic, and per-tick movement.",
     "script.runtime rules:",
-    "- use @target scene or @target <entity_id>",
+    "- use @target scene or @target <entity_id> for every_tick scripts",
+    "- use @run on_call for helper scripts that should only run when another script calls them",
+    "- @run on_call helpers may omit @target and then inherit the caller self",
+    "- use @input name [default] to declare callable inputs",
     "- use @set for custom constants like chase_speed 12 or stop_distance 1.5",
-    "- non-directive lines are script statements that run every tick",
+    "- non-directive lines are script statements",
     "- supported statements: let name = expr, if (expr) return, if (expr) { ... }, assignment, expression calls, return",
     "- supported expressions: identifiers, property access, function calls, + - * /, comparisons, &&, ||, !",
-    "- supported builtins: entity(id), entities(kind), players(), nearest(list, from), sort_by_distance(list, from), distance(a, b), normalize(v), length(v), vec(x,y,z), clamp(v,min,max), min(...), max(...), move_toward(from,to,max_step,stop_distance)",
+    "- supported builtins: entity(id), entities(kind), players(), nearest(list, from), sort_by_distance(list, from), distance(a, b), normalize(v), length(v), vec(x,y,z), clamp(v,min,max), min(...), max(...), move_toward(from,to,max_step,stop_distance), call(function_id_or_name, ...args), play_sound(sound), stop_sound(sound)",
     "- special variables: self, scene, dt, time, plus any @set constants",
+    "- return values: use return <expr>; call(...) returns the called script value",
     "- writable properties include self.position, self.position.x, self.rotation, self.velocity, scene.gravity, and visible/value where supported",
     "Use readable comments when a placeholder or reminder should stay non-running.",
     "Legacy trigger/action rule lines are still valid. Available triggers:",
     "zone_enter, zone_exit, key_press, timer, scene_start, all_players_ready.",
     "Available actions:",
-    "apply_force, teleport, move_platform, switch_scene, set_material, set_visibility, toggle_particles, set_text, set_screen_state, start_scene.",
+    "apply_force, teleport, move_platform, switch_scene, set_material, set_visibility, toggle_particles, play_sound, stop_sound, set_text, set_screen_state, start_scene.",
     "Supported mouse input tokens are mouse_left, mouse_right, and mouse_middle.",
     "Directional force rules can use syntax like: key_press key mouse_left from player_1 -> apply_force to crate direction facing strength 12",
     "For moving platforms, use syntax like:",
@@ -257,22 +265,6 @@ function buildAssetSpecPrompt(input = {}) {
   ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-function extractTextFromResponse(payload = {}) {
-  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
-    return payload.output_text.trim();
-  }
-
-  const chunks = [];
-  for (const item of payload.output ?? []) {
-    for (const content of item.content ?? []) {
-      if (content.type === "output_text" && typeof content.text === "string") {
-        chunks.push(content.text);
-      }
-    }
-  }
-  return chunks.join("\n").trim();
 }
 
 function parseJsonFromText(input = "") {
@@ -332,34 +324,6 @@ function validateAssetSpec(rawSpec = {}, artifactType) {
     spec.bounds_hint = normalizeBoundsHint(rawSpec.bounds_hint ?? rawSpec.boundsHint ?? {});
   }
   return spec;
-}
-
-async function callOpenAiResponses(options = {}) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${requireApiKey(options.apiKey, "text reasoning")}`,
-    },
-    body: JSON.stringify({
-      model: String(options.model ?? DEFAULT_OPENAI_TEXT_MODEL).trim() || DEFAULT_OPENAI_TEXT_MODEL,
-      input: options.prompt,
-    }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new HttpError(502, payload.error?.message || "AI provider request failed");
-  }
-  const text = extractTextFromResponse(payload);
-  if (!text) {
-    throw new HttpError(502, "AI provider returned no text");
-  }
-  return {
-    provider: "openai",
-    model: String(options.model ?? DEFAULT_OPENAI_TEXT_MODEL).trim() || DEFAULT_OPENAI_TEXT_MODEL,
-    text,
-    raw: payload,
-  };
 }
 
 async function fetchBinaryFromUrl(url, headers = {}) {
@@ -590,15 +554,6 @@ async function callMeshyTextTo3d(options = {}) {
   };
 }
 
-const TEXT_PROVIDER_REGISTRY = {
-  openai: {
-    name: "openai",
-    async generate(options = {}) {
-      return await callOpenAiResponses(options);
-    },
-  },
-};
-
 const IMAGE_PROVIDER_REGISTRY = {
   openai: {
     name: "openai",
@@ -638,8 +593,8 @@ async function generateStructuredAssetSpec(options = {}) {
   if (artifactType !== "texture" && artifactType !== "3d_model") {
     throw new HttpError(400, "Unsupported asset spec type");
   }
-  const providerAdapter = resolveProviderAdapter(TEXT_PROVIDER_REGISTRY, options.reasoningProvider ?? options.provider, "text reasoning");
-  const generated = await providerAdapter.generate({
+  const generated = await generateTextReasoning({
+    provider: options.reasoningProvider ?? options.provider,
     apiKey: options.reasoningApiKey ?? options.apiKey,
     model: options.reasoningModel ?? options.model,
     prompt: buildAssetSpecPrompt({
@@ -656,12 +611,12 @@ async function generateStructuredAssetSpec(options = {}) {
 }
 
 export async function brainstormPrivateWorldAiArtifact(options = {}) {
-  const providerAdapter = resolveProviderAdapter(TEXT_PROVIDER_REGISTRY, options.provider, "text reasoning");
   const artifactType = normalizeArtifactType(options.artifactType);
   if (!["screen_html", "world_script", "texture", "3d_model"].includes(artifactType)) {
     throw new HttpError(400, "Unsupported AI artifact type");
   }
-  return await providerAdapter.generate({
+  return await generateTextReasoning({
+    provider: options.provider,
     apiKey: options.apiKey,
     model: options.model,
     prompt: buildBrainstormPrompt({
@@ -672,7 +627,6 @@ export async function brainstormPrivateWorldAiArtifact(options = {}) {
 }
 
 export async function generatePrivateWorldAiArtifact(options = {}) {
-  const providerAdapter = resolveProviderAdapter(TEXT_PROVIDER_REGISTRY, options.provider, "text reasoning");
   const artifactType = normalizeArtifactType(options.artifactType);
   const prompt =
     artifactType === "screen_html"
@@ -683,7 +637,8 @@ export async function generatePrivateWorldAiArtifact(options = {}) {
   if (!prompt) {
     throw new HttpError(400, "Unsupported AI artifact type");
   }
-  return await providerAdapter.generate({
+  return await generateTextReasoning({
+    provider: options.provider,
     apiKey: options.apiKey,
     model: options.model,
     prompt,

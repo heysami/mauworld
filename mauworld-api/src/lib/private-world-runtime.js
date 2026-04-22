@@ -37,6 +37,9 @@ const PLATFORM_CARRY_HORIZONTAL_BUFFER = 0.14;
 const MAX_DELTA_SECONDS = 0.08;
 const FLOOR_HALF_EXTENT = 4096;
 const SCRIPT_RUNTIME_REF_KEY = "__pw_script_ref";
+const SCRIPT_RUNTIME_DEFAULT_RUN_MODE = "every_tick";
+const SCRIPT_RUNTIME_MAX_CALL_DEPTH = 12;
+const SCRIPT_RUNTIME_MAX_CALLS_PER_TICK = 256;
 
 function nowIso() {
   return new Date().toISOString();
@@ -94,6 +97,30 @@ function getPlayerCameraBehaviorConfig(runtime = {}, player = {}) {
     return null;
   }
   return getRuntimeScriptConfig(runtime)?.camera_behaviors?.[playerId] ?? null;
+}
+
+function normalizeScriptRuntimeFunctionLookupKey(value = "") {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function buildScriptRuntimeFunctionIndex(scripts = []) {
+  const functionsById = new Map();
+  const functionsByLookup = new Map();
+  for (const scriptEntry of Array.isArray(scripts) ? scripts : []) {
+    if (!scriptEntry?.function_id) {
+      continue;
+    }
+    functionsById.set(scriptEntry.function_id, scriptEntry);
+    const idKey = normalizeScriptRuntimeFunctionLookupKey(scriptEntry.function_id);
+    if (idKey) {
+      functionsByLookup.set(idKey, scriptEntry);
+    }
+    const nameKey = normalizeScriptRuntimeFunctionLookupKey(scriptEntry.function_name);
+    if (nameKey && !functionsByLookup.has(nameKey)) {
+      functionsByLookup.set(nameKey, scriptEntry);
+    }
+  }
+  return { functionsById, functionsByLookup };
 }
 
 function getPlayerBindingToken(runtime = {}, player = {}, bindingName = "", fallback = "") {
@@ -906,6 +933,45 @@ function translateRuntimeTriggerZoneByDelta(runtime, triggerZoneId = "", delta =
   return cloneJson(zone.position);
 }
 
+function translateRuntimeSoundByDelta(runtime, soundId = "", delta = null) {
+  const resolvedSoundId = String(soundId ?? "").trim();
+  if (!runtime || !resolvedSoundId) {
+    return null;
+  }
+  const sound = runtime.soundState?.[resolvedSoundId] ?? null;
+  if (!sound) {
+    return null;
+  }
+  const resolvedDelta = vec3(delta, { x: 0, y: 0, z: 0 });
+  sound.position = {
+    x: mustFinite(sound.position?.x, 0) + resolvedDelta.x,
+    y: mustFinite(sound.position?.y, 0) + resolvedDelta.y,
+    z: mustFinite(sound.position?.z, 0) + resolvedDelta.z,
+  };
+  const sceneSound = (runtime.sceneDoc?.sounds ?? []).find((entry) => entry.id === resolvedSoundId) ?? null;
+  if (sceneSound) {
+    sceneSound.position = cloneJson(sound.position);
+  }
+  return cloneJson(sound.position);
+}
+
+function setRuntimeSoundPlaying(runtime, soundId = "", playing = true, options = {}) {
+  const resolvedSoundId = String(soundId ?? "").trim();
+  if (!runtime || !resolvedSoundId) {
+    return null;
+  }
+  const sound = runtime.soundState?.[resolvedSoundId] ?? null;
+  if (!sound) {
+    return null;
+  }
+  const nextPlaying = playing === true;
+  sound.playing = nextPlaying;
+  if (nextPlaying && options.restart !== false) {
+    sound.play_revision = Math.max(0, Number(sound.play_revision ?? 0) || 0) + 1;
+  }
+  return cloneJson(sound);
+}
+
 function applyPrefabInstancePose(runtime, prefabInstance, {
   position = null,
   velocity = null,
@@ -948,6 +1014,9 @@ function applyPrefabInstancePose(runtime, prefabInstance, {
   }
   for (const triggerZoneId of prefabInstance.trigger_zone_ids ?? []) {
     translateRuntimeTriggerZoneByDelta(runtime, triggerZoneId, delta);
+  }
+  for (const soundId of prefabInstance.sound_ids ?? []) {
+    translateRuntimeSoundByDelta(runtime, soundId, delta);
   }
   return {
     position: cloneJson(nextPosition),
@@ -1053,6 +1122,9 @@ function listScriptRuntimeEntityRefs(simulation, kind = "") {
   for (const entry of simulation.triggerZones ?? []) {
     refs.push(createScriptRuntimeEntityRef("trigger", entry.id));
   }
+  for (const entry of Object.values(simulation.soundState ?? {})) {
+    refs.push(createScriptRuntimeEntityRef("sound", entry.id));
+  }
   for (const entry of simulation.sceneDoc?.voxels ?? []) {
     refs.push(createScriptRuntimeEntityRef("voxel", entry.id));
   }
@@ -1101,7 +1173,21 @@ function resolveScriptRuntimeEntityTarget(simulation, ref = null) {
   if (ref.kind === "text") {
     return simulation.textState?.[ref.id] ?? null;
   }
+  if (ref.kind === "sound") {
+    return simulation.soundState?.[ref.id] ?? null;
+  }
   return null;
+}
+
+function resolveScriptRuntimeSoundId(simulation, value = null) {
+  if (isScriptRuntimeEntityRef(value)) {
+    return value.kind === "sound" ? value.id : "";
+  }
+  const normalizedId = String(value ?? "").trim();
+  if (!normalizedId || !simulation?.soundState?.[normalizedId]) {
+    return "";
+  }
+  return normalizedId;
 }
 
 function resolveScriptRuntimePositionLike(simulation, value) {
@@ -1149,6 +1235,9 @@ function readScriptRuntimeEntityProperty(simulation, ref, property = "") {
   }
   if (normalizedProperty === "value" && ref.kind === "text") {
     return String(target.value ?? "");
+  }
+  if (ref.kind === "sound" && ["asset_id", "volume", "loop", "autoplay", "spatial", "max_distance", "playing", "play_revision"].includes(normalizedProperty)) {
+    return cloneScriptRuntimeValue(target[normalizedProperty] ?? null);
   }
   if (normalizedProperty === "state" && ref.kind === "screen") {
     return cloneScriptRuntimeValue(target.state ?? {});
@@ -1342,6 +1431,14 @@ function setScriptRuntimeEntityPath(simulation, ref, path = [], value = null) {
     if (ref.kind === "screen") {
       return applyScriptRuntimeScreenPosition(simulation, ref.id, next);
     }
+    if (ref.kind === "sound") {
+      target.position = cloneJson(next);
+      const sceneSound = simulation.sceneDoc?.sounds?.find((entry) => entry.id === ref.id) ?? null;
+      if (sceneSound) {
+        sceneSound.position = cloneJson(next);
+      }
+      return true;
+    }
     throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
   }
   if (property === "rotation") {
@@ -1409,6 +1506,27 @@ function setScriptRuntimeEntityPath(simulation, ref, path = [], value = null) {
     target.value = String(value ?? "").slice(0, 160);
     return true;
   }
+  if (property === "playing" && ref.kind === "sound" && path.length === 1) {
+    return Boolean(setRuntimeSoundPlaying(simulation, ref.id, value !== false, {
+      restart: value !== false,
+    }));
+  }
+  if (property === "volume" && ref.kind === "sound" && path.length === 1) {
+    target.volume = clampNumber(mustFinite(value, target.volume ?? 0.85), target.volume ?? 0.85, 0, 1);
+    return true;
+  }
+  if (property === "loop" && ref.kind === "sound" && path.length === 1) {
+    target.loop = value === true;
+    return true;
+  }
+  if (property === "spatial" && ref.kind === "sound" && path.length === 1) {
+    target.spatial = value !== false;
+    return true;
+  }
+  if (property === "max_distance" && ref.kind === "sound" && path.length === 1) {
+    target.max_distance = clampNumber(mustFinite(value, target.max_distance ?? 24), target.max_distance ?? 24, 1, 512);
+    return true;
+  }
   throw new Error(`Property path \`${path.join(".")}\` is not writable for ${ref.kind}.`);
 }
 
@@ -1451,6 +1569,7 @@ function unwrapScriptRuntimeReferencePath(reference) {
 
 function createScriptRuntimeEnvironment({
   constants = {},
+  inputs = {},
   selfRef = null,
   sceneRef = createScriptRuntimeSceneRef(),
   dt = 0,
@@ -1460,6 +1579,10 @@ function createScriptRuntimeEnvironment({
   const bindings = new Map();
   const readonly = new Set(["self", "scene", "dt", "time"]);
   for (const [key, value] of Object.entries(constants ?? {})) {
+    bindings.set(key, cloneScriptRuntimeValue(value));
+    readonly.add(key);
+  }
+  for (const [key, value] of Object.entries(inputs ?? {})) {
     bindings.set(key, cloneScriptRuntimeValue(value));
     readonly.add(key);
   }
@@ -1756,8 +1879,79 @@ function createScriptRuntimeBuiltins(simulation, sceneRef = createScriptRuntimeS
         z: fromPosition.z + (dz / distance) * step,
       };
     }],
+    ["play_sound", (soundLike) => {
+      const soundId = resolveScriptRuntimeSoundId(simulation, soundLike);
+      if (!soundId) {
+        return false;
+      }
+      setRuntimeSoundPlaying(simulation, soundId, true, { restart: true });
+      return true;
+    }],
+    ["stop_sound", (soundLike) => {
+      const soundId = resolveScriptRuntimeSoundId(simulation, soundLike);
+      if (!soundId) {
+        return false;
+      }
+      setRuntimeSoundPlaying(simulation, soundId, false, { restart: false });
+      return true;
+    }],
     ["scene", sceneRef],
   ]);
+}
+
+function resolveScriptRuntimeCallTarget(simulation, rawTarget = "") {
+  const lookupKey = normalizeScriptRuntimeFunctionLookupKey(rawTarget);
+  if (!lookupKey) {
+    return null;
+  }
+  return simulation?.scriptRuntimeState?.functionsByLookup?.get?.(lookupKey) ?? null;
+}
+
+function bindScriptRuntimeInputs(inputDefinitions = [], args = []) {
+  const bindings = {};
+  const definitions = Array.isArray(inputDefinitions) ? inputDefinitions : [];
+  const values = Array.isArray(args) ? args : [];
+  for (let index = 0; index < definitions.length; index += 1) {
+    const definition = definitions[index] ?? {};
+    const name = String(definition.name ?? "").trim();
+    if (!name) {
+      continue;
+    }
+    if (index < values.length) {
+      bindings[name] = cloneScriptRuntimeValue(values[index]);
+      continue;
+    }
+    if (definition.has_default === true || Object.hasOwn(definition, "default_value")) {
+      bindings[name] = cloneScriptRuntimeValue(definition.default_value);
+      continue;
+    }
+    bindings[name] = null;
+  }
+  return bindings;
+}
+
+function resolveScriptRuntimeSelfRef(simulation, scriptEntry = {}, sceneRef = createScriptRuntimeSceneRef(), inheritedSelfRef = null) {
+  if (scriptEntry?.target_id === "scene") {
+    return sceneRef;
+  }
+  if (scriptEntry?.target_id) {
+    return findScriptRuntimeEntityRef(simulation, scriptEntry.target_id);
+  }
+  if (inheritedSelfRef) {
+    return inheritedSelfRef;
+  }
+  return sceneRef;
+}
+
+function consumeScriptRuntimeCallBudget(simulation) {
+  const state = simulation?.scriptRuntimeState;
+  if (!state) {
+    return;
+  }
+  state.callCountThisTick = (state.callCountThisTick ?? 0) + 1;
+  if (state.callCountThisTick > SCRIPT_RUNTIME_MAX_CALLS_PER_TICK) {
+    throw new Error(`script.runtime exceeded ${SCRIPT_RUNTIME_MAX_CALLS_PER_TICK} script calls in one tick.`);
+  }
 }
 
 function resolveScriptRuntimeReference(expression = null) {
@@ -1948,26 +2142,44 @@ function executeScriptRuntimeStatement(simulation, environment, statement = null
   throw new Error(`Unsupported script.runtime statement type \`${statement.type}\`.`);
 }
 
-function executeRuntimeScript(simulation, scriptEntry = {}, deltaSeconds = 0) {
+function executeRuntimeScript(simulation, scriptEntry = {}, deltaSeconds = 0, options = {}) {
   if (!scriptEntry?.program_ast || scriptEntry.enabled === false) {
-    return;
+    return null;
   }
-  const sceneRef = createScriptRuntimeSceneRef();
-  const selfRef = scriptEntry.target_id === "scene"
-    ? sceneRef
-    : findScriptRuntimeEntityRef(simulation, scriptEntry.target_id);
+  const callDepth = Math.max(0, mustFinite(options.callDepth, 0));
+  if (callDepth > SCRIPT_RUNTIME_MAX_CALL_DEPTH) {
+    throw new Error(`script.runtime exceeded the maximum nested call depth of ${SCRIPT_RUNTIME_MAX_CALL_DEPTH}.`);
+  }
+  consumeScriptRuntimeCallBudget(simulation);
+  const sceneRef = options.sceneRef ?? createScriptRuntimeSceneRef();
+  const selfRef = resolveScriptRuntimeSelfRef(simulation, scriptEntry, sceneRef, options.inheritedSelfRef ?? null);
   if (!selfRef) {
     throw new Error(`Script target \`${scriptEntry.target_id || "scene"}\` is no longer available.`);
   }
+  const builtins = createScriptRuntimeBuiltins(simulation, sceneRef);
   const environment = createScriptRuntimeEnvironment({
     constants: scriptEntry.constants ?? {},
+    inputs: bindScriptRuntimeInputs(scriptEntry.inputs ?? [], options.args ?? []),
     selfRef,
     sceneRef,
     dt: Math.max(0, mustFinite(deltaSeconds, 0)),
     time: Math.max(0, mustFinite(simulation.elapsedMs, 0)) / 1000,
-    builtins: createScriptRuntimeBuiltins(simulation, sceneRef),
+    builtins,
   });
-  executeScriptRuntimeStatement(simulation, environment, scriptEntry.program_ast);
+  builtins.set("call", (rawTarget, ...args) => {
+    const targetScript = resolveScriptRuntimeCallTarget(simulation, rawTarget);
+    if (!targetScript) {
+      throw new Error(`Script call target \`${String(rawTarget ?? "").trim() || "(empty)"}\` was not found.`);
+    }
+    return executeRuntimeScript(simulation, targetScript, deltaSeconds, {
+      sceneRef,
+      inheritedSelfRef: environment.get("self"),
+      args,
+      callDepth: callDepth + 1,
+    });
+  });
+  const result = executeScriptRuntimeStatement(simulation, environment, scriptEntry.program_ast);
+  return result.returned ? result.value : null;
 }
 
 function executeRuntimeScripts(simulation, deltaSeconds = 0) {
@@ -1977,7 +2189,11 @@ function executeRuntimeScripts(simulation, deltaSeconds = 0) {
   if (!scripts.length) {
     return;
   }
+  simulation.scriptRuntimeState.callCountThisTick = 0;
   for (const scriptEntry of scripts) {
+    if ((scriptEntry?.run_mode ?? SCRIPT_RUNTIME_DEFAULT_RUN_MODE) === "on_call") {
+      continue;
+    }
     try {
       executeRuntimeScript(simulation, scriptEntry, deltaSeconds);
       simulation.scriptRuntimeState?.lastErrorByFunctionId?.delete?.(scriptEntry.function_id);
@@ -2939,6 +3155,10 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       label: entry.label,
       scale,
       asset_id: entry.asset_id ?? null,
+      animation_clip: entry.animation_clip ?? null,
+      animation_autoplay: entry.animation_autoplay === true,
+      animation_loop: entry.animation_loop !== false,
+      animation_speed: mustFinite(entry.animation_speed, 1),
       material: cloneJson(entry.material ?? {}),
       camera_mode: entry.camera_mode,
       fixed_top_down_direction: String(entry.fixed_top_down_direction ?? "north").trim().toLowerCase() || "north",
@@ -2979,6 +3199,10 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     instance_id: entry.instance_id ?? null,
     entity_kind: "primitive",
     asset_id: entry.asset_id ?? null,
+    animation_clip: entry.animation_clip ?? null,
+    animation_autoplay: entry.animation_autoplay === true,
+    animation_loop: entry.animation_loop !== false,
+    animation_speed: mustFinite(entry.animation_speed, 1),
     shape: entry.shape,
     scale: cloneJson(entry.scale),
     collider_scale: cloneJson(entry.scale),
@@ -3003,6 +3227,10 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     entity_kind: "model",
     id: entry.id,
     asset_id: entry.asset_id ?? null,
+    animation_clip: entry.animation_clip ?? null,
+    animation_autoplay: entry.animation_autoplay === true,
+    animation_loop: entry.animation_loop !== false,
+    animation_speed: mustFinite(entry.animation_speed, 1),
     shape: "box",
     scale: cloneJson(entry.scale),
     bounds: cloneJson(entry.bounds ?? { x: 1, y: 1, z: 1 }),
@@ -3047,6 +3275,20 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     color: entry.color,
     enabled: entry.enabled !== false,
   }]));
+  const soundState = Object.fromEntries((sceneDoc.sounds ?? []).map((entry) => [entry.id, {
+    id: entry.id,
+    instance_id: entry.instance_id ?? null,
+    label: entry.label,
+    asset_id: entry.asset_id ?? null,
+    position: vec3(entry.position, { x: 0, y: 1.5, z: 0 }),
+    volume: clampNumber(entry.volume, 0.85, 0, 1),
+    loop: entry.loop === true,
+    autoplay: entry.autoplay === true,
+    spatial: entry.spatial !== false,
+    max_distance: clampNumber(entry.max_distance, 24, 1, 512),
+    playing: entry.autoplay === true,
+    play_revision: entry.autoplay === true ? 1 : 0,
+  }]));
   const screenState = Object.fromEntries((sceneDoc.screens ?? []).map((entry) => [entry.id, {
     id: entry.id,
     instance_id: entry.instance_id ?? null,
@@ -3086,6 +3328,9 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     trigger_zone_ids: triggerZones
       .filter((candidate) => candidate.instance_id === entry.id)
       .map((candidate) => candidate.id),
+    sound_ids: Object.values(soundState)
+      .filter((candidate) => candidate.instance_id === entry.id)
+      .map((candidate) => candidate.id),
   }));
   const runtime = {
     sceneRowId: sceneRow?.id ?? null,
@@ -3114,6 +3359,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       sceneStartFired: sceneStarted === true && elapsedMs > 0,
     },
     particleState,
+    soundState,
     screenState,
     textState,
     recentEvents: [],
@@ -3121,6 +3367,8 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     scriptedPlatformMotions: new Map(),
     scriptRuntimeState: {
       lastErrorByFunctionId: new Map(),
+      ...buildScriptRuntimeFunctionIndex(scriptConfig?.runtime_scripts ?? []),
+      callCountThisTick: 0,
     },
     physics: null,
   };
@@ -3438,6 +3686,38 @@ function executeRuleAction(simulation, rule, context = {}) {
     return;
   }
 
+  if (rule.action === "play_sound") {
+    const targetSoundId = targetId || String(rule.payload?.sound_id ?? rule.payload?.soundId ?? "").trim() || null;
+    if (targetSoundId) {
+      const sound = setRuntimeSoundPlaying(simulation, targetSoundId, true, { restart: true });
+      if (sound) {
+        pushRuntimeEvent(simulation, {
+          type: "play_sound",
+          rule_id: rule.id,
+          sound_id: targetSoundId,
+        });
+      }
+    }
+    markRuleFired();
+    return;
+  }
+
+  if (rule.action === "stop_sound") {
+    const targetSoundId = targetId || String(rule.payload?.sound_id ?? rule.payload?.soundId ?? "").trim() || null;
+    if (targetSoundId) {
+      const sound = setRuntimeSoundPlaying(simulation, targetSoundId, false, { restart: false });
+      if (sound) {
+        pushRuntimeEvent(simulation, {
+          type: "stop_sound",
+          rule_id: rule.id,
+          sound_id: targetSoundId,
+        });
+      }
+    }
+    markRuleFired();
+    return;
+  }
+
   if (rule.action === "set_text") {
     const targetTextId = targetId || String(rule.payload?.text_id ?? rule.payload?.textId ?? "").trim() || null;
     if (targetTextId && simulation.textState[targetTextId]) {
@@ -3670,6 +3950,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
   const publicDynamicObjects = runtime.dynamicObjects.filter((entry) => !entry.instance_id);
   const publicTriggerZones = runtime.triggerZones.filter((entry) => !entry.instance_id);
   const publicParticles = Object.values(runtime.particleState).filter((entry) => !entry.instance_id);
+  const publicSounds = Object.values(runtime.soundState ?? {});
   const publicScreens = Object.values(runtime.screenState ?? {}).filter((entry) => !entry.instance_id);
   const publicTexts = Object.values(runtime.textState).filter((entry) => !entry.instance_id);
   return {
@@ -3702,6 +3983,10 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
         label: entry.label,
         scale: entry.scale,
         asset_id: entry.asset_id ?? null,
+        animation_clip: entry.animation_clip ?? null,
+        animation_autoplay: entry.animation_autoplay === true,
+        animation_loop: entry.animation_loop !== false,
+        animation_speed: mustFinite(entry.animation_speed, 1),
         position: cloneJson(replicatedPose?.position ?? entry.position),
         rotation: cloneJson(replicatedPose?.rotation ?? entry.rotation),
         velocity: cloneJson(replicatedPose?.velocity ?? entry.velocity),
@@ -3731,6 +4016,10 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       id: entry.id,
       entity_kind: entry.entity_kind ?? "primitive",
       asset_id: entry.asset_id ?? null,
+      animation_clip: entry.animation_clip ?? null,
+      animation_autoplay: entry.animation_autoplay === true,
+      animation_loop: entry.animation_loop !== false,
+      animation_speed: mustFinite(entry.animation_speed, 1),
       shape: entry.shape,
       scale: cloneJson(entry.scale),
       bounds: cloneJson(entry.bounds ?? null),
@@ -3755,6 +4044,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       occupant_ids: [...entry.currentOccupants],
     })),
     particles: publicParticles.map((entry) => cloneJson(entry)),
+    sounds: publicSounds.map((entry) => cloneJson(entry)),
     screens: publicScreens.map((entry) => cloneJson(entry)),
     texts: publicTexts.map((entry) => cloneJson(entry)),
     recent_events: cloneJson(runtime.recentEvents),

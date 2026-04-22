@@ -112,6 +112,8 @@ function createDetailStore(runtimeOverrides = {}) {
           about: "",
           max_viewers: 16,
           max_players: 4,
+          allow_non_editor_export: false,
+          allow_non_editor_fork: false,
           created_at: "2026-04-20T00:00:00.000Z",
           updated_at: "2026-04-20T00:00:00.000Z",
         }],
@@ -466,6 +468,8 @@ test("listPrivateWorlds returns lightweight summaries without loading scene cont
           search_text: "fast summary world",
           max_viewers: 12,
           max_players: 4,
+          allow_non_editor_export: false,
+          allow_non_editor_fork: false,
           created_at: freshIso,
           updated_at: freshIso,
           imported_by_profile_id: null,
@@ -513,6 +517,135 @@ test("listPrivateWorlds returns lightweight summaries without loading scene cont
   assert.equal("prefabs" in result.worlds[0], false);
   assert.equal(queriedTables.includes("private_world_scenes"), false);
   assert.equal(queriedTables.includes("private_world_prefabs"), false);
+});
+
+test("getPrivateWorldDetail exposes non-editor export and fork permissions from world policy", async () => {
+  const store = new FakeStore();
+  store.serviceClient = {
+    from(table) {
+      const tables = {
+        private_worlds: [{
+          id: "world_row",
+          world_id: "mw_world",
+          creator_profile_id: "profile_creator",
+          default_scene_id: "scene_main",
+          world_type: "private",
+          template_size: "medium",
+          width: 40,
+          length: 40,
+          height: 20,
+          name: "Policy Test World",
+          about: "",
+          max_viewers: 16,
+          max_players: 4,
+          allow_non_editor_export: true,
+          allow_non_editor_fork: false,
+          created_at: "2026-04-20T00:00:00.000Z",
+          updated_at: "2026-04-20T00:00:00.000Z",
+        }],
+        user_profiles: [{
+          id: "profile_creator",
+          username: "maker",
+          display_name: "Maker",
+        }],
+        private_world_collaborators: [],
+        private_world_scenes: [],
+        private_world_prefabs: [],
+        private_world_active_instances: [],
+        private_world_participants: [],
+      };
+      return createQuery(tables[table] ?? []);
+    },
+  };
+  store.privateWorldRuntime = {};
+
+  const detail = await store.getPrivateWorldDetail({
+    worldId: "mw_world",
+    creatorUsername: "maker",
+    profile: {
+      id: "profile_viewer",
+      username: "viewer",
+    },
+  });
+
+  assert.equal(detail.world.permissions.can_edit, false);
+  assert.equal(detail.world.permissions.can_export, true);
+  assert.equal(detail.world.permissions.can_fork, false);
+  assert.equal(detail.world.access_policy.allow_non_editor_export, true);
+  assert.equal(detail.world.access_policy.allow_non_editor_fork, false);
+});
+
+test("exportPrivateWorld enforces non-editor export and fork toggles", async () => {
+  const store = new FakeStore();
+  store.serviceClient = {
+    from(table) {
+      const tables = {
+        private_worlds: [{
+          id: "world_row",
+          world_id: "mw_world",
+          creator_profile_id: "profile_creator",
+          default_scene_id: "scene_main",
+          world_type: "private",
+          template_size: "medium",
+          width: 40,
+          length: 40,
+          height: 20,
+          name: "Policy Test World",
+          about: "",
+          max_viewers: 16,
+          max_players: 4,
+          allow_non_editor_export: false,
+          allow_non_editor_fork: true,
+          created_at: "2026-04-20T00:00:00.000Z",
+          updated_at: "2026-04-20T00:00:00.000Z",
+        }],
+        user_profiles: [{
+          id: "profile_creator",
+          username: "maker",
+          display_name: "Maker",
+        }],
+        private_world_collaborators: [],
+        private_world_scenes: [{
+          id: "scene_main",
+          world_id: "world_row",
+          name: "Main Scene",
+          version: 1,
+          is_default: true,
+          scene_doc: { players: [] },
+          compiled_doc: {},
+          created_at: "2026-04-20T00:00:00.000Z",
+          updated_at: "2026-04-20T00:00:00.000Z",
+        }],
+        private_world_prefabs: [],
+        private_world_assets: [],
+        private_world_asset_files: [],
+      };
+      return createQuery(tables[table] ?? []);
+    },
+  };
+  store.privateWorldRuntime = {};
+
+  await assert.rejects(
+    store.exportPrivateWorld({
+      id: "profile_viewer",
+      username: "viewer",
+    }, {
+      worldId: "mw_world",
+      creatorUsername: "maker",
+    }),
+    /does not allow non-editors to export/i,
+  );
+
+  const forkPayload = await store.exportPrivateWorld({
+    id: "profile_viewer",
+    username: "viewer",
+  }, {
+    worldId: "mw_world",
+    creatorUsername: "maker",
+    format: "json",
+  });
+  assert.equal(forkPayload.package.world.allow_non_editor_export, false);
+  assert.equal(forkPayload.package.world.allow_non_editor_fork, true);
 });
 
 test("verifyUserAccessToken dedupes concurrent work and reuses a short-lived cache", async () => {

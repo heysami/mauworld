@@ -94,6 +94,23 @@ function asNumber(value, fallback = 0) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function asOptionalBoolean(value, fallback = undefined) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = lower(value);
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+  return Boolean(value);
+}
+
 export function isPubliclyVisiblePrivateWorldInstanceStatus(status = "") {
   return PUBLIC_PRIVATE_WORLD_VISIBLE_STATUSES.has(lower(status));
 }
@@ -127,6 +144,19 @@ function inferExtensionFromContentType(contentType = "", fallback = "bin") {
     "image/svg+xml": "svg",
     "model/gltf-binary": "glb",
     "model/gltf+json": "gltf",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/webm": "webm",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/flac": "flac",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/ogg": "ogv",
+    "video/quicktime": "mov",
     "application/octet-stream": fallback,
     "application/json": "json",
     "application/zip": "zip",
@@ -154,6 +184,39 @@ function inferContentTypeFromFilename(filename = "") {
   if (lowerFilename.endsWith(".gltf")) {
     return "model/gltf+json";
   }
+  if (lowerFilename.endsWith(".mp3")) {
+    return "audio/mpeg";
+  }
+  if (lowerFilename.endsWith(".wav")) {
+    return "audio/wav";
+  }
+  if (lowerFilename.endsWith(".ogg")) {
+    return "audio/ogg";
+  }
+  if (lowerFilename.endsWith(".weba")) {
+    return "audio/webm";
+  }
+  if (lowerFilename.endsWith(".m4a")) {
+    return "audio/mp4";
+  }
+  if (lowerFilename.endsWith(".flac")) {
+    return "audio/flac";
+  }
+  if (lowerFilename.endsWith(".webm")) {
+    return "video/webm";
+  }
+  if (lowerFilename.endsWith(".ogv")) {
+    return "video/ogg";
+  }
+  if (lowerFilename.endsWith(".mov") || lowerFilename.endsWith(".qt")) {
+    return "video/quicktime";
+  }
+  if (lowerFilename.endsWith(".m4v")) {
+    return "video/mp4";
+  }
+  if (lowerFilename.endsWith(".mp4")) {
+    return "video/mp4";
+  }
   if (lowerFilename.endsWith(".json")) {
     return "application/json";
   }
@@ -169,9 +232,15 @@ function buildAssetBounds(input = {}) {
 }
 
 function buildPrivateWorldAssetPayload(input = {}, profileId) {
-  const assetType = lower(input.asset_type ?? input.assetType) === "model" ? "model" : "texture";
-  const name = String(input.name ?? `${assetType === "model" ? "Model" : "Texture"} Asset`).trim().slice(0, 120)
-    || `${assetType === "model" ? "Model" : "Texture"} Asset`;
+  const requestedAssetType = lower(input.asset_type ?? input.assetType);
+  const assetType = requestedAssetType === "model"
+    ? "model"
+    : requestedAssetType === "sound"
+      ? "sound"
+      : "texture";
+  const assetLabel = assetType === "model" ? "Model" : assetType === "sound" ? "Sound" : "Texture";
+  const name = String(input.name ?? `${assetLabel} Asset`).trim().slice(0, 120)
+    || `${assetLabel} Asset`;
   return {
     owner_profile_id: profileId,
     asset_type: assetType,
@@ -349,9 +418,13 @@ function rewriteSceneDocAssetIds(sceneDoc = {}, assetIdMap = new Map()) {
     if (textureAssetId && assetIdMap.has(textureAssetId)) {
       material.texture_asset_id = assetIdMap.get(textureAssetId);
     }
+    const videoAssetId = String(material.video_asset_id ?? "").trim();
+    if (videoAssetId && assetIdMap.has(videoAssetId)) {
+      material.video_asset_id = assetIdMap.get(videoAssetId);
+    }
     return material;
   };
-  for (const collectionKey of ["voxels", "primitives", "models", "players", "screens", "texts"]) {
+  for (const collectionKey of ["voxels", "primitives", "panels", "models", "players", "screens", "texts"]) {
     doc[collectionKey] = Array.isArray(doc[collectionKey]) ? doc[collectionKey] : [];
     doc[collectionKey] = doc[collectionKey].map((entry) => ({
       ...entry,
@@ -367,6 +440,10 @@ function rewriteSceneDocAssetIds(sceneDoc = {}, assetIdMap = new Map()) {
     asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,
   }));
   doc.players = (doc.players ?? []).map((entry) => ({
+    ...entry,
+    asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,
+  }));
+  doc.sounds = (doc.sounds ?? []).map((entry) => ({
     ...entry,
     asset_id: assetIdMap.get(entry.asset_id) ?? entry.asset_id ?? null,
   }));
@@ -462,6 +539,8 @@ async function importPrivateWorldPackageData(store, profile, parsed, { assetIdMa
         about: parsed.world.about,
         max_viewers: parsed.world.max_viewers,
         max_players: parsed.world.max_players,
+        allow_non_editor_export: parsed.world.allow_non_editor_export === true,
+        allow_non_editor_fork: parsed.world.allow_non_editor_fork === true,
         origin_world_id: parsed.credits.origin_world_id ?? parsed.world.lineage.origin_world_id,
         origin_creator_username: parsed.credits.origin_creator_username ?? parsed.world.lineage.origin_creator_username,
         origin_world_name: parsed.credits.origin_world_name ?? parsed.world.lineage.origin_world_name,
@@ -788,14 +867,23 @@ function filterFreshPrivateWorldParticipants(participants = [], options = {}) {
     && (!visibleOnly || row.visible_to_others !== false));
 }
 
+function buildWorldAccessPolicy(world = {}) {
+  return {
+    allow_non_editor_export: world.allow_non_editor_export === true,
+    allow_non_editor_fork: world.allow_non_editor_fork === true,
+  };
+}
+
 function createPermissionSummary({ collaboratorRole = null, requesterProfileId = "" } = {}, world = {}) {
+  const accessPolicy = buildWorldAccessPolicy(world);
   const isCreator = collaboratorRole === "creator" || String(world.creator_profile_id ?? "") === String(requesterProfileId ?? "");
-  const canEdit = collaboratorRole === "creator" || collaboratorRole === "editor";
+  const canEdit = isCreator || collaboratorRole === "editor";
   return {
     role: collaboratorRole,
     is_creator: isCreator,
     can_edit: canEdit,
-    can_export: Boolean(requesterProfileId),
+    can_export: Boolean(requesterProfileId) && (canEdit || accessPolicy.allow_non_editor_export),
+    can_fork: Boolean(requesterProfileId) && (canEdit || accessPolicy.allow_non_editor_fork),
     can_join: Boolean(requesterProfileId),
   };
 }
@@ -1262,6 +1350,7 @@ async function buildWorldDetail(store, {
         username: creator.username,
         display_name: creator.display_name,
       },
+      access_policy: buildWorldAccessPolicy(world),
       permissions,
       lineage: buildWorldLineage(world, creator),
       collaborators: collaborators.map(serializeCollaborator),
@@ -1420,6 +1509,7 @@ function serializeWorldSummary({
           display_name: null,
         },
     permissions,
+    access_policy: buildWorldAccessPolicy(world),
     lineage: buildWorldLineage(world, creator, importedByUsername),
     active_instance: activeInstance
       ? {
@@ -1774,6 +1864,8 @@ export function installPrivateWorldStore(MauworldStore) {
           }),
           max_viewers: clampLimit(input.max_viewers, PRIVATE_WORLD_LIMITS.maxViewers, 100),
           max_players: clampLimit(input.max_players, PRIVATE_WORLD_LIMITS.maxPlayers, PRIVATE_WORLD_LIMITS.maxPlayers),
+          allow_non_editor_export: asOptionalBoolean(input.allow_non_editor_export, false) === true,
+          allow_non_editor_fork: asOptionalBoolean(input.allow_non_editor_fork, false) === true,
         })
         .select("*")
         .single(),
@@ -1884,6 +1976,8 @@ export function installPrivateWorldStore(MauworldStore) {
     });
     const nextName = input.name ? sanitizeWorldText(input.name, "world name", 96) : world.name;
     const nextAbout = input.about ? sanitizeWorldText(input.about, "world about", 240) : world.about;
+    const nextAllowNonEditorExport = asOptionalBoolean(input.allow_non_editor_export, world.allow_non_editor_export) === true;
+    const nextAllowNonEditorFork = asOptionalBoolean(input.allow_non_editor_fork, world.allow_non_editor_fork) === true;
     const updated = await must(
       this.serviceClient
         .from("private_worlds")
@@ -1897,6 +1991,8 @@ export function installPrivateWorldStore(MauworldStore) {
           about: nextAbout,
           max_viewers: input.max_viewers ? clampLimit(input.max_viewers, world.max_viewers, 100) : world.max_viewers,
           max_players: input.max_players ? clampLimit(input.max_players, world.max_players, PRIVATE_WORLD_LIMITS.maxPlayers) : world.max_players,
+          allow_non_editor_export: nextAllowNonEditorExport,
+          allow_non_editor_fork: nextAllowNonEditorFork,
           search_text: buildPrivateWorldSearchText({
             name: nextName,
             about: nextAbout,
@@ -2228,10 +2324,25 @@ export function installPrivateWorldStore(MauworldStore) {
 
   MauworldStore.prototype.exportPrivateWorld = async function exportPrivateWorld(profile, input = {}) {
     const { world, creator } = await loadWorldByExactReference(this, input.worldId, input.creatorUsername);
+    const collaborators = await loadWorldCollaborators(this, world.id);
+    const collaboratorRole = collaborators.find((row) => row.profile_id === profile.id)?.role ?? null;
+    const permissions = createPermissionSummary({
+      collaboratorRole,
+      requesterProfileId: profile.id,
+    }, world);
+    const exportFormat = lower(input.format) === "json" ? "json" : "archive";
+    const canUseExport = exportFormat === "json" ? permissions.can_fork === true : permissions.can_export === true;
+    if (!canUseExport) {
+      throw new HttpError(
+        403,
+        exportFormat === "json"
+          ? "This world does not allow non-editors to fork it"
+          : "This world does not allow non-editors to export it",
+      );
+    }
     const scenes = await loadWorldScenes(this, world.id);
     const prefabs = await loadWorldPrefabs(this, world.id);
     const defaultScene = scenes.find((row) => row.id === world.default_scene_id) ?? scenes.find((row) => row.is_default) ?? scenes[0] ?? null;
-    const exportFormat = lower(input.format) === "json" ? "json" : "archive";
     const { assetRows, fileMap } = await loadReferencedPrivateWorldAssets(this, scenes, prefabs);
     const packagePayload = buildPrivateWorldExportPackage({
       format: exportFormat === "archive" ? "mauworld.private-world.v2" : (assetRows.length > 0 ? "mauworld.private-world.v2" : "mauworld.private-world.v1"),

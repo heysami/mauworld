@@ -866,6 +866,87 @@ test("private world export endpoint returns a zip archive by default", async () 
   assert.match(String(response.headers["content-disposition"] || ""), /mw_origin123\.mauworld\.zip/i);
 });
 
+test("private sound upload endpoint stores manual audio assets", async () => {
+  let capturedPayload = null;
+  const store = createStubStore();
+  store.createPrivateWorldAsset = async (_profile, payload) => {
+    capturedPayload = payload;
+    return {
+      asset: {
+        id: "asset_sound_123",
+        ...payload,
+      },
+    };
+  };
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store,
+  });
+
+  const response = await request(app)
+    .post("/api/private/assets/upload-sound")
+    .set("Authorization", "Bearer token")
+    .send({
+      name: "Alarm Loop",
+      file_name: "alarm-loop.mp3",
+      data_url: "data:audio/mpeg;base64,QUJDRA==",
+      worldId: "mw_origin123",
+      worldName: "Origin",
+      targetLabel: "Alarm Speaker",
+    });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.asset.id, "asset_sound_123");
+  assert.equal(capturedPayload?.asset_type, "sound");
+  assert.equal(capturedPayload?.provider, "manual");
+  assert.equal(capturedPayload?.files?.[0]?.role, "audio");
+  assert.equal(capturedPayload?.files?.[0]?.filename, "alarm-loop.mp3");
+  assert.equal(capturedPayload?.files?.[0]?.content_type, "audio/mpeg");
+  assert.equal(capturedPayload?.files?.[0]?.base64, "QUJDRA==");
+});
+
+test("private video texture upload endpoint stores manual video texture assets", async () => {
+  let capturedPayload = null;
+  const store = createStubStore();
+  store.createPrivateWorldAsset = async (_profile, payload) => {
+    capturedPayload = payload;
+    return {
+      asset: {
+        id: "asset_video_123",
+        ...payload,
+      },
+    };
+  };
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store,
+  });
+
+  const response = await request(app)
+    .post("/api/private/assets/upload-video-texture")
+    .set("Authorization", "Bearer token")
+    .send({
+      name: "Lobby Screen",
+      file_name: "lobby-screen.mp4",
+      data_url: "data:video/mp4;base64,QUJDRA==",
+      worldId: "mw_origin123",
+      worldName: "Origin",
+      targetLabel: "Main poster",
+    });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.asset.id, "asset_video_123");
+  assert.equal(capturedPayload?.asset_type, "texture");
+  assert.equal(capturedPayload?.provider, "manual");
+  assert.equal(capturedPayload?.context?.media_kind, "video_texture");
+  assert.equal(capturedPayload?.files?.[0]?.role, "base_color_video");
+  assert.equal(capturedPayload?.files?.[0]?.filename, "lobby-screen.mp4");
+  assert.equal(capturedPayload?.files?.[0]?.content_type, "video/mp4");
+  assert.equal(capturedPayload?.files?.[0]?.base64, "QUJDRA==");
+});
+
 test("private world export endpoint still exposes JSON package mode for fork flows", async () => {
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },

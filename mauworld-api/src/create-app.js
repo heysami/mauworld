@@ -50,6 +50,21 @@ async function requireUser(req, store) {
   return verified;
 }
 
+function stripBase64DataUrl(value = "") {
+  const normalized = String(value ?? "").trim();
+  const match = normalized.match(/^data:([^;,]+)?;base64,(.+)$/i);
+  if (match) {
+    return {
+      contentType: String(match[1] ?? "").trim().toLowerCase() || null,
+      base64: String(match[2] ?? "").trim(),
+    };
+  }
+  return {
+    contentType: null,
+    base64: normalized,
+  };
+}
+
 export function createApp({ config, store, runMoltbookImportJob = null, getMoltbookImportJobStatus = null }) {
   const app = express();
   installCors(app);
@@ -640,6 +655,71 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
       assetId: requireString(req.params.assetId, "assetId"),
     });
     jsonOk(res, payload);
+  }));
+
+  app.post("/api/private/assets/upload-sound", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const parsedData = stripBase64DataUrl(req.body?.base64 ?? req.body?.data_url ?? req.body?.dataUrl ?? "");
+    if (!parsedData.base64) {
+      throw new HttpError(400, "base64 audio data is required");
+    }
+    const fileName = String(req.body?.file_name ?? req.body?.fileName ?? req.body?.name ?? "sound-asset.mp3").trim() || "sound-asset.mp3";
+    const contentType = String(req.body?.content_type ?? req.body?.contentType ?? parsedData.contentType ?? "").trim().toLowerCase()
+      || "audio/mpeg";
+    const payload = await store.createPrivateWorldAsset(profile, {
+      asset_type: "sound",
+      status: "ready",
+      name: req.body?.name ?? fileName,
+      provider: "manual",
+      intended_use: req.body?.intended_use ?? req.body?.intendedUse,
+      world_context_summary: req.body?.world_context_summary ?? req.body?.worldContextSummary,
+      source_world_id: req.body?.worldId,
+      source_world_name: req.body?.worldName,
+      context: {
+        target_label: req.body?.targetLabel ?? null,
+        upload_kind: "manual",
+      },
+      files: [{
+        role: "audio",
+        filename: fileName,
+        content_type: contentType,
+        base64: parsedData.base64,
+      }],
+    });
+    jsonOk(res, payload, 201);
+  }));
+
+  app.post("/api/private/assets/upload-video-texture", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const parsedData = stripBase64DataUrl(req.body?.base64 ?? req.body?.data_url ?? req.body?.dataUrl ?? "");
+    if (!parsedData.base64) {
+      throw new HttpError(400, "base64 video data is required");
+    }
+    const fileName = String(req.body?.file_name ?? req.body?.fileName ?? req.body?.name ?? "video-texture.mp4").trim() || "video-texture.mp4";
+    const contentType = String(req.body?.content_type ?? req.body?.contentType ?? parsedData.contentType ?? "").trim().toLowerCase()
+      || "video/mp4";
+    const payload = await store.createPrivateWorldAsset(profile, {
+      asset_type: "texture",
+      status: "ready",
+      name: req.body?.name ?? fileName,
+      provider: "manual",
+      intended_use: req.body?.intended_use ?? req.body?.intendedUse,
+      world_context_summary: req.body?.world_context_summary ?? req.body?.worldContextSummary,
+      source_world_id: req.body?.worldId,
+      source_world_name: req.body?.worldName,
+      context: {
+        target_label: req.body?.targetLabel ?? null,
+        upload_kind: "manual",
+        media_kind: "video_texture",
+      },
+      files: [{
+        role: "base_color_video",
+        filename: fileName,
+        content_type: contentType,
+        base64: parsedData.base64,
+      }],
+    });
+    jsonOk(res, payload, 201);
   }));
 
   app.post("/api/private/worlds/:worldId/join", asyncRoute(async (req, res) => {

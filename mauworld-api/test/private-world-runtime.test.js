@@ -2607,3 +2607,282 @@ self.position = self.position + direction * (chase_speed * dt)
   assert.ok(finalDistance < initialDistance);
   assert.ok(finalDistance >= 0.45);
 });
+
+test("script.runtime can call helper scripts with inputs and inherited self", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [{
+      id: "sphere",
+      shape: "sphere",
+      position: { x: 0, y: 1, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      rigid_mode: "ghost",
+      physics: { ignore_gravity: true },
+    }],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 8, y: 1, z: 0 },
+      scale: 1,
+      body_mode: "ghost",
+      camera_mode: "third_person",
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    prefab_instances: [],
+    particles: [],
+    rules: [],
+    script_dsl: `
+# function[chase_step]: Chase Step
+@module script.runtime
+@run on_call
+@input target
+@input max_step
+@input stop_distance 0.5
+
+if (!target) return false
+self.position = move_toward(self.position, target.position, max_step, stop_distance)
+return true
+
+# function[chase]: Sphere Chase
+@module script.runtime
+@target sphere
+@set chase_speed 10
+@set stop_distance 0.5
+
+let target = nearest(players(), self.position)
+if (!target) return
+let moved = call("chase_step", target, chase_speed * dt, stop_distance)
+if (!moved) return
+    `,
+  };
+  const simulation = buildSimulation({
+    sceneDoc,
+    participants: [],
+    sceneStarted: true,
+    status: "started",
+  });
+  const sphere = simulation.runtime.dynamicObjects[0];
+  const initialDistance = Math.abs(simulation.runtime.players[0].position.x - sphere.position.x);
+
+  for (let index = 0; index < 8; index += 1) {
+    stepPrivateWorldSimulation(simulation.runtime, {
+      deltaMs: 50,
+      pendingInputs: [],
+    });
+  }
+
+  const finalDistance = Math.abs(simulation.runtime.players[0].position.x - sphere.position.x);
+  assert.ok(sphere.position.x > 0.5);
+  assert.ok(finalDistance < initialDistance);
+  assert.equal(simulation.runtime.recentEvents.some((entry) => entry.type === "script_runtime_error"), false);
+});
+
+test("sound rules and script.runtime builtins update runtime sound playback state", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [],
+    sounds: [
+      {
+        id: "rule_sound",
+        asset_id: "asset_sound_rule",
+        position: { x: 0, y: 2, z: 0 },
+        autoplay: false,
+        loop: true,
+        spatial: false,
+        volume: 0.7,
+        max_distance: 40,
+      },
+      {
+        id: "script_sound",
+        asset_id: "asset_sound_script",
+        position: { x: 2, y: 2, z: 0 },
+        autoplay: false,
+        loop: true,
+        spatial: false,
+        volume: 0.5,
+        max_distance: 40,
+      },
+    ],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 1, z: 0 },
+      scale: 1,
+      body_mode: "ghost",
+      camera_mode: "third_person",
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    prefab_instances: [],
+    particles: [],
+    rules: [
+      {
+        id: "rule_play_alarm",
+        trigger: "scene_start",
+        action: "play_sound",
+        target_id: "rule_sound",
+        payload: {},
+      },
+      {
+        id: "rule_stop_alarm",
+        trigger: "timer",
+        action: "stop_sound",
+        target_id: "rule_sound",
+        delay_ms: 80,
+        payload: {},
+      },
+    ],
+    script_dsl: `
+# function[sound_control]: Sound Control
+@module script.runtime
+@target script_sound
+
+if (time < 0.04) return
+if (time >= 0.12 && self.playing) {
+  stop_sound(self)
+  return
+}
+if (self.playing) return
+play_sound(self)
+    `,
+  };
+  const simulation = buildSimulation({
+    sceneDoc,
+    participants: [],
+    sceneStarted: true,
+    status: "started",
+  });
+  const getSoundByAsset = (assetId) =>
+    Object.values(simulation.runtime.soundState).find((entry) => entry.asset_id === assetId) ?? null;
+  const ruleSound = getSoundByAsset("asset_sound_rule");
+  const scriptSound = getSoundByAsset("asset_sound_script");
+
+  assert.equal(ruleSound?.playing, false);
+  assert.equal(ruleSound?.play_revision, 0);
+  assert.equal(scriptSound?.playing, false);
+  assert.equal(scriptSound?.play_revision, 0);
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 16,
+    pendingInputs: [],
+  });
+  assert.equal(ruleSound?.playing, true);
+  assert.equal(ruleSound?.play_revision, 1);
+  assert.equal(scriptSound?.playing, false);
+  assert.equal(simulation.runtime.recentEvents.some((entry) => entry.type === "play_sound"), true);
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 40,
+    pendingInputs: [],
+  });
+  assert.equal(ruleSound?.playing, true);
+  assert.equal(scriptSound?.playing, true);
+  assert.equal(scriptSound?.play_revision, 1);
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 40,
+    pendingInputs: [],
+  });
+  assert.equal(ruleSound?.playing, false);
+  assert.equal(simulation.runtime.recentEvents.some((entry) => entry.type === "stop_sound"), true);
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 40,
+    pendingInputs: [],
+  });
+  assert.equal(scriptSound?.playing, false);
+});
+
+test("moving prefab instances carry descendant sounds in runtime snapshots", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 1, z: 0 },
+      scale: 1,
+      body_mode: "ghost",
+      camera_mode: "third_person",
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    prefab_instances: [{
+      id: "platform_group",
+      prefab_id: "prefab_platform",
+      position: { x: 2, y: 0, z: 1 },
+    }],
+    particles: [],
+    rules: [
+      {
+        id: "rule_move_platform",
+        trigger: "scene_start",
+        action: "move_platform",
+        target_id: "platform_group",
+        payload: {
+          motion_delta: { x: 4, y: 0, z: 0 },
+          duration_ms: 1000,
+          loop_mode: "once",
+        },
+      },
+    ],
+  };
+  const compiledSceneDoc = compileSceneDoc(sceneDoc, {
+    world_type: "room",
+    width: 40,
+    length: 20,
+    height: 10,
+  }, {
+    prefabs: [
+      {
+        id: "prefab_platform",
+        prefab_doc: {
+          sounds: [
+            {
+              id: "engine_hum",
+              asset_id: "asset_sound_engine",
+              position: { x: 1, y: 2, z: 0 },
+              loop: true,
+              autoplay: true,
+            },
+          ],
+        },
+      },
+    ],
+  });
+  const simulation = buildSimulation({
+    sceneRow: {
+      id: "scene_runtime",
+      name: "Runtime Scene",
+      scene_doc: sceneDoc,
+      compiled_doc: compiledSceneDoc,
+    },
+    sceneDoc,
+    participants: [],
+    sceneStarted: true,
+    status: "started",
+  });
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 500,
+    pendingInputs: [],
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  const sound = snapshot.sounds.find((entry) => entry.id.includes("engine-hum")) ?? snapshot.sounds[0];
+  assert.ok(sound);
+  assert.ok(sound.instance_id);
+  assert.ok(sound.position.x > 3.05);
+  assert.equal(snapshot.prefab_instances[0].id, "prefabinst_platform-group");
+});
