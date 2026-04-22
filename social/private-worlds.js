@@ -8352,12 +8352,12 @@ const privateBrowserShareFeature = createNearbyDisplayShareFeature({
   modeAttribute: "data-private-browser-share-mode",
   titleInput: elements.panelBrowserShareTitle,
   launchButton: elements.panelBrowserLaunch,
-  getMode: () => getActivePrivateBrowserShareModeFromUi() || state.browserShareMode,
+  getMode: () => normalizeBrowserShareKind(state.browserShareMode, "screen"),
   setMode(mode) {
-    state.browserShareMode = mode;
+    state.browserShareMode = normalizeBrowserShareKind(mode, "screen");
   },
   onModeChanged() {
-    state.browserShareMode = getActivePrivateBrowserShareModeFromUi() || state.browserShareMode;
+    state.browserShareMode = normalizeBrowserShareKind(state.browserShareMode, "screen");
     if (state.browserShareMode === "game" && state.browserOverlayOpen) {
       setPrivateBrowserOverlayOpen(false);
     }
@@ -9220,7 +9220,7 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
 }
 
 function updatePrivateBrowserPanel() {
-  state.browserShareMode = getActivePrivateBrowserShareModeFromUi() || normalizeBrowserShareKind(state.browserShareMode, "screen");
+  state.browserShareMode = normalizeBrowserShareKind(state.browserShareMode, "screen");
   for (const [sessionId, localShare] of [...state.localBrowserShares.entries()]) {
     if (isLocalDisplayShareActive(localShare)) {
       continue;
