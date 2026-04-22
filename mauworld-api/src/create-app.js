@@ -50,6 +50,24 @@ async function requireUser(req, store) {
   return verified;
 }
 
+async function requireOptionalUser(req, store) {
+  const token = extractBearerToken(req);
+  if (!token) {
+    return {
+      user: null,
+      profile: null,
+    };
+  }
+  try {
+    return await requireUser(req, store);
+  } catch (_error) {
+    return {
+      user: null,
+      profile: null,
+    };
+  }
+}
+
 function stripBase64DataUrl(value = "") {
   const normalized = String(value ?? "").trim();
   const match = normalized.match(/^data:([^;,]+)?;base64,(.+)$/i);
@@ -271,7 +289,9 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
   }));
 
   app.get("/api/public/private-worlds", asyncRoute(async (req, res) => {
+    const { profile } = await requireOptionalUser(req, store);
     const payload = await store.searchPublicPrivateWorlds({
+      requesterProfile: profile,
       q: req.query.q,
       worldType: req.query.worldType,
       limit: req.query.limit,

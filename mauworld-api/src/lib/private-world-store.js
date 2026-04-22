@@ -1747,6 +1747,7 @@ export function installPrivateWorldStore(MauworldStore) {
     const limit = clampLimit(input.limit, 18, 60);
     const query = lower(input.q);
     const worldType = lower(input.worldType);
+    const requesterProfile = input.requesterProfile ?? null;
     const nowMs = Date.now();
     const activeRows = await must(
       this.serviceClient
@@ -1783,58 +1784,36 @@ export function installPrivateWorldStore(MauworldStore) {
       .filter((entry) => (participantCounts.get(entry.activeInstance.id) ?? 0) > 0)
       .slice(0, limit);
     const creatorProfiles = await loadProfilesByIds(this, matchedRows.map((entry) => entry.world.creator_profile_id));
+    const collaboratorRows = requesterProfile && matchedRows.length > 0
+      ? await must(
+          this.serviceClient
+            .from("private_world_collaborators")
+            .select("world_id, role")
+            .eq("profile_id", requesterProfile.id)
+            .in("world_id", matchedRows.map((entry) => entry.world.id)),
+          "Could not load public private world permissions",
+        )
+      : [];
+    const collaboratorRoleByWorldId = new Map(collaboratorRows.map((row) => [row.world_id, row.role]));
     return {
       worlds: matchedRows.map(({ world: row, activeInstance }) => {
         const creator = creatorProfiles.get(row.creator_profile_id) ?? null;
-        const isImported = Boolean(
-          row.imported_at
-          || row.origin_world_id
-          || row.origin_creator_username
-          || row.origin_world_name,
-        );
-        return {
-          world_id: row.world_id,
-          name: row.name,
-          about: row.about,
-          world_type: row.world_type,
-          template_size: row.template_size,
-          width: row.width,
-          length: row.length,
-          height: row.height,
-          updated_at: row.updated_at,
-          creator: creator
-            ? {
-                username: creator.username,
-                display_name: creator.display_name,
-              }
-            : {
-                username: "unknown",
-                display_name: "Unknown",
-              },
-          lineage: {
-            is_imported: isImported,
-            origin_world_id: isImported ? (row.origin_world_id ?? row.world_id) : null,
-            origin_creator_username: isImported ? row.origin_creator_username : null,
-            origin_world_name: isImported ? row.origin_world_name : null,
-            imported_at: isImported ? (row.imported_at ?? null) : null,
-          },
-          active_instance: {
-            status: activeInstance.status,
-            viewer_count: participantCounts.get(activeInstance.id) ?? 0,
-            active_scene_id: activeInstance.active_scene_id,
-            anchor_world_snapshot_id: activeInstance.anchor_world_snapshot_id,
-            anchor_position: {
-              x: activeInstance.anchor_position_x,
-              y: activeInstance.anchor_position_y,
-              z: activeInstance.anchor_position_z,
-            },
-            miniature: {
-              width: activeInstance.miniature_width,
-              length: activeInstance.miniature_length,
-              height: activeInstance.miniature_height,
-            },
-          },
-        };
+        const collaboratorRole = requesterProfile
+          ? (row.creator_profile_id === requesterProfile.id
+              ? "creator"
+              : collaboratorRoleByWorldId.get(row.id) ?? null)
+          : null;
+        const permissions = createPermissionSummary({
+          collaboratorRole,
+          requesterProfileId: requesterProfile?.id ?? "",
+        }, row);
+        return serializeWorldSummary({
+          world: row,
+          creator,
+          permissions,
+          activeInstance,
+          viewerCount: participantCounts.get(activeInstance.id) ?? 0,
+        });
       }),
     };
   };

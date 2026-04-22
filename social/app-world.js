@@ -10706,6 +10706,7 @@ function renderSelected(result) {
   if (isPrivateWorldSelection(result)) {
     const world = normalizePrivateWorldResult(result);
     const activeInstance = world.active_instance ?? {};
+    const canFork = world.permissions?.can_fork === true;
     const occupancy = activeInstance.viewer_count != null
       ? `${Number(activeInstance.viewer_count) || 0} inside now`
       : "No live occupancy";
@@ -10737,7 +10738,9 @@ function renderSelected(result) {
       <div class="world-selected__actions">
         <button class="world-selected__button" type="button" data-private-world-action="view" data-private-world-id="${htmlEscape(world.world_id)}" data-private-world-creator="${htmlEscape(world.creator?.username || world.creator_username || "")}">View</button>
         <button class="world-selected__button world-selected__button--primary" type="button" data-private-world-action="enter" data-private-world-id="${htmlEscape(world.world_id)}" data-private-world-creator="${htmlEscape(world.creator?.username || world.creator_username || "")}">Enter</button>
-        <button class="world-selected__button" type="button" data-private-world-action="fork" data-private-world-id="${htmlEscape(world.world_id)}" data-private-world-creator="${htmlEscape(world.creator?.username || world.creator_username || "")}">Fork</button>
+        ${canFork
+          ? `<button class="world-selected__button" type="button" data-private-world-action="fork" data-private-world-id="${htmlEscape(world.world_id)}" data-private-world-creator="${htmlEscape(world.creator?.username || world.creator_username || "")}">Fork</button>`
+          : ""}
       </div>
     `;
     return;
