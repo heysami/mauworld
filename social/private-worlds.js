@@ -17527,7 +17527,7 @@ function isPrivateListedLiveGameSession(session = {}) {
 }
 
 function getNearbyPrivateOriginGameSession(excludeHostSessionId = getPrivateViewerSessionId()) {
-  const viewerPosition = getPrivateNavigationPosition();
+  const viewerPosition = getPrivatePresencePosition();
   let bestSession = null;
   let bestDistanceSquared = Infinity;
   for (const session of state.gameSessions.values()) {
