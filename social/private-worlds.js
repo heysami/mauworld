@@ -9051,14 +9051,16 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
   const joinStateMatches = String(state.pendingShareJoin?.anchorSessionId ?? "").trim() === String(joinTarget?.session_id ?? "").trim();
   const joinApproved = joinMode && joinStateMatches && state.pendingShareJoin?.approved === true;
   const previewUrl = String(localGameSession?.latest_preview?.data_url ?? "").trim();
+  const showGameStage = Boolean(localGameSession);
   elements.panelBrowserPanel?.classList.add("is-game-mode");
   elements.panelBrowserPanel?.classList.remove("is-docked-compact");
-  elements.panelBrowserStage?.classList.add("is-active");
-  elements.panelBrowserStage?.classList.remove("is-collapsed", "is-permission-only", "needs-video-start");
+  elements.panelBrowserStage?.classList.toggle("is-active", showGameStage);
+  elements.panelBrowserStage?.classList.toggle("is-collapsed", !showGameStage);
+  elements.panelBrowserStage?.classList.remove("is-permission-only", "needs-video-start");
   elements.panelBrowserShare?.classList.toggle("is-join-mode", joinMode);
   if (elements.panelBrowserStage) {
     elements.panelBrowserStage.tabIndex = -1;
-    elements.panelBrowserStage.setAttribute("aria-hidden", "false");
+    elements.panelBrowserStage.setAttribute("aria-hidden", showGameStage ? "false" : "true");
   }
   if (elements.panelBrowserShareTitle) {
     elements.panelBrowserShareTitle.disabled = true;
