@@ -1,18 +1,13 @@
 .mauworld-overview-body {
   --mw-bg: #eef4ff;
-  --mw-bg-deep: #dbe7ff;
   --mw-paper: rgba(255, 255, 255, 0.9);
-  --mw-paper-strong: rgba(255, 255, 255, 0.97);
   --mw-shell: rgba(235, 242, 255, 0.8);
   --mw-line: rgba(58, 84, 162, 0.14);
-  --mw-line-strong: rgba(38, 67, 152, 0.22);
   --mw-text: #20316d;
   --mw-muted: #6577b4;
   --mw-accent: #29d4f7;
-  --mw-accent-strong: #0fb6dd;
   --mw-warm: #ffb36a;
   --mw-shadow-soft: 0 22px 60px rgba(92, 112, 191, 0.12);
-  --mw-shadow-deep: 0 34px 100px rgba(77, 98, 184, 0.18);
   font-family: "Manrope", system-ui, sans-serif;
   color: var(--mw-text);
   background:
@@ -145,8 +140,6 @@
 }
 
 .mauworld-overview {
-  display: grid;
-  gap: 26px;
   padding: 28px 0 88px;
 }
 
@@ -167,40 +160,16 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
 }
 
-.mauworld-card-label,
-.mauworld-auth-card__eyebrow {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  min-height: 30px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(74, 101, 183, 0.12);
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--mw-muted);
-  font-size: 0.74rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .mauworld-hero {
-  display: grid;
-  gap: 0;
-}
-
-.mauworld-hero__grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.12fr) minmax(340px, 0.88fr);
-  gap: 20px;
-  align-items: stretch;
+  min-height: calc(100dvh - 184px);
 }
 
 .mauworld-hero__copy-core {
   display: grid;
-  gap: 20px;
-  min-height: 100%;
-  padding: 34px;
+  align-content: center;
+  gap: 22px;
+  min-height: clamp(540px, 74dvh, 760px);
+  padding: clamp(28px, 5vw, 56px);
 }
 
 .mauworld-overview h1,
@@ -230,9 +199,7 @@
 }
 
 .mauworld-overview p,
-.mauworld-overview li,
-.mauworld-overview dt,
-.mauworld-overview dd {
+.mauworld-overview li {
   margin: 0;
   color: var(--mw-text);
 }
@@ -246,64 +213,53 @@
   text-transform: uppercase;
 }
 
-.mauworld-hero__lede,
-.mauworld-section__head p,
-.mauworld-cta__copy p,
-.mauworld-build__copy-core p {
+.mauworld-hero__lede {
   max-width: 42rem;
   font-size: 1.05rem;
   line-height: 1.76;
 }
 
-.mauworld-hero__actions {
-  align-items: center;
+.mauworld-hero__points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  max-width: 50rem;
+  padding: 0;
+  list-style: none;
 }
 
-.mauworld-use-card {
-  position: relative;
-  overflow: hidden;
-  display: grid;
-  gap: 12px;
-  padding: 22px;
-  border-radius: 24px;
-  border: 1px solid var(--mw-line);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(245, 248, 255, 0.92)),
-    rgba(255, 255, 255, 0.88);
+.mauworld-hero__points li {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(74, 101, 183, 0.12);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--mw-text);
+  font-size: 0.95rem;
+  font-weight: 700;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
 }
 
-.mauworld-use-card p {
-  color: var(--mw-muted);
-  line-height: 1.68;
-}
-
-.mauworld-status-core {
-  min-height: 100%;
-  padding: 22px;
-}
-
-.mauworld-auth-card {
+.mauworld-auth-inline {
   display: grid;
-  gap: 18px;
-  padding: 22px;
-  border-radius: 24px;
-  border: 1px solid rgba(69, 97, 179, 0.16);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 250, 255, 0.98)),
-    rgba(255, 255, 255, 0.9);
-  box-shadow: 0 22px 56px rgba(90, 107, 183, 0.12);
-}
-
-.mauworld-auth-card__head {
-  display: flex;
-  flex-wrap: wrap;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
+  max-width: 52rem;
+  padding: 15px 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(69, 97, 179, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 250, 255, 0.98)),
+    rgba(255, 255, 255, 0.88);
+  box-shadow: 0 18px 42px rgba(90, 107, 183, 0.08);
 }
 
-.mauworld-auth-card__badge {
+.mauworld-auth-inline__badge {
+  display: inline-flex;
+  align-items: center;
   min-height: 34px;
   padding: 0 14px;
   border-radius: 999px;
@@ -312,121 +268,55 @@
   color: var(--mw-text);
   font-size: 0.84rem;
   font-weight: 800;
+  white-space: nowrap;
 }
 
-.mauworld-auth-card[data-auth-state="signed-in"] .mauworld-auth-card__badge {
+.mauworld-auth-inline__text {
+  color: var(--mw-muted);
+  line-height: 1.6;
+}
+
+.mauworld-auth-inline__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  color: var(--mw-text);
+  font-size: 0.95rem;
+  font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    transform 300ms ease,
+    color 300ms ease,
+    background-color 300ms ease;
+}
+
+.mauworld-auth-inline__link:hover,
+.mauworld-auth-inline__link:focus-visible {
+  color: #0f778f;
+  background: rgba(41, 212, 247, 0.08);
+  transform: translateY(-1px);
+}
+
+.mauworld-auth-inline[data-auth-state="signed-in"] .mauworld-auth-inline__badge {
   background: rgba(41, 212, 247, 0.14);
   color: #0e6780;
 }
 
-.mauworld-auth-card[data-auth-state="signed-out"] .mauworld-auth-card__badge {
+.mauworld-auth-inline[data-auth-state="signed-out"] .mauworld-auth-inline__badge {
   background: rgba(255, 179, 106, 0.14);
   color: #9c5a16;
 }
 
-.mauworld-auth-card[data-auth-state="error"] .mauworld-auth-card__badge {
+.mauworld-auth-inline[data-auth-state="error"] .mauworld-auth-inline__badge {
   background: rgba(255, 125, 88, 0.14);
   color: #a34b28;
 }
 
-.mauworld-auth-card__copy,
-.mauworld-auth-card__meta {
-  color: var(--mw-muted);
-  line-height: 1.7;
-}
-
-.mauworld-auth-card h2 {
-  font-size: clamp(1.7rem, 3vw, 2.5rem);
-  line-height: 0.98;
-}
-
-.mauworld-auth-list {
-  display: grid;
-  gap: 10px;
-}
-
-.mauworld-auth-list div {
-  display: flex;
+.mauworld-hero__actions {
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  border: 1px solid rgba(73, 101, 183, 0.12);
-  background: rgba(245, 249, 255, 0.8);
-}
-
-.mauworld-auth-list dt {
-  color: var(--mw-muted);
-  font-size: 0.92rem;
-  font-weight: 700;
-}
-
-.mauworld-auth-list dd {
-  font-weight: 800;
-}
-
-.mauworld-auth-list dd[data-state="ready"] {
-  color: #0f778f;
-}
-
-.mauworld-auth-list dd[data-state="locked"] {
-  color: #9c5a16;
-}
-
-.mauworld-auth-list dd[data-state="checking"] {
-  color: var(--mw-muted);
-}
-
-.mauworld-section {
-  display: grid;
-  gap: 18px;
-}
-
-.mauworld-section__head {
-  display: grid;
-  gap: 12px;
-  max-width: 56rem;
-}
-
-.mauworld-uses__grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.mauworld-cta {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) auto;
-  gap: 24px;
-  align-items: center;
-  padding: 12px;
-  border-radius: 34px;
-  border: 1px solid rgba(255, 255, 255, 0.76);
-  background: var(--mw-shell);
-  box-shadow: var(--mw-shadow-soft);
-}
-
-.mauworld-cta__copy,
-.mauworld-cta__actions {
-  padding: 22px 24px;
-}
-
-.mauworld-cta__copy {
-  display: grid;
-  gap: 12px;
-  border-radius: 24px;
-  border: 1px solid var(--mw-line);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 249, 255, 0.98)),
-    var(--mw-paper-strong);
-}
-
-.mauworld-cta__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 12px;
 }
 
 .mauworld-overview-body .site-footer {
@@ -440,14 +330,13 @@
 }
 
 @media (max-width: 1180px) {
-  .mauworld-hero__grid,
-  .mauworld-cta,
-  .mauworld-uses__grid {
+  .mauworld-auth-inline {
     grid-template-columns: 1fr;
+    align-items: start;
   }
 
-  .mauworld-cta__actions {
-    justify-content: flex-start;
+  .mauworld-auth-inline__link {
+    padding-left: 0;
   }
 }
 
@@ -469,17 +358,13 @@
     justify-content: flex-start;
   }
 
-  .mauworld-hero__copy-core,
-  .mauworld-status-core,
-  .mauworld-cta__copy,
-  .mauworld-cta__actions {
+  .mauworld-hero__copy-core {
     padding: 22px;
   }
 }
 
 @media (max-width: 680px) {
   .mauworld-overview-body .site-header__inner,
-  .mauworld-cta,
   .mauworld-shell {
     border-radius: 26px;
   }
@@ -493,20 +378,17 @@
     font-size: clamp(1.9rem, 8vw, 2.7rem);
   }
 
-  .mauworld-hero__actions,
-  .mauworld-cta__actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .mauworld-hero__actions .button,
-  .mauworld-cta__actions .button {
+  .mauworld-hero__actions .button {
     width: 100%;
     justify-content: space-between;
   }
 
-  .mauworld-auth-list div {
-    align-items: start;
-    flex-direction: column;
+  .mauworld-auth-inline__link {
+    padding-left: 0;
+  }
+
+  .mauworld-hero__points li {
+    width: 100%;
+    justify-content: center;
   }
 }

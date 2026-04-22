@@ -1,21 +1,14 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
 const elements = {
-  authCard: document.querySelector("[data-mauworld-auth-card]"),
+  authInline: document.querySelector("[data-mauworld-auth-inline]"),
   authBadge: document.querySelector("[data-mauworld-auth-badge]"),
-  authTitle: document.querySelector("[data-mauworld-auth-title]"),
-  authCopy: document.querySelector("[data-mauworld-auth-copy]"),
-  authPublic: document.querySelector("[data-mauworld-auth-public]"),
-  authShare: document.querySelector("[data-mauworld-auth-share]"),
-  authVoice: document.querySelector("[data-mauworld-auth-voice]"),
-  authPrivate: document.querySelector("[data-mauworld-auth-private]"),
-  authMeta: document.querySelector("[data-mauworld-auth-meta]"),
-  secondaryLabel: document.querySelector("[data-mauworld-secondary-label]"),
-  secondaryLabelFooter: document.querySelector("[data-mauworld-secondary-label-footer]"),
+  authText: document.querySelector("[data-mauworld-auth-text]"),
+  authLink: document.querySelector("[data-mauworld-auth-link]"),
+  authLinkLabel: document.querySelector("[data-mauworld-auth-link-label]"),
 };
 
 let lastAuthRequestId = 0;
-const revealSections = [...document.querySelectorAll("[data-mauworld-reveal]")];
 
 function mauworldApiUrl(path) {
   const resolver = window.MauworldSocial?.mauworldApiUrl;
@@ -39,63 +32,22 @@ async function fetchMauworldJson(path, options = {}) {
   return payload;
 }
 
-function setCapability(node, label, state) {
-  if (!node) {
-    return;
-  }
-  node.textContent = label;
-  node.dataset.state = state;
-}
-
-function setPrivateWorldCta(label) {
-  if (elements.secondaryLabel) {
-    elements.secondaryLabel.textContent = label;
-  }
-  if (elements.secondaryLabelFooter) {
-    elements.secondaryLabelFooter.textContent = label;
-  }
-}
-
-function initRevealMotion() {
-  if (!revealSections.length) {
-    return;
-  }
-  for (const section of revealSections) {
-    section.classList.add("is-visible");
-  }
-}
-
-function renderAuthCard({
-  state,
-  badge,
-  title,
-  copy,
-  meta,
-  shareStatus,
-  voiceStatus,
-  privateStatus,
-  privateLabel,
-}) {
-  if (elements.authCard) {
-    elements.authCard.dataset.authState = state;
+function renderAuthState({ state, badge, text, linkLabel }) {
+  if (elements.authInline) {
+    elements.authInline.dataset.authState = state;
   }
   if (elements.authBadge) {
     elements.authBadge.textContent = badge;
   }
-  if (elements.authTitle) {
-    elements.authTitle.textContent = title;
+  if (elements.authText) {
+    elements.authText.textContent = text;
   }
-  if (elements.authCopy) {
-    elements.authCopy.textContent = copy;
+  if (elements.authLinkLabel) {
+    elements.authLinkLabel.textContent = linkLabel;
   }
-  if (elements.authMeta) {
-    elements.authMeta.textContent = meta;
+  if (elements.authLink) {
+    elements.authLink.setAttribute("aria-label", linkLabel);
   }
-  setCapability(elements.authPublic, "Ready now", "ready");
-  setCapability(elements.authShare, shareStatus.label, shareStatus.state);
-  setCapability(elements.authVoice, voiceStatus.label, voiceStatus.state);
-  setCapability(elements.authPrivate, privateStatus.label, privateStatus.state);
-  setPrivateWorldCta(privateLabel);
 }
 
 async function loadProfile(accessToken) {
@@ -111,16 +63,11 @@ async function syncSessionState(session = null) {
   lastAuthRequestId = requestId;
 
   if (!session?.access_token) {
-    renderAuthCard({
+    renderAuthState({
       state: "signed-out",
       badge: "Guest mode",
-      title: "You are not logged in yet",
-      copy: "Public World still works in guest mode. Sign in when you want nearby sharing, persistent voice, and your own private worlds.",
-      meta: "Guest chat, reactions, live browsing, and search are still available from Public World.",
-      shareStatus: { label: "Sign in first", state: "locked" },
-      voiceStatus: { label: "Sign in first", state: "locked" },
-      privateStatus: { label: "Sign in first", state: "locked" },
-      privateLabel: "Sign In for Private Worlds",
+      text: "You are not signed in. Public World works now. Sign in when you want private worlds and nearby sharing.",
+      linkLabel: "Sign in for Private Worlds",
     });
     return;
   }
@@ -137,32 +84,22 @@ async function syncSessionState(session = null) {
   }
 
   const username = String(profile?.username ?? "").trim();
-  renderAuthCard({
+  renderAuthState({
     state: "signed-in",
     badge: "Signed in",
-    title: username ? `Signed in as @${username}` : "Your Mauworld session is active",
-    copy: "Your account is ready for Public World, nearby sharing, persistent voice, and private worlds.",
-    meta: username
-      ? `Signed-in identity detected through the same auth flow used by Mauworld itself.`
-      : "Signed in now. If you still need a username, you can finish that inside Private Worlds.",
-    shareStatus: { label: "Ready now", state: "ready" },
-    voiceStatus: { label: "Ready now", state: "ready" },
-    privateStatus: { label: "Ready now", state: "ready" },
-    privateLabel: "Open Private Worlds",
+    text: username
+      ? `Signed in as @${username}. Private Worlds and nearby sharing are ready.`
+      : "Signed in. Private Worlds and nearby sharing are ready.",
+    linkLabel: "Open Private Worlds",
   });
 }
 
-async function initAuthCard() {
-  renderAuthCard({
+async function initAuthState() {
+  renderAuthState({
     state: "checking",
     badge: "Checking account",
-    title: "Looking for your Mauworld session",
-    copy: "Public World still works even if you stay a guest.",
-    meta: "We are checking the same auth setup used by the public and private world pages.",
-    shareStatus: { label: "Checking", state: "checking" },
-    voiceStatus: { label: "Checking", state: "checking" },
-    privateStatus: { label: "Checking", state: "checking" },
-    privateLabel: "Open Private Worlds",
+    text: "Looking for your Mauworld session. Public World works either way.",
+    linkLabel: "Private Worlds",
   });
 
   try {
@@ -175,19 +112,13 @@ async function initAuthCard() {
     });
   } catch (error) {
     console.error("Could not initialize Mauworld auth on the overview page.", error);
-    renderAuthCard({
+    renderAuthState({
       state: "error",
-      badge: "Account check unavailable",
-      title: "Could not confirm your login status right now",
-      copy: "Public World is still available. If the auth service comes back, the world pages will keep working from there.",
-      meta: "This usually means the Mauworld API or auth provider was unreachable for a moment.",
-      shareStatus: { label: "Try again later", state: "locked" },
-      voiceStatus: { label: "Try again later", state: "locked" },
-      privateStatus: { label: "Try again later", state: "locked" },
-      privateLabel: "Open Private Worlds",
+      badge: "Status unavailable",
+      text: "Could not confirm your login right now. Public World is still available.",
+      linkLabel: "Private Worlds",
     });
   }
 }
 
-initRevealMotion();
-void initAuthCard();
+void initAuthState();
