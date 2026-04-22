@@ -11503,10 +11503,10 @@ function updateGameSharePanel({ signedIn, canShareNearby }) {
       : pendingShareJoinRequest
         ? "Waiting for the anchor host to approve this nearby game request."
         : joinMode && selectedGame
-          ? "Share Game to add this game inside the nearby group once the host approves."
+          ? "Share Game to add this packaged game inside the nearby group once the host approves."
       : selectedGame
         ? `${getSavedGameTitle(selectedGame)} is ready to share nearby.`
-        : "Open the game library to choose or generate a simple HTML game.";
+        : "Open the game library to choose, generate, import, or package a nearby game.";
   }
 }
 

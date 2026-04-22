@@ -81,6 +81,18 @@ function createStubStore() {
         },
       };
     },
+    async brainstormWorldGame(_profile, payload) {
+      return {
+        message: {
+          role: "assistant",
+          text: `Brainstorming ${payload.prompt || payload.objective || "game"}`,
+        },
+        generation: {
+          provider: "openai",
+          model: payload.model || "gpt-5.4-mini",
+        },
+      };
+    },
     async getWorldGame(_profile, payload) {
       return {
         game: {
@@ -98,6 +110,19 @@ function createStubStore() {
             preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
           },
           source_html: "<!DOCTYPE html><html></html>",
+          package: {
+            format: "mauworld.world-game.package.v1",
+            version: 1,
+            assets: {
+              board_icon: {
+                id: "board_icon",
+                kind: "image",
+                mime_type: "image/svg+xml",
+                file_name: "board-icon.svg",
+                data_url: "data:image/svg+xml;base64,PHN2Zy8+",
+              },
+            },
+          },
         },
       };
     },
@@ -111,6 +136,73 @@ function createStubStore() {
           prompt: "make chess",
           manifest: {
             title: payload.title || "Chess copy",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+          },
+          source_html: "<!DOCTYPE html><html></html>",
+        },
+      };
+    },
+    async updateWorldGame(_profile, payload) {
+      return {
+        game: {
+          id: payload.gameId,
+          owner_profile_id: "profile_123",
+          title: payload.title || "Updated Chess",
+          prompt: payload.prompt || "make chess",
+          manifest: {
+            title: payload.title || "Updated Chess",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+            package: payload.package ?? { format: "mauworld.world-game.package.v1", version: 1, assets: {} },
+          },
+          source_html: payload.source_html || "<!DOCTYPE html><html></html>",
+          package: payload.package ?? { format: "mauworld.world-game.package.v1", version: 1, assets: {} },
+        },
+      };
+    },
+    async exportWorldGame(_profile, payload) {
+      return {
+        filename: `${payload.gameId}.mauworld-game.json`,
+        package: {
+          format: "mauworld.world-game.v1",
+          title: "Chess",
+          prompt: "make chess",
+          source_html: "<!DOCTYPE html><html></html>",
+          manifest: {
+            title: "Chess",
+            multiplayer_mode: "turn-based",
+            min_players: 2,
+            max_players: 2,
+            allow_viewers: true,
+            aspect_ratio: 1.6,
+            preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+          },
+          package: {
+            format: "mauworld.world-game.package.v1",
+            version: 1,
+            assets: {},
+          },
+        },
+      };
+    },
+    async importWorldGame() {
+      return {
+        game: {
+          id: "game_imported",
+          owner_profile_id: "profile_123",
+          title: "Imported Chess",
+          prompt: "imported",
+          manifest: {
+            title: "Imported Chess",
             multiplayer_mode: "turn-based",
             min_players: 2,
             max_players: 2,
@@ -394,7 +486,7 @@ test("bootstrap link endpoint returns a one-time code", async () => {
   assert.equal(response.body.code, "mau_bootstrap_123");
 });
 
-test("saved games endpoints list, generate, get, and copy Mauworld games", async () => {
+test("saved games endpoints list, brainstorm, generate, get, update, export, import, and copy Mauworld games", async () => {
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
     store: createStubStore(),
@@ -407,13 +499,26 @@ test("saved games endpoints list, generate, get, and copy Mauworld games", async
   assert.equal(Array.isArray(listResponse.body.games), true);
   assert.equal(listResponse.body.games[0].id, "game_123");
 
+  const brainstormResponse = await request(app)
+    .post("/api/games/ai/brainstorm")
+    .set("Authorization", "Bearer user-token")
+    .send({
+      prompt: "Plan a chess game with separate packaged icons",
+      apiKey: "sk-local-only",
+      model: "gpt-5.4-mini",
+      messages: [{ role: "user", text: "Let's make chess." }],
+    });
+  assert.equal(brainstormResponse.status, 200);
+  assert.match(brainstormResponse.body.message.text, /Brainstorming/i);
+
   const generateResponse = await request(app)
     .post("/api/games/generate")
     .set("Authorization", "Bearer user-token")
     .send({
-      prompt: "Generate a simple chess game",
+      objective: "Generate a simple chess game",
       apiKey: "sk-local-only",
       model: "gpt-5.4-mini",
+      messages: [{ role: "assistant", text: "Ready to generate." }],
     });
   assert.equal(generateResponse.status, 201);
   assert.equal(generateResponse.body.game.id, "game_generated");
@@ -424,6 +529,63 @@ test("saved games endpoints list, generate, get, and copy Mauworld games", async
     .set("Authorization", "Bearer user-token");
   assert.equal(getResponse.status, 200);
   assert.equal(getResponse.body.game.id, "game_123");
+  assert.equal(getResponse.body.game.package.assets.board_icon.id, "board_icon");
+
+  const updateResponse = await request(app)
+    .patch("/api/games/game_123")
+    .set("Authorization", "Bearer user-token")
+    .send({
+      title: "Chess with Assets",
+      package: {
+        format: "mauworld.world-game.package.v1",
+        version: 1,
+        assets: {
+          board_icon: {
+            id: "board_icon",
+            kind: "image",
+            mime_type: "image/svg+xml",
+            file_name: "board-icon.svg",
+            data_url: "data:image/svg+xml;base64,PHN2Zy8+",
+          },
+        },
+      },
+    });
+  assert.equal(updateResponse.status, 200);
+  assert.equal(updateResponse.body.game.title, "Chess with Assets");
+
+  const exportResponse = await request(app)
+    .get("/api/games/game_123/export")
+    .set("Authorization", "Bearer user-token");
+  assert.equal(exportResponse.status, 200);
+  assert.equal(exportResponse.body.package.format, "mauworld.world-game.v1");
+
+  const importResponse = await request(app)
+    .post("/api/games/import")
+    .set("Authorization", "Bearer user-token")
+    .send({
+      package: {
+        format: "mauworld.world-game.v1",
+        title: "Imported Chess",
+        prompt: "imported",
+        source_html: "<!DOCTYPE html><html></html>",
+        manifest: {
+          title: "Imported Chess",
+          multiplayer_mode: "turn-based",
+          min_players: 2,
+          max_players: 2,
+          allow_viewers: true,
+          aspect_ratio: 1.6,
+          preview: { mode: "sdk", fps: 4, width: 480, height: 270 },
+        },
+        package: {
+          format: "mauworld.world-game.package.v1",
+          version: 1,
+          assets: {},
+        },
+      },
+    });
+  assert.equal(importResponse.status, 201);
+  assert.equal(importResponse.body.game.id, "game_imported");
 
   const copyResponse = await request(app)
     .post("/api/games/game_123/copy")

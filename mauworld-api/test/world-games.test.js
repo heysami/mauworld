@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildWorldGameExportPackage,
+  normalizeWorldGamePackage,
   normalizeWorldGameManifest,
   sanitizeWorldGameHtml,
   validateWorldGameRecord,
@@ -113,4 +115,91 @@ test("validateWorldGameRecord keeps provider metadata without requiring stored k
   assert.equal(record.ai_provider, "openai");
   assert.equal(record.ai_model, "gpt-5.4-mini");
   assert.equal(record.manifest.title, "Mini Chess");
+});
+
+test("normalizeWorldGamePackage keeps data-url assets editable outside the html", () => {
+  const gamePackage = normalizeWorldGamePackage({
+    assets: {
+      board_icon: {
+        mime_type: "image/svg+xml",
+        file_name: "board-icon.svg",
+        text: "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+      },
+    },
+  });
+
+  assert.equal(gamePackage.format, "mauworld.world-game.package.v1");
+  assert.equal(gamePackage.assets.board_icon.kind, "image");
+  assert.match(gamePackage.assets.board_icon.data_url, /^data:image\/svg\+xml/);
+});
+
+test("validateWorldGameRecord preserves package assets alongside the html template", () => {
+  const record = validateWorldGameRecord({
+    title: "Packaged Chess",
+    prompt: "make chess",
+    source_html: `
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <img src="{{assets.board_icon}}" alt="board" />
+          <script>
+            window.MauworldGame.register({
+              manifest: { title: "Packaged Chess" },
+              mount() { return {}; },
+            });
+          </script>
+        </body>
+      </html>
+    `,
+    manifest: {
+      title: "Packaged Chess",
+      multiplayer_mode: "turn-based",
+      min_players: 2,
+      max_players: 2,
+    },
+    package: {
+      assets: {
+        board_icon: {
+          mime_type: "image/svg+xml",
+          file_name: "board-icon.svg",
+          text: "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        },
+      },
+    },
+  });
+
+  assert.equal(record.package.assets.board_icon.id, "board_icon");
+  assert.equal(record.manifest.package.assets.board_icon.id, "board_icon");
+});
+
+test("buildWorldGameExportPackage emits an importable package document", () => {
+  const exported = buildWorldGameExportPackage({
+    title: "Chess",
+    prompt: "make chess",
+    source_html: `
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <script>
+            window.MauworldGame.register({
+              manifest: { title: "Chess" },
+              mount() { return {}; },
+            });
+          </script>
+        </body>
+      </html>
+    `,
+    manifest: {
+      title: "Chess",
+      multiplayer_mode: "turn-based",
+      min_players: 2,
+      max_players: 2,
+    },
+    package: {
+      assets: {},
+    },
+  });
+
+  assert.equal(exported.format, "mauworld.world-game.v1");
+  assert.equal(exported.package.format, "mauworld.world-game.package.v1");
 });

@@ -385,13 +385,28 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     jsonOk(res, payload);
   }));
 
-  app.post("/api/games/generate", asyncRoute(async (req, res) => {
+  app.post("/api/games/ai/brainstorm", asyncRoute(async (req, res) => {
     const { profile } = await requireUser(req, store);
-    const payload = await store.generateWorldGame(profile, {
-      prompt: requireString(req.body?.prompt ?? req.body?.objective, "prompt"),
+    const payload = await store.brainstormWorldGame(profile, {
+      prompt: req.body?.prompt,
+      objective: req.body?.objective,
       provider: req.body?.provider,
       model: req.body?.model,
       apiKey: req.body?.apiKey,
+      messages: req.body?.messages,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/games/generate", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.generateWorldGame(profile, {
+      prompt: req.body?.prompt,
+      objective: req.body?.objective,
+      provider: req.body?.provider,
+      model: req.body?.model,
+      apiKey: req.body?.apiKey,
+      messages: req.body?.messages,
     });
     jsonOk(res, payload, 201);
   }));
@@ -404,11 +419,44 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     jsonOk(res, payload);
   }));
 
+  app.patch("/api/games/:gameId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.updateWorldGame(profile, {
+      gameId: requireString(req.params.gameId, "gameId"),
+      game: req.body?.game,
+      title: req.body?.title,
+      prompt: req.body?.prompt,
+      source_html: req.body?.source_html,
+      sourceHtml: req.body?.sourceHtml,
+      html: req.body?.html,
+      manifest: req.body?.manifest,
+      package: req.body?.package,
+    });
+    jsonOk(res, payload);
+  }));
+
   app.post("/api/games/:gameId/copy", asyncRoute(async (req, res) => {
     const { profile } = await requireUser(req, store);
     const payload = await store.copyWorldGame(profile, {
       gameId: requireString(req.params.gameId, "gameId"),
       title: req.body?.title,
+    });
+    jsonOk(res, payload, 201);
+  }));
+
+  app.get("/api/games/:gameId/export", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.exportWorldGame(profile, {
+      gameId: requireString(req.params.gameId, "gameId"),
+    });
+    res.setHeader("Content-Disposition", `attachment; filename="${payload.filename || "mauworld-game.json"}"`);
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/games/import", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.importWorldGame(profile, {
+      package: req.body?.package ?? req.body,
     });
     jsonOk(res, payload, 201);
   }));

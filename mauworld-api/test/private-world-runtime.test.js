@@ -181,6 +181,57 @@ test("runtime honors remapped movement bindings from the control script", () => 
   assert.ok(fallbackSimulation.runtime.players[0].position.z >= fallbackBefore - 0.0001);
 });
 
+test("scene_start set_screen_state rules update screen runtime snapshots", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [],
+    screens: [{
+      id: "score_screen",
+      html: "<div><strong>{{state.score}}</strong> <img src=\"{{assets.icon}}\" alt=\"icon\" /></div>",
+      state: { score: 0 },
+      assets: { icon: "data:image/png;base64,abc123" },
+      position: { x: 0, y: 2, z: 0 },
+      scale: { x: 4, y: 2.25, z: 0.1 },
+    }],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 1, z: 0 },
+      scale: 1,
+      body_mode: "rigid",
+      camera_mode: "third_person",
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    particles: [],
+    rules: [],
+    script_dsl: `
+scene_start -> set_screen_state to score_screen path score value 12
+    `,
+  };
+  const compiledSceneDoc = compileSceneDoc(sceneDoc);
+  const simulation = buildSimulation({
+    sceneRow: {
+      id: "scene_runtime",
+      name: "Runtime Scene",
+      scene_doc: sceneDoc,
+      compiled_doc: compiledSceneDoc,
+    },
+    sceneDoc,
+  });
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 16,
+    pendingInputs: [],
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.equal(snapshot.screens[0].state.score, 12);
+  assert.equal(snapshot.screens[0].assets.icon, "data:image/png;base64,abc123");
+});
+
 test("runtime buffers an initial jump press until a grounded occupied player settles", () => {
   const simulation = buildSimulation({
     sceneDoc: {

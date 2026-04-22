@@ -224,3 +224,27 @@ test("physics world modules still only target scene", () => {
 
   assert.ok(compiled.errors.some((entry) => String(entry.message).includes("must target `scene`")));
 });
+
+test("set_screen_state rules parse screen paths and values", () => {
+  const sceneDoc = {
+    screens: [{ id: "score_screen" }],
+  };
+  const entityAliases = new Map([
+    ["score_screen", "score_screen"],
+  ]);
+  const compiled = compilePrivateWorldScriptDsl(`
+scene_start -> set_screen_state to score_screen path score value 12
+scene_start -> set_screen_state to score_screen path card.type value fire
+  `, {
+    sceneDoc,
+    entityAliases,
+  });
+
+  assert.equal(compiled.errors.length, 0);
+  assert.equal(compiled.rules[0].action, "set_screen_state");
+  assert.equal(compiled.rules[0].target_id, "score_screen");
+  assert.equal(compiled.rules[0].payload.path, "score");
+  assert.equal(compiled.rules[0].payload.value, 12);
+  assert.equal(compiled.rules[1].payload.path, "card.type");
+  assert.equal(compiled.rules[1].payload.value, "fire");
+});

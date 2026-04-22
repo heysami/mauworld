@@ -5,6 +5,15 @@ const DEFAULT_OPENAI_TEXT_MODEL = "gpt-5.4-mini";
 const DEFAULT_GAME_ASPECT_RATIO = 16 / 9;
 const MAX_GAME_PROMPT_CHARS = 4000;
 const MAX_SOURCE_HTML_CHARS = 200_000;
+const MAX_GAME_DISCUSSION_MESSAGES = 24;
+const MAX_GAME_DISCUSSION_CHARS = 4000;
+const MAX_GAME_ASSET_COUNT = 48;
+const MAX_GAME_ASSET_ID_CHARS = 64;
+const MAX_GAME_ASSET_FILE_NAME_CHARS = 120;
+const MAX_GAME_ASSET_DATA_URL_CHARS = 2_500_000;
+const MAX_GAME_PACKAGE_BYTES = 7_500_000;
+const WORLD_GAME_EXPORT_FORMAT = "mauworld.world-game.v1";
+const WORLD_GAME_PACKAGE_FORMAT = "mauworld.world-game.package.v1";
 const ALLOWED_MULTIPLAYER_MODES = new Set(["single", "turn-based", "realtime"]);
 const BLOCKED_HTML_PATTERNS = [
   { pattern: /<script[^>]+\bsrc\s*=/i, reason: "External scripts are not allowed." },
@@ -47,6 +56,234 @@ function clipText(value, maxLength) {
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value ?? null));
+}
+
+function slugToken(value, fallback = "asset", maxLength = MAX_GAME_ASSET_ID_CHARS) {
+  const normalized = clipText(value, maxLength)
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function inferAssetMimeType(fileName = "", fallback = "application/octet-stream") {
+  const normalized = String(fileName ?? "").trim().toLowerCase();
+  if (normalized.endsWith(".svg")) {
+    return "image/svg+xml";
+  }
+  if (normalized.endsWith(".png")) {
+    return "image/png";
+  }
+  if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (normalized.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (normalized.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (normalized.endsWith(".glb")) {
+    return "model/gltf-binary";
+  }
+  if (normalized.endsWith(".gltf")) {
+    return "model/gltf+json";
+  }
+  if (normalized.endsWith(".obj")) {
+    return "model/obj";
+  }
+  if (normalized.endsWith(".json")) {
+    return "application/json";
+  }
+  if (normalized.endsWith(".txt")) {
+    return "text/plain;charset=utf-8";
+  }
+  return fallback;
+}
+
+function inferAssetKind(mimeType = "", fileName = "") {
+  const mime = String(mimeType ?? "").trim().toLowerCase();
+  const normalizedFileName = String(fileName ?? "").trim().toLowerCase();
+  if (mime.startsWith("image/")) {
+    return "image";
+  }
+  if (mime.startsWith("audio/")) {
+    return "audio";
+  }
+  if (mime.startsWith("model/") || /\.(?:glb|gltf|obj)$/i.test(normalizedFileName)) {
+    return "model";
+  }
+  return "data";
+}
+
+function buildTextAssetDataUrl(text = "", mimeType = "text/plain;charset=utf-8") {
+  return `data:${mimeType};base64,${Buffer.from(String(text ?? ""), "utf8").toString("base64")}`;
+}
+
+function estimateDataUrlBytes(dataUrl = "") {
+  const normalized = String(dataUrl ?? "").trim();
+  if (!normalized.startsWith("data:")) {
+    return Buffer.byteLength(normalized, "utf8");
+  }
+  const commaIndex = normalized.indexOf(",");
+  if (commaIndex < 0) {
+    return Buffer.byteLength(normalized, "utf8");
+  }
+  const meta = normalized.slice(0, commaIndex);
+  const payload = normalized.slice(commaIndex + 1);
+  if (/;base64/i.test(meta)) {
+    return Math.max(0, Math.round((payload.length * 3) / 4));
+  }
+  try {
+    return Buffer.byteLength(decodeURIComponent(payload), "utf8");
+  } catch (_error) {
+    return Buffer.byteLength(payload, "utf8");
+  }
+}
+
+function buildEmptyWorldGamePackage() {
+  return {
+    format: WORLD_GAME_PACKAGE_FORMAT,
+    version: 1,
+    assets: {},
+  };
+}
+
+function sanitizeWorldGameAssetEntry(input = {}, assetKey = "", index = 0) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+  const id = slugToken(input.id ?? assetKey ?? `asset-${index + 1}`, `asset-${index + 1}`);
+  const fileName = clipText(
+    input.file_name ?? input.fileName ?? input.filename ?? `${id}`,
+    MAX_GAME_ASSET_FILE_NAME_CHARS,
+  ) || id;
+  const mimeType = clipText(
+    input.mime_type ?? input.mimeType ?? inferAssetMimeType(fileName),
+    160,
+  ) || inferAssetMimeType(fileName);
+  let dataUrl = clipText(
+    input.data_url ?? input.dataUrl ?? input.source ?? input.url ?? "",
+    MAX_GAME_ASSET_DATA_URL_CHARS,
+  );
+  const rawText = String(input.text ?? input.svg ?? "").trim();
+  const rawBase64 = String(input.base64 ?? "").trim();
+  if (!dataUrl && rawText) {
+    dataUrl = buildTextAssetDataUrl(rawText, mimeType || inferAssetMimeType(fileName, "text/plain;charset=utf-8"));
+  } else if (!dataUrl && rawBase64) {
+    dataUrl = `data:${mimeType || inferAssetMimeType(fileName)};base64,${rawBase64}`;
+  }
+  if (!dataUrl) {
+    throw new HttpError(400, `Game asset "${id}" is missing data.`);
+  }
+  if (/^(?:https?:)?\/\//i.test(dataUrl)) {
+    throw new HttpError(400, `Game asset "${id}" cannot use a remote URL.`);
+  }
+  if (!/^data:/i.test(dataUrl)) {
+    throw new HttpError(400, `Game asset "${id}" must be provided as a data URL.`);
+  }
+  if (dataUrl.length > MAX_GAME_ASSET_DATA_URL_CHARS) {
+    throw new HttpError(400, `Game asset "${id}" is too large.`);
+  }
+  return {
+    id,
+    kind: clipText(input.kind ?? inferAssetKind(mimeType, fileName), 40) || inferAssetKind(mimeType, fileName),
+    mime_type: mimeType,
+    file_name: fileName,
+    data_url: dataUrl,
+    size_bytes: estimateDataUrlBytes(dataUrl),
+  };
+}
+
+export function normalizeWorldGamePackage(input = {}) {
+  const source = input && typeof input === "object" && !Array.isArray(input)
+    ? input
+    : {};
+  const assetsInput = source.assets && typeof source.assets === "object" && !Array.isArray(source.assets)
+    ? source.assets
+    : {};
+  const assets = {};
+  let totalBytes = 0;
+  let index = 0;
+  for (const [assetKey, assetValue] of Object.entries(assetsInput).slice(0, MAX_GAME_ASSET_COUNT)) {
+    const normalizedAsset = sanitizeWorldGameAssetEntry(assetValue, assetKey, index);
+    if (!normalizedAsset) {
+      continue;
+    }
+    totalBytes += Math.max(0, Number(normalizedAsset.size_bytes ?? 0) || 0);
+    if (totalBytes > MAX_GAME_PACKAGE_BYTES) {
+      throw new HttpError(400, "Game package assets are too large.");
+    }
+    assets[normalizedAsset.id] = normalizedAsset;
+    index += 1;
+  }
+  return {
+    format: WORLD_GAME_PACKAGE_FORMAT,
+    version: 1,
+    assets,
+  };
+}
+
+function safeNormalizeWorldGamePackage(input = {}) {
+  try {
+    return normalizeWorldGamePackage(input);
+  } catch (_error) {
+    return buildEmptyWorldGamePackage();
+  }
+}
+
+function extractWorldGamePackageInput(input = {}) {
+  if (input?.package && typeof input.package === "object" && !Array.isArray(input.package)) {
+    return input.package;
+  }
+  if (input?.assets && typeof input.assets === "object" && !Array.isArray(input.assets)) {
+    return { assets: input.assets };
+  }
+  if (input?.manifest?.package && typeof input.manifest.package === "object" && !Array.isArray(input.manifest.package)) {
+    return input.manifest.package;
+  }
+  return {};
+}
+
+function sanitizeWorldGameDiscussionMessages(input = []) {
+  return (Array.isArray(input) ? input : [])
+    .slice(0, MAX_GAME_DISCUSSION_MESSAGES)
+    .map((entry) => {
+      const role = String(entry?.role ?? "").trim().toLowerCase();
+      const text = clipText(entry?.text ?? entry?.content ?? "", MAX_GAME_DISCUSSION_CHARS);
+      if (!text || (role !== "user" && role !== "assistant")) {
+        return null;
+      }
+      assertSafePublicText(text, `${role} message`);
+      return { role, text };
+    })
+    .filter(Boolean);
+}
+
+function buildWorldGameMessageTranscript(messages = []) {
+  return sanitizeWorldGameDiscussionMessages(messages)
+    .map((entry) => `${entry.role === "assistant" ? "Assistant" : "User"}: ${entry.text}`)
+    .join("\n\n");
+}
+
+function deriveWorldGamePrompt(input = {}, fieldName = "prompt") {
+  const direct = clipText(input.prompt ?? input.objective ?? "", MAX_GAME_PROMPT_CHARS);
+  if (direct) {
+    assertSafePublicText(direct, fieldName);
+    return direct;
+  }
+  const fromMessages = clipText(
+    sanitizeWorldGameDiscussionMessages(input.messages)
+      .filter((entry) => entry.role === "user")
+      .map((entry) => entry.text)
+      .join("\n\n"),
+    MAX_GAME_PROMPT_CHARS,
+  );
+  if (!fromMessages) {
+    throw new HttpError(400, `Invalid ${fieldName}`);
+  }
+  assertSafePublicText(fromMessages, fieldName);
+  return fromMessages;
 }
 
 function extractTextFromResponse(payload = {}) {
@@ -244,16 +481,24 @@ export function validateWorldGameRecord(input = {}, options = {}) {
   const title = clipText(input.title ?? manifest.title, 96) || manifest.title;
   const prompt = options.promptRequired === false && !String(input.prompt ?? "").trim()
     ? ""
-    : sanitizeWorldGamePrompt(input.prompt ?? "Generated Mauworld game");
+    : sanitizeWorldGamePrompt(input.prompt ?? deriveWorldGamePrompt(input) ?? "Generated Mauworld game");
   const sourceHtml = sanitizeWorldGameHtml(input.source_html ?? input.sourceHtml ?? input.html ?? "");
+  const gamePackage = normalizeWorldGamePackage(extractWorldGamePackageInput(input));
+  const nextManifest = {
+    ...manifest,
+    title,
+  };
+  if (Object.keys(gamePackage.assets).length > 0) {
+    nextManifest.package = gamePackage;
+  } else {
+    delete nextManifest.package;
+  }
   return {
     title,
     prompt,
     source_html: sourceHtml,
-    manifest: {
-      ...manifest,
-      title,
-    },
+    manifest: nextManifest,
+    package: gamePackage,
     ai_provider: clipText(input.ai_provider ?? input.aiProvider ?? "", 40) || null,
     ai_model: clipText(input.ai_model ?? input.aiModel ?? "", 80) || null,
     source_game_id: String(input.source_game_id ?? input.sourceGameId ?? "").trim() || null,
@@ -261,14 +506,21 @@ export function validateWorldGameRecord(input = {}, options = {}) {
 }
 
 export function serializeWorldGame(row = {}) {
+  const manifest = cloneJson(row.manifest ?? {});
+  const gamePackage = safeNormalizeWorldGamePackage(
+    manifest?.package && typeof manifest.package === "object" && !Array.isArray(manifest.package)
+      ? manifest.package
+      : row.package,
+  );
   return {
     id: row.id,
     owner_profile_id: row.owner_profile_id,
     source_game_id: row.source_game_id ?? null,
     title: row.title,
     prompt: row.prompt,
-    manifest: cloneJson(row.manifest ?? {}),
+    manifest,
     source_html: row.source_html,
+    package: gamePackage,
     ai_provider: row.ai_provider ?? null,
     ai_model: row.ai_model ?? null,
     created_at: row.created_at ?? nowIso(),
@@ -276,12 +528,33 @@ export function serializeWorldGame(row = {}) {
   };
 }
 
+function buildGameBrainstormPrompt(input = {}) {
+  const objective = deriveWorldGamePrompt(input);
+  const transcript = buildWorldGameMessageTranscript(input.messages);
+  return [
+    "You are brainstorming a nearby-share Mauworld game package.",
+    "Discuss the concept before generating code.",
+    "Focus on gameplay loop, seat roles, UI flow, package assets, and what should be separated from code.",
+    "Do not output final HTML or JSON yet.",
+    "Keep the advice practical and tailored to Mauworld's nearby game shell.",
+    `User objective:\n${objective}`,
+    transcript ? `Brainstorm thread:\n${transcript}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function buildGameGenerationPrompt(input = {}) {
-  const userPrompt = sanitizeWorldGamePrompt(input.prompt ?? input.objective ?? "", "prompt");
+  const userPrompt = deriveWorldGamePrompt(input);
+  const transcript = buildWorldGameMessageTranscript(input.messages);
   return [
     "Generate a single-file HTML game for Mauworld.",
-    "Return JSON only with these top-level keys: title, manifest, html.",
+    "Use the brainstorm thread and context below as the source of truth.",
+    "Return JSON only with these top-level keys: title, manifest, html, assets.",
     "The html value must be one complete HTML document with inline CSS and inline JavaScript only.",
+    "The assets value must be an object map. Each asset may include kind, mime_type, file_name, and either data_url, text, svg, or base64.",
+    "Prefer SVG or text-based assets when possible so they stay editable. Use PNG/JPEG/WebP data URLs only when needed.",
+    "If the HTML or inline JavaScript references a packaged resource, use template placeholders like {{assets.fire_icon}} or api.getAssetUrl('fire_icon').",
     "The generated game owns its own visual style. It can look completely different from Mauworld UI.",
     "Do not rely on parent page CSS. Include all visual styling the game needs inside the generated HTML.",
     "Only the outer Mauworld shell is host-styled; the game itself must be visually self-contained.",
@@ -300,14 +573,37 @@ function buildGameGenerationPrompt(input = {}) {
     "- api.setState(nextState): host only, publishes authoritative state to everyone",
     "- api.sendAction(action): non-host players send semantic actions to the host",
     "- api.claimSeat(seatId), api.releaseSeat(optionalSeatId), api.setReady(boolean), api.startMatch()",
+    "- api.getAsset(assetId), api.getAssetUrl(assetId), api.listAssets()",
     "- api.publishPreview(elementOrCanvas): publish a live preview frame after rendering",
     "Manifest requirements:",
     '- manifest must include title, description, multiplayer_mode ("single", "turn-based", or "realtime"), min_players, max_players, allow_viewers, aspect_ratio, and preview.',
     "- for multiplayer games with named roles, manifest.seats must list those semantic seat labels in order, for example ['X', 'O'] or ['White', 'Black']",
     "- if the UI says 'Claim X' or 'Claim White', that same label must appear in manifest.seats so the Mauworld shell can show the role identity correctly",
     "- Keep the game simple, readable, and self-contained.",
+    transcript ? `Brainstorm thread:\n${transcript}` : "",
     `User request:\n${userPrompt}`,
   ].join("\n\n");
+}
+
+export async function brainstormWorldGameWithAi(options = {}) {
+  const provider = String(options.provider ?? "openai").trim().toLowerCase() || "openai";
+  if (provider !== "openai") {
+    throw new HttpError(400, `Unsupported text reasoning provider: ${provider}`);
+  }
+  const generated = await callOpenAiResponses({
+    apiKey: options.apiKey,
+    model: options.model,
+    prompt: buildGameBrainstormPrompt(options),
+  });
+  return {
+    message: {
+      role: "assistant",
+      text: generated.text,
+    },
+    provider: generated.provider,
+    model: generated.model,
+    raw: generated.raw,
+  };
 }
 
 export async function generateWorldGameFromAi(options = {}) {
@@ -323,9 +619,10 @@ export async function generateWorldGameFromAi(options = {}) {
   const parsed = parseJsonCandidate(generated.text);
   const record = validateWorldGameRecord({
     title: parsed.title,
-    prompt: options.prompt ?? options.objective ?? "",
+    prompt: deriveWorldGamePrompt(options),
     source_html: parsed.html,
     manifest: parsed.manifest,
+    package: parsed.assets ? { assets: parsed.assets } : {},
     ai_provider: generated.provider,
     ai_model: generated.model,
   });
@@ -335,5 +632,22 @@ export async function generateWorldGameFromAi(options = {}) {
     provider: generated.provider,
     model: generated.model,
     raw: generated.raw,
+  };
+}
+
+export function buildWorldGameExportPackage(game = {}) {
+  const record = validateWorldGameRecord(game, {
+    promptRequired: false,
+  });
+  return {
+    format: WORLD_GAME_EXPORT_FORMAT,
+    title: record.title,
+    prompt: record.prompt,
+    source_game_id: record.source_game_id,
+    source_html: record.source_html,
+    manifest: cloneJson(record.manifest),
+    package: cloneJson(record.package),
+    ai_provider: record.ai_provider,
+    ai_model: record.ai_model,
   };
 }

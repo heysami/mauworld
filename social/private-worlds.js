@@ -2,7 +2,11 @@ import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 import { GLTFLoader } from "https://unpkg.com/three@0.165.0/examples/jsm/loaders/GLTFLoader.js";
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 import { createPatternedMaterial } from "./private-world-materials.js";
-import { renderScreenHtmlTexture } from "./screen-texture.js";
+import {
+  collectScreenTemplateBindings,
+  renderScreenHtmlTexture,
+  resolveScreenHtmlSource,
+} from "./screen-texture.js";
 import { createBrowserMediaController } from "./world-browser-media.js?v=20260418b";
 import {
   createChatBubbleState,
@@ -781,11 +785,13 @@ const elements = {
   aiDialogClose: document.querySelector("[data-ai-dialog-close]"),
   aiDialogTitle: document.querySelector("[data-ai-dialog-title]"),
   aiDialogNote: document.querySelector("[data-ai-dialog-note]"),
+  aiDialogThreadList: document.querySelector("[data-ai-dialog-thread-list]"),
   aiDialogThread: document.querySelector("[data-ai-dialog-thread]"),
   aiDialogStatus: document.querySelector("[data-ai-dialog-status]"),
   aiDialogInput: document.querySelector("[data-ai-dialog-input]"),
   aiDialogSend: document.querySelector("[data-ai-dialog-send]"),
   aiDialogGenerate: document.querySelector("[data-ai-dialog-generate]"),
+  aiDialogNewThread: document.querySelector("[data-ai-dialog-new-thread]"),
   aiDialogApply: document.querySelector("[data-ai-dialog-apply]"),
   aiDialogResultPanel: document.querySelector("[data-ai-dialog-result-panel]"),
   aiDialogResultTitle: document.querySelector("[data-ai-dialog-result-title]"),
@@ -1018,6 +1024,23 @@ function createEmptyPrivateBrowserMediaState() {
   };
 }
 
+function createAiDialogThreadId() {
+  return `ai-thread-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+}
+
+function createEmptyAiDialogThread() {
+  const now = Date.now();
+  return {
+    id: createAiDialogThreadId(),
+    messages: [],
+    input: "",
+    result: "",
+    generatedAsset: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 function createEmptyAiDialogState() {
   return {
     open: false,
@@ -1028,10 +1051,8 @@ function createEmptyAiDialogState() {
     title: "AI brainstorm",
     note: "Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.",
     applyLabel: "",
-    messages: [],
-    input: "",
-    result: "",
-    generatedAsset: null,
+    activeThreadId: "",
+    threads: [],
     status: "",
     statusTone: "",
     busy: false,
@@ -1070,6 +1091,7 @@ const state = {
   assetFilterType: "all",
   sceneDrafts: new Map(),
   screenAiPromptDrafts: new Map(),
+  screenPreviewDrafts: new Map(),
   aiThreadDrafts: new Map(),
   sceneEditorSceneId: "",
   aiDialog: createEmptyAiDialogState(),
@@ -4111,6 +4133,51 @@ function setByPath(target, path, value) {
   cursor[segments[segments.length - 1]] = value;
 }
 
+function getValueByPath(target, path) {
+  const segments = String(path ?? "").split(".").filter(Boolean);
+  if (!segments.length) {
+    return { exists: false, value: undefined };
+  }
+  let cursor = target;
+  for (const segment of segments) {
+    if (cursor == null || typeof cursor !== "object" || !Object.prototype.hasOwnProperty.call(cursor, segment)) {
+      return { exists: false, value: undefined };
+    }
+    cursor = cursor[segment];
+  }
+  return { exists: true, value: cursor };
+}
+
+function deleteByPath(target, path) {
+  const segments = String(path ?? "").split(".").filter(Boolean);
+  if (!target || typeof target !== "object" || !segments.length) {
+    return;
+  }
+  const stack = [];
+  let cursor = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (!cursor[segment] || typeof cursor[segment] !== "object") {
+      return;
+    }
+    stack.push([cursor, segment]);
+    cursor = cursor[segment];
+  }
+  delete cursor[segments[segments.length - 1]];
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    const [parent, key] = stack[index];
+    const value = parent?.[key];
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length > 0) {
+      break;
+    }
+    delete parent[key];
+  }
+}
+
+function isRecordObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function getPrivateFlatForwardVector(yaw = privateInputState.yaw) {
   return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
 }
@@ -5183,30 +5250,119 @@ function cloneAiDialogMessages(messages = []) {
     : [];
 }
 
+function cloneAiDialogThread(thread = {}) {
+  const createdAt = Number(thread?.createdAt) || Date.now();
+  const updatedAt = Number(thread?.updatedAt) || createdAt;
+  return {
+    id: String(thread?.id ?? "").trim() || createAiDialogThreadId(),
+    messages: cloneAiDialogMessages(thread.messages),
+    input: String(thread?.input ?? ""),
+    result: String(thread?.result ?? ""),
+    generatedAsset: thread.generatedAsset ? deepClone(thread.generatedAsset) : null,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function normalizeAiDialogThreads(dialog = {}) {
+  const hasLegacyThreadState = Array.isArray(dialog.messages)
+    || dialog.input
+    || dialog.result
+    || dialog.generatedAsset;
+  const sourceThreads = Array.isArray(dialog.threads)
+    ? dialog.threads
+    : (hasLegacyThreadState ? [{
+      messages: dialog.messages,
+      input: dialog.input,
+      result: dialog.result,
+      generatedAsset: dialog.generatedAsset,
+    }] : []);
+  const threads = sourceThreads.map((thread) => cloneAiDialogThread(thread)).filter(Boolean);
+  return threads.length ? threads : [createEmptyAiDialogThread()];
+}
+
 function cloneAiDialogState(dialog = {}) {
+  const threads = normalizeAiDialogThreads(dialog);
+  const activeThreadId = threads.some((thread) => thread.id === dialog.activeThreadId)
+    ? dialog.activeThreadId
+    : threads[0].id;
   return {
     ...createEmptyAiDialogState(),
     ...dialog,
-    messages: cloneAiDialogMessages(dialog.messages),
-    generatedAsset: dialog.generatedAsset ? deepClone(dialog.generatedAsset) : null,
+    activeThreadId,
+    threads,
   };
 }
 
 function getAiDialogThreadKey(config = {}) {
+  const worldId = String(config.worldId ?? state.selectedWorld?.world_id ?? "world").trim() || "world";
   const artifactType = String(config.artifactType ?? "screen_html").trim().toLowerCase() || "screen_html";
   const targetKind = String(config.targetKind ?? "world").trim().toLowerCase() || "world";
   const targetId = String(config.targetId ?? "world").trim() || "world";
-  return `${artifactType}:${targetKind}:${targetId}`;
+  return `${worldId}:${artifactType}:${targetKind}:${targetId}`;
+}
+
+function ensureAiDialogThreads(dialog = state.aiDialog) {
+  if (!dialog || typeof dialog !== "object") {
+    return [createEmptyAiDialogThread()];
+  }
+  if (!Array.isArray(dialog.threads) || !dialog.threads.length) {
+    dialog.threads = [createEmptyAiDialogThread()];
+  }
+  if (!dialog.threads.some((thread) => thread.id === dialog.activeThreadId)) {
+    dialog.activeThreadId = dialog.threads[0].id;
+  }
+  return dialog.threads;
+}
+
+function getActiveAiDialogThread(dialog = state.aiDialog) {
+  const threads = ensureAiDialogThreads(dialog);
+  return threads.find((thread) => thread.id === dialog.activeThreadId) || threads[0];
+}
+
+function touchAiDialogThread(thread = null) {
+  if (!thread) {
+    return;
+  }
+  thread.updatedAt = Date.now();
+}
+
+function getAiDialogThreadPreview(thread = {}) {
+  const previewSource = thread.messages.find((entry) => entry.role === "user")?.text
+    || thread.result
+    || "";
+  if (!previewSource) {
+    return "No prompt yet";
+  }
+  return truncatePrivateUiLabel(previewSource.replace(/\s+/g, " "), 80);
+}
+
+function getAiDialogThreadSummary(thread = {}) {
+  const turnCount = Array.isArray(thread.messages) ? thread.messages.length : 0;
+  const turnLabel = `${turnCount} message${turnCount === 1 ? "" : "s"}`;
+  if (thread.generatedAsset?.id) {
+    return `${turnLabel} · asset ready\n${getAiDialogThreadPreview(thread)}`;
+  }
+  if (thread.result) {
+    return `${turnLabel} · final ready\n${getAiDialogThreadPreview(thread)}`;
+  }
+  if (turnCount > 0) {
+    return `${turnLabel} · brainstorming\n${getAiDialogThreadPreview(thread)}`;
+  }
+  return "New thread";
 }
 
 function persistAiDialogThreadState() {
   if (!state.aiDialog.key) {
     return;
   }
+  ensureAiDialogThreads(state.aiDialog);
   state.aiThreadDrafts.set(state.aiDialog.key, cloneAiDialogState({
     ...state.aiDialog,
     open: false,
     busy: false,
+    status: "",
+    statusTone: "",
   }));
 }
 
@@ -5217,6 +5373,8 @@ function setAiDialogStatus(text = "", tone = "") {
 
 function renderAiDialog() {
   const dialog = state.aiDialog;
+  const threads = ensureAiDialogThreads(dialog);
+  const activeThread = getActiveAiDialogThread(dialog);
   if (elements.aiDialogBackdrop) {
     elements.aiDialogBackdrop.hidden = !dialog.open;
   }
@@ -5230,9 +5388,24 @@ function renderAiDialog() {
     elements.aiDialogNote.textContent = dialog.note
       || "Start with a brief, let the AI surface assumptions and questions, then generate when it is ready.";
   }
+  if (elements.aiDialogThreadList) {
+    elements.aiDialogThreadList.innerHTML = threads.map((thread, index) => {
+      const activeClass = thread.id === dialog.activeThreadId ? " is-active" : "";
+      const deleteDisabled = dialog.busy || threads.length <= 1 ? "disabled" : "";
+      return `
+        <div class="pw-ai-dialog__threadcard${activeClass}">
+          <button type="button" class="pw-ai-dialog__threadselect" data-ai-dialog-thread-select="${htmlEscape(thread.id)}" ${dialog.busy ? "disabled" : ""}>
+            <p class="pw-ai-dialog__threadlabel">Thread ${index + 1}</p>
+            <p class="pw-ai-dialog__threadmeta">${htmlEscape(getAiDialogThreadSummary(thread))}</p>
+          </button>
+          <button type="button" class="is-muted" data-ai-dialog-thread-delete="${htmlEscape(thread.id)}" ${deleteDisabled}>Delete</button>
+        </div>
+      `;
+    }).join("");
+  }
   if (elements.aiDialogThread) {
-    elements.aiDialogThread.innerHTML = dialog.messages.length
-      ? dialog.messages.map((entry) => `
+    elements.aiDialogThread.innerHTML = activeThread.messages.length
+      ? activeThread.messages.map((entry) => `
         <article class="pw-ai-dialog__message pw-ai-dialog__message--${entry.role}">
           <strong>${entry.role === "assistant" ? "AI" : "You"}</strong>
           <p>${htmlEscape(entry.text)}</p>
@@ -5248,8 +5421,8 @@ function renderAiDialog() {
       delete elements.aiDialogStatus.dataset.tone;
     }
   }
-  if (elements.aiDialogInput && elements.aiDialogInput.value !== dialog.input) {
-    elements.aiDialogInput.value = dialog.input || "";
+  if (elements.aiDialogInput && elements.aiDialogInput.value !== activeThread.input) {
+    elements.aiDialogInput.value = activeThread.input || "";
   }
   if (elements.aiDialogInput) {
     elements.aiDialogInput.disabled = !dialog.open || dialog.busy || !state.selectedWorld || !state.session;
@@ -5257,22 +5430,26 @@ function renderAiDialog() {
   if (elements.aiDialogSend) {
     elements.aiDialogSend.disabled = !dialog.open || dialog.busy || !state.selectedWorld || !state.session;
   }
-  const canGenerate = dialog.messages.some((entry) => entry.role === "assistant");
+  if (elements.aiDialogNewThread) {
+    elements.aiDialogNewThread.disabled = !dialog.open || dialog.busy || !state.selectedWorld || !state.session;
+  }
+  const canGenerate = activeThread.messages.some((entry) => entry.role === "assistant");
   if (elements.aiDialogGenerate) {
     elements.aiDialogGenerate.disabled = !dialog.open || dialog.busy || !canGenerate || !state.selectedWorld || !state.session;
   }
   if (elements.aiDialogApply) {
-    const canApply = dialog.artifactType === "texture"
-      ? Boolean(dialog.generatedAsset) && dialog.targetKind !== "world"
-      : Boolean(dialog.result) && dialog.targetKind !== "world";
+    const canApplyAsset = dialog.artifactType === "texture" || dialog.artifactType === "3d_model";
+    const canApply = canApplyAsset
+      ? Boolean(activeThread.generatedAsset) && dialog.targetKind !== "world"
+      : Boolean(activeThread.result) && dialog.targetKind !== "world";
     elements.aiDialogApply.hidden = !canApply;
     elements.aiDialogApply.disabled = !canApply || dialog.busy;
     if (canApply) {
-      elements.aiDialogApply.textContent = dialog.applyLabel || "Apply result";
+      elements.aiDialogApply.textContent = dialog.applyLabel || (canApplyAsset ? "Apply asset" : "Apply result");
     }
   }
   if (elements.aiDialogResultPanel) {
-    elements.aiDialogResultPanel.hidden = !dialog.result;
+    elements.aiDialogResultPanel.hidden = !activeThread.result;
   }
   if (elements.aiDialogResultTitle) {
     elements.aiDialogResultTitle.textContent =
@@ -5284,8 +5461,8 @@ function renderAiDialog() {
             ? "Generated texture asset"
             : "Generated model asset";
   }
-  if (elements.aiDialogResult && elements.aiDialogResult.value !== dialog.result) {
-    elements.aiDialogResult.value = dialog.result || "";
+  if (elements.aiDialogResult && elements.aiDialogResult.value !== activeThread.result) {
+    elements.aiDialogResult.value = activeThread.result || "";
   }
   if (elements.aiDialogResult) {
     elements.aiDialogResult.disabled = !dialog.open || dialog.busy;
@@ -5470,6 +5647,64 @@ function buildAiRequestOptions(dialog = state.aiDialog) {
   };
 }
 
+function selectAiDialogThread(threadId = "") {
+  const normalizedThreadId = String(threadId ?? "").trim();
+  if (!normalizedThreadId || state.aiDialog.busy) {
+    return false;
+  }
+  const threads = ensureAiDialogThreads(state.aiDialog);
+  if (!threads.some((thread) => thread.id === normalizedThreadId)) {
+    return false;
+  }
+  state.aiDialog.activeThreadId = normalizedThreadId;
+  setAiDialogStatus("", "");
+  persistAiDialogThreadState();
+  renderAiDialog();
+  window.setTimeout(() => {
+    elements.aiDialogInput?.focus?.();
+  }, 0);
+  return true;
+}
+
+function createAiDialogThread(options = {}) {
+  const thread = createEmptyAiDialogThread();
+  const threads = ensureAiDialogThreads(state.aiDialog);
+  threads.push(thread);
+  state.aiDialog.activeThreadId = thread.id;
+  setAiDialogStatus(options.status ?? "Started a fresh brainstorm thread.", "success");
+  persistAiDialogThreadState();
+  renderAiDialog();
+  if (options.focus !== false) {
+    window.setTimeout(() => {
+      elements.aiDialogInput?.focus?.();
+    }, 0);
+  }
+  return thread;
+}
+
+function deleteAiDialogThread(threadId = "") {
+  const normalizedThreadId = String(threadId ?? "").trim();
+  if (!normalizedThreadId || state.aiDialog.busy) {
+    return false;
+  }
+  const threads = ensureAiDialogThreads(state.aiDialog);
+  const index = threads.findIndex((thread) => thread.id === normalizedThreadId);
+  if (index < 0 || threads.length <= 1) {
+    return false;
+  }
+  if (typeof window.confirm === "function" && !window.confirm("Delete this brainstorm thread?")) {
+    return false;
+  }
+  threads.splice(index, 1);
+  if (state.aiDialog.activeThreadId === normalizedThreadId) {
+    state.aiDialog.activeThreadId = threads[Math.max(0, index - 1)]?.id || threads[0]?.id || "";
+  }
+  setAiDialogStatus("Deleted brainstorm thread.", "success");
+  persistAiDialogThreadState();
+  renderAiDialog();
+  return true;
+}
+
 function openAiDialog(config = {}) {
   const key = getAiDialogThreadKey(config);
   const stored = cloneAiDialogState(state.aiThreadDrafts.get(key) ?? {});
@@ -5481,15 +5716,15 @@ function openAiDialog(config = {}) {
     busy: false,
     status: "",
     statusTone: "",
-    messages: stored.messages,
-    result: stored.result || "",
-    generatedAsset: stored.generatedAsset || null,
-    input: stored.input || "",
   });
   updateShellState();
   renderAiDialog();
   const seedPrompt = String(config.seedPrompt ?? "").trim();
-  const shouldAutoStart = Boolean(seedPrompt) && !stored.messages.length && !stored.result;
+  const activeThread = getActiveAiDialogThread(state.aiDialog);
+  const shouldAutoStart = Boolean(seedPrompt)
+    && !activeThread.messages.length
+    && !activeThread.result
+    && !activeThread.generatedAsset;
   if (shouldAutoStart) {
     void sendAiDialogMessage(seedPrompt);
     return;
@@ -5500,16 +5735,20 @@ function openAiDialog(config = {}) {
 }
 
 async function sendAiDialogMessage(seedText = "") {
-  const message = String(seedText || state.aiDialog.input || "").trim();
+  const activeThread = getActiveAiDialogThread();
+  const message = String(seedText || activeThread.input || "").trim();
   if (!message) {
     setAiDialogStatus("Add a short brief first.", "error");
     renderAiDialog();
     elements.aiDialogInput?.focus?.();
     return;
   }
-  const nextMessages = [...state.aiDialog.messages, { role: "user", text: message }];
-  state.aiDialog.messages = nextMessages;
-  state.aiDialog.input = "";
+  const nextMessages = [...activeThread.messages, { role: "user", text: message }];
+  activeThread.messages = nextMessages;
+  activeThread.input = "";
+  activeThread.result = "";
+  activeThread.generatedAsset = null;
+  touchAiDialogThread(activeThread);
   state.aiDialog.busy = true;
   setAiDialogStatus("Thinking through assumptions and questions...", "");
   persistAiDialogThreadState();
@@ -5527,7 +5766,8 @@ async function sendAiDialogMessage(seedText = "") {
       },
     });
     const reply = String(payload.text ?? "").trim() || "I need a little more detail before I can help shape this.";
-    state.aiDialog.messages = [...nextMessages, { role: "assistant", text: reply }];
+    activeThread.messages = [...nextMessages, { role: "assistant", text: reply }];
+    touchAiDialogThread(activeThread);
     state.aiDialog.busy = false;
     setAiDialogStatus("AI replied. Revise the thread or generate when it feels right.", "success");
     persistAiDialogThreadState();
@@ -5544,13 +5784,123 @@ async function sendAiDialogMessage(seedText = "") {
   }
 }
 
+function applyAiDialogAssetToTarget(asset = getActiveAiDialogThread().generatedAsset) {
+  if (!asset?.id) {
+    return {
+      ok: false,
+      error: state.aiDialog.artifactType === "texture"
+        ? "Generate a texture asset first."
+        : "Generate a model asset first.",
+    };
+  }
+  if (state.aiDialog.targetKind === "world") {
+    return {
+      ok: true,
+      applied: false,
+      message: "Final asset created and saved in your library.",
+    };
+  }
+  const applied = state.aiDialog.artifactType === "texture"
+    ? applyTextureAssetToSelection(asset.id, {
+      targetKind: state.aiDialog.targetKind,
+      targetId: state.aiDialog.targetId,
+    })
+    : applyModelAssetToSelection(asset.id, {
+      targetKind: state.aiDialog.targetKind,
+      targetId: state.aiDialog.targetId,
+    });
+  if (!applied) {
+    return {
+      ok: false,
+      error: state.aiDialog.artifactType === "texture"
+        ? "That texture target is no longer available."
+        : "That model target is no longer available.",
+    };
+  }
+  return {
+    ok: true,
+    applied: true,
+    message: state.aiDialog.artifactType === "texture"
+      ? "Applied texture to the selected item."
+      : "Applied model to the selected item.",
+  };
+}
+
+function applyAiDialogTextToTarget(result = "") {
+  const normalizedResult = String(result ?? "").trim();
+  if (!normalizedResult) {
+    return {
+      ok: false,
+      error: "Generate something first.",
+    };
+  }
+  if (state.aiDialog.targetKind === "screen") {
+    let applied = false;
+    mutateSceneDoc((sceneDoc) => {
+      const found = findEntityByRef(sceneDoc, { kind: "screen", id: state.aiDialog.targetId });
+      if (!found?.entry) {
+        return;
+      }
+      found.entry.html = normalizedResult;
+      applied = true;
+    });
+    if (!applied) {
+      return {
+        ok: false,
+        error: "That screen is no longer available.",
+      };
+    }
+    return {
+      ok: true,
+      applied: true,
+      appliedResult: normalizedResult,
+      message: "Applied to the screen.",
+    };
+  }
+  if (state.aiDialog.targetKind === "script_function") {
+    let applied = false;
+    const normalizedBody = normalizeGeneratedScriptBody(normalizedResult);
+    mutateSceneScriptFunctions((functions) => {
+      const target = functions.find((entry) => entry.id === state.aiDialog.targetId);
+      if (!target) {
+        return;
+      }
+      target.body = normalizedBody;
+      applied = true;
+    });
+    if (!applied) {
+      return {
+        ok: false,
+        error: "That logic function is no longer available.",
+      };
+    }
+    return {
+      ok: true,
+      applied: true,
+      appliedResult: normalizedBody,
+      focusScript: true,
+      message: "Applied to the function.",
+    };
+  }
+  if (elements.aiOutput) {
+    elements.aiOutput.value = normalizedResult;
+  }
+  return {
+    ok: true,
+    applied: false,
+    appliedResult: normalizedResult,
+    message: "Saved as the latest result in AI Builder.",
+  };
+}
+
 async function generateAiDialogResult() {
-  if (!state.aiDialog.messages.some((entry) => entry.role === "assistant")) {
+  const activeThread = getActiveAiDialogThread();
+  if (!activeThread.messages.some((entry) => entry.role === "assistant")) {
     setAiDialogStatus("Ask AI first so it can answer with assumptions and questions before you generate.", "error");
     renderAiDialog();
     return;
   }
-  if (String(state.aiDialog.input || "").trim()) {
+  if (String(activeThread.input || "").trim()) {
     setAiDialogStatus("Send your latest revision to AI first, then generate from the updated thread.", "error");
     renderAiDialog();
     elements.aiDialogInput?.focus?.();
@@ -5575,6 +5925,8 @@ async function generateAiDialogResult() {
   renderAiDialog();
   try {
     const request = buildAiRequestOptions();
+    let finalStatusMessage = "Final result ready.";
+    let finalStatusTone = "success";
     if (kind === "texture" || kind === "3d_model") {
       const reasoning = getAiProviderState("reasoning");
       const generationSettings = kind === "texture" ? getAiProviderState("image") : getAiProviderState("model");
@@ -5592,7 +5944,7 @@ async function generateAiDialogResult() {
           worldAbout: state.selectedWorld.about,
           objective: request.objective,
           sceneSummary: request.sceneSummary,
-          messages: state.aiDialog.messages,
+          messages: activeThread.messages,
           targetLabel: request.targetLabel,
           currentArtifact: request.currentArtifact,
           entityContext: request.entityContext,
@@ -5607,20 +5959,26 @@ async function generateAiDialogResult() {
           modelApiKey: kind === "3d_model" ? generationSettings.apiKey : undefined,
         },
       });
-      state.aiDialog.generatedAsset = payload.asset || null;
-      state.aiDialog.result = payload.asset ? JSON.stringify(payload.asset, null, 2) : "";
+      activeThread.generatedAsset = payload.asset || null;
+      activeThread.result = payload.asset ? JSON.stringify(payload.asset, null, 2) : "";
+      touchAiDialogThread(activeThread);
       await loadAssets();
-      if (kind === "texture" && state.aiDialog.generatedAsset && state.aiDialog.targetId) {
-        applyTextureAssetToSelection(state.aiDialog.generatedAsset.id, {
-          targetKind: state.aiDialog.targetKind,
-          targetId: state.aiDialog.targetId,
-        });
+      const applyOutcome = applyAiDialogAssetToTarget(activeThread.generatedAsset);
+      if (!applyOutcome.ok) {
+        finalStatusMessage = `${applyOutcome.error} The asset is still saved in your library.`;
+        finalStatusTone = "error";
+      } else if (applyOutcome.applied) {
+        finalStatusMessage = kind === "texture"
+          ? "Final texture asset created and applied to the selected item."
+          : "Final 3D model asset created and applied to the selected item.";
+      } else {
+        finalStatusMessage = applyOutcome.message;
       }
     } else {
       const generatedText = await generateAi(kind, {
         objective: request.objective,
         sceneSummary: request.sceneSummary,
-        messages: state.aiDialog.messages,
+        messages: activeThread.messages,
         targetLabel: request.targetLabel,
         currentArtifact: request.currentArtifact,
         viewportSummary: request.viewportSummary,
@@ -5628,11 +5986,29 @@ async function generateAiDialogResult() {
         outputTarget: elements.aiDialogResult,
         mirrorToAiOutput: state.aiDialog.targetKind === "world",
       });
-      state.aiDialog.result = String(generatedText ?? "").trim();
-      state.aiDialog.generatedAsset = null;
+      activeThread.result = String(generatedText ?? "").trim();
+      activeThread.generatedAsset = null;
+      touchAiDialogThread(activeThread);
+      const applyOutcome = applyAiDialogTextToTarget(activeThread.result);
+      if (applyOutcome.appliedResult) {
+        activeThread.result = applyOutcome.appliedResult;
+      }
+      if (!applyOutcome.ok) {
+        finalStatusMessage = `${applyOutcome.error} The generated result is still available below.`;
+        finalStatusTone = "error";
+      } else if (applyOutcome.applied) {
+        finalStatusMessage = kind === "html"
+          ? "Generated HTML and applied to the screen."
+          : "Generated script and applied to the function.";
+      } else {
+        finalStatusMessage = applyOutcome.message;
+      }
+      if (applyOutcome.focusScript) {
+        focusSelectedScriptFunctionBody();
+      }
     }
     state.aiDialog.busy = false;
-    setAiDialogStatus("Final result ready. Review it, then apply it when you are happy.", "success");
+    setAiDialogStatus(finalStatusMessage, finalStatusTone);
     persistAiDialogThreadState();
     renderAiDialog();
   } catch (error) {
@@ -5645,78 +6021,29 @@ async function generateAiDialogResult() {
 }
 
 function applyAiDialogResult() {
-  const result = String(elements.aiDialogResult?.value ?? state.aiDialog.result ?? "").trim();
-  if (!result) {
-    setAiDialogStatus("Generate something first.", "error");
-    renderAiDialog();
-    return;
-  }
-  if (state.aiDialog.artifactType === "texture") {
-    if (!state.aiDialog.generatedAsset?.id) {
-      setAiDialogStatus("Generate a texture asset first.", "error");
-      renderAiDialog();
-      return;
+  const activeThread = getActiveAiDialogThread();
+  const result = String(elements.aiDialogResult?.value ?? activeThread.result ?? "").trim();
+  activeThread.result = result;
+  let applyOutcome = null;
+  if (state.aiDialog.artifactType === "texture" || state.aiDialog.artifactType === "3d_model") {
+    applyOutcome = applyAiDialogAssetToTarget(activeThread.generatedAsset);
+  } else {
+    applyOutcome = applyAiDialogTextToTarget(result);
+    if (applyOutcome.appliedResult) {
+      activeThread.result = applyOutcome.appliedResult;
     }
-    applyTextureAssetToSelection(state.aiDialog.generatedAsset.id, {
-      targetKind: state.aiDialog.targetKind,
-      targetId: state.aiDialog.targetId,
-    });
-    setAiDialogStatus("Applied texture to the selected item.", "success");
-    persistAiDialogThreadState();
+  }
+  if (!applyOutcome.ok) {
+    setAiDialogStatus(applyOutcome.error, "error");
     renderAiDialog();
     return;
   }
-  if (state.aiDialog.targetKind === "screen") {
-    let applied = false;
-    mutateSceneDoc((sceneDoc) => {
-      const found = findEntityByRef(sceneDoc, { kind: "screen", id: state.aiDialog.targetId });
-      if (!found?.entry) {
-        return;
-      }
-      found.entry.html = result;
-      applied = true;
-    });
-    if (!applied) {
-      setAiDialogStatus("That screen is no longer available.", "error");
-      renderAiDialog();
-      return;
-    }
-    state.aiDialog.result = result;
-    setAiDialogStatus("Applied to the screen.", "success");
-    persistAiDialogThreadState();
-    renderAiDialog();
-    return;
-  }
-  if (state.aiDialog.targetKind === "script_function") {
-    let applied = false;
-    const normalizedBody = normalizeGeneratedScriptBody(result);
-    mutateSceneScriptFunctions((functions) => {
-      const target = functions.find((entry) => entry.id === state.aiDialog.targetId);
-      if (!target) {
-        return;
-      }
-      target.body = normalizedBody;
-      applied = true;
-    });
-    if (!applied) {
-      setAiDialogStatus("That logic function is no longer available.", "error");
-      renderAiDialog();
-      return;
-    }
-    state.aiDialog.result = normalizedBody;
-    setAiDialogStatus("Applied to the function.", "success");
-    persistAiDialogThreadState();
-    renderAiDialog();
-    focusSelectedScriptFunctionBody();
-    return;
-  }
-  if (elements.aiOutput) {
-    elements.aiOutput.value = result;
-  }
-  state.aiDialog.result = result;
-  setAiDialogStatus("Saved as the latest result in AI Builder.", "success");
+  setAiDialogStatus(applyOutcome.message, "success");
   persistAiDialogThreadState();
   renderAiDialog();
+  if (applyOutcome.focusScript) {
+    focusSelectedScriptFunctionBody();
+  }
 }
 
 function focusAiBuilder(fieldName = "reasoningApiKey") {
@@ -8323,10 +8650,10 @@ function updatePrivateGamePanel({ canShare, socketReady }) {
       : pendingShareJoinRequest
         ? "Waiting for the anchor host to approve this nearby game request."
         : joinMode && selectedGame
-          ? "Share Game to add this game inside the nearby group once the host approves."
+          ? "Share Game to add this packaged game inside the nearby group once the host approves."
       : selectedGame
         ? `${getPrivateSavedGameTitle(selectedGame)} is ready to share in this world.`
-        : "Open the game library to choose or generate a simple HTML game.";
+        : "Open the game library to choose, generate, import, or package a nearby game.";
   }
 }
 
@@ -9814,6 +10141,342 @@ function setScreenAiPrompt(screenId = "", value = "") {
     return;
   }
   state.screenAiPromptDrafts.set(normalizedScreenId, String(value ?? ""));
+}
+
+function getSelectedScreenEntryForInspector(sceneDoc = null) {
+  try {
+    const resolvedSceneDoc = sceneDoc ?? parseSceneTextarea();
+    const selected = getSelectedEntity(resolvedSceneDoc);
+    return selected?.kind === "screen" ? selected.entry : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function getScreenPreviewDraft(screenId = "") {
+  const normalizedScreenId = String(screenId ?? "").trim();
+  if (!normalizedScreenId) {
+    return { state: {}, assets: {} };
+  }
+  const draft = state.screenPreviewDrafts.get(normalizedScreenId);
+  return {
+    state: isRecordObject(draft?.state) ? draft.state : {},
+    assets: isRecordObject(draft?.assets) ? draft.assets : {},
+  };
+}
+
+function ensureScreenPreviewDraft(screenId = "") {
+  const normalizedScreenId = String(screenId ?? "").trim();
+  if (!normalizedScreenId) {
+    return { state: {}, assets: {} };
+  }
+  const existing = getScreenPreviewDraft(normalizedScreenId);
+  state.screenPreviewDrafts.set(normalizedScreenId, existing);
+  return existing;
+}
+
+function hasScreenPreviewDraftValues(draft = {}) {
+  return Boolean(
+    isRecordObject(draft?.state) && Object.keys(draft.state).length
+    || isRecordObject(draft?.assets) && Object.keys(draft.assets).length,
+  );
+}
+
+function parseScreenPreviewBindingValue(rawValue) {
+  const text = String(rawValue ?? "");
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return { clear: true, value: undefined };
+  }
+  try {
+    return { clear: false, value: JSON.parse(trimmed) };
+  } catch (_error) {
+    return { clear: false, value: text };
+  }
+}
+
+function formatScreenPreviewBindingValue(value) {
+  if (value == null) {
+    return value === null ? "null" : "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (_error) {
+    return String(value);
+  }
+}
+
+function summarizeScreenBindingValue(value) {
+  if (value === undefined) {
+    return "Missing";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return value ? truncatePrivateUiLabel(value, 80) : '""';
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return truncatePrivateUiLabel(JSON.stringify(value), 80);
+  } catch (_error) {
+    return truncatePrivateUiLabel(String(value), 80);
+  }
+}
+
+function flattenScreenBindingPaths(value, prefix = "") {
+  if (!isRecordObject(value)) {
+    return [];
+  }
+  const paths = [];
+  for (const [key, childValue] of Object.entries(value)) {
+    const nextPath = prefix ? `${prefix}.${key}` : key;
+    if (isRecordObject(childValue) && Object.keys(childValue).length > 0) {
+      paths.push(...flattenScreenBindingPaths(childValue, nextPath));
+      continue;
+    }
+    paths.push(nextPath);
+  }
+  return paths;
+}
+
+function getScreenBindingPathMeta(fullPath = "") {
+  const normalized = String(fullPath ?? "").trim();
+  if (normalized.startsWith("state.")) {
+    return {
+      fullPath: normalized,
+      kind: "state",
+      localPath: normalized.slice("state.".length),
+    };
+  }
+  if (normalized.startsWith("assets.")) {
+    return {
+      fullPath: normalized,
+      kind: "assets",
+      localPath: normalized.slice("assets.".length),
+    };
+  }
+  return {
+    fullPath: normalized,
+    kind: "",
+    localPath: "",
+  };
+}
+
+function setScreenPreviewBindingDraft(screenId = "", fullPath = "", rawValue = "") {
+  const normalizedScreenId = String(screenId ?? "").trim();
+  const pathMeta = getScreenBindingPathMeta(fullPath);
+  if (!normalizedScreenId || !pathMeta.kind || !pathMeta.localPath) {
+    return;
+  }
+  const draft = ensureScreenPreviewDraft(normalizedScreenId);
+  const parsed = parseScreenPreviewBindingValue(rawValue);
+  if (parsed.clear) {
+    deleteByPath(draft[pathMeta.kind], pathMeta.localPath);
+  } else {
+    setByPath(draft[pathMeta.kind], pathMeta.localPath, parsed.value);
+  }
+  if (hasScreenPreviewDraftValues(draft)) {
+    state.screenPreviewDrafts.set(normalizedScreenId, draft);
+  } else {
+    state.screenPreviewDrafts.delete(normalizedScreenId);
+  }
+}
+
+function clearScreenPreviewBindingDraft(screenId = "", fullPath = "") {
+  const normalizedScreenId = String(screenId ?? "").trim();
+  const pathMeta = getScreenBindingPathMeta(fullPath);
+  if (!normalizedScreenId || !pathMeta.kind || !pathMeta.localPath) {
+    return;
+  }
+  const draft = ensureScreenPreviewDraft(normalizedScreenId);
+  deleteByPath(draft[pathMeta.kind], pathMeta.localPath);
+  if (hasScreenPreviewDraftValues(draft)) {
+    state.screenPreviewDrafts.set(normalizedScreenId, draft);
+  } else {
+    state.screenPreviewDrafts.delete(normalizedScreenId);
+  }
+}
+
+function clearScreenPreviewDraft(screenId = "") {
+  const normalizedScreenId = String(screenId ?? "").trim();
+  if (!normalizedScreenId) {
+    return;
+  }
+  state.screenPreviewDrafts.delete(normalizedScreenId);
+}
+
+function buildScreenInspectorRenderableEntry(screen = {}) {
+  const draft = getScreenPreviewDraft(screen.id);
+  const renderable = deepClone(screen) ?? {};
+  renderable.state = isRecordObject(screen.state) ? deepClone(screen.state) : {};
+  renderable.assets = isRecordObject(screen.assets) ? deepClone(screen.assets) : {};
+  for (const path of flattenScreenBindingPaths(draft.state ?? {})) {
+    const previewInfo = getValueByPath(draft.state ?? {}, path);
+    if (previewInfo.exists) {
+      setByPath(renderable.state, path, deepClone(previewInfo.value));
+    }
+  }
+  for (const path of flattenScreenBindingPaths(draft.assets ?? {})) {
+    const previewInfo = getValueByPath(draft.assets ?? {}, path);
+    if (previewInfo.exists) {
+      setByPath(renderable.assets, path, deepClone(previewInfo.value));
+    }
+  }
+  return renderable;
+}
+
+function getScreenInspectorBindingDescriptors(screen = {}) {
+  const draft = getScreenPreviewDraft(screen.id);
+  const templateBindings = new Set(
+    collectScreenTemplateBindings(screen.html ?? "")
+      .filter((path) => String(path ?? "").startsWith("state.") || String(path ?? "").startsWith("assets.")),
+  );
+  const savedBindings = [
+    ...flattenScreenBindingPaths(screen.state ?? {}, "state"),
+    ...flattenScreenBindingPaths(screen.assets ?? {}, "assets"),
+  ];
+  const previewBindings = [
+    ...flattenScreenBindingPaths(draft.state ?? {}, "state"),
+    ...flattenScreenBindingPaths(draft.assets ?? {}, "assets"),
+  ];
+  return [...new Set([
+    ...templateBindings,
+    ...savedBindings,
+    ...previewBindings,
+  ])]
+    .map((fullPath) => {
+      const pathMeta = getScreenBindingPathMeta(fullPath);
+      if (!pathMeta.kind || !pathMeta.localPath) {
+        return null;
+      }
+      const savedInfo = getValueByPath(screen[pathMeta.kind] ?? {}, pathMeta.localPath);
+      const previewInfo = getValueByPath(draft[pathMeta.kind] ?? {}, pathMeta.localPath);
+      const effectiveInfo = previewInfo.exists ? previewInfo : savedInfo;
+      return {
+        ...pathMeta,
+        usedInTemplate: templateBindings.has(fullPath),
+        savedInfo,
+        previewInfo,
+        effectiveInfo,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (left.kind !== right.kind) {
+        return left.kind.localeCompare(right.kind);
+      }
+      return left.localPath.localeCompare(right.localPath, undefined, { numeric: true, sensitivity: "base" });
+    });
+}
+
+function buildScreenInspectorBindingMarkup(screen = {}) {
+  const bindings = getScreenInspectorBindingDescriptors(screen);
+  if (!bindings.length) {
+    return `
+      <div class="pw-screen-binding-empty">
+        <strong>No bindings yet</strong>
+        <p>Add placeholders like <code>{{state.score}}</code> or <code>{{assets.fire_icon}}</code> in the HTML to inspect them here.</p>
+      </div>
+    `;
+  }
+  return bindings.map((binding) => {
+    const badges = [
+      binding.usedInTemplate ? '<span class="pw-screen-binding-row__badge">used</span>' : "",
+      binding.savedInfo.exists ? '<span class="pw-screen-binding-row__badge">saved</span>' : "",
+      binding.previewInfo.exists ? '<span class="pw-screen-binding-row__badge is-preview">test</span>' : "",
+    ].filter(Boolean).join("");
+    const stateClass = !binding.effectiveInfo.exists
+      ? " is-missing"
+      : (binding.previewInfo.exists ? " is-preview" : "");
+    const summary = binding.previewInfo.exists
+      ? `Preview ${summarizeScreenBindingValue(binding.previewInfo.value)}${binding.savedInfo.exists ? ` · saved ${summarizeScreenBindingValue(binding.savedInfo.value)}` : ""}`
+      : binding.savedInfo.exists
+        ? `Saved ${summarizeScreenBindingValue(binding.savedInfo.value)}`
+        : "No saved value yet";
+    const inputValue = binding.previewInfo.exists ? formatScreenPreviewBindingValue(binding.previewInfo.value) : "";
+    const placeholder = binding.kind === "assets"
+      ? (binding.savedInfo.exists ? summarizeScreenBindingValue(binding.savedInfo.value) : "URL or data URL")
+      : (binding.savedInfo.exists ? summarizeScreenBindingValue(binding.savedInfo.value) : "Text or JSON");
+    return `
+      <div class="pw-screen-binding-row${stateClass}">
+        <div class="pw-screen-binding-row__meta">
+          <div class="pw-screen-binding-row__head">
+            <code>${htmlEscape(binding.fullPath)}</code>
+            <div class="pw-screen-binding-row__badges">${badges}</div>
+          </div>
+          <small>${htmlEscape(summary)}</small>
+        </div>
+        <label class="pw-screen-binding-row__field">
+          <span>Test value</span>
+          <input
+            type="text"
+            data-screen-preview-binding="${htmlEscape(binding.fullPath)}"
+            value="${htmlEscape(inputValue)}"
+            placeholder="${htmlEscape(placeholder)}"
+            spellcheck="false"
+          />
+        </label>
+        <button
+          type="button"
+          class="is-muted"
+          data-screen-preview-clear-binding="${htmlEscape(binding.fullPath)}"
+          ${binding.previewInfo.exists ? "" : "disabled"}
+        >Clear</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function buildScreenInspectorPreviewMarkup(screen = {}) {
+  const html = String(resolveScreenHtmlSource(buildScreenInspectorRenderableEntry(screen)) ?? "").trim();
+  if (!html) {
+    return `
+      <div class="pw-screen-binding-empty">
+        <strong>No preview yet</strong>
+        <p>Add screen HTML above to preview the resolved layout here.</p>
+      </div>
+    `;
+  }
+  return `
+    <iframe
+      class="pw-screen-preview__frame"
+      sandbox="allow-same-origin"
+      loading="lazy"
+      referrerpolicy="no-referrer"
+      srcdoc="${htmlEscape(html)}"
+      title="Screen preview"
+    ></iframe>
+  `;
+}
+
+function refreshSelectedScreenInspectorPanels(options = {}) {
+  if (!elements.entityEditor) {
+    return;
+  }
+  const screen = getSelectedScreenEntryForInspector();
+  if (!screen) {
+    return;
+  }
+  if (options.rerenderBindings !== false) {
+    const bindingsHost = elements.entityEditor.querySelector("[data-screen-binding-list]");
+    if (bindingsHost) {
+      bindingsHost.innerHTML = buildScreenInspectorBindingMarkup(screen);
+    }
+  }
+  const previewHost = elements.entityEditor.querySelector("[data-screen-preview-frame]");
+  if (previewHost) {
+    previewHost.innerHTML = buildScreenInspectorPreviewMarkup(screen);
+  }
+  const clearButton = elements.entityEditor.querySelector("[data-screen-preview-clear]");
+  if (clearButton) {
+    clearButton.disabled = !hasScreenPreviewDraftValues(getScreenPreviewDraft(screen.id));
+  }
 }
 
 function ensureSelectedScriptFunction(functions = getSceneScriptFunctions()) {
@@ -14033,7 +14696,7 @@ function openAssetAiDialog(kind = "texture") {
     note: kind === "texture"
       ? "Let the text model ask a few sharp questions first, then it writes a structured texture spec and hands it to the image provider."
       : "Let the text model frame the model first, then it writes a structured 3D spec and hands it to the model provider.",
-    applyLabel: kind === "texture" ? "Apply texture" : "",
+    applyLabel: kind === "texture" ? "Apply texture" : "Apply model",
   });
 }
 
@@ -14955,16 +15618,41 @@ function renderEntityInspector(sceneDoc, selected = null) {
     const aiDisabled = !state.selectedWorld || !state.session || !isEditor() || state.mode !== "build";
     const screenPrompt = getScreenAiPrompt(entry.id);
     elements.entityEditor.innerHTML = `
-      <p class="pw-inspector-note">Static HTML and CSS only. No custom JavaScript or remote resources. Width and height changes now reflow the HTML to match the new viewport instead of just stretching it.</p>
+      <p class="pw-inspector-note">Templated HTML and CSS. No custom JavaScript. Use <code>{{state.score}}</code>, <code>{{assets.icon}}</code>, <code>{{#if state.featured}}...{{/if}}</code>, or <code>{{#eq state.card_type "fire"}}...{{/eq}}</code>. Same-origin or data URL images work in <code>&lt;img&gt;</code>.</p>
       ${buildMaterialEditor(entry.material, { textureTargetKind: kind, textureTargetId: entry.id })}
       ${buildFacingModeEditor(entry)}
       <div class="pw-inspector-grid">${buildVectorFields("Position", "position", entry.position)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Rotation", "rotation", entry.rotation)}</div>
       <div class="pw-inspector-grid">${buildVectorFields("Scale", "scale", entry.scale)}</div>
       <label>
+        <span>Screen State JSON</span>
+        <textarea rows="6" data-screen-json-field="state" spellcheck="false">${htmlEscape(JSON.stringify(entry.state ?? {}, null, 2))}</textarea>
+      </label>
+      <label>
+        <span>Screen Assets JSON</span>
+        <textarea rows="6" data-screen-json-field="assets" spellcheck="false" placeholder='{"fire_icon":"data:image/png;base64,..."}'>${htmlEscape(JSON.stringify(entry.assets ?? {}, null, 2))}</textarea>
+      </label>
+      <label>
         <span>Screen HTML</span>
         <textarea rows="10" data-entity-field="html" data-value-type="text" spellcheck="false">${htmlEscape(entry.html || "")}</textarea>
       </label>
+      <section class="pw-screen-inspector-card">
+        <div class="pw-screen-inspector-card__head">
+          <strong>Binding inspector</strong>
+          <span>Saved screen data plus local test values for this editor only. Type plain text directly, or JSON for numbers, booleans, arrays, and objects.</span>
+        </div>
+        <div class="pw-screen-binding-list" data-screen-binding-list>${buildScreenInspectorBindingMarkup(entry)}</div>
+        <div class="pw-inline-actions">
+          <button type="button" class="is-muted" data-screen-preview-clear="${htmlEscape(entry.id)}" ${hasScreenPreviewDraftValues(getScreenPreviewDraft(entry.id)) ? "" : "disabled"}>Clear test values</button>
+        </div>
+      </section>
+      <section class="pw-screen-inspector-card">
+        <div class="pw-screen-inspector-card__head">
+          <strong>Editor preview</strong>
+          <span>This preview merges saved <code>state</code>/<code>assets</code> with the test values above. It does not save until you edit the real JSON fields.</span>
+        </div>
+        <div class="pw-screen-preview" data-screen-preview-frame>${buildScreenInspectorPreviewMarkup(entry)}</div>
+      </section>
       <label class="pw-screen-ai">
         <span>Starting brief</span>
         <textarea rows="3" data-screen-ai-prompt="${htmlEscape(entry.id)}" spellcheck="false" placeholder="Optional starting brief for the brainstorm thread." ${aiDisabled ? "disabled" : ""}>${htmlEscape(screenPrompt)}</textarea>
@@ -16458,6 +17146,130 @@ function getScreenTextureRenderSize(screen = {}) {
     width: Math.max(384, Math.round(width * scaleDown)),
     height: Math.max(256, Math.round(height * scaleDown)),
   };
+}
+
+function mergeRenderableScreenEntry(authoredScreen = {}, runtimeScreen = null) {
+  const authored = authoredScreen && typeof authoredScreen === "object" && !Array.isArray(authoredScreen)
+    ? authoredScreen
+    : {};
+  const runtime = runtimeScreen && typeof runtimeScreen === "object" && !Array.isArray(runtimeScreen)
+    ? runtimeScreen
+    : {};
+  const authoredState = authored.state && typeof authored.state === "object" && !Array.isArray(authored.state)
+    ? authored.state
+    : {};
+  const runtimeState = runtime.state && typeof runtime.state === "object" && !Array.isArray(runtime.state)
+    ? runtime.state
+    : {};
+  const authoredAssets = authored.assets && typeof authored.assets === "object" && !Array.isArray(authored.assets)
+    ? authored.assets
+    : {};
+  const runtimeAssets = runtime.assets && typeof runtime.assets === "object" && !Array.isArray(runtime.assets)
+    ? runtime.assets
+    : {};
+  return {
+    ...authored,
+    ...runtime,
+    material: {
+      ...(authored.material ?? {}),
+      ...(runtime.material ?? {}),
+    },
+    position: {
+      ...(authored.position ?? {}),
+      ...(runtime.position ?? {}),
+    },
+    rotation: {
+      ...(authored.rotation ?? {}),
+      ...(runtime.rotation ?? {}),
+    },
+    scale: {
+      ...(authored.scale ?? {}),
+      ...(runtime.scale ?? {}),
+    },
+    state: {
+      ...authoredState,
+      ...runtimeState,
+    },
+    assets: {
+      ...authoredAssets,
+      ...runtimeAssets,
+    },
+  };
+}
+
+function isDynamicScreenRenderSource(screen = {}) {
+  const html = String(screen?.html ?? "");
+  const state = screen?.state && typeof screen.state === "object" && !Array.isArray(screen.state)
+    ? screen.state
+    : null;
+  const assets = screen?.assets && typeof screen.assets === "object" && !Array.isArray(screen.assets)
+    ? screen.assets
+    : null;
+  return html.includes("{{")
+    || Boolean(state && Object.keys(state).length)
+    || Boolean(assets && Object.keys(assets).length);
+}
+
+function getRenderableScreenTextureSignature(screen = {}) {
+  const viewport = getScreenTextureRenderSize(screen);
+  return JSON.stringify({
+    html: String(screen?.html ?? ""),
+    state: screen?.state ?? {},
+    assets: screen?.assets ?? {},
+    materialColor: String(screen?.material?.color ?? ""),
+    width: viewport.width,
+    height: viewport.height,
+  });
+}
+
+function applyScreenTextureToMesh(mesh, screen = {}) {
+  if (!mesh || Array.isArray(mesh.material)) {
+    return;
+  }
+  const material = mesh.material;
+  material.toneMapped = false;
+  const renderableScreen = mergeRenderableScreenEntry({}, screen);
+  const fallbackColor = renderableScreen.material?.color || "#ffffff";
+  const html = String(renderableScreen.html ?? "").trim();
+  const nextSignature = getRenderableScreenTextureSignature(renderableScreen);
+  if (mesh.userData.privateWorldScreenTextureSignature === nextSignature) {
+    if (!material.map) {
+      material.color.set(fallbackColor);
+      material.needsUpdate = true;
+    }
+    return;
+  }
+  mesh.userData.privateWorldScreenTextureSignature = nextSignature;
+  if (!html) {
+    if (material.map) {
+      disposeOwnedPreviewTexture(material.map);
+      material.map = null;
+    }
+    material.color.set(fallbackColor);
+    material.needsUpdate = true;
+    return;
+  }
+  const requestId = (Number(mesh.userData.privateWorldScreenTextureRequestId) || 0) + 1;
+  mesh.userData.privateWorldScreenTextureRequestId = requestId;
+  const textureViewport = getScreenTextureRenderSize(renderableScreen);
+  void renderScreenHtmlTexture(THREE, renderableScreen, {
+    width: textureViewport.width,
+    height: textureViewport.height,
+    cache: !isDynamicScreenRenderSource(renderableScreen),
+  }).then((texture) => {
+    if (!mesh.parent || mesh.userData.privateWorldScreenTextureRequestId !== requestId) {
+      disposeOwnedPreviewTexture(texture);
+      return;
+    }
+    if (material.map && material.map !== texture) {
+      disposeOwnedPreviewTexture(material.map);
+    }
+    material.map = texture || null;
+    material.color.set(texture ? "#ffffff" : fallbackColor);
+    material.needsUpdate = true;
+  }).catch(() => {
+    // ignore transient screen texture failures
+  });
 }
 
 function getDominantHitNormal(hit) {
@@ -21196,6 +22008,8 @@ function getRuntimeTransformMaps() {
       prefabInstances: [],
       playerById: new Map(),
       players: [],
+      screenById: new Map(),
+      screens: [],
     };
   }
   return {
@@ -21205,6 +22019,8 @@ function getRuntimeTransformMaps() {
     prefabInstances: runtime.prefab_instances ?? [],
     playerById: new Map((runtime.players ?? []).map((entry) => [entry.id, entry])),
     players: runtime.players ?? [],
+    screenById: new Map((runtime.screens ?? []).map((entry) => [entry.id, entry])),
+    screens: runtime.screens ?? [],
   };
 }
 
@@ -21712,8 +22528,9 @@ function syncPreviewRuntimeSnapshot(snapshot) {
   const dynamicObjects = Array.isArray(snapshot.dynamic_objects) ? snapshot.dynamic_objects : [];
   const prefabInstances = Array.isArray(snapshot.prefab_instances) ? snapshot.prefab_instances : [];
   const players = Array.isArray(snapshot.players) ? snapshot.players : [];
+  const screens = Array.isArray(snapshot.screens) ? snapshot.screens : [];
   const localPlayerId = getLocallyControlledPlayerEntityId();
-  for (const entry of [...dynamicObjects, ...prefabInstances, ...players]) {
+  for (const entry of [...dynamicObjects, ...prefabInstances, ...players, ...screens]) {
     if (!preview.entityMeshes.has(entry.id)) {
       return false;
     }
@@ -21744,6 +22561,15 @@ function syncPreviewRuntimeSnapshot(snapshot) {
         : null,
       playerColor: runtimePlayer?.occupied_by_username ? "#ff5a6f" : "",
     });
+  }
+  for (const runtimeScreen of screens) {
+    const mesh = preview.entityMeshes.get(runtimeScreen.id);
+    applyRuntimeEntryToMesh(mesh, runtimeScreen, {
+      leadSeconds: 0,
+      motionMode: "target_lerp",
+      fallbackScale: runtimeScreen.scale ?? { x: 4, y: 2.25, z: 0.1 },
+    });
+    applyScreenTextureToMesh(mesh, runtimeScreen);
   }
   return true;
 }
@@ -22029,7 +22855,11 @@ function updatePreviewFromSelection(options = {}) {
 
     for (const [index, screen] of (prefabDoc.screens ?? []).entries()) {
       renderedAny = true;
-      const resolvedMaterial = getMergedMaterial(screen.material);
+      const renderableScreen = mergeRenderableScreenEntry({
+        ...screen,
+        material: getMergedMaterial(screen.material),
+      });
+      const resolvedMaterial = renderableScreen.material ?? {};
       const material = new THREE.MeshBasicMaterial({
         color: resolvedMaterial?.color || "#ffffff",
         toneMapped: false,
@@ -22038,26 +22868,13 @@ function updatePreviewFromSelection(options = {}) {
         parent,
         new THREE.BoxGeometry(1, 1, 0.1),
         material,
-        screen.position || { x: 0, y: 2, z: 0 },
-        screen.rotation || { x: 0, y: 0, z: 0 },
-        screen.scale || { x: 4, y: 2, z: 0.1 },
+        renderableScreen.position || { x: 0, y: 2, z: 0 },
+        renderableScreen.rotation || { x: 0, y: 0, z: 0 },
+        renderableScreen.scale || { x: 4, y: 2, z: 0.1 },
         metadata ?? { id: screen.id || `prefab_screen_${index}`, kind: "screen" },
       );
-      const textureViewport = getScreenTextureRenderSize(screen);
-      void renderScreenHtmlTexture(THREE, screen, {
-        width: textureViewport.width,
-        height: textureViewport.height,
-      }).then((texture) => {
-        if (!texture || !mesh.parent) {
-          return;
-        }
-        material.map = texture;
-        material.color.set("#ffffff");
-        material.needsUpdate = true;
-      }).catch(() => {
-        // ignore transient screen texture failures
-      });
-      registerPreviewBillboard(preview, mesh, screen.facing_mode);
+      applyScreenTextureToMesh(mesh, renderableScreen);
+      registerPreviewBillboard(preview, mesh, renderableScreen.facing_mode);
     }
 
     for (const [index, text] of (prefabDoc.texts ?? []).entries()) {
@@ -22743,33 +23560,22 @@ function updatePreviewFromSelection(options = {}) {
   }
 
   for (const screen of sceneDoc.screens ?? []) {
+    const runtimeScreen = runtimeTransforms.screenById.get(screen.id) ?? null;
+    const renderableScreen = mergeRenderableScreenEntry(screen, runtimeScreen);
     const material = new THREE.MeshBasicMaterial({
-      color: screen.material?.color || "#ffffff",
+      color: renderableScreen.material?.color || "#ffffff",
       toneMapped: false,
     });
     const mesh = addMesh(
       new THREE.BoxGeometry(1, 1, 0.1),
       material,
-      screen.position || { x: 0, y: 2, z: 0 },
-      screen.rotation || { x: 0, y: 0, z: 0 },
-      screen.scale || { x: 4, y: 2, z: 0.1 },
+      renderableScreen.position || { x: 0, y: 2, z: 0 },
+      renderableScreen.rotation || { x: 0, y: 0, z: 0 },
+      renderableScreen.scale || { x: 4, y: 2, z: 0.1 },
       { id: screen.id, kind: "screen" },
     );
-    const textureViewport = getScreenTextureRenderSize(screen);
-    void renderScreenHtmlTexture(THREE, screen, {
-      width: textureViewport.width,
-      height: textureViewport.height,
-    }).then((texture) => {
-      if (!texture || !mesh.parent) {
-        return;
-      }
-      material.map = texture;
-      material.color.set("#ffffff");
-      material.needsUpdate = true;
-    }).catch(() => {
-      // ignore transient screen texture failures
-    });
-    registerPreviewBillboard(preview, mesh, screen.facing_mode);
+    applyScreenTextureToMesh(mesh, renderableScreen);
+    registerPreviewBillboard(preview, mesh, renderableScreen.facing_mode);
   }
 
   for (const runtimePrimitive of runtimeTransforms.dynamicObjects) {
@@ -23243,6 +24049,7 @@ async function openWorld(worldId, creatorUsername, includeContent = true, option
       clearPlacementTool();
       state.sceneDrafts.clear();
       state.screenAiPromptDrafts.clear();
+      state.screenPreviewDrafts.clear();
       state.sceneEditorSceneId = "";
       state.scriptFunctionQuery = "";
       state.privateChatEntries = [];
@@ -24204,6 +25011,30 @@ function updateSelectedEntityField(path, rawValue, valueType = "text", options =
       }
     }
   }, options);
+}
+
+function updateSelectedScreenJsonField(fieldName, rawValue) {
+  const normalizedFieldName = String(fieldName ?? "").trim().toLowerCase();
+  const statusLabel = normalizedFieldName === "assets" ? "Screen assets" : "Screen state";
+  let parsed = {};
+  try {
+    parsed = String(rawValue ?? "").trim() ? JSON.parse(rawValue) : {};
+  } catch (_error) {
+    setStatus(`${statusLabel} JSON is invalid.`);
+    return;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    setStatus(`${statusLabel} must be a JSON object.`);
+    return;
+  }
+  void acquireSceneLock();
+  mutateSceneDoc((sceneDoc) => {
+    const selected = getSelectedEntity(sceneDoc);
+    if (!selected || selected.kind !== "screen") {
+      return;
+    }
+    selected.entry[normalizedFieldName === "assets" ? "assets" : "state"] = deepClone(parsed);
+  });
 }
 
 function groupSelectedEntities() {
@@ -25339,6 +26170,25 @@ function bindEvents() {
       setScreenAiPrompt(screenPromptField.getAttribute("data-screen-ai-prompt"), screenPromptField.value);
       return;
     }
+    const screenPreviewField = event.target.closest("[data-screen-preview-binding]");
+    if (screenPreviewField) {
+      const selectedScreen = getSelectedScreenEntryForInspector();
+      if (selectedScreen?.id) {
+        setScreenPreviewBindingDraft(
+          selectedScreen.id,
+          screenPreviewField.getAttribute("data-screen-preview-binding"),
+          screenPreviewField.value,
+        );
+        const clearButton = screenPreviewField
+          .closest(".pw-screen-binding-row")
+          ?.querySelector("[data-screen-preview-clear-binding]");
+        if (clearButton) {
+          clearButton.disabled = !String(screenPreviewField.value ?? "").trim();
+        }
+        refreshSelectedScreenInspectorPanels({ rerenderBindings: false });
+      }
+      return;
+    }
     const field = event.target.closest("[data-entity-field]");
     if (!field) {
       return;
@@ -25349,8 +26199,29 @@ function bindEvents() {
       field.getAttribute("data-value-type") || "text",
       { renderBuilder: false },
     );
+    if (field.getAttribute("data-entity-field") === "html" && getSelectedScreenEntryForInspector()) {
+      refreshSelectedScreenInspectorPanels({ rerenderBindings: false });
+    }
   });
   elements.entityEditor.addEventListener("change", (event) => {
+    const screenJsonField = event.target.closest("[data-screen-json-field]");
+    if (screenJsonField) {
+      updateSelectedScreenJsonField(screenJsonField.getAttribute("data-screen-json-field"), screenJsonField.value);
+      return;
+    }
+    const screenPreviewField = event.target.closest("[data-screen-preview-binding]");
+    if (screenPreviewField) {
+      const selectedScreen = getSelectedScreenEntryForInspector();
+      if (selectedScreen?.id) {
+        setScreenPreviewBindingDraft(
+          selectedScreen.id,
+          screenPreviewField.getAttribute("data-screen-preview-binding"),
+          screenPreviewField.value,
+        );
+        refreshSelectedScreenInspectorPanels();
+      }
+      return;
+    }
     const field = event.target.closest("[data-entity-field]");
     if (!field) {
       return;
@@ -25395,6 +26266,24 @@ function bindEvents() {
     const screenGenerateButton = event.target.closest("[data-screen-ai-generate]");
     if (screenGenerateButton) {
       openScreenAiDialog(screenGenerateButton.getAttribute("data-screen-ai-generate"));
+      return;
+    }
+    const clearScreenPreviewBindingButton = event.target.closest("[data-screen-preview-clear-binding]");
+    if (clearScreenPreviewBindingButton) {
+      const selectedScreen = getSelectedScreenEntryForInspector();
+      if (selectedScreen?.id) {
+        clearScreenPreviewBindingDraft(
+          selectedScreen.id,
+          clearScreenPreviewBindingButton.getAttribute("data-screen-preview-clear-binding"),
+        );
+        refreshSelectedScreenInspectorPanels();
+      }
+      return;
+    }
+    const clearScreenPreviewButton = event.target.closest("[data-screen-preview-clear]");
+    if (clearScreenPreviewButton) {
+      clearScreenPreviewDraft(clearScreenPreviewButton.getAttribute("data-screen-preview-clear"));
+      refreshSelectedScreenInspectorPanels();
       return;
     }
     const groupButton = event.target.closest("[data-group-selection]");
@@ -25512,8 +26401,23 @@ function bindEvents() {
   elements.aiDialogClose?.addEventListener("click", () => {
     closeAiDialog();
   });
+  elements.aiDialogThreadList?.addEventListener("click", (event) => {
+    const deleteButton = event.target.closest("[data-ai-dialog-thread-delete]");
+    if (deleteButton) {
+      deleteAiDialogThread(deleteButton.getAttribute("data-ai-dialog-thread-delete"));
+      return;
+    }
+    const selectButton = event.target.closest("[data-ai-dialog-thread-select]");
+    if (selectButton) {
+      selectAiDialogThread(selectButton.getAttribute("data-ai-dialog-thread-select"));
+    }
+  });
+  elements.aiDialogNewThread?.addEventListener("click", () => {
+    createAiDialogThread();
+  });
   elements.aiDialogInput?.addEventListener("input", (event) => {
-    state.aiDialog.input = event.target.value;
+    const activeThread = getActiveAiDialogThread();
+    activeThread.input = event.target.value;
     persistAiDialogThreadState();
   });
   elements.aiDialogInput?.addEventListener("keydown", (event) => {
@@ -25532,7 +26436,9 @@ function bindEvents() {
     applyAiDialogResult();
   });
   elements.aiDialogResult?.addEventListener("input", (event) => {
-    state.aiDialog.result = event.target.value;
+    const activeThread = getActiveAiDialogThread();
+    activeThread.result = event.target.value;
+    touchAiDialogThread(activeThread);
     persistAiDialogThreadState();
   });
   elements.generateHtml.addEventListener("click", () => {

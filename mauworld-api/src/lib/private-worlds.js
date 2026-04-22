@@ -80,6 +80,7 @@ const ALLOWED_RULE_ACTIONS = new Set([
   "set_visibility",
   "toggle_particles",
   "set_text",
+  "set_screen_state",
   "start_scene",
 ]);
 const PRIVATE_WORLD_BLOCK_UNIT = 5;
@@ -463,6 +464,57 @@ function sanitizeScreenHtml(input) {
   return html;
 }
 
+function sanitizeScreenStateValue(input, depth = 0) {
+  if (depth > 5) {
+    return null;
+  }
+  if (input == null) {
+    return null;
+  }
+  if (typeof input === "boolean") {
+    return input;
+  }
+  if (typeof input === "number") {
+    return Number.isFinite(input) ? input : null;
+  }
+  if (typeof input === "string") {
+    return input.slice(0, 2000);
+  }
+  if (Array.isArray(input)) {
+    return input
+      .slice(0, 64)
+      .map((entry) => sanitizeScreenStateValue(entry, depth + 1));
+  }
+  if (typeof input === "object") {
+    return Object.fromEntries(
+      Object.entries(input)
+        .slice(0, 64)
+        .map(([key, value]) => [slugToken(key).slice(0, 64), sanitizeScreenStateValue(value, depth + 1)])
+        .filter(([key]) => key),
+    );
+  }
+  return null;
+}
+
+function sanitizeScreenAssets(input = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(input)
+      .slice(0, 64)
+      .map(([key, rawValue]) => {
+        const normalizedKey = slugToken(key).slice(0, 64);
+        const normalizedValue = String(rawValue ?? "")
+          .replace(/javascript:/gi, "")
+          .trim()
+          .slice(0, 4096);
+        return normalizedKey && normalizedValue ? [normalizedKey, normalizedValue] : null;
+      })
+      .filter(Boolean),
+  );
+}
+
 function sanitizeScreenEntry(entry = {}, index = 0, options = {}) {
   const html = sanitizeScreenHtml(entry.html ?? entry.html_source ?? entry.htmlSource ?? "");
   return {
@@ -474,6 +526,8 @@ function sanitizeScreenEntry(entry = {}, index = 0, options = {}) {
     material: sanitizeMaterial(entry.material, "#ffffff"),
     facing_mode: sanitizeFacingMode(entry.facing_mode ?? entry.facingMode, "fixed"),
     html,
+    state: sanitizeScreenStateValue(entry.state ?? entry.screen_state ?? entry.screenState ?? {}, 0) ?? {},
+    assets: sanitizeScreenAssets(entry.assets ?? entry.screen_assets ?? entry.screenAssets ?? {}),
     html_hash: crypto.createHash("sha256").update(html).digest("hex"),
     group_id: String(entry.group_id ?? entry.groupId ?? "").trim() || null,
   };
@@ -700,6 +754,20 @@ function buildRuleDsl(rules = []) {
         const loopMode = String(rule.payload?.loop_mode ?? rule.payload?.motion_loop ?? rule.payload?.loop ?? "").trim().toLowerCase();
         if (loopMode) {
           actionParts.push(`loop ${loopMode}`);
+        }
+      }
+      if (rule.action === "set_screen_state") {
+        const path = String(rule.payload?.path ?? rule.payload?.state_path ?? "").trim();
+        const value = rule.payload?.value;
+        if (path) {
+          actionParts.push(`path ${path}`);
+        }
+        if (typeof value === "string" && value) {
+          actionParts.push(`value "${value.replace(/"/g, '\\"')}"`);
+        } else if (typeof value === "number" && Number.isFinite(value)) {
+          actionParts.push(`value ${value}`);
+        } else if (typeof value === "boolean") {
+          actionParts.push(`value ${value}`);
         }
       }
       return `${rule.trigger} -> ${actionParts.join(" ")}`;
@@ -1319,8 +1387,11 @@ export function compileSceneDoc(sceneDoc = {}, world = {}, options = {}) {
         id: entry.id,
         position: entry.position,
         scale: entry.scale,
+        material: entry.material,
         html: entry.html,
         html_hash: entry.html_hash,
+        state: entry.state,
+        assets: entry.assets,
         facing_mode: entry.facing_mode,
       })),
       players: resolvedDoc.players.map((entry) => ({

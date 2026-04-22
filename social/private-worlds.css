@@ -1684,6 +1684,72 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
   transform: translate3d(-50%, 0, 0);
 }
 
+.pw-ai-dialog__threadbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.pw-ai-dialog__threadlist {
+  display: flex;
+  gap: 10px;
+  overflow: auto;
+  padding-bottom: 4px;
+}
+
+.pw-ai-dialog__threadcard {
+  min-width: 220px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.pw-ai-dialog__threadcard.is-active {
+  border-color: rgba(61, 87, 182, 0.28);
+  background: rgba(245, 248, 255, 0.92);
+  box-shadow: 0 10px 28px rgba(32, 46, 104, 0.08);
+}
+
+.pw-ai-dialog__threadselect {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.pw-ai-dialog__threadlabel,
+.pw-ai-dialog__threadmeta {
+  margin: 0;
+}
+
+.pw-ai-dialog__threadlabel {
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pw-ink);
+}
+
+.pw-ai-dialog__threadmeta {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--pw-muted);
+  white-space: pre-wrap;
+}
+
 .pw-ai-dialog__thread {
   display: grid;
   gap: 10px;
@@ -1752,6 +1818,16 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
 
 .pw-ai-dialog__status {
   min-height: 18px;
+}
+
+@media (max-width: 720px) {
+  .pw-ai-dialog__threadbar {
+    grid-template-columns: 1fr;
+  }
+
+  .pw-ai-dialog__threadcard {
+    min-width: 200px;
+  }
 }
 
 body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw-inspector {
@@ -1868,6 +1944,128 @@ body.private-worlds-body.is-world-menu-open.has-selection:not(.is-play-mode) .pw
   margin: 0;
   color: var(--pw-muted);
   line-height: 1.5;
+}
+
+.pw-screen-inspector-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.pw-screen-inspector-card__head {
+  display: grid;
+  gap: 4px;
+}
+
+.pw-screen-inspector-card__head strong {
+  color: var(--pw-text);
+}
+
+.pw-screen-inspector-card__head span {
+  color: var(--pw-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.pw-screen-binding-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pw-screen-binding-row,
+.pw-screen-binding-empty {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--pw-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.pw-screen-binding-row {
+  grid-template-columns: minmax(0, 1.2fr) minmax(180px, 0.9fr) auto;
+  align-items: end;
+}
+
+.pw-screen-binding-row.is-missing {
+  border-color: rgba(255, 184, 77, 0.4);
+  background: rgba(255, 184, 77, 0.08);
+}
+
+.pw-screen-binding-row.is-preview {
+  border-color: rgba(45, 216, 255, 0.3);
+  background: rgba(245, 251, 255, 0.92);
+}
+
+.pw-screen-binding-row__meta,
+.pw-screen-binding-row__field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pw-screen-binding-row__head,
+.pw-screen-binding-row__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.pw-screen-binding-row__head code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--pw-text);
+  font-size: 0.84rem;
+}
+
+.pw-screen-binding-row__meta small {
+  color: var(--pw-muted);
+  line-height: 1.45;
+}
+
+.pw-screen-binding-row__badge {
+  padding: 3px 8px;
+  border: 1px solid var(--pw-line);
+  border-radius: 999px;
+  color: var(--pw-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pw-screen-binding-row__badge.is-preview {
+  border-color: rgba(45, 216, 255, 0.3);
+  background: rgba(45, 216, 255, 0.12);
+  color: #0f6f86;
+}
+
+.pw-screen-binding-row__field span,
+.pw-screen-binding-empty p {
+  color: var(--pw-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.pw-screen-binding-empty strong,
+.pw-screen-binding-empty p {
+  margin: 0;
+}
+
+.pw-screen-preview {
+  min-height: 200px;
+}
+
+.pw-screen-preview__frame {
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid var(--pw-line);
+  border-radius: 10px;
+  background: #ffffff;
 }
 
 .pw-asset-context {
@@ -2268,6 +2466,10 @@ body.private-worlds-body.is-launcher-open .pw-world-menu {
   .pw-inline-actions {
     grid-template-columns: 1fr;
     grid-auto-flow: row;
+  }
+
+  .pw-screen-binding-row {
+    grid-template-columns: 1fr;
   }
 
   .pw-material-texture-card__row {

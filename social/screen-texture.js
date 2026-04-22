@@ -1,6 +1,9 @@
 let htmlToImageModulePromise = null;
 const textureCache = new Map();
 let hiddenRenderHost = null;
+const SCREEN_IF_BLOCK_RE = /{{#if\s+([a-zA-Z0-9_.-]+)}}([\s\S]*?){{\/if}}/g;
+const SCREEN_EQ_BLOCK_RE = /{{#eq\s+([a-zA-Z0-9_.-]+)\s+("[^"]*"|'[^']*'|[^\s}]+)}}([\s\S]*?){{\/eq}}/g;
+const SCREEN_VALUE_RE = /{{\s*([a-zA-Z0-9_.-]+)\s*}}/g;
 
 function getHtmlToImageModule() {
   if (!htmlToImageModulePromise) {
@@ -27,6 +30,130 @@ function ensureRenderHost() {
   return hiddenRenderHost;
 }
 
+function escapeScreenTemplateValue(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getScreenTemplateValue(path = "", context = {}) {
+  const keys = String(path ?? "")
+    .split(".")
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+  if (!keys.length) {
+    return "";
+  }
+  let cursor = context;
+  for (const key of keys) {
+    if (cursor == null || typeof cursor !== "object") {
+      return "";
+    }
+    cursor = cursor[key];
+  }
+  return cursor ?? "";
+}
+
+function parseScreenTemplateLiteral(token = "") {
+  const normalized = String(token ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if ((normalized.startsWith("\"") && normalized.endsWith("\"")) || (normalized.startsWith("'") && normalized.endsWith("'"))) {
+    return normalized.slice(1, -1);
+  }
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+  if (normalized === "null") {
+    return null;
+  }
+  const numeric = Number(normalized);
+  if (Number.isFinite(numeric) && /^-?\d+(?:\.\d+)?$/i.test(normalized)) {
+    return numeric;
+  }
+  return normalized;
+}
+
+function buildScreenTemplateContext(screen = {}) {
+  const state = screen?.state && typeof screen.state === "object" && !Array.isArray(screen.state)
+    ? screen.state
+    : {};
+  const assets = screen?.assets && typeof screen.assets === "object" && !Array.isArray(screen.assets)
+    ? screen.assets
+    : {};
+  return {
+    screen: {
+      ...screen,
+      state,
+      assets,
+    },
+    state,
+    assets,
+    ...state,
+  };
+}
+
+export function collectScreenTemplateBindings(source = "") {
+  const bindings = new Set();
+  const normalized = String(source ?? "");
+  for (const pattern of [SCREEN_EQ_BLOCK_RE, SCREEN_IF_BLOCK_RE, SCREEN_VALUE_RE]) {
+    pattern.lastIndex = 0;
+  }
+  for (const match of normalized.matchAll(SCREEN_EQ_BLOCK_RE)) {
+    if (match?.[1]) {
+      bindings.add(String(match[1]).trim());
+    }
+  }
+  for (const match of normalized.matchAll(SCREEN_IF_BLOCK_RE)) {
+    if (match?.[1]) {
+      bindings.add(String(match[1]).trim());
+    }
+  }
+  for (const match of normalized.matchAll(SCREEN_VALUE_RE)) {
+    if (match?.[1]) {
+      bindings.add(String(match[1]).trim());
+    }
+  }
+  return [...bindings];
+}
+
+function resolveScreenTemplate(source = "", context = {}) {
+  let resolved = String(source ?? "");
+  let previous = "";
+  while (resolved !== previous) {
+    previous = resolved;
+    resolved = resolved.replace(SCREEN_EQ_BLOCK_RE, (_match, path, expectedToken, body) => {
+      const actual = getScreenTemplateValue(path, context);
+      const expected = parseScreenTemplateLiteral(expectedToken);
+      return actual === expected ? body : "";
+    });
+    resolved = resolved.replace(SCREEN_IF_BLOCK_RE, (_match, path, body) => (
+      getScreenTemplateValue(path, context) ? body : ""
+    ));
+  }
+  return resolved.replace(SCREEN_VALUE_RE, (_match, path) => {
+    const value = getScreenTemplateValue(path, context);
+    if (value == null) {
+      return "";
+    }
+    if (typeof value === "object") {
+      return escapeScreenTemplateValue(JSON.stringify(value));
+    }
+    return escapeScreenTemplateValue(value);
+  });
+}
+
+export function resolveScreenHtmlSource(screen = {}) {
+  return resolveScreenTemplate(String(screen?.html ?? ""), buildScreenTemplateContext(screen));
+}
+
 function extractRenderableHtml(source) {
   const raw = String(source ?? "").trim();
   if (!raw) {
@@ -45,7 +172,7 @@ function extractRenderableHtml(source) {
 function buildCacheKey(screen = {}, options = {}) {
   const width = Number(options.width ?? 1024) || 1024;
   const height = Number(options.height ?? 576) || 576;
-  return `${screen.html_hash || screen.id || "screen"}:${width}x${height}:${String(screen.html ?? "").slice(0, 256)}`;
+  return `${screen.id || "screen"}:${width}x${height}:${screen.material?.color || ""}:${resolveScreenHtmlSource(screen)}`;
 }
 
 function buildRenderNode(screen = {}, options = {}) {
@@ -60,7 +187,7 @@ function buildRenderNode(screen = {}, options = {}) {
   root.style.boxSizing = "border-box";
   root.style.fontFamily = "Manrope, Arial, sans-serif";
   root.style.display = "block";
-  root.innerHTML = extractRenderableHtml(screen.html);
+  root.innerHTML = extractRenderableHtml(resolveScreenHtmlSource(screen));
   return root;
 }
 
@@ -69,10 +196,13 @@ export async function renderScreenHtmlTexture(THREE, screen = {}, options = {}) 
   if (!html) {
     return null;
   }
+  const enableCache = options.cache !== false;
   const cacheKey = buildCacheKey(screen, options);
-  const cached = textureCache.get(cacheKey);
-  if (cached) {
-    return cached instanceof Promise ? await cached : cached;
+  if (enableCache) {
+    const cached = textureCache.get(cacheKey);
+    if (cached) {
+      return cached instanceof Promise ? await cached : cached;
+    }
   }
 
   const pending = (async () => {
@@ -91,14 +221,20 @@ export async function renderScreenHtmlTexture(THREE, screen = {}, options = {}) 
       const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.needsUpdate = true;
-      textureCache.set(cacheKey, texture);
+      if (enableCache) {
+        textureCache.set(cacheKey, texture);
+      } else {
+        texture.userData.privateWorldOwnedPreviewTexture = true;
+      }
       return texture;
     } finally {
       node.remove();
     }
   })();
 
-  textureCache.set(cacheKey, pending);
+  if (enableCache) {
+    textureCache.set(cacheKey, pending);
+  }
   return await pending;
 }
 

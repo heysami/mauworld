@@ -21,6 +21,228 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value ?? null));
 }
 
+function slugToken(value, fallback = "asset", maxLength = 64) {
+  const normalized = clipText(value, maxLength)
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function inferAssetMimeType(fileName = "", fallback = "application/octet-stream") {
+  const normalized = String(fileName ?? "").trim().toLowerCase();
+  if (normalized.endsWith(".svg")) {
+    return "image/svg+xml";
+  }
+  if (normalized.endsWith(".png")) {
+    return "image/png";
+  }
+  if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (normalized.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (normalized.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (normalized.endsWith(".glb")) {
+    return "model/gltf-binary";
+  }
+  if (normalized.endsWith(".gltf")) {
+    return "model/gltf+json";
+  }
+  if (normalized.endsWith(".obj")) {
+    return "model/obj";
+  }
+  if (normalized.endsWith(".json")) {
+    return "application/json";
+  }
+  if (normalized.endsWith(".txt")) {
+    return "text/plain;charset=utf-8";
+  }
+  return fallback;
+}
+
+function inferAssetKind(mimeType = "", fileName = "") {
+  const mime = String(mimeType ?? "").trim().toLowerCase();
+  const normalizedFileName = String(fileName ?? "").trim().toLowerCase();
+  if (mime.startsWith("image/")) {
+    return "image";
+  }
+  if (mime.startsWith("audio/")) {
+    return "audio";
+  }
+  if (mime.startsWith("model/") || /\.(?:glb|gltf|obj)$/i.test(normalizedFileName)) {
+    return "model";
+  }
+  return "data";
+}
+
+function estimateDataUrlBytes(dataUrl = "") {
+  const normalized = String(dataUrl ?? "").trim();
+  if (!normalized.startsWith("data:")) {
+    return normalized.length;
+  }
+  const commaIndex = normalized.indexOf(",");
+  if (commaIndex < 0) {
+    return normalized.length;
+  }
+  const meta = normalized.slice(0, commaIndex);
+  const payload = normalized.slice(commaIndex + 1);
+  if (/;base64/i.test(meta)) {
+    return Math.max(0, Math.round((payload.length * 3) / 4));
+  }
+  try {
+    return decodeURIComponent(payload).length;
+  } catch (_error) {
+    return payload.length;
+  }
+}
+
+function normalizeWorldGamePackage(game = {}) {
+  const packageSource = game?.package && typeof game.package === "object" && !Array.isArray(game.package)
+    ? game.package
+    : (game?.manifest?.package && typeof game.manifest.package === "object" && !Array.isArray(game.manifest.package)
+      ? game.manifest.package
+      : {});
+  const assetsSource = packageSource?.assets && typeof packageSource.assets === "object" && !Array.isArray(packageSource.assets)
+    ? packageSource.assets
+    : {};
+  const assets = {};
+  for (const [assetKey, assetValue] of Object.entries(assetsSource)) {
+    if (!assetValue || typeof assetValue !== "object" || Array.isArray(assetValue)) {
+      continue;
+    }
+    const fileName = clipText(assetValue.file_name ?? assetValue.fileName ?? `${assetKey}`, 120) || assetKey;
+    const mimeType = clipText(assetValue.mime_type ?? assetValue.mimeType ?? inferAssetMimeType(fileName), 160) || inferAssetMimeType(fileName);
+    const dataUrl = clipText(assetValue.data_url ?? assetValue.dataUrl ?? assetValue.source ?? assetValue.url ?? "", 2_500_000);
+    if (!dataUrl) {
+      continue;
+    }
+    const id = slugToken(assetValue.id ?? assetKey, `asset-${Object.keys(assets).length + 1}`);
+    assets[id] = {
+      id,
+      kind: clipText(assetValue.kind ?? inferAssetKind(mimeType, fileName), 40) || inferAssetKind(mimeType, fileName),
+      mime_type: mimeType,
+      file_name: fileName,
+      data_url: dataUrl,
+      size_bytes: Math.max(0, Number(assetValue.size_bytes ?? assetValue.sizeBytes ?? estimateDataUrlBytes(dataUrl)) || estimateDataUrlBytes(dataUrl)),
+    };
+  }
+  return {
+    format: "mauworld.world-game.package.v1",
+    version: 1,
+    assets,
+  };
+}
+
+function getWorldGameAssetEntries(game = {}) {
+  return Object.values(normalizeWorldGamePackage(game).assets ?? {});
+}
+
+function buildWorldGameExportPackage(game = {}) {
+  return {
+    format: "mauworld.world-game.v1",
+    title: clipText(game?.title ?? game?.manifest?.title ?? "Untitled Game", 96) || "Untitled Game",
+    prompt: clipText(game?.prompt ?? "", 4000),
+    source_game_id: String(game?.source_game_id ?? "").trim() || null,
+    source_html: String(game?.source_html ?? "").trim(),
+    manifest: cloneJson(game?.manifest ?? {}),
+    package: normalizeWorldGamePackage(game),
+    ai_provider: clipText(game?.ai_provider ?? "", 40) || null,
+    ai_model: clipText(game?.ai_model ?? "", 80) || null,
+  };
+}
+
+function getWorldGameAssetTemplateValue(asset = null, property = "") {
+  if (!asset || typeof asset !== "object") {
+    return "";
+  }
+  const normalizedProperty = String(property ?? "").trim().toLowerCase();
+  if (!normalizedProperty) {
+    return String(asset.data_url ?? "");
+  }
+  if (normalizedProperty === "url" || normalizedProperty === "src" || normalizedProperty === "data_url" || normalizedProperty === "dataurl") {
+    return String(asset.data_url ?? "");
+  }
+  if (normalizedProperty === "mime_type" || normalizedProperty === "mimetype") {
+    return String(asset.mime_type ?? "");
+  }
+  if (normalizedProperty === "file_name" || normalizedProperty === "filename") {
+    return String(asset.file_name ?? "");
+  }
+  if (normalizedProperty === "kind") {
+    return String(asset.kind ?? "");
+  }
+  return String(asset[normalizedProperty] ?? "");
+}
+
+function resolveWorldGameAssetTemplate(sourceHtml = "", game = {}) {
+  const assets = normalizeWorldGamePackage(game).assets ?? {};
+  return String(sourceHtml ?? "").replace(/{{\s*assets\.([a-zA-Z0-9_.-]+)(?:\.([a-zA-Z0-9_.-]+))?\s*}}/g, (_match, assetId, property) => {
+    const asset = assets[String(assetId ?? "").trim()] ?? null;
+    return getWorldGameAssetTemplateValue(asset, property);
+  });
+}
+
+function buildWorldGameShellPackagePayload(game = {}) {
+  const gamePackage = normalizeWorldGamePackage(game);
+  return {
+    assets: Object.fromEntries(Object.entries(gamePackage.assets ?? {}).map(([assetId, asset]) => [assetId, {
+      id: asset.id,
+      kind: asset.kind,
+      mime_type: asset.mime_type,
+      file_name: asset.file_name,
+      data_url: asset.data_url,
+      size_bytes: asset.size_bytes,
+    }])),
+  };
+}
+
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 1000);
+}
+
+function dataUrlToBlob(dataUrl = "") {
+  const normalized = String(dataUrl ?? "").trim();
+  const commaIndex = normalized.indexOf(",");
+  if (commaIndex < 0) {
+    return new Blob([normalized], { type: "application/octet-stream" });
+  }
+  const meta = normalized.slice(0, commaIndex);
+  const payload = normalized.slice(commaIndex + 1);
+  const mimeMatch = meta.match(/^data:([^;,]+)?/i);
+  const mimeType = mimeMatch?.[1] || "application/octet-stream";
+  if (/;base64/i.test(meta)) {
+    const binary = window.atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mimeType });
+  }
+  return new Blob([decodeURIComponent(payload)], { type: mimeType });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error || new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function clampInteger(value, fallback, min, max) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -180,6 +402,9 @@ function buildShellBridgeScript() {
           previewTimer: null,
           previewPending: false,
           lastPreview: null,
+          package: window.__MAUWORLD_GAME_PACKAGE__ && typeof window.__MAUWORLD_GAME_PACKAGE__ === "object"
+            ? clone(window.__MAUWORLD_GAME_PACKAGE__)
+            : { assets: {} },
         };
 
         function clone(value) {
@@ -752,6 +977,20 @@ function buildShellBridgeScript() {
             getState() {
               return clone(state.authoritativeState);
             },
+            getAsset(assetId) {
+              const normalizedAssetId = String(assetId || "").trim();
+              if (!normalizedAssetId) {
+                return null;
+              }
+              return clone(state.package && state.package.assets ? state.package.assets[normalizedAssetId] || null : null);
+            },
+            getAssetUrl(assetId) {
+              const asset = this.getAsset(assetId);
+              return asset && asset.data_url ? String(asset.data_url) : "";
+            },
+            listAssets() {
+              return clone(state.package && state.package.assets ? Object.values(state.package.assets) : []);
+            },
             setState(nextState) {
               post("set-state", { state: clone(nextState) });
             },
@@ -880,8 +1119,13 @@ function buildShellBridgeScript() {
   `;
 }
 
-function injectShellBridge(sourceHtml = "") {
+function injectShellBridge(sourceHtml = "", game = {}) {
   const bridgeScript = buildShellBridgeScript();
+  const packageScript = `
+    <script data-mauworld-game-package>
+      window.__MAUWORLD_GAME_PACKAGE__ = ${JSON.stringify(buildWorldGameShellPackagePayload(game))};
+    </script>
+  `;
   const bridgeStyle = `
     <style data-mauworld-game-bridge>
       html, body {
@@ -895,7 +1139,7 @@ function injectShellBridge(sourceHtml = "") {
       }
     </style>
   `;
-  const normalized = String(sourceHtml ?? "").trim();
+  const normalized = resolveWorldGameAssetTemplate(sourceHtml, game).trim();
   if (!normalized) {
     return [
       "<!DOCTYPE html>",
@@ -904,6 +1148,7 @@ function injectShellBridge(sourceHtml = "") {
       '<meta charset="UTF-8" />',
       '<meta name="viewport" content="width=device-width, initial-scale=1.0" />',
       bridgeStyle,
+      packageScript,
       bridgeScript,
       "</head>",
       '<body><div id="mauworld-game-root"></div></body>',
@@ -912,15 +1157,16 @@ function injectShellBridge(sourceHtml = "") {
   }
   let html = normalized;
   if (/<head[\s>]/i.test(html)) {
-    html = html.replace(/<head([^>]*)>/i, `<head$1>${bridgeStyle}${bridgeScript}`);
+    html = html.replace(/<head([^>]*)>/i, `<head$1>${bridgeStyle}${packageScript}${bridgeScript}`);
   } else if (/<html[\s>]/i.test(html)) {
-    html = html.replace(/<html([^>]*)>/i, `<html$1><head>${bridgeStyle}${bridgeScript}</head>`);
+    html = html.replace(/<html([^>]*)>/i, `<html$1><head>${bridgeStyle}${packageScript}${bridgeScript}</head>`);
   } else {
     html = [
       "<!DOCTYPE html>",
       "<html>",
       "<head>",
       bridgeStyle,
+      packageScript,
       bridgeScript,
       "</head>",
       `<body>${html}</body>`,
@@ -945,15 +1191,53 @@ export function createWorldGamesApi(options = {}) {
         getAccessToken: options.getAccessToken,
       });
     },
+    async brainstormGame(input = {}) {
+      return apiRequest("/games/ai/brainstorm", {
+        method: "POST",
+        getAccessToken: options.getAccessToken,
+        body: {
+          prompt: String(input.prompt ?? "").trim() || undefined,
+          objective: String(input.objective ?? "").trim() || undefined,
+          apiKey: String(input.apiKey ?? "").trim(),
+          model: String(input.model ?? "").trim() || undefined,
+          provider: String(input.provider ?? "openai").trim(),
+          messages: Array.isArray(input.messages) ? input.messages : [],
+        },
+      });
+    },
     async generateGame(input = {}) {
       return apiRequest("/games/generate", {
         method: "POST",
         getAccessToken: options.getAccessToken,
         body: {
-          prompt: String(input.prompt ?? "").trim(),
+          prompt: String(input.prompt ?? "").trim() || undefined,
+          objective: String(input.objective ?? "").trim() || undefined,
           apiKey: String(input.apiKey ?? "").trim(),
           model: String(input.model ?? "").trim() || undefined,
           provider: String(input.provider ?? "openai").trim(),
+          messages: Array.isArray(input.messages) ? input.messages : [],
+        },
+      });
+    },
+    async updateGame(gameId, input = {}) {
+      return apiRequest(`/games/${encodeURIComponent(String(gameId ?? "").trim())}`, {
+        method: "PATCH",
+        getAccessToken: options.getAccessToken,
+        body: {
+          title: input.title,
+          prompt: input.prompt,
+          source_html: input.source_html,
+          manifest: input.manifest,
+          package: input.package,
+        },
+      });
+    },
+    async importGame(input = {}) {
+      return apiRequest("/games/import", {
+        method: "POST",
+        getAccessToken: options.getAccessToken,
+        body: {
+          package: input.package ?? input,
         },
       });
     },
@@ -970,17 +1254,32 @@ export function createWorldGamesApi(options = {}) {
 export function createWorldGameLibrary(options = {}) {
   const storagePrefix = clipText(options.storagePrefix ?? "mauworld-world-games", 64) || "mauworld-world-games";
   const api = options.api;
+  const createThreadId = () => `game-thread-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+  const createEmptyThread = () => ({
+    id: createThreadId(),
+    messages: [],
+    input: "",
+    generatedGameId: "",
+    generatedGameTitle: "",
+    updatedAt: Date.now(),
+  });
   const state = {
     open: false,
     loading: false,
     generating: false,
+    aiBusy: false,
+    updating: false,
     status: "",
     games: [],
     selectedGameId: "",
-    prompt: "",
     apiKey: readStorage(`${storagePrefix}:api-key`, ""),
     model: readStorage(`${storagePrefix}:model`, "gpt-5.4-mini"),
+    aiStatus: "",
+    aiStatusTone: "",
+    threads: [createEmptyThread()],
+    activeThreadId: "",
   };
+  state.activeThreadId = state.threads[0].id;
 
   const overlay = document.createElement("div");
   overlay.className = "mw-game-modal";
@@ -1001,12 +1300,16 @@ export function createWorldGameLibrary(options = {}) {
           <div class="mw-game-library__toolbar">
             <div class="mw-game-library__toolbar-copy">
               <strong>Your games</strong>
-              <span>Single-file HTML apps</span>
+              <span>HTML game packages</span>
             </div>
-            <button type="button" class="is-muted" data-game-library-refresh>Refresh</button>
+            <div class="mw-game-library__toolbar-actions">
+              <button type="button" class="is-muted" data-game-library-import-button>Import</button>
+              <button type="button" class="is-muted" data-game-library-refresh>Refresh</button>
+            </div>
           </div>
           <div class="mw-game-library__status" data-game-library-status></div>
           <div class="mw-game-library__list" data-game-library-list></div>
+          <input type="file" data-game-library-import-file accept=".json,.mauworld-game.json,application/json" hidden />
         </section>
         <section class="mw-game-library__column mw-game-library__column--detail">
           <div class="mw-game-library__detail" data-game-library-detail></div>
@@ -1014,12 +1317,18 @@ export function createWorldGameLibrary(options = {}) {
             <div class="mw-game-generator__header">
               <div class="mw-game-generator__copy">
                 <strong>Generate a new game</strong>
-                <span>Your AI key is used for this request only.</span>
+                <span>Discuss in threads first, then generate the final nearby game package.</span>
               </div>
             </div>
+            <div class="mw-game-generator__threadbar">
+              <div class="mw-game-generator__threadlist" data-game-generator-thread-list aria-label="Game brainstorm threads"></div>
+              <button type="button" class="is-muted" data-game-generator-new-thread>New thread</button>
+            </div>
+            <div class="mw-game-generator__discussion" data-game-generator-thread></div>
+            <div class="mw-game-generator__status" data-game-generator-status></div>
             <label>
-              <span>Prompt</span>
-              <textarea data-game-generator-prompt rows="6" placeholder="Build a simple two-player chess game for Mauworld."></textarea>
+              <span>Message</span>
+              <textarea data-game-generator-prompt rows="5" placeholder="Plan the game, seat roles, visuals, and packaged assets before generating the final result."></textarea>
             </label>
             <div class="mw-game-generator__grid">
               <label>
@@ -1032,8 +1341,10 @@ export function createWorldGameLibrary(options = {}) {
               </label>
             </div>
             <div class="mw-game-generator__actions">
-              <button type="submit" data-game-generator-submit>Generate</button>
+              <button type="button" class="is-muted" data-game-generator-send>Send</button>
+              <button type="submit" data-game-generator-submit>Generate final</button>
             </div>
+            <p class="mw-game-generator__hint">Packaged assets can live outside the HTML through <code>{{assets.asset_id}}</code> placeholders and can be replaced or imported later.</p>
           </form>
         </section>
       </div>
@@ -1050,13 +1361,71 @@ export function createWorldGameLibrary(options = {}) {
     prompt: overlay.querySelector("[data-game-generator-prompt]"),
     apiKey: overlay.querySelector("[data-game-generator-key]"),
     model: overlay.querySelector("[data-game-generator-model]"),
+    send: overlay.querySelector("[data-game-generator-send]"),
     submit: overlay.querySelector("[data-game-generator-submit]"),
     refresh: overlay.querySelector("[data-game-library-refresh]"),
+    importButton: overlay.querySelector("[data-game-library-import-button]"),
+    importFile: overlay.querySelector("[data-game-library-import-file]"),
+    threadList: overlay.querySelector("[data-game-generator-thread-list]"),
+    thread: overlay.querySelector("[data-game-generator-thread]"),
+    generatorStatus: overlay.querySelector("[data-game-generator-status]"),
+    newThread: overlay.querySelector("[data-game-generator-new-thread]"),
   };
 
-  elements.prompt.value = state.prompt;
   elements.apiKey.value = state.apiKey;
   elements.model.value = state.model;
+
+  function ensureThreads() {
+    if (!Array.isArray(state.threads) || !state.threads.length) {
+      state.threads = [createEmptyThread()];
+    }
+    if (!state.threads.some((thread) => thread.id === state.activeThreadId)) {
+      state.activeThreadId = state.threads[0].id;
+    }
+    return state.threads;
+  }
+
+  function getActiveThread() {
+    const threads = ensureThreads();
+    return threads.find((thread) => thread.id === state.activeThreadId) || threads[0];
+  }
+
+  function touchThread(thread = null) {
+    if (!thread) {
+      return;
+    }
+    thread.updatedAt = Date.now();
+  }
+
+  function getThreadPreview(thread = {}) {
+    const latestAssistant = [...(Array.isArray(thread.messages) ? thread.messages : [])]
+      .reverse()
+      .find((entry) => entry.role === "assistant")
+      || (Array.isArray(thread.messages) ? thread.messages[0] : null);
+    return clipText(
+      latestAssistant?.text
+      ?? (Array.isArray(thread.messages) ? thread.messages.find((entry) => entry.role === "user")?.text : "")
+      ?? thread.generatedGameTitle
+      ?? "New thread",
+      90,
+    ) || "New thread";
+  }
+
+  function getThreadSummary(thread = {}) {
+    const turnCount = Array.isArray(thread.messages) ? thread.messages.length : 0;
+    const turnLabel = `${turnCount} turn${turnCount === 1 ? "" : "s"}`;
+    if (thread.generatedGameId) {
+      return `${turnLabel} · final ready\n${getThreadPreview(thread)}`;
+    }
+    if ((Array.isArray(thread.messages) ? thread.messages.length : 0) > 0) {
+      return `${turnLabel} · brainstorming\n${getThreadPreview(thread)}`;
+    }
+    return "New thread";
+  }
+
+  function canGenerateFinal() {
+    return getActiveThread().messages.some((entry) => entry.role === "assistant");
+  }
 
   function getSelectedGame() {
     return state.games.find((game) => String(game?.id ?? "") === state.selectedGameId) ?? null;
@@ -1073,6 +1442,24 @@ export function createWorldGameLibrary(options = {}) {
       return "error";
     }
     return "info";
+  }
+
+  function getGeneratorStatusTone() {
+    if (!state.aiStatus) {
+      return "";
+    }
+    if (state.aiBusy || state.generating || state.updating) {
+      return "working";
+    }
+    if (/(fail|error|could not|couldn't|denied|invalid|unsupported|forbidden|unauthor)/i.test(state.aiStatus)) {
+      return "error";
+    }
+    return state.aiStatusTone || "info";
+  }
+
+  function setGeneratorStatus(text = "", tone = "") {
+    state.aiStatus = String(text ?? "");
+    state.aiStatusTone = String(tone ?? "");
   }
 
   function renderList() {
@@ -1125,6 +1512,7 @@ export function createWorldGameLibrary(options = {}) {
       `;
       return;
     }
+    const assetEntries = getWorldGameAssetEntries(game);
     elements.detail.innerHTML = `
       <div class="mw-game-library__detail-head">
         <div class="mw-game-library__detail-copy">
@@ -1133,6 +1521,7 @@ export function createWorldGameLibrary(options = {}) {
           <p>${escapeHtml(getGameDescription(game) || "No description yet.")}</p>
         </div>
         <div class="mw-game-library__detail-actions">
+          <button type="button" class="is-muted" data-game-library-download>Download Package</button>
           <button type="button" data-game-library-share>Share Nearby</button>
         </div>
       </div>
@@ -1140,15 +1529,134 @@ export function createWorldGameLibrary(options = {}) {
         <span>${escapeHtml(getMultiplayerModeLabel(game.manifest))}</span>
         <span>${escapeHtml(getPlayerCountLabel(game.manifest))}</span>
         <span>${game.manifest?.allow_viewers === false ? "Players only" : "Viewers allowed"}</span>
+        <span>${assetEntries.length} packaged asset${assetEntries.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="mw-game-library__assets">
+        <div class="mw-game-library__assets-head">
+          <div class="mw-game-library__toolbar-copy">
+            <strong>Package assets</strong>
+            <span>Replace or download resources without rewriting the game HTML.</span>
+          </div>
+          <button type="button" class="is-muted" data-game-library-asset-add ${state.updating ? "disabled" : ""}>Add asset</button>
+        </div>
+        ${assetEntries.length ? `
+          <div class="mw-game-library__asset-list">
+            ${assetEntries.map((asset) => `
+              <div class="mw-game-library__asset-item">
+                <div class="mw-game-library__asset-copy">
+                  <strong>${escapeHtml(asset.id)}</strong>
+                  <span>${escapeHtml(asset.kind)} · ${escapeHtml(asset.mime_type || "application/octet-stream")} · ${Math.max(1, Math.round((asset.size_bytes ?? 0) / 1024))} KB</span>
+                </div>
+                <div class="mw-game-library__asset-actions">
+                  <button type="button" class="is-muted" data-game-library-asset-download="${escapeHtml(asset.id)}">Download</button>
+                  <button type="button" class="is-muted" data-game-library-asset-replace="${escapeHtml(asset.id)}" ${state.updating ? "disabled" : ""}>Replace</button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `
+          <div class="mw-game-library__empty">
+            <strong>No packaged assets yet</strong>
+            <p>The HTML can still work as a single-file app, but package assets let you swap icons, images, and model files separately.</p>
+          </div>
+        `}
+        <input type="file" data-game-library-asset-file hidden />
       </div>
     `;
+    const selectedGame = getSelectedGame();
     elements.detail.querySelector("[data-game-library-share]")?.addEventListener("click", () => {
-      const selectedGame = getSelectedGame();
       if (!selectedGame) {
         return;
       }
       options.onShare?.(selectedGame);
     });
+    elements.detail.querySelector("[data-game-library-download]")?.addEventListener("click", () => {
+      if (!selectedGame) {
+        return;
+      }
+      const packagePayload = buildWorldGameExportPackage(selectedGame);
+      downloadBlob(
+        `${slugToken(getGameTitle(selectedGame, "mauworld-game"), "mauworld-game", 96)}.mauworld-game.json`,
+        new Blob([JSON.stringify(packagePayload, null, 2)], { type: "application/json" }),
+      );
+    });
+    const assetFileInput = elements.detail.querySelector("[data-game-library-asset-file]");
+    assetFileInput?.addEventListener("change", async () => {
+      const selectedFile = assetFileInput.files?.[0];
+      const assetId = String(assetFileInput.dataset.assetId ?? "").trim();
+      if (!selectedGame || !selectedFile || !assetId) {
+        assetFileInput.value = "";
+        return;
+      }
+      state.updating = true;
+      setGeneratorStatus(`Updating ${assetId}...`, "working");
+      render();
+      try {
+        const dataUrl = await readFileAsDataUrl(selectedFile);
+        const nextPackage = normalizeWorldGamePackage(selectedGame);
+        const normalizedAssetId = slugToken(assetId, "asset");
+        nextPackage.assets[normalizedAssetId] = {
+          id: normalizedAssetId,
+          kind: inferAssetKind(selectedFile.type || inferAssetMimeType(selectedFile.name), selectedFile.name),
+          mime_type: selectedFile.type || inferAssetMimeType(selectedFile.name),
+          file_name: selectedFile.name || normalizedAssetId,
+          data_url: dataUrl,
+        };
+        const payload = await api.updateGame(selectedGame.id, {
+          title: selectedGame.title,
+          prompt: selectedGame.prompt,
+          source_html: selectedGame.source_html,
+          manifest: selectedGame.manifest,
+          package: nextPackage,
+        });
+        await refresh({ selectGameId: payload?.game?.id ?? selectedGame.id });
+        state.status = `Updated asset "${normalizedAssetId}".`;
+        setGeneratorStatus(`Updated ${normalizedAssetId}.`, "success");
+        options.onSelect?.(getSelectedGame());
+      } catch (error) {
+        state.status = error?.message || "Could not update the game asset.";
+        setGeneratorStatus(error?.message || "Could not update the game asset.", "error");
+      } finally {
+        state.updating = false;
+        assetFileInput.value = "";
+        render();
+      }
+    });
+    elements.detail.querySelector("[data-game-library-asset-add]")?.addEventListener("click", () => {
+      if (!assetFileInput || state.updating) {
+        return;
+      }
+      const requestedId = typeof window.prompt === "function"
+        ? slugToken(window.prompt("Asset id", "new_asset") ?? "", "new_asset")
+        : "new_asset";
+      if (!requestedId) {
+        return;
+      }
+      assetFileInput.dataset.assetId = requestedId;
+      assetFileInput.click();
+    });
+    for (const button of elements.detail.querySelectorAll("[data-game-library-asset-download]")) {
+      button.addEventListener("click", () => {
+        if (!selectedGame) {
+          return;
+        }
+        const assetId = button.getAttribute("data-game-library-asset-download") || "";
+        const asset = normalizeWorldGamePackage(selectedGame).assets?.[assetId];
+        if (!asset?.data_url) {
+          return;
+        }
+        downloadBlob(asset.file_name || `${asset.id}`, dataUrlToBlob(asset.data_url));
+      });
+    }
+    for (const button of elements.detail.querySelectorAll("[data-game-library-asset-replace]")) {
+      button.addEventListener("click", () => {
+        if (!assetFileInput || state.updating) {
+          return;
+        }
+        assetFileInput.dataset.assetId = button.getAttribute("data-game-library-asset-replace") || "";
+        assetFileInput.click();
+      });
+    }
   }
 
   function renderStatus() {
@@ -1163,14 +1671,74 @@ export function createWorldGameLibrary(options = {}) {
     }
   }
 
+  function renderDiscussion() {
+    const activeThread = getActiveThread();
+    const busy = state.aiBusy || state.generating || state.updating;
+    if (elements.threadList) {
+      elements.threadList.innerHTML = ensureThreads().map((thread, index) => {
+        const activeClass = thread.id === state.activeThreadId ? " is-active" : "";
+        return `
+          <div class="mw-game-generator__threadcard${activeClass}">
+            <button type="button" class="mw-game-generator__threadselect" data-game-generator-thread-select="${escapeHtml(thread.id)}" ${busy ? "disabled" : ""}>
+              <p class="mw-game-generator__threadlabel">Thread ${index + 1}</p>
+              <p class="mw-game-generator__threadmeta">${escapeHtml(getThreadSummary(thread))}</p>
+            </button>
+            <button type="button" class="is-muted" data-game-generator-thread-delete="${escapeHtml(thread.id)}" ${busy || state.threads.length <= 1 ? "disabled" : ""}>Delete</button>
+          </div>
+        `;
+      }).join("");
+    }
+    if (elements.thread) {
+      elements.thread.innerHTML = activeThread.messages.length
+        ? activeThread.messages.map((entry) => `
+          <article class="mw-game-generator__message is-${escapeHtml(entry.role)}">
+            <span class="mw-game-generator__message-role">${escapeHtml(entry.role === "assistant" ? "AI" : "You")}</span>
+            <p>${escapeHtml(entry.text)}</p>
+          </article>
+        `).join("")
+        : `
+          <div class="mw-game-library__empty">
+            <strong>Start a discussion</strong>
+            <p>Talk through the rules, asset package, seat setup, and UI direction before you generate the final game.</p>
+          </div>
+        `;
+    }
+    if (elements.prompt && elements.prompt.value !== activeThread.input) {
+      elements.prompt.value = activeThread.input || "";
+    }
+    if (elements.generatorStatus) {
+      elements.generatorStatus.textContent = state.aiStatus || "";
+      if (state.aiStatus) {
+        elements.generatorStatus.dataset.state = getGeneratorStatusTone();
+      } else {
+        delete elements.generatorStatus.dataset.state;
+      }
+    }
+  }
+
   function renderForm() {
+    const busy = state.aiBusy || state.generating || state.updating;
+    const activeThread = getActiveThread();
     if (!elements.submit) {
       return;
     }
-    elements.submit.disabled = state.generating === true;
-    elements.submit.textContent = state.generating ? "Generating..." : "Generate";
+    elements.submit.disabled = busy || !canGenerateFinal();
+    elements.submit.textContent = state.generating ? "Generating..." : "Generate final";
+    if (elements.send) {
+      elements.send.disabled = busy || !String(activeThread.input ?? "").trim();
+      elements.send.textContent = state.aiBusy ? "Sending..." : "Send";
+    }
     if (elements.refresh) {
-      elements.refresh.disabled = state.loading === true || state.generating === true;
+      elements.refresh.disabled = state.loading === true || busy;
+    }
+    if (elements.importButton) {
+      elements.importButton.disabled = state.loading === true || busy;
+    }
+    if (elements.newThread) {
+      elements.newThread.disabled = busy;
+    }
+    if (elements.prompt) {
+      elements.prompt.disabled = busy;
     }
   }
 
@@ -1180,6 +1748,7 @@ export function createWorldGameLibrary(options = {}) {
     renderStatus();
     renderList();
     renderDetail();
+    renderDiscussion();
     renderForm();
   }
 
@@ -1214,8 +1783,9 @@ export function createWorldGameLibrary(options = {}) {
     state.open = true;
     state.status = "";
     if (config.prompt) {
-      state.prompt = String(config.prompt);
-      elements.prompt.value = state.prompt;
+      const activeThread = getActiveThread();
+      activeThread.input = String(config.prompt);
+      touchThread(activeThread);
     }
     if (config.selectGameId) {
       state.selectedGameId = String(config.selectGameId);
@@ -1232,52 +1802,144 @@ export function createWorldGameLibrary(options = {}) {
     render();
   }
 
+  async function handleBrainstormSend() {
+    if (!api) {
+      return;
+    }
+    const activeThread = getActiveThread();
+    const prompt = clipText(activeThread.input ?? "", 4000);
+    const apiKey = String(elements.apiKey?.value ?? "").trim();
+    const model = clipText(elements.model?.value ?? "", 80) || "gpt-5.4-mini";
+    if (!prompt) {
+      setGeneratorStatus("Add a message before sending it to AI.", "error");
+      render();
+      return;
+    }
+    if (!apiKey) {
+      setGeneratorStatus("Enter your AI key. It stays in this browser only.", "error");
+      render();
+      return;
+    }
+    state.aiBusy = true;
+    setGeneratorStatus("Sending the current thread to AI...", "working");
+    state.apiKey = apiKey;
+    state.model = model;
+    writeStorage(`${storagePrefix}:api-key`, apiKey);
+    writeStorage(`${storagePrefix}:model`, model);
+    activeThread.messages.push({
+      role: "user",
+      text: prompt,
+    });
+    activeThread.input = "";
+    activeThread.generatedGameId = "";
+    activeThread.generatedGameTitle = "";
+    touchThread(activeThread);
+    render();
+    try {
+      const payload = await api.brainstormGame({
+        objective: prompt,
+        messages: activeThread.messages,
+        apiKey,
+        model,
+        provider: "openai",
+      });
+      const replyText = clipText(payload?.message?.text ?? "", 8000);
+      if (replyText) {
+        activeThread.messages.push({
+          role: "assistant",
+          text: replyText,
+        });
+        touchThread(activeThread);
+      }
+      setGeneratorStatus("AI replied. Keep discussing or generate the final package when it feels ready.", "success");
+    } catch (error) {
+      setGeneratorStatus(error?.message || "Could not continue the brainstorm.", "error");
+    } finally {
+      state.aiBusy = false;
+      render();
+    }
+  }
+
   async function handleGenerate(event) {
     event?.preventDefault?.();
     if (!api) {
       return;
     }
-    const prompt = clipText(elements.prompt?.value ?? "", 4000);
+    const activeThread = getActiveThread();
+    const unsentInput = clipText(activeThread.input ?? "", 4000);
     const apiKey = String(elements.apiKey?.value ?? "").trim();
     const model = clipText(elements.model?.value ?? "", 80) || "gpt-5.4-mini";
-    if (!prompt) {
-      state.status = "Add a prompt before generating a game.";
+    if (unsentInput) {
+      setGeneratorStatus("Send your latest revision to AI first, then generate the final game.", "error");
+      render();
+      return;
+    }
+    if (!canGenerateFinal()) {
+      setGeneratorStatus("Discuss the game with AI first, then generate the final package.", "error");
       render();
       return;
     }
     if (!apiKey) {
-      state.status = "Enter your AI key. It stays in this browser only.";
+      setGeneratorStatus("Enter your AI key. It stays in this browser only.", "error");
       render();
       return;
     }
     state.generating = true;
-    state.status = "Generating a new Mauworld game...";
-    state.prompt = prompt;
     state.apiKey = apiKey;
     state.model = model;
     writeStorage(`${storagePrefix}:api-key`, apiKey);
     writeStorage(`${storagePrefix}:model`, model);
+    setGeneratorStatus("Generating the final nearby game package...", "working");
     render();
     try {
       const payload = await api.generateGame({
-        prompt,
+        messages: activeThread.messages,
         apiKey,
         model,
         provider: "openai",
       });
       if (payload?.game) {
+        activeThread.generatedGameId = payload.game.id;
+        activeThread.generatedGameTitle = getGameTitle(payload.game);
+        touchThread(activeThread);
         state.selectedGameId = payload.game.id;
       }
       await refresh({ selectGameId: payload?.game?.id ?? state.selectedGameId });
       state.status = payload?.game ? `"${getGameTitle(payload.game)}" is ready.` : "Game generated.";
+      setGeneratorStatus(payload?.game ? `Generated "${getGameTitle(payload.game)}".` : "Game generated.", "success");
       options.onGenerated?.(payload?.game ?? null);
       options.onSelect?.(getSelectedGame());
       render();
     } catch (error) {
-      state.status = error?.message || "Could not generate a game.";
+      setGeneratorStatus(error?.message || "Could not generate a game.", "error");
       render();
     } finally {
       state.generating = false;
+      render();
+    }
+  }
+
+  async function handleImportPackageFile(file) {
+    if (!api || !file) {
+      return;
+    }
+    state.loading = true;
+    state.status = "Importing game package...";
+    render();
+    try {
+      const payload = await api.importGame({
+        package: JSON.parse(await file.text()),
+      });
+      await refresh({ selectGameId: payload?.game?.id ?? state.selectedGameId });
+      state.status = payload?.game ? `"${getGameTitle(payload.game)}" was imported.` : "Game package imported.";
+      options.onSelect?.(getSelectedGame());
+    } catch (error) {
+      state.status = error?.message || "Could not import the game package.";
+    } finally {
+      state.loading = false;
+      if (elements.importFile) {
+        elements.importFile.value = "";
+      }
       render();
     }
   }
@@ -1293,6 +1955,74 @@ export function createWorldGameLibrary(options = {}) {
   });
   elements.refresh?.addEventListener("click", () => {
     void refresh({ selectGameId: state.selectedGameId });
+  });
+  elements.importButton?.addEventListener("click", () => {
+    elements.importFile?.click();
+  });
+  elements.importFile?.addEventListener("change", () => {
+    const selectedFile = elements.importFile?.files?.[0];
+    if (!selectedFile) {
+      return;
+    }
+    void handleImportPackageFile(selectedFile);
+  });
+  elements.threadList?.addEventListener("click", (event) => {
+    const selectButton = event.target.closest("[data-game-generator-thread-select]");
+    if (selectButton) {
+      const threadId = selectButton.getAttribute("data-game-generator-thread-select") || "";
+      if (!state.aiBusy && !state.generating && !state.updating && state.threads.some((thread) => thread.id === threadId)) {
+        state.activeThreadId = threadId;
+        render();
+      }
+      return;
+    }
+    const deleteButton = event.target.closest("[data-game-generator-thread-delete]");
+    if (deleteButton) {
+      const threadId = deleteButton.getAttribute("data-game-generator-thread-delete") || "";
+      if (!threadId || state.aiBusy || state.generating || state.updating || state.threads.length <= 1) {
+        return;
+      }
+      if (typeof window.confirm === "function" && !window.confirm("Delete this brainstorm thread?")) {
+        return;
+      }
+      const index = state.threads.findIndex((thread) => thread.id === threadId);
+      if (index < 0) {
+        return;
+      }
+      state.threads.splice(index, 1);
+      if (state.activeThreadId === threadId) {
+        state.activeThreadId = state.threads[Math.max(0, index - 1)]?.id || state.threads[0]?.id || "";
+      }
+      setGeneratorStatus("Deleted brainstorm thread.", "success");
+      render();
+    }
+  });
+  elements.newThread?.addEventListener("click", () => {
+    if (state.aiBusy || state.generating || state.updating) {
+      return;
+    }
+    const thread = createEmptyThread();
+    state.threads.push(thread);
+    state.activeThreadId = thread.id;
+    setGeneratorStatus("Started a fresh brainstorm thread.", "success");
+    render();
+  });
+  elements.send?.addEventListener("click", () => {
+    void handleBrainstormSend();
+  });
+  elements.prompt?.addEventListener("input", () => {
+    const activeThread = getActiveThread();
+    activeThread.input = elements.prompt.value || "";
+    touchThread(activeThread);
+    renderForm();
+  });
+  elements.prompt?.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      if (!state.aiBusy && !state.generating && !state.updating) {
+        void handleBrainstormSend();
+      }
+    }
   });
   elements.form?.addEventListener("submit", (event) => {
     void handleGenerate(event);
@@ -1661,7 +2391,7 @@ export function createWorldGameShell(options = {}) {
       return;
     }
     state.iframeReady = false;
-    elements.frame.srcdoc = injectShellBridge(state.game.source_html);
+    elements.frame.srcdoc = injectShellBridge(state.game.source_html, state.game);
   }
 
   function requestOpen(session = {}) {

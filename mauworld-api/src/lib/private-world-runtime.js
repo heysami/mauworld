@@ -306,6 +306,39 @@ function pushRuntimeEvent(simulation, event = {}) {
   simulation.recentEvents = simulation.recentEvents.slice(0, 24);
 }
 
+function setRuntimeObjectPathValue(target = {}, path = "", value = null) {
+  const keys = String(path ?? "")
+    .split(".")
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  if (!keys.length || !target || typeof target !== "object") {
+    return false;
+  }
+  let cursor = target;
+  for (const key of keys.slice(0, -1)) {
+    if (!cursor[key] || typeof cursor[key] !== "object" || Array.isArray(cursor[key])) {
+      cursor[key] = {};
+    }
+    cursor = cursor[key];
+  }
+  cursor[keys[keys.length - 1]] = cloneJson(value);
+  return true;
+}
+
+function sanitizeRuntimeScreenStateValue(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  return String(value).slice(0, 2000);
+}
+
 function clearDynamicObjectAuthority(entry) {
   if (!entry) {
     return;
@@ -1970,6 +2003,19 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     color: entry.color,
     enabled: entry.enabled !== false,
   }]));
+  const screenState = Object.fromEntries((sceneDoc.screens ?? []).map((entry) => [entry.id, {
+    id: entry.id,
+    instance_id: entry.instance_id ?? null,
+    position: cloneJson(entry.position),
+    rotation: cloneJson(entry.rotation),
+    scale: cloneJson(entry.scale),
+    material: cloneJson(entry.material),
+    facing_mode: entry.facing_mode,
+    html: entry.html,
+    html_hash: entry.html_hash,
+    state: cloneJson(entry.state ?? {}),
+    assets: cloneJson(entry.assets ?? {}),
+  }]));
   const textState = Object.fromEntries((sceneDoc.texts ?? []).map((entry) => [entry.id, {
     id: entry.id,
     instance_id: entry.instance_id ?? null,
@@ -2024,6 +2070,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       sceneStartFired: sceneStarted === true && elapsedMs > 0,
     },
     particleState,
+    screenState,
     textState,
     recentEvents: [],
     commandQueue: [],
@@ -2358,6 +2405,27 @@ function executeRuleAction(simulation, rule, context = {}) {
     return;
   }
 
+  if (rule.action === "set_screen_state") {
+    const targetScreenId = targetId || String(rule.payload?.screen_id ?? rule.payload?.screenId ?? "").trim() || null;
+    const path = String(rule.payload?.path ?? rule.payload?.state_path ?? rule.payload?.statePath ?? "").trim();
+    const targetScreen = targetScreenId ? simulation.screenState?.[targetScreenId] : null;
+    if (targetScreen && path) {
+      setRuntimeObjectPathValue(
+        targetScreen.state,
+        path,
+        sanitizeRuntimeScreenStateValue(rule.payload?.value),
+      );
+      pushRuntimeEvent(simulation, {
+        type: "set_screen_state",
+        rule_id: rule.id,
+        screen_id: targetScreenId,
+        path,
+      });
+    }
+    markRuleFired();
+    return;
+  }
+
   if (rule.action === "switch_scene") {
     const sceneId = parseRuleSceneTarget(rule);
     if (sceneId) {
@@ -2553,6 +2621,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
   const publicDynamicObjects = runtime.dynamicObjects.filter((entry) => !entry.instance_id);
   const publicTriggerZones = runtime.triggerZones.filter((entry) => !entry.instance_id);
   const publicParticles = Object.values(runtime.particleState).filter((entry) => !entry.instance_id);
+  const publicScreens = Object.values(runtime.screenState ?? {}).filter((entry) => !entry.instance_id);
   const publicTexts = Object.values(runtime.textState).filter((entry) => !entry.instance_id);
   return {
     instance_id: simulation.instanceId ?? null,
@@ -2637,6 +2706,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       occupant_ids: [...entry.currentOccupants],
     })),
     particles: publicParticles.map((entry) => cloneJson(entry)),
+    screens: publicScreens.map((entry) => cloneJson(entry)),
     texts: publicTexts.map((entry) => cloneJson(entry)),
     recent_events: cloneJson(runtime.recentEvents),
   };

@@ -69,6 +69,7 @@ const ALLOWED_RULE_ACTIONS = new Set([
   "set_visibility",
   "toggle_particles",
   "set_text",
+  "set_screen_state",
   "start_scene",
 ]);
 
@@ -264,6 +265,27 @@ function parseDslVector(token = "") {
       z: Number(match[4]),
     }),
   };
+}
+
+function parseDslLiteralValue(token = "") {
+  const normalized = String(token ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+  if (normalized === "null") {
+    return null;
+  }
+  const numeric = Number(normalized);
+  if (Number.isFinite(numeric) && /^-?\d+(?:\.\d+)?$/i.test(normalized)) {
+    return numeric;
+  }
+  return normalized;
 }
 
 function parseDirectiveVectorValue(rawValue = "") {
@@ -1057,7 +1079,7 @@ function compileRuleLine(line = "", index = 0, options = {}) {
     } else if (token === "text" && next) {
       rule.payload.text_id = resolveEntityAlias(aliasMap, next);
       tokenIndex += 1;
-    } else if (token === "value" && next) {
+    } else if (token === "value" && next && action !== "set_screen_state") {
       rule.payload.value = next;
       tokenIndex += 1;
     } else if (token === "visible" && next) {
@@ -1089,6 +1111,12 @@ function compileRuleLine(line = "", index = 0, options = {}) {
         rule.payload.force_magnitude = numericValue;
         tokenIndex += 1;
       }
+    } else if (action === "set_screen_state" && (token === "path" || token === "key" || token === "field") && next) {
+      rule.payload.path = String(next).trim();
+      tokenIndex += 1;
+    } else if (action === "set_screen_state" && token === "value" && next) {
+      rule.payload.value = parseDslLiteralValue(next);
+      tokenIndex += 1;
     } else if (token === "force" && actionTokens.length >= tokenIndex + 4) {
       rule.payload.force = sanitizeVector3({
         x: Number(actionTokens[tokenIndex + 1]),
@@ -1110,6 +1138,9 @@ function compileRuleLine(line = "", index = 0, options = {}) {
 
   if (action === "set_text" && !rule.payload.value && freeTextTokens.length > 0) {
     rule.payload.value = freeTextTokens.join(" ").slice(0, 160);
+  }
+  if (action === "set_screen_state" && rule.payload.value === undefined && freeTextTokens.length > 0) {
+    rule.payload.value = parseDslLiteralValue(freeTextTokens.join(" "));
   }
 
   return {
