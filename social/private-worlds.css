@@ -1647,7 +1647,7 @@ body.private-worlds-body.is-world-menu-open .pw-world-menu {
 }
 
 .pw-ai-dialog-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 5;
   background: rgba(251, 252, 255, 0.7);
@@ -1662,11 +1662,12 @@ body.private-worlds-body.is-world-menu-open .pw-world-menu {
 }
 
 .pw-ai-dialog {
+  position: fixed;
   top: 18px;
   left: 50%;
   width: min(1120px, calc(100vw - 36px));
+  height: min(760px, calc(100dvh - 36px));
   max-height: calc(100dvh - 36px);
-  min-height: min(760px, calc(100dvh - 36px));
   overflow: hidden;
   grid-template-columns: minmax(252px, 292px) minmax(0, 1fr);
   gap: 0;
@@ -1807,7 +1808,9 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   gap: 14px;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   padding: 18px 20px 18px 18px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 251, 255, 0.96));
@@ -1852,16 +1855,20 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
 }
 
 .pw-ai-dialog__panes {
+  display: grid;
   min-height: 0;
   overflow: hidden;
 }
 
 .pw-ai-dialog__pane {
   display: grid;
+  align-content: start;
   min-height: 0;
   height: 100%;
   overflow: auto;
   padding-right: 6px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .pw-ai-dialog__thread {
@@ -1973,7 +1980,7 @@ body.private-worlds-body.is-ai-dialog-open .pw-ai-dialog {
   .pw-ai-dialog {
     top: 12px;
     width: min(calc(100vw - 24px), 980px);
-    min-height: calc(100dvh - 24px);
+    height: calc(100dvh - 24px);
     max-height: calc(100dvh - 24px);
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);

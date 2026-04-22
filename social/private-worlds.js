@@ -56,7 +56,7 @@ import {
   createWorldGamesApi,
   createWorldGameLibrary,
   createWorldGameShell,
-} from "./world-games-ui.js?v=20260419i";
+} from "./world-games-ui.js?v=20260422aiconsistency1";
 import {
   applyAuthoritativeMotionSample,
   computeLocalInteractionVelocity,
