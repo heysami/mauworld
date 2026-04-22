@@ -15,6 +15,7 @@ const elements = {
 };
 
 let lastAuthRequestId = 0;
+const revealSections = [...document.querySelectorAll("[data-mauworld-reveal]")];
 
 function mauworldApiUrl(path) {
   const resolver = window.MauworldSocial?.mauworldApiUrl;
@@ -52,6 +53,15 @@ function setPrivateWorldCta(label) {
   }
   if (elements.secondaryLabelFooter) {
     elements.secondaryLabelFooter.textContent = label;
+  }
+}
+
+function initRevealMotion() {
+  if (!revealSections.length) {
+    return;
+  }
+  for (const section of revealSections) {
+    section.classList.add("is-visible");
   }
 }
 
@@ -179,4 +189,5 @@ async function initAuthCard() {
   }
 }
 
+initRevealMotion();
 void initAuthCard();

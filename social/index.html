@@ -12,11 +12,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
-    <link rel="stylesheet" href="/social/mauworld.css?v=20260422overview1" />
+    <link rel="stylesheet" href="/social/mauworld.css?v=20260422overview2" />
   </head>
   <body class="mauworld-overview-body">
     <a class="skip-link" href="#content">Skip to content</a>
@@ -39,7 +39,7 @@
           <a class="button button--primary" href="/social/world.html">
             <span>Go to Public World</span>
             <span class="button__tail" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M7 12h10"></path>
                 <path d="m12 7 5 5-5 5"></path>
               </svg>
@@ -50,162 +50,144 @@
     </header>
 
     <main class="page-main mauworld-overview" id="content">
-      <section class="mauworld-hero">
-        <div class="mauworld-hero__copy">
-          <p class="section-kicker">Mauworld overview</p>
-          <h1>Mauworld is where Maumau becomes social.</h1>
-          <p class="mauworld-hero__lede">
-            It has a public world for dropping in, talking, reacting, browsing what is live, and joining nearby
-            screen, video, voice, or game shares. When you sign in, Mauworld also unlocks persistent voice chat,
-            private worlds, build mode, and tools for making a space feel like yours.
-          </p>
-
-          <div class="hero__actions">
-            <a class="button button--primary" href="/social/world.html">
-              <span>Go to Public World</span>
-              <span class="button__tail" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                  <path d="M7 12h10"></path>
-                  <path d="m12 7 5 5-5 5"></path>
-                </svg>
-              </span>
-            </a>
-            <a class="button button--soft" href="/social/private-worlds.html" data-mauworld-secondary-cta>
-              <span data-mauworld-secondary-label>Open Private Worlds</span>
-              <span class="button__tail" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                  <path d="M7 12h10"></path>
-                  <path d="m12 7 5 5-5 5"></path>
-                </svg>
-              </span>
-            </a>
-          </div>
-
-          <div class="mauworld-hero__tags" aria-label="Highlights">
-            <span>Guest-friendly public world</span>
-            <span>Nearby screen, video, voice, and game sharing</span>
-            <span>Persistent voice when signed in</span>
-            <span>Private worlds with build and play modes</span>
-          </div>
+      <section class="mauworld-hero" data-mauworld-reveal>
+        <div class="mauworld-hero__intro">
+          <span class="mauworld-mini-tag">Public first, private when needed</span>
+          <span class="mauworld-mini-tag">Guest-friendly start</span>
         </div>
 
-        <aside class="mauworld-auth-card" data-mauworld-auth-card data-auth-state="checking" aria-live="polite">
-          <div class="mauworld-auth-card__head">
-            <p class="mauworld-auth-card__eyebrow">Account status</p>
-            <span class="mauworld-auth-card__badge" data-mauworld-auth-badge>Checking account</span>
+        <div class="mauworld-hero__grid">
+          <div class="mauworld-shell mauworld-hero__copy-shell">
+            <div class="mauworld-core mauworld-hero__copy-core">
+              <p class="section-kicker">Mauworld overview</p>
+              <h1>Drop in, share what you are doing, then keep a world of your own.</h1>
+              <p class="mauworld-hero__lede">
+                Mauworld starts as a public social space. You can chat, react, see what is live, and share screen,
+                video, voice, or games nearby. If you sign in, you can also open private worlds.
+              </p>
+
+              <div class="mauworld-hero__actions hero__actions">
+                <a class="button button--primary" href="/social/world.html">
+                  <span>Go to Public World</span>
+                  <span class="button__tail" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <path d="M7 12h10"></path>
+                      <path d="m12 7 5 5-5 5"></path>
+                    </svg>
+                  </span>
+                </a>
+                <a class="button button--soft" href="/social/private-worlds.html" data-mauworld-secondary-cta>
+                  <span data-mauworld-secondary-label>Open Private Worlds</span>
+                  <span class="button__tail" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <path d="M7 12h10"></path>
+                      <path d="m12 7 5 5-5 5"></path>
+                    </svg>
+                  </span>
+                </a>
+              </div>
+
+            </div>
           </div>
 
-          <h2 data-mauworld-auth-title>Looking for your Mauworld session</h2>
-          <p class="mauworld-auth-card__copy" data-mauworld-auth-copy>
-            Public World still works even if you stay a guest.
-          </p>
+          <div class="mauworld-shell mauworld-stage-shell">
+            <div class="mauworld-core mauworld-stage-core">
+              <div class="mauworld-stage" aria-hidden="true">
+                <div class="mauworld-stage__grid"></div>
+                <div class="mauworld-stage__ring mauworld-stage__ring--one"></div>
+                <div class="mauworld-stage__ring mauworld-stage__ring--two"></div>
+                <article class="mauworld-node mauworld-node--public">
+                  <span class="mauworld-node__eyebrow">Public World</span>
+                  <strong>Chat, react, and see what is live.</strong>
+                </article>
+                <article class="mauworld-node mauworld-node--share">
+                  <span class="mauworld-node__eyebrow">Live Share</span>
+                  <strong>Screen, video, voice, or game nearby.</strong>
+                </article>
+                <article class="mauworld-node mauworld-node--voice">
+                  <span class="mauworld-node__eyebrow">Persistent Voice</span>
+                  <strong>Keep talking without restarting the room.</strong>
+                </article>
+                <article class="mauworld-node mauworld-node--private">
+                  <span class="mauworld-node__eyebrow">Private Worlds</span>
+                  <strong>Your own room with its own entry link.</strong>
+                </article>
+                <article class="mauworld-node mauworld-node--build">
+                  <span class="mauworld-node__eyebrow">Build Layer</span>
+                  <strong>Build mode is there when you need more.</strong>
+                </article>
+              </div>
 
-          <dl class="mauworld-auth-list">
-            <div>
-              <dt>Public World</dt>
-              <dd data-mauworld-auth-public data-state="ready">Ready now</dd>
-            </div>
-            <div>
-              <dt>Nearby share</dt>
-              <dd data-mauworld-auth-share data-state="checking">Checking</dd>
-            </div>
-            <div>
-              <dt>Persistent voice</dt>
-              <dd data-mauworld-auth-voice data-state="checking">Checking</dd>
-            </div>
-            <div>
-              <dt>Private worlds</dt>
-              <dd data-mauworld-auth-private data-state="checking">Checking</dd>
-            </div>
-          </dl>
+              <aside class="mauworld-auth-card" data-mauworld-auth-card data-auth-state="checking" aria-live="polite">
+                <div class="mauworld-auth-card__head">
+                  <p class="mauworld-auth-card__eyebrow">Account status</p>
+                  <span class="mauworld-auth-card__badge" data-mauworld-auth-badge>Checking account</span>
+                </div>
 
-          <p class="mauworld-auth-card__meta" data-mauworld-auth-meta>
-            We use the same Mauworld auth config already present in the world pages.
-          </p>
-        </aside>
+                <h2 data-mauworld-auth-title>Looking for your Mauworld session</h2>
+                <p class="mauworld-auth-card__copy" data-mauworld-auth-copy>
+                  Public World still works even if you stay a guest.
+                </p>
+
+                <dl class="mauworld-auth-list">
+                  <div>
+                    <dt>Public World</dt>
+                    <dd data-mauworld-auth-public data-state="ready">Ready now</dd>
+                  </div>
+                  <div>
+                    <dt>Nearby share</dt>
+                    <dd data-mauworld-auth-share data-state="checking">Checking</dd>
+                  </div>
+                  <div>
+                    <dt>Persistent voice</dt>
+                    <dd data-mauworld-auth-voice data-state="checking">Checking</dd>
+                  </div>
+                  <div>
+                    <dt>Private worlds</dt>
+                    <dd data-mauworld-auth-private data-state="checking">Checking</dd>
+                  </div>
+                </dl>
+
+                <p class="mauworld-auth-card__meta" data-mauworld-auth-meta>
+                  We use the same Mauworld auth config already present in the world pages.
+                </p>
+              </aside>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <section class="mauworld-strip">
-        <div class="mauworld-strip__intro">
-          <p class="section-kicker">What everyday people can do here</p>
-          <h2>Start simple, then go deeper only if you want to.</h2>
-          <p>
-            The code already supports the basic social stuff people actually reach for first: talking, finding what is
-            live, showing someone a screen, keeping a voice room open, or moving a group into a private space.
-          </p>
+      <section class="mauworld-section mauworld-uses" data-mauworld-reveal>
+        <div class="mauworld-section__head">
+          <p class="section-kicker">What normal people would care about</p>
+          <h2>Three useful things, without overthinking it.</h2>
         </div>
 
-        <div class="mauworld-use-grid">
+        <div class="mauworld-uses__grid">
           <article class="mauworld-use-card">
-            <strong>Hang out in the public world</strong>
-            <p>Join as a guest, pick a name, move around, bubble chat, and drop quick reactions without setting up a full account first.</p>
+            <span class="mauworld-card-label">01</span>
+            <h3>Talk and hang out.</h3>
+            <p>Enter the public world quickly, pick a name, chat, react, and get a feel for what is happening.</p>
           </article>
           <article class="mauworld-use-card">
-            <strong>Show someone what you are doing</strong>
-            <p>Share a screen, camera feed, voice channel, or a game nearby, give it a title, and let people open it from the live list.</p>
+            <span class="mauworld-card-label">02</span>
+            <h3>Show people what you are doing.</h3>
+            <p>Share screen, video, voice, or a game nearby so people can join from the live list.</p>
           </article>
           <article class="mauworld-use-card">
-            <strong>Keep a room for your own people</strong>
-            <p>Signed-in users can open private worlds, share entry links, and keep a room, field, or board for friends, teammates, or a recurring group.</p>
-          </article>
-          <article class="mauworld-use-card">
-            <strong>Find what is already active</strong>
-            <p>Search live share titles, browse posts, and switch search modes to look up private worlds when you want to jump into something already happening.</p>
+            <span class="mauworld-card-label">03</span>
+            <h3>Keep your own space.</h3>
+            <p>Sign in to open private worlds. If you want more later, build mode is already there.</p>
           </article>
         </div>
       </section>
 
-      <section class="mauworld-feature-grid" aria-label="Mauworld features">
-        <article class="mauworld-feature-card mauworld-feature-card--wide">
-          <div>
-            <p class="mauworld-feature-card__eyebrow">Public World</p>
-            <h2>The easy front door stays useful even before sign-in.</h2>
-          </div>
-          <p>
-            Public World is not just a splash screen. It already supports guest chat, reactions, live browsing, and
-            search. That makes it a good first stop before you decide whether you want to share something, listen in,
-            or move into a more private space.
-          </p>
-        </article>
-
-        <article class="mauworld-feature-card">
-          <p class="mauworld-feature-card__eyebrow">Voice and live presence</p>
-          <h2>Persistent voice is there when the room should stay open.</h2>
-          <p>
-            Signed-in users can start persistent voice chat and keep a live social layer around the world instead of
-            treating every interaction like a one-off call.
-          </p>
-        </article>
-
-        <article class="mauworld-feature-card">
-          <p class="mauworld-feature-card__eyebrow">Private Worlds</p>
-          <h2>You can keep your own space instead of borrowing the public one.</h2>
-          <p>
-            Private worlds already support entry links, live feed activity, and different world types such as rooms,
-            fields, and boards, so they can be casual hangouts or something more structured.
-          </p>
-        </article>
-
-        <article class="mauworld-feature-card mauworld-feature-card--wide">
-          <div>
-            <p class="mauworld-feature-card__eyebrow">Build and AI tools</p>
-            <h2>Mauworld can go beyond hanging out when you want to make something.</h2>
-          </div>
-          <p>
-            The private-world code already supports build mode, scenes, screens, models, textures, prefabs, scene
-            logic, editor access, and AI-assisted screen HTML or scripts. For most people that means a space can start
-            simple, then gradually become a custom place instead of staying a generic room forever.
-          </p>
-        </article>
-      </section>
-
-      <section class="mauworld-cta">
+      <section class="mauworld-cta" data-mauworld-reveal>
         <div class="mauworld-cta__copy">
           <p class="section-kicker">Start here</p>
-          <h2>Public World is still the best first click.</h2>
+          <h2>Start in Public World. Sign in if you want the space to stay with you.</h2>
           <p>
-            Enter it as a guest if you just want to look around. Sign in when you want nearby sharing, persistent
-            voice, and private worlds to come with you.
+            That is the simplest and most honest way into Mauworld.
           </p>
         </div>
 
@@ -213,7 +195,7 @@
           <a class="button button--primary" href="/social/world.html">
             <span>Go to Public World</span>
             <span class="button__tail" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M7 12h10"></path>
                 <path d="m12 7 5 5-5 5"></path>
               </svg>
@@ -222,7 +204,7 @@
           <a class="button button--soft" href="/social/private-worlds.html" data-mauworld-secondary-cta-footer>
             <span data-mauworld-secondary-label-footer>Open Private Worlds</span>
             <span class="button__tail" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M7 12h10"></path>
                 <path d="m12 7 5 5-5 5"></path>
               </svg>
@@ -246,7 +228,7 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/mauworld.js?v=20260422overview1"></script>
+    <script type="module" src="/social/mauworld.js?v=20260422overview2"></script>
     <script src="/script.js" defer></script>
   </body>
 </html>
