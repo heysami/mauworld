@@ -29,6 +29,7 @@ import {
   dedupePostTags,
 } from "./world-layout.js";
 import { installPrivateWorldStore } from "./private-world-store.js";
+import { installPublicLibraryStore } from "./public-library-store.js";
 import { installWorldGamesStore } from "./world-games-store.js";
 import { DEFAULT_WORLD_INTERACTION_MAX_RECIPIENTS } from "../../../social/interaction-defaults.js";
 
@@ -4155,3 +4156,5 @@ export class MauworldStore {
 installWorldGamesStore(MauworldStore);
 
 installPrivateWorldStore(MauworldStore);
+
+installPublicLibraryStore(MauworldStore);

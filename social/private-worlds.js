@@ -9815,6 +9815,46 @@ function normalizeProfileLauncherTab(tab = "") {
   return PROFILE_LAUNCHER_TABS.has(tab) ? tab : "account";
 }
 
+function buildPublicLibraryPublishUrl({
+  kind = "",
+  sourceWorldId = "",
+  sourceGameId = "",
+  sourceAssetId = "",
+  resourceKind = "",
+} = {}) {
+  const url = new URL("/social/library.html", window.location.origin);
+  if (kind) {
+    url.searchParams.set("publish", kind);
+  }
+  if (sourceWorldId) {
+    url.searchParams.set("sourceWorldId", sourceWorldId);
+  }
+  if (sourceGameId) {
+    url.searchParams.set("sourceGameId", sourceGameId);
+  }
+  if (sourceAssetId) {
+    url.searchParams.set("sourceAssetId", sourceAssetId);
+  }
+  if (resourceKind) {
+    url.searchParams.set("resourceKind", resourceKind);
+  }
+  return `${url.pathname}${url.search}`;
+}
+
+function isOwnedByCurrentProfile(world = {}) {
+  return String(world?.creator?.username ?? "").trim().toLowerCase() === String(state.profile?.username ?? "").trim().toLowerCase();
+}
+
+function resolvePublicLibraryResourceKindForAsset(asset = {}) {
+  if (asset.asset_type === "sound") {
+    return "sound";
+  }
+  if (asset.asset_type === "model") {
+    return "model";
+  }
+  return isVideoTextureAsset(asset) ? "video" : "texture";
+}
+
 function buildProfileAssetSummary(asset = {}) {
   const typeLabel = asset.asset_type === "model"
     ? "Model"
@@ -9873,7 +9913,22 @@ function renderProfileWorldBrowser() {
       : '<div class="pw-world-card"><p>No private worlds yet. Create one to get started.</p></div>';
     return;
   }
-  elements.profileWorldList.innerHTML = buildPrivateWorldBrowserResultsMarkup(worlds, {
+  const publishCard = state.selectedWorld && isOwnedByCurrentProfile(state.selectedWorld)
+    ? `
+      <div class="pw-world-card">
+        <h3>Publish ${htmlEscape(state.selectedWorld.name || "this world")}</h3>
+        <p>Turn the current world into a public snapshot package with preview media, reviews, and either download or contact delivery.</p>
+        <div class="pw-inline-actions">
+          <a class="pw-ghost-button" href="${htmlEscape(buildPublicLibraryPublishUrl({
+            kind: "world_package",
+            sourceWorldId: state.selectedWorld.world_id,
+          }))}">Publish Selected World</a>
+          <a class="pw-ghost-button is-muted" href="/social/library.html">Open Public Library</a>
+        </div>
+      </div>
+    `
+    : "";
+  elements.profileWorldList.innerHTML = publishCard + buildPrivateWorldBrowserResultsMarkup(worlds, {
     selectedKey: state.selectedWorld ? getPrivateWorldBrowserKey(state.selectedWorld) : "",
     resultDataAttribute: "data-profile-world-result",
     includeStatus: true,
@@ -9901,6 +9956,13 @@ function renderProfileGameLibrarySummary() {
     elements.profileGameSummary.innerHTML = `
       <strong>${htmlEscape(getPrivateSavedGameTitle(selectedGame))}</strong>
       <p>${htmlEscape(selectedGame.manifest?.summary || selectedGame.prompt || "Open the game library to refine, export, or share this game nearby.")}</p>
+      <div class="pw-inline-actions">
+        <a class="pw-ghost-button" href="${htmlEscape(buildPublicLibraryPublishUrl({
+          kind: "game",
+          sourceGameId: selectedGame.id,
+        }))}">Publish Selected Game</a>
+        <a class="pw-ghost-button is-muted" href="/social/library.html">Open Public Library</a>
+      </div>
     `;
     return;
   }
@@ -9959,6 +10021,11 @@ function renderProfileResourcesBrowser() {
   }
   elements.profileResourceList.innerHTML = assets.map((asset) => {
     const summary = buildProfileAssetSummary(asset);
+    const publishHref = buildPublicLibraryPublishUrl({
+      kind: "resource",
+      sourceAssetId: asset.id,
+      resourceKind: resolvePublicLibraryResourceKindForAsset(asset),
+    });
     return `
       <article class="pw-prefab-card">
         <div class="pw-prefab-card__head">
@@ -9974,6 +10041,10 @@ function renderProfileResourcesBrowser() {
               : ""}
         <p>${htmlEscape(summary.meta)}</p>
         <small>${htmlEscape(summary.note)}</small>
+        <div class="pw-prefab-card__actions">
+          <a class="pw-ghost-button" href="${htmlEscape(publishHref)}">Publish</a>
+          <a class="pw-ghost-button is-muted" href="/social/library.html">Library</a>
+        </div>
       </article>
     `;
   }).join("");

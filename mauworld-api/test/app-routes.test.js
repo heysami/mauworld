@@ -422,6 +422,337 @@ function createStubStore() {
   };
 }
 
+function createLibraryRouteStore() {
+  const state = {
+    publicList: null,
+    publicDetail: null,
+    publicDownload: null,
+    publicProfile: null,
+    ownListings: null,
+    publish: null,
+    update: null,
+    archive: null,
+    listingReview: null,
+    deleteListingReview: null,
+    profileReview: null,
+    deleteProfileReview: null,
+  };
+  return {
+    state,
+    store: {
+      ...createStubStore(),
+      async listPublicLibraryListings(input, viewerProfile) {
+        state.publicList = { input, viewerProfile };
+        return {
+          listings: [{
+            id: "listing_123",
+            kind: input.kind || "resource",
+            resource_kind: input.resourceKind || null,
+            title: "Lantern Pack",
+            description: "Reusable lantern assets",
+            delivery_mode: "download",
+            owner: {
+              id: "profile_123",
+              username: "maker",
+              display_name: "Maker",
+              profile_rating_average: 4.8,
+              profile_review_count: 2,
+              active_listing_count: 1,
+            },
+            media: [],
+            reviews: [],
+            permissions: {
+              can_edit: false,
+              can_review: true,
+            },
+            download: {
+              available: true,
+              href: "/api/public/library/listings/listing_123/download",
+              filename: "lantern-pack.zip",
+              content_type: "application/zip",
+            },
+          }],
+          filters: {
+            q: input.q ?? "",
+            sort: input.sort ?? "newest",
+            kind: input.kind ?? null,
+            resource_kind: input.resourceKind ?? null,
+          },
+        };
+      },
+      async getPublicLibraryListing(input, viewerProfile) {
+        state.publicDetail = { input, viewerProfile };
+        return {
+          listing: {
+            id: input.listingId,
+            kind: "resource",
+            resource_kind: "texture",
+            title: "Lantern Pack",
+            description: "Reusable lantern assets",
+            delivery_mode: "download",
+            owner: {
+              id: "profile_123",
+              username: "maker",
+              display_name: "Maker",
+              profile_rating_average: 4.8,
+              profile_review_count: 2,
+              active_listing_count: 1,
+            },
+            media: [],
+            reviews: [],
+            permissions: {
+              can_edit: false,
+              can_review: true,
+            },
+            download: {
+              available: true,
+              href: `/api/public/library/listings/${input.listingId}/download`,
+              filename: "lantern-pack.zip",
+              content_type: "application/zip",
+            },
+          },
+        };
+      },
+      async downloadPublicLibraryListing(input) {
+        state.publicDownload = input;
+        return {
+          buffer: Buffer.from("library-download"),
+          filename: "lantern-pack.zip",
+          contentType: "application/zip",
+        };
+      },
+      async getPublicLibraryProfile(input, viewerProfile) {
+        state.publicProfile = { input, viewerProfile };
+        return {
+          profile: {
+            id: "profile_123",
+            username: input.username,
+            display_name: "Maker",
+            profile_rating_average: 4.7,
+            profile_review_count: 2,
+            active_listing_count: 1,
+            permissions: {
+              can_review: true,
+            },
+          },
+          listings: [],
+          reviews: [],
+          viewer_review: null,
+        };
+      },
+      async listOwnPublicLibraryListings(profile, input) {
+        state.ownListings = { profile, input };
+        return {
+          listings: [{
+            id: "listing_123",
+            kind: "resource",
+            title: "Lantern Pack",
+          }],
+        };
+      },
+      async publishPublicLibraryListing(profile, input) {
+        state.publish = { profile, input };
+        return {
+          listing: {
+            id: "listing_new",
+            kind: input.kind,
+            resource_kind: input.resourceKind ?? null,
+            title: input.title,
+            description: input.description,
+            delivery_mode: input.deliveryMode,
+            owner: {
+              id: profile.id,
+              username: profile.username,
+              display_name: profile.display_name,
+              profile_rating_average: 0,
+              profile_review_count: 0,
+              active_listing_count: 1,
+            },
+            media: [],
+            reviews: [],
+            permissions: {
+              can_edit: true,
+              can_review: false,
+            },
+            download: {
+              available: input.deliveryMode === "download",
+              href: "/api/public/library/listings/listing_new/download",
+              filename: "new-listing.zip",
+              content_type: "application/zip",
+            },
+          },
+        };
+      },
+      async updatePublicLibraryListing(profile, input) {
+        state.update = { profile, input };
+        return {
+          listing: {
+            id: input.listingId,
+            kind: "resource",
+            resource_kind: input.resourceKind ?? "texture",
+            title: input.title ?? "Updated Listing",
+            description: input.description ?? "",
+            delivery_mode: input.deliveryMode ?? "download",
+            contact_instructions: input.contactInstructions ?? "",
+            owner: {
+              id: profile.id,
+              username: profile.username,
+              display_name: profile.display_name,
+              profile_rating_average: 0,
+              profile_review_count: 0,
+              active_listing_count: 1,
+            },
+            media: [],
+            reviews: [],
+            permissions: {
+              can_edit: true,
+              can_review: false,
+            },
+            download: {
+              available: (input.deliveryMode ?? "download") === "download",
+              href: `/api/public/library/listings/${input.listingId}/download`,
+              filename: "updated-listing.zip",
+              content_type: "application/zip",
+            },
+          },
+        };
+      },
+      async archivePublicLibraryListing(profile, input) {
+        state.archive = { profile, input };
+        return {
+          archived: true,
+          listing_id: input.listingId,
+        };
+      },
+      async upsertPublicLibraryListingReview(profile, input) {
+        state.listingReview = { profile, input };
+        return {
+          listing: {
+            id: input.listingId,
+            kind: "resource",
+            resource_kind: "texture",
+            title: "Lantern Pack",
+            description: "Reusable lantern assets",
+            delivery_mode: "download",
+            owner: {
+              id: "profile_123",
+              username: "maker",
+              display_name: "Maker",
+            },
+            media: [],
+            reviews: [{
+              id: "review_123",
+              rating: Number(input.rating),
+              comment: input.comment,
+              author: {
+                id: profile.id,
+                username: profile.username,
+                display_name: profile.display_name,
+              },
+            }],
+            permissions: {
+              can_edit: false,
+              can_review: true,
+            },
+            download: {
+              available: false,
+              href: null,
+              filename: null,
+              content_type: null,
+            },
+          },
+        };
+      },
+      async deletePublicLibraryListingReview(profile, input) {
+        state.deleteListingReview = { profile, input };
+        return {
+          listing: {
+            id: input.listingId,
+            kind: "resource",
+            resource_kind: "texture",
+            title: "Lantern Pack",
+            description: "Reusable lantern assets",
+            delivery_mode: "download",
+            owner: {
+              id: "profile_123",
+              username: "maker",
+              display_name: "Maker",
+            },
+            media: [],
+            reviews: [],
+            permissions: {
+              can_edit: false,
+              can_review: true,
+            },
+            download: {
+              available: false,
+              href: null,
+              filename: null,
+              content_type: null,
+            },
+          },
+        };
+      },
+      async upsertPublicLibraryProfileReview(profile, input) {
+        state.profileReview = { profile, input };
+        return {
+          profile: {
+            id: "profile_123",
+            username: input.username,
+            display_name: "Maker",
+            profile_rating_average: Number(input.rating),
+            profile_review_count: 1,
+            active_listing_count: 1,
+            permissions: {
+              can_review: true,
+            },
+          },
+          listings: [],
+          reviews: [{
+            id: "profile_review_123",
+            rating: Number(input.rating),
+            comment: input.comment,
+            author: {
+              id: profile.id,
+              username: profile.username,
+              display_name: profile.display_name,
+            },
+          }],
+          viewer_review: {
+            id: "profile_review_123",
+            rating: Number(input.rating),
+            comment: input.comment,
+            author: {
+              id: profile.id,
+              username: profile.username,
+              display_name: profile.display_name,
+            },
+          },
+        };
+      },
+      async deletePublicLibraryProfileReview(profile, input) {
+        state.deleteProfileReview = { profile, input };
+        return {
+          profile: {
+            id: "profile_123",
+            username: input.username,
+            display_name: "Maker",
+            profile_rating_average: 0,
+            profile_review_count: 0,
+            active_listing_count: 1,
+            permissions: {
+              can_review: true,
+            },
+          },
+          listings: [],
+          reviews: [],
+          viewer_review: null,
+        };
+      },
+    },
+  };
+}
+
 test("health endpoint responds with ok payload", async () => {
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
@@ -458,6 +789,159 @@ test("public auth config endpoint exposes client bootstrap settings", async () =
   assert.equal(response.body.ok, true);
   assert.equal(response.body.supabaseUrl, "https://example.supabase.co");
   assert.equal(response.body.supabaseAnonKey, "anon-key");
+});
+
+test("public library endpoints expose listings, detail, download, and creator profile", async () => {
+  const { store, state } = createLibraryRouteStore();
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store,
+  });
+
+  const listResponse = await request(app)
+    .get("/api/public/library/listings")
+    .query({
+      q: "lantern",
+      sort: "top-rated",
+      kind: "resource",
+      resourceKind: "video",
+      limit: 10,
+    });
+  assert.equal(listResponse.status, 200);
+  assert.equal(listResponse.body.listings[0].id, "listing_123");
+  assert.equal(state.publicList.input.q, "lantern");
+  assert.equal(state.publicList.input.sort, "top-rated");
+  assert.equal(state.publicList.input.kind, "resource");
+  assert.equal(state.publicList.input.resourceKind, "video");
+  assert.equal(state.publicList.viewerProfile, null);
+
+  const detailResponse = await request(app)
+    .get("/api/public/library/listings/listing_123")
+    .set("Authorization", "Bearer user-token");
+  assert.equal(detailResponse.status, 200);
+  assert.equal(detailResponse.body.listing.id, "listing_123");
+  assert.equal(state.publicDetail.input.listingId, "listing_123");
+  assert.equal(state.publicDetail.viewerProfile?.id, "profile_123");
+
+  const downloadResponse = await request(app)
+    .get("/api/public/library/listings/listing_123/download");
+  assert.equal(downloadResponse.status, 200);
+  assert.match(downloadResponse.headers["content-type"], /application\/zip/);
+  assert.match(downloadResponse.headers["content-disposition"], /lantern-pack\.zip/);
+  assert.equal(state.publicDownload.listingId, "listing_123");
+
+  const profileResponse = await request(app)
+    .get("/api/public/library/profiles/maker")
+    .set("Authorization", "Bearer user-token");
+  assert.equal(profileResponse.status, 200);
+  assert.equal(profileResponse.body.profile.username, "maker");
+  assert.equal(state.publicProfile.input.username, "maker");
+  assert.equal(state.publicProfile.viewerProfile?.id, "profile_123");
+});
+
+test("authenticated public library endpoints publish, edit, archive, and review listings and creators", async () => {
+  const { store, state } = createLibraryRouteStore();
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron" },
+    store,
+  });
+
+  const ownListingsResponse = await request(app)
+    .get("/api/library/listings")
+    .query({ limit: 12, state: "archived" })
+    .set("Authorization", "Bearer user-token");
+  assert.equal(ownListingsResponse.status, 200);
+  assert.equal(ownListingsResponse.body.listings[0].id, "listing_123");
+  assert.equal(state.ownListings.profile.id, "profile_123");
+  assert.equal(state.ownListings.input.limit, "12");
+  assert.equal(state.ownListings.input.state, "archived");
+
+  const publishResponse = await request(app)
+    .post("/api/library/listings")
+    .set("Authorization", "Bearer user-token")
+    .field("kind", "resource")
+    .field("resourceKind", "animation")
+    .field("sourceAssetId", "asset_123")
+    .field("title", "Animated Lantern")
+    .field("description", "A looping lantern animation")
+    .field("deliveryMode", "download")
+    .attach("media", Buffer.from("preview-image"), { filename: "preview.png", contentType: "image/png" })
+    .attach("media", Buffer.from("preview-video"), { filename: "preview.mp4", contentType: "video/mp4" });
+  assert.equal(publishResponse.status, 201);
+  assert.equal(publishResponse.body.listing.id, "listing_new");
+  assert.equal(state.publish.profile.id, "profile_123");
+  assert.equal(state.publish.input.kind, "resource");
+  assert.equal(state.publish.input.resourceKind, "animation");
+  assert.equal(state.publish.input.sourceAssetId, "asset_123");
+  assert.equal(state.publish.input.mediaFiles.length, 2);
+  assert.equal(state.publish.input.mediaFiles[0].filename, "preview.png");
+  assert.equal(state.publish.input.mediaFiles[1].contentType, "video/mp4");
+
+  const updateResponse = await request(app)
+    .patch("/api/library/listings/listing_new")
+    .set("Authorization", "Bearer user-token")
+    .send({
+      title: "Animated Lantern v2",
+      description: "Improved timing",
+      deliveryMode: "contact",
+      contactInstructions: "DM @maker in Mauworld",
+      resourceKind: "animation",
+      republishSnapshot: true,
+    });
+  assert.equal(updateResponse.status, 200);
+  assert.equal(updateResponse.body.listing.id, "listing_new");
+  assert.equal(state.update.profile.id, "profile_123");
+  assert.equal(state.update.input.listingId, "listing_new");
+  assert.equal(state.update.input.deliveryMode, "contact");
+  assert.equal(state.update.input.contactInstructions, "DM @maker in Mauworld");
+  assert.equal(state.update.input.republishSnapshot, true);
+
+  const listingReviewResponse = await request(app)
+    .put("/api/library/listings/listing_new/review")
+    .set("Authorization", "Bearer user-token")
+    .send({
+      rating: 4,
+      comment: "Useful pack with clean previews.",
+    });
+  assert.equal(listingReviewResponse.status, 200);
+  assert.equal(state.listingReview.profile.id, "profile_123");
+  assert.equal(state.listingReview.input.listingId, "listing_new");
+  assert.equal(state.listingReview.input.rating, 4);
+  assert.equal(state.listingReview.input.comment, "Useful pack with clean previews.");
+
+  const deleteListingReviewResponse = await request(app)
+    .delete("/api/library/listings/listing_new/review")
+    .set("Authorization", "Bearer user-token");
+  assert.equal(deleteListingReviewResponse.status, 200);
+  assert.equal(state.deleteListingReview.profile.id, "profile_123");
+  assert.equal(state.deleteListingReview.input.listingId, "listing_new");
+
+  const profileReviewResponse = await request(app)
+    .put("/api/library/profiles/maker/review")
+    .set("Authorization", "Bearer user-token")
+    .send({
+      rating: 5,
+      comment: "Clear instructions and polished work.",
+    });
+  assert.equal(profileReviewResponse.status, 200);
+  assert.equal(state.profileReview.profile.id, "profile_123");
+  assert.equal(state.profileReview.input.username, "maker");
+  assert.equal(state.profileReview.input.comment, "Clear instructions and polished work.");
+
+  const deleteProfileReviewResponse = await request(app)
+    .delete("/api/library/profiles/maker/review")
+    .set("Authorization", "Bearer user-token");
+  assert.equal(deleteProfileReviewResponse.status, 200);
+  assert.equal(state.deleteProfileReview.profile.id, "profile_123");
+  assert.equal(state.deleteProfileReview.input.username, "maker");
+
+  const archiveResponse = await request(app)
+    .delete("/api/library/listings/listing_new")
+    .set("Authorization", "Bearer user-token");
+  assert.equal(archiveResponse.status, 200);
+  assert.equal(archiveResponse.body.archived, true);
+  assert.equal(state.archive.profile.id, "profile_123");
+  assert.equal(state.archive.input.listingId, "listing_new");
 });
 
 test("bootstrap link endpoint requires onboarding secret", async () => {

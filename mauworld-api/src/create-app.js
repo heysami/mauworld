@@ -1,6 +1,7 @@
 import express from "express";
 import { HttpError, asyncRoute, installCors, installErrorHandler, jsonOk, requireArray, requireString } from "./lib/http.js";
 import { createBrowserMediaToken } from "./lib/livekit-media.js";
+import { parseMultipartFormData } from "./lib/multipart.js";
 import {
   brainstormPrivateWorldAiArtifact,
   generatePrivateWorldAiArtifact,
@@ -50,6 +51,18 @@ async function requireUser(req, store) {
   return verified;
 }
 
+async function resolveOptionalUser(req, store) {
+  const token = extractBearerToken(req);
+  if (!token) {
+    return null;
+  }
+  try {
+    return await requireUser(req, store);
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function requireOptionalUser(req, store) {
   const token = extractBearerToken(req);
   if (!token) {
@@ -85,6 +98,10 @@ function stripBase64DataUrl(value = "") {
 
 export function createApp({ config, store, runMoltbookImportJob = null, getMoltbookImportJobStatus = null }) {
   const app = express();
+  const multipartRawBody = express.raw({
+    type: (req) => String(req.headers["content-type"] ?? "").toLowerCase().startsWith("multipart/form-data"),
+    limit: "50mb",
+  });
   installCors(app);
   app.use(express.json({ limit: "10mb" }));
 
@@ -94,6 +111,43 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
 
   app.get("/api/public/auth/config", asyncRoute(async (_req, res) => {
     jsonOk(res, await store.getPublicAuthConfig());
+  }));
+
+  app.get("/api/public/library/listings", asyncRoute(async (req, res) => {
+    const verified = await resolveOptionalUser(req, store);
+    const payload = await store.listPublicLibraryListings({
+      q: req.query.q,
+      sort: req.query.sort,
+      kind: req.query.kind,
+      resourceKind: req.query.resourceKind ?? req.query.resource_kind,
+      limit: req.query.limit,
+    }, verified?.profile ?? null);
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/public/library/listings/:listingId", asyncRoute(async (req, res) => {
+    const verified = await resolveOptionalUser(req, store);
+    const payload = await store.getPublicLibraryListing({
+      listingId: requireString(req.params.listingId, "listingId"),
+    }, verified?.profile ?? null);
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/public/library/listings/:listingId/download", asyncRoute(async (req, res) => {
+    const payload = await store.downloadPublicLibraryListing({
+      listingId: requireString(req.params.listingId, "listingId"),
+    });
+    res.setHeader("Content-Type", payload.contentType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${payload.filename || "download.bin"}"`);
+    res.status(200).send(payload.buffer);
+  }));
+
+  app.get("/api/public/library/profiles/:username", asyncRoute(async (req, res) => {
+    const verified = await resolveOptionalUser(req, store);
+    const payload = await store.getPublicLibraryProfile({
+      username: requireString(req.params.username, "username"),
+    }, verified?.profile ?? null);
+    jsonOk(res, payload);
   }));
 
   app.post("/api/agent/link/start", asyncRoute(async (req, res) => {
@@ -408,6 +462,95 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     const payload = await store.upsertUserProfile(user, {
       username: req.body?.username,
       displayName: req.body?.displayName,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.get("/api/library/listings", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.listOwnPublicLibraryListings(profile, {
+      limit: req.query.limit,
+      state: req.query.state,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.post("/api/library/listings", multipartRawBody, asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const { fields, files } = parseMultipartFormData(req.body, req.headers["content-type"]);
+    const payload = await store.publishPublicLibraryListing(profile, {
+      kind: fields.kind,
+      resourceKind: fields.resourceKind ?? fields.resource_kind,
+      sourceWorldId: fields.sourceWorldId ?? fields.source_world_id,
+      sourceGameId: fields.sourceGameId ?? fields.source_game_id,
+      sourceAssetId: fields.sourceAssetId ?? fields.source_asset_id,
+      title: fields.title,
+      description: fields.description,
+      deliveryMode: fields.deliveryMode ?? fields.delivery_mode,
+      contactInstructions: fields.contactInstructions ?? fields.contact_instructions,
+      mediaFiles: files.map((file) => ({
+        filename: file.filename,
+        contentType: file.contentType,
+        buffer: file.buffer,
+      })),
+    });
+    jsonOk(res, payload, 201);
+  }));
+
+  app.patch("/api/library/listings/:listingId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.updatePublicLibraryListing(profile, {
+      listingId: requireString(req.params.listingId, "listingId"),
+      title: req.body?.title,
+      description: req.body?.description,
+      deliveryMode: req.body?.deliveryMode ?? req.body?.delivery_mode,
+      contactInstructions: req.body?.contactInstructions ?? req.body?.contact_instructions,
+      resourceKind: req.body?.resourceKind ?? req.body?.resource_kind,
+      republishSnapshot: req.body?.republishSnapshot ?? req.body?.republish_snapshot,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.delete("/api/library/listings/:listingId", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.archivePublicLibraryListing(profile, {
+      listingId: requireString(req.params.listingId, "listingId"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.put("/api/library/listings/:listingId/review", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.upsertPublicLibraryListingReview(profile, {
+      listingId: requireString(req.params.listingId, "listingId"),
+      rating: req.body?.rating,
+      comment: req.body?.comment,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.delete("/api/library/listings/:listingId/review", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.deletePublicLibraryListingReview(profile, {
+      listingId: requireString(req.params.listingId, "listingId"),
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.put("/api/library/profiles/:username/review", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.upsertPublicLibraryProfileReview(profile, {
+      username: requireString(req.params.username, "username"),
+      rating: req.body?.rating,
+      comment: req.body?.comment,
+    });
+    jsonOk(res, payload);
+  }));
+
+  app.delete("/api/library/profiles/:username/review", asyncRoute(async (req, res) => {
+    const { profile } = await requireUser(req, store);
+    const payload = await store.deletePublicLibraryProfileReview(profile, {
+      username: requireString(req.params.username, "username"),
     });
     jsonOk(res, payload);
   }));

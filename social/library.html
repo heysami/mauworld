@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="mauworld-api-base" content="auto" />
+    <title>Mauworld Public Library</title>
+    <meta
+      name="description"
+      content="Browse public Mauworld packages, games, and reusable resources. Publish snapshot-based listings, collect reviews, and share downloads or contact instructions."
+    />
+    <link rel="icon" type="image/png" href="/assets/maumau-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/social/mauworld.css?v=20260422overview3" />
+    <link rel="stylesheet" href="/social/library.css?v=20260422publiclibrary1" />
+  </head>
+  <body class="mauworld-overview-body library-body">
+    <a class="skip-link" href="#content">Skip to content</a>
+
+    <header class="site-header">
+      <div class="site-header__inner">
+        <a class="brand" href="/index.html" aria-label="Maumau home">
+          <span class="brand__mark">
+            <img src="/assets/maumau-icon.png" alt="Maumau cat mascot icon" />
+          </span>
+          <span class="brand__copy">
+            <span class="brand__name">Maumau</span>
+          </span>
+        </a>
+
+        <nav class="site-nav" aria-label="Primary">
+          <a class="site-nav__link" href="/index.html">Overview</a>
+          <a class="site-nav__link" href="/social/index.html">Mauworld</a>
+          <a class="site-nav__link" href="/social/world.html">Public World</a>
+          <a class="site-nav__link" href="/social/private-worlds.html">Private Worlds</a>
+          <a class="site-nav__link site-nav__link--active" href="/social/library.html" aria-current="page">Public Library</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page-main library-page" id="content">
+      <section class="mauworld-shell library-shell">
+        <div class="mauworld-core library-core">
+          <section class="library-hero">
+            <div class="library-hero__copy">
+              <p class="section-kicker">Mauworld Public Library</p>
+              <h1>Publish reusable worlds, games, and resources.</h1>
+              <p class="library-hero__lede">
+                Guests can browse everything here. Signed-in creators can publish snapshot-based listings from their
+                existing Mauworld library, choose download or contact delivery, and collect star ratings with required comments.
+              </p>
+              <div class="library-hero__actions hero__actions">
+                <button type="button" class="button button--primary" data-library-open-publish>Publish Something</button>
+                <a class="button button--soft" href="/social/private-worlds.html">
+                  <span>Open Private Worlds</span>
+                  <span class="button__tail" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <path d="M7 12h10"></path>
+                      <path d="m12 7 5 5-5 5"></path>
+                    </svg>
+                  </span>
+                </a>
+              </div>
+            </div>
+
+            <aside class="library-account" aria-label="Account">
+              <div class="library-account__head">
+                <span class="library-account__badge" data-library-auth-badge>Checking account</span>
+                <p class="library-account__text" data-library-auth-text>
+                  Looking for your Mauworld session.
+                </p>
+              </div>
+
+              <div class="library-account__actions">
+                <button type="button" class="button button--soft" data-library-auth-toggle>Sign In</button>
+                <button type="button" class="button button--soft" data-library-signout hidden>Sign Out</button>
+              </div>
+
+              <form class="library-auth-form" data-library-auth-form hidden>
+                <label>
+                  <span>Email</span>
+                  <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
+                </label>
+                <label>
+                  <span>Password</span>
+                  <input type="password" name="password" autocomplete="current-password" placeholder="Password" required />
+                </label>
+                <div class="library-auth-form__actions">
+                  <button type="submit" class="button button--primary" data-auth-action="signin">Sign In</button>
+                  <button type="button" class="button button--soft" data-auth-action="signup">Create Account</button>
+                </div>
+              </form>
+
+              <form class="library-profile-form" data-library-profile-form hidden>
+                <label>
+                  <span>Username</span>
+                  <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
+                </label>
+                <label>
+                  <span>Display Name</span>
+                  <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
+                </label>
+                <button type="submit" class="button button--soft">Save Profile</button>
+              </form>
+            </aside>
+          </section>
+
+          <section class="library-browser" aria-label="Public library browser">
+            <div class="library-toolbar">
+              <label class="library-search">
+                <span>Search</span>
+                <input type="search" data-library-search placeholder="Search listings, creators, games, and resources" />
+              </label>
+              <label class="library-select">
+                <span>Sort</span>
+                <select data-library-sort>
+                  <option value="newest">Newest</option>
+                  <option value="top-rated">Top Rated</option>
+                </select>
+              </label>
+              <button type="button" class="button button--soft" data-library-refresh>Refresh</button>
+            </div>
+
+            <div class="library-tabs" role="tablist" aria-label="Library surfaces">
+              <button type="button" class="is-active" data-library-tab="all" aria-pressed="true">All</button>
+              <button type="button" data-library-tab="world_package" aria-pressed="false">World Packages</button>
+              <button type="button" data-library-tab="game" aria-pressed="false">Games</button>
+              <button type="button" data-library-tab="resource" aria-pressed="false">Resources</button>
+              <button type="button" data-library-tab="creators" aria-pressed="false">Creators</button>
+            </div>
+
+            <div class="library-resource-filters" data-library-resource-filters hidden>
+              <button type="button" class="is-active" data-library-resource-kind="">Any Resource</button>
+              <button type="button" data-library-resource-kind="texture">Texture</button>
+              <button type="button" data-library-resource-kind="animation">Animation</button>
+              <button type="button" data-library-resource-kind="video">Video</button>
+              <button type="button" data-library-resource-kind="sound">Sound</button>
+              <button type="button" data-library-resource-kind="model">3D Model</button>
+            </div>
+
+            <p class="library-status" data-library-status aria-live="polite"></p>
+            <div class="library-results" data-library-results></div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div class="library-overlay" data-library-detail hidden>
+      <button type="button" class="library-overlay__backdrop" data-library-close-detail aria-label="Close detail view"></button>
+      <aside class="library-drawer" aria-label="Library detail">
+        <div class="library-drawer__content" data-library-detail-content></div>
+      </aside>
+    </div>
+
+    <div class="library-overlay" data-library-publish-shell hidden>
+      <button type="button" class="library-overlay__backdrop" data-library-close-publish aria-label="Close publish panel"></button>
+      <aside class="library-drawer library-drawer--publish" aria-label="Publish to the public library">
+        <div class="library-drawer__content">
+          <div class="library-drawer__head">
+            <div>
+              <p class="section-kicker">Publish</p>
+              <h2>Submit to the public library</h2>
+            </div>
+            <button type="button" class="library-drawer__close" data-library-close-publish>Close</button>
+          </div>
+
+          <p class="library-status" data-library-publish-status aria-live="polite"></p>
+
+          <form class="library-publish-form" data-library-publish-form>
+            <section class="library-form-step">
+              <div>
+                <span class="library-form-step__index">1</span>
+                <div>
+                  <h3>Choose listing type</h3>
+                  <p>Pick the kind of Mauworld item you want to publish.</p>
+                </div>
+              </div>
+              <div class="library-chip-row">
+                <button type="button" class="library-chip is-active" data-publish-kind="world_package">Private World Package</button>
+                <button type="button" class="library-chip" data-publish-kind="game">Game</button>
+                <button type="button" class="library-chip" data-publish-kind="resource">Resource</button>
+              </div>
+            </section>
+
+            <section class="library-form-step">
+              <div>
+                <span class="library-form-step__index">2</span>
+                <div>
+                  <h3>Choose existing source</h3>
+                  <p>Publishing always starts from an item already saved in your Mauworld account.</p>
+                </div>
+              </div>
+              <label class="library-select">
+                <span data-publish-source-label>Private world</span>
+                <select data-publish-source required></select>
+              </label>
+              <label class="library-select" data-publish-resource-kind-field hidden>
+                <span>Resource type</span>
+                <select data-publish-resource-kind>
+                  <option value="texture">Texture</option>
+                  <option value="animation">Animation</option>
+                  <option value="video">Video</option>
+                  <option value="sound">Sound</option>
+                  <option value="model">3D Model</option>
+                </select>
+              </label>
+            </section>
+
+            <section class="library-form-step">
+              <div>
+                <span class="library-form-step__index">3</span>
+                <div>
+                  <h3>Add preview gallery</h3>
+                  <p>Upload one or more images or videos that will be shown publicly.</p>
+                </div>
+              </div>
+              <label class="library-upload">
+                <span>Preview files</span>
+                <input type="file" data-publish-media accept="image/*,video/*" multiple required />
+              </label>
+              <div class="library-upload-preview" data-publish-media-preview></div>
+            </section>
+
+            <section class="library-form-step">
+              <div>
+                <span class="library-form-step__index">4</span>
+                <div>
+                  <h3>Choose delivery mode</h3>
+                  <p>Either publish a direct download or show contact instructions instead.</p>
+                </div>
+              </div>
+              <div class="library-chip-row">
+                <button type="button" class="library-chip is-active" data-publish-delivery="download">Download</button>
+                <button type="button" class="library-chip" data-publish-delivery="contact">Contact Creator</button>
+              </div>
+              <label>
+                <span>Title</span>
+                <input type="text" data-publish-title maxlength="120" placeholder="Listing title" required />
+              </label>
+              <label>
+                <span>Description</span>
+                <textarea data-publish-description rows="4" maxlength="4000" placeholder="Tell people what this package includes and why it matters."></textarea>
+              </label>
+              <label data-publish-contact-field hidden>
+                <span>Contact instructions</span>
+                <textarea data-publish-contact rows="3" maxlength="2000" placeholder="Explain how people should contact you."></textarea>
+              </label>
+            </section>
+
+            <section class="library-form-step">
+              <div>
+                <span class="library-form-step__index">5</span>
+                <div>
+                  <h3>Preview</h3>
+                  <p>Double-check what will be shown before you publish.</p>
+                </div>
+              </div>
+              <article class="library-preview-card" data-publish-preview></article>
+            </section>
+
+            <div class="library-publish-form__actions">
+              <button type="submit" class="button button--primary">Publish Listing</button>
+            </div>
+          </form>
+        </div>
+      </aside>
+    </div>
+
+    <script src="/social/runtime-config.js"></script>
+    <script src="/social/common.js"></script>
+    <script type="module" src="/social/library.js?v=20260422publiclibrary1"></script>
+    <script src="/script.js" defer></script>
+  </body>
+</html>
