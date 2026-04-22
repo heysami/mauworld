@@ -40,6 +40,11 @@ const SCRIPT_RUNTIME_REF_KEY = "__pw_script_ref";
 const SCRIPT_RUNTIME_DEFAULT_RUN_MODE = "every_tick";
 const SCRIPT_RUNTIME_MAX_CALL_DEPTH = 12;
 const SCRIPT_RUNTIME_MAX_CALLS_PER_TICK = 256;
+const SCRIPT_RUNTIME_MAX_SPAWNS_PER_TICK = 64;
+const SCRIPT_RUNTIME_DEFAULT_TIMER_MS = 1000;
+const SCRIPT_RUNTIME_DEFAULT_PARTICLE_LIFETIME_MS = 1200;
+const SCRIPT_RUNTIME_DEFAULT_RAYCAST_DISTANCE = 64;
+const SCRIPT_RUNTIME_MAX_ENTITY_LIFETIME_MS = 600000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -324,6 +329,204 @@ function findPrefabInstanceTarget(simulation, targetId) {
     return null;
   }
   return simulation.prefabInstances?.find((entry) => entry.id === targetId) ?? null;
+}
+
+function nextScriptRuntimeSerial(simulation) {
+  const state = simulation?.scriptRuntimeState;
+  if (!state) {
+    return Date.now();
+  }
+  state.serial = Math.max(0, Number(state.serial ?? 0) || 0) + 1;
+  return state.serial;
+}
+
+function buildRuntimeSpawnId(prefix = "runtime", simulation) {
+  const serial = nextScriptRuntimeSerial(simulation).toString(36);
+  const tick = Math.max(0, Number(simulation?.tick ?? 0) || 0).toString(36);
+  return `${prefix}_${tick}_${serial}`;
+}
+
+function isRuntimeEntryActive(entry = null) {
+  return entry?.active !== false;
+}
+
+function isRuntimeRefActive(simulation, ref = null) {
+  if (!isScriptRuntimeEntityRef(ref)) {
+    return false;
+  }
+  const target = resolveScriptRuntimeEntityTarget(simulation, ref);
+  return isRuntimeEntryActive(target);
+}
+
+function getVoxelHalfExtents(voxel = {}) {
+  return {
+    x: Math.max(0.1, mustFinite(voxel.scale?.x, 1) / 2),
+    y: Math.max(0.1, mustFinite(voxel.scale?.y, 1) / 2),
+    z: Math.max(0.1, mustFinite(voxel.scale?.z, 1) / 2),
+  };
+}
+
+function getBoundsFromPositionAndHalfExtents(position = null, halfExtents = null) {
+  const center = vec3(position);
+  const half = vec3(halfExtents, { x: 0.1, y: 0.1, z: 0.1 });
+  return {
+    position: center,
+    halfExtents: {
+      x: Math.max(0.05, mustFinite(half.x, 0.1)),
+      y: Math.max(0.05, mustFinite(half.y, 0.1)),
+      z: Math.max(0.05, mustFinite(half.z, 0.1)),
+    },
+  };
+}
+
+function mergeRuntimeBounds(boundsList = []) {
+  const valid = (Array.isArray(boundsList) ? boundsList : []).filter((entry) => entry?.position && entry?.halfExtents);
+  if (!valid.length) {
+    return null;
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (const entry of valid) {
+    minX = Math.min(minX, entry.position.x - entry.halfExtents.x);
+    minY = Math.min(minY, entry.position.y - entry.halfExtents.y);
+    minZ = Math.min(minZ, entry.position.z - entry.halfExtents.z);
+    maxX = Math.max(maxX, entry.position.x + entry.halfExtents.x);
+    maxY = Math.max(maxY, entry.position.y + entry.halfExtents.y);
+    maxZ = Math.max(maxZ, entry.position.z + entry.halfExtents.z);
+  }
+  return {
+    position: {
+      x: (minX + maxX) / 2,
+      y: (minY + maxY) / 2,
+      z: (minZ + maxZ) / 2,
+    },
+    halfExtents: {
+      x: Math.max(0.05, (maxX - minX) / 2),
+      y: Math.max(0.05, (maxY - minY) / 2),
+      z: Math.max(0.05, (maxZ - minZ) / 2),
+    },
+  };
+}
+
+function getScriptRuntimeRefBounds(simulation, ref = null) {
+  if (!isScriptRuntimeEntityRef(ref)) {
+    return null;
+  }
+  const target = resolveScriptRuntimeEntityTarget(simulation, ref);
+  if (!target || target.active === false) {
+    return null;
+  }
+  if (ref.kind === "player" || ref.kind === "primitive" || ref.kind === "model" || ref.kind === "dynamic_object") {
+    return getBoundsFromPositionAndHalfExtents(target.position, getBodyHalfExtents(target));
+  }
+  if (ref.kind === "voxel") {
+    return getBoundsFromPositionAndHalfExtents(target.position, getVoxelHalfExtents(target));
+  }
+  if (ref.kind === "trigger") {
+    return getBoundsFromPositionAndHalfExtents(target.position, target.halfExtents);
+  }
+  if (ref.kind === "prefab_instance") {
+    const descendants = [
+      ...(target.dynamic_object_ids ?? []).map((entryId) => getScriptRuntimeRefBounds(simulation, createScriptRuntimeEntityRef("dynamic_object", entryId))),
+      ...(target.voxel_ids ?? []).map((entryId) => getScriptRuntimeRefBounds(simulation, createScriptRuntimeEntityRef("voxel", entryId))),
+      ...(target.trigger_zone_ids ?? []).map((entryId) => getScriptRuntimeRefBounds(simulation, createScriptRuntimeEntityRef("trigger", entryId))),
+    ];
+    return mergeRuntimeBounds(descendants);
+  }
+  if (ref.kind === "sound") {
+    return getBoundsFromPositionAndHalfExtents(target.position, { x: 0.35, y: 0.35, z: 0.35 });
+  }
+  if (ref.kind === "screen") {
+    return getBoundsFromPositionAndHalfExtents(target.position, {
+      x: Math.max(0.1, mustFinite(target.scale?.x, 1) / 2),
+      y: Math.max(0.1, mustFinite(target.scale?.y, 1) / 2),
+      z: Math.max(0.1, mustFinite(target.scale?.z, 0.1) / 2),
+    });
+  }
+  return null;
+}
+
+function doBoundsOverlap(left = null, right = null) {
+  if (!left?.position || !left?.halfExtents || !right?.position || !right?.halfExtents) {
+    return false;
+  }
+  return (
+    Math.abs(left.position.x - right.position.x) <= (left.halfExtents.x + right.halfExtents.x)
+    && Math.abs(left.position.y - right.position.y) <= (left.halfExtents.y + right.halfExtents.y)
+    && Math.abs(left.position.z - right.position.z) <= (left.halfExtents.z + right.halfExtents.z)
+  );
+}
+
+function buildManualOverlapBounds(subject = null, options = {}) {
+  const position = resolveScriptRuntimePositionLike(null, subject) ?? (isScriptRuntimeVectorLike(subject) ? toScriptRuntimeVector(subject) : null);
+  if (!position) {
+    return null;
+  }
+  const radius = Math.max(0, mustFinite(options.radius ?? options.max_distance, 0));
+  const halfExtents = isScriptRuntimeVectorLike(options.half_extents ?? options.halfExtents)
+    ? toScriptRuntimeVector(options.half_extents ?? options.halfExtents)
+    : {
+      x: Math.max(0.05, radius),
+      y: Math.max(0.05, radius),
+      z: Math.max(0.05, radius),
+    };
+  return getBoundsFromPositionAndHalfExtents(position, halfExtents);
+}
+
+function collectScriptRuntimeOverlapRefs(simulation, subject, options = {}) {
+  const kindFilter = String(options.kind ?? options.kinds ?? "").trim().toLowerCase();
+  const targetRef = isScriptRuntimeEntityRef(subject) ? subject : null;
+  const subjectBounds = targetRef
+    ? getScriptRuntimeRefBounds(simulation, targetRef)
+    : buildManualOverlapBounds(subject, options);
+  if (!subjectBounds) {
+    return [];
+  }
+  const refs = listScriptRuntimeEntityRefs(simulation)
+    .filter((entry) => isRuntimeRefActive(simulation, entry))
+    .filter((entry) => !kindFilter || entry.kind === normalizeScriptRuntimeEntityKind(kindFilter));
+  return refs.filter((entry) => {
+    if (targetRef && entry.id === targetRef.id && entry.kind === targetRef.kind) {
+      return options.include_self === true;
+    }
+    const bounds = getScriptRuntimeRefBounds(simulation, entry);
+    return doBoundsOverlap(subjectBounds, bounds);
+  });
+}
+
+function findRuntimeGroupValue(target = null) {
+  return String(target?.group_id ?? target?.groupId ?? "").trim() || null;
+}
+
+function resolveScriptRuntimeEventValue(value = null) {
+  return cloneScriptRuntimeValue(value);
+}
+
+function applyRuntimeRigidBodyEnabled(body = null, enabled = true) {
+  if (!body) {
+    return;
+  }
+  if (typeof body.setEnabled === "function") {
+    body.setEnabled(enabled);
+  }
+  if (enabled) {
+    body.wakeUp?.();
+  } else {
+    body.sleep?.();
+  }
+}
+
+function applyRuntimeColliderEnabled(collider = null, enabled = true) {
+  if (!collider) {
+    return;
+  }
+  if (typeof collider.setEnabled === "function") {
+    collider.setEnabled(enabled);
+  }
 }
 
 function pushRuntimeEvent(simulation, event = {}) {
@@ -1122,6 +1325,9 @@ function listScriptRuntimeEntityRefs(simulation, kind = "") {
   for (const entry of simulation.triggerZones ?? []) {
     refs.push(createScriptRuntimeEntityRef("trigger", entry.id));
   }
+  for (const entry of Object.values(simulation.particleState ?? {})) {
+    refs.push(createScriptRuntimeEntityRef("particle", entry.id));
+  }
   for (const entry of Object.values(simulation.soundState ?? {})) {
     refs.push(createScriptRuntimeEntityRef("sound", entry.id));
   }
@@ -1163,6 +1369,9 @@ function resolveScriptRuntimeEntityTarget(simulation, ref = null) {
   }
   if (ref.kind === "trigger") {
     return simulation.triggerZones?.find((entry) => entry.id === ref.id) ?? null;
+  }
+  if (ref.kind === "particle") {
+    return simulation.particleState?.[ref.id] ?? null;
   }
   if (ref.kind === "voxel") {
     return simulation.sceneDoc?.voxels?.find((entry) => entry.id === ref.id) ?? null;
@@ -1225,16 +1434,25 @@ function readScriptRuntimeEntityProperty(simulation, ref, property = "") {
   if (normalizedProperty === "label") {
     return target.label ?? null;
   }
+  if (normalizedProperty === "active") {
+    return target.active !== false;
+  }
+  if (normalizedProperty === "group_id") {
+    return findRuntimeGroupValue(target);
+  }
   if (normalizedProperty === "visible" || normalizedProperty === "visibility") {
     if (Object.hasOwn(target, "visibility")) {
-      return target.visibility !== false;
+      return target.visibility !== false && target.active !== false;
     }
     if (Object.hasOwn(target, "visible")) {
-      return target.visible !== false;
+      return target.visible !== false && target.active !== false;
     }
   }
   if (normalizedProperty === "value" && ref.kind === "text") {
     return String(target.value ?? "");
+  }
+  if (ref.kind === "particle" && ["effect", "target_id", "enabled", "color", "position", "rotation", "scale"].includes(normalizedProperty)) {
+    return cloneScriptRuntimeValue(target[normalizedProperty] ?? null);
   }
   if (ref.kind === "sound" && ["asset_id", "volume", "loop", "autoplay", "spatial", "max_distance", "playing", "play_revision"].includes(normalizedProperty)) {
     return cloneScriptRuntimeValue(target[normalizedProperty] ?? null);
@@ -1485,25 +1703,37 @@ function setScriptRuntimeEntityPath(simulation, ref, path = [], value = null) {
     const nextVisible = value !== false;
     if (ref.kind === "prefab_instance") {
       target.visibility = nextVisible;
+      target.active = nextVisible;
       for (const dynamicObjectId of target.dynamic_object_ids ?? []) {
         const dynamicObject = simulation.dynamicObjects?.find((entry) => entry.id === dynamicObjectId) ?? null;
         if (dynamicObject) {
           dynamicObject.visibility = nextVisible;
+          dynamicObject.active = nextVisible;
         }
       }
       return true;
     }
     if (Object.hasOwn(target, "visibility")) {
       target.visibility = nextVisible;
+      target.active = nextVisible;
       return true;
     }
     if (Object.hasOwn(target, "visible")) {
       target.visible = nextVisible;
+      target.active = nextVisible;
       return true;
     }
   }
+  if (property === "active" && path.length === 1) {
+    return setScriptRuntimeEntityActive(simulation, ref, value !== false);
+  }
   if (property === "value" && ref.kind === "text" && path.length === 1) {
     target.value = String(value ?? "").slice(0, 160);
+    return true;
+  }
+  if (property === "enabled" && ref.kind === "particle" && path.length === 1) {
+    target.enabled = value !== false;
+    target.active = value !== false;
     return true;
   }
   if (property === "playing" && ref.kind === "sound" && path.length === 1) {
@@ -1572,12 +1802,13 @@ function createScriptRuntimeEnvironment({
   inputs = {},
   selfRef = null,
   sceneRef = createScriptRuntimeSceneRef(),
+  eventValue = null,
   dt = 0,
   time = 0,
   builtins = new Map(),
 } = {}) {
   const bindings = new Map();
-  const readonly = new Set(["self", "scene", "dt", "time"]);
+  const readonly = new Set(["self", "scene", "event", "dt", "time"]);
   for (const [key, value] of Object.entries(constants ?? {})) {
     bindings.set(key, cloneScriptRuntimeValue(value));
     readonly.add(key);
@@ -1588,6 +1819,7 @@ function createScriptRuntimeEnvironment({
   }
   bindings.set("self", selfRef);
   bindings.set("scene", sceneRef);
+  bindings.set("event", cloneScriptRuntimeValue(eventValue ?? {}));
   bindings.set("dt", dt);
   bindings.set("time", time);
   return {
@@ -1765,11 +1997,1063 @@ function applyScriptRuntimeBinaryOperator(operator = "", left, right) {
   throw new Error(`Unsupported operator \`${operator}\` in script.runtime.`);
 }
 
+function runtimeScale3(input = {}, fallback = { x: 1, y: 1, z: 1 }) {
+  return {
+    x: Math.max(0.05, mustFinite(input?.x, fallback.x)),
+    y: Math.max(0.05, mustFinite(input?.y, fallback.y)),
+    z: Math.max(0.05, mustFinite(input?.z, fallback.z)),
+  };
+}
+
+function runtimeMultiplyScale3(left = {}, right = {}) {
+  return {
+    x: mustFinite(left?.x, 1) * mustFinite(right?.x, 1),
+    y: mustFinite(left?.y, 1) * mustFinite(right?.y, 1),
+    z: mustFinite(left?.z, 1) * mustFinite(right?.z, 1),
+  };
+}
+
+function runtimeAddEuler3(left = {}, right = {}) {
+  return {
+    x: mustFinite(left?.x, 0) + mustFinite(right?.x, 0),
+    y: mustFinite(left?.y, 0) + mustFinite(right?.y, 0),
+    z: mustFinite(left?.z, 0) + mustFinite(right?.z, 0),
+  };
+}
+
+function rotateRuntimePointByEuler(point = {}, rotation = {}) {
+  let x = mustFinite(point.x, 0);
+  let y = mustFinite(point.y, 0);
+  let z = mustFinite(point.z, 0);
+  const rx = mustFinite(rotation.x, 0);
+  const ry = mustFinite(rotation.y, 0);
+  const rz = mustFinite(rotation.z, 0);
+  const cosX = Math.cos(rx);
+  const sinX = Math.sin(rx);
+  const cosY = Math.cos(ry);
+  const sinY = Math.sin(ry);
+  const cosZ = Math.cos(rz);
+  const sinZ = Math.sin(rz);
+  let nextY = y * cosX - z * sinX;
+  let nextZ = y * sinX + z * cosX;
+  y = nextY;
+  z = nextZ;
+  let nextX = x * cosY + z * sinY;
+  nextZ = -x * sinY + z * cosY;
+  x = nextX;
+  z = nextZ;
+  nextX = x * cosZ - y * sinZ;
+  nextY = x * sinZ + y * cosZ;
+  return {
+    x: nextX,
+    y: nextY,
+    z,
+  };
+}
+
+function transformRuntimePosition(position = {}, instance = {}) {
+  const scaled = {
+    x: mustFinite(position?.x, 0) * mustFinite(instance.scale?.x, 1),
+    y: mustFinite(position?.y, 0) * mustFinite(instance.scale?.y, 1),
+    z: mustFinite(position?.z, 0) * mustFinite(instance.scale?.z, 1),
+  };
+  const rotated = rotateRuntimePointByEuler(scaled, instance.rotation);
+  return {
+    x: rotated.x + mustFinite(instance.position?.x, 0),
+    y: rotated.y + mustFinite(instance.position?.y, 0),
+    z: rotated.z + mustFinite(instance.position?.z, 0),
+  };
+}
+
+function removeArrayEntryById(list = [], id = "") {
+  if (!Array.isArray(list)) {
+    return null;
+  }
+  const index = list.findIndex((entry) => entry?.id === id);
+  if (index < 0) {
+    return null;
+  }
+  const [removed] = list.splice(index, 1);
+  return removed ?? null;
+}
+
+function removeRuntimeDynamicObject(simulation, objectId = "") {
+  const removed = removeArrayEntryById(simulation.dynamicObjects, objectId);
+  if (!removed) {
+    return null;
+  }
+  removeArrayEntryById(simulation.sceneDoc?.primitives, objectId);
+  removeArrayEntryById(simulation.sceneDoc?.models, objectId);
+  const body = simulation.physics?.objectBodies?.get(objectId) ?? null;
+  if (body && simulation.physics?.world) {
+    simulation.physics.world.removeRigidBody?.(body);
+  }
+  simulation.physics?.objectBodies?.delete?.(objectId);
+  simulation.physics?.objectColliders?.delete?.(objectId);
+  for (const prefab of simulation.prefabInstances ?? []) {
+    prefab.dynamic_object_ids = (prefab.dynamic_object_ids ?? []).filter((entry) => entry !== objectId);
+  }
+  return removed;
+}
+
+function removeRuntimeVoxel(simulation, voxelId = "") {
+  const removed = removeArrayEntryById(simulation.sceneDoc?.voxels, voxelId);
+  removeArrayEntryById(simulation.staticSolids, voxelId);
+  const body = simulation.physics?.voxelBodies?.get(voxelId) ?? null;
+  if (body && simulation.physics?.world) {
+    simulation.physics.world.removeRigidBody?.(body);
+  }
+  const collider = simulation.physics?.staticVoxelColliders?.get(voxelId) ?? null;
+  if (collider && simulation.physics?.world) {
+    simulation.physics.world.removeCollider?.(collider, true);
+  }
+  simulation.physics?.voxelBodies?.delete?.(voxelId);
+  simulation.physics?.voxelColliders?.delete?.(voxelId);
+  simulation.physics?.staticVoxelColliders?.delete?.(voxelId);
+  for (const prefab of simulation.prefabInstances ?? []) {
+    prefab.voxel_ids = (prefab.voxel_ids ?? []).filter((entry) => entry !== voxelId);
+  }
+  return removed;
+}
+
+function removeRuntimeTriggerZone(simulation, triggerId = "") {
+  const removed = removeArrayEntryById(simulation.triggerZones, triggerId);
+  removeArrayEntryById(simulation.sceneDoc?.trigger_zones, triggerId);
+  for (const prefab of simulation.prefabInstances ?? []) {
+    prefab.trigger_zone_ids = (prefab.trigger_zone_ids ?? []).filter((entry) => entry !== triggerId);
+  }
+  return removed;
+}
+
+function removeRuntimeParticle(simulation, particleId = "") {
+  const removed = simulation.particleState?.[particleId] ?? null;
+  if (removed) {
+    delete simulation.particleState[particleId];
+    removeArrayEntryById(simulation.sceneDoc?.particles, particleId);
+  }
+  return removed;
+}
+
+function removeRuntimeSound(simulation, soundId = "") {
+  const removed = simulation.soundState?.[soundId] ?? null;
+  if (removed) {
+    setRuntimeSoundPlaying(simulation, soundId, false, { restart: false });
+    delete simulation.soundState[soundId];
+    removeArrayEntryById(simulation.sceneDoc?.sounds, soundId);
+    for (const prefab of simulation.prefabInstances ?? []) {
+      prefab.sound_ids = (prefab.sound_ids ?? []).filter((entry) => entry !== soundId);
+    }
+  }
+  return removed;
+}
+
+function removeRuntimeText(simulation, textId = "") {
+  const removed = simulation.textState?.[textId] ?? null;
+  if (removed) {
+    delete simulation.textState[textId];
+    removeArrayEntryById(simulation.sceneDoc?.texts, textId);
+  }
+  return removed;
+}
+
+function removeRuntimeScreen(simulation, screenId = "") {
+  const removed = simulation.screenState?.[screenId] ?? null;
+  if (removed) {
+    delete simulation.screenState[screenId];
+    removeArrayEntryById(simulation.sceneDoc?.screens, screenId);
+  }
+  return removed;
+}
+
+function destroyRuntimeEntity(simulation, ref = null, options = {}) {
+  if (!isScriptRuntimeEntityRef(ref)) {
+    return false;
+  }
+  const cause = String(options.cause ?? "script").trim() || "script";
+  if (ref.kind === "prefab_instance") {
+    const target = findPrefabInstanceTarget(simulation, ref.id);
+    if (!target) {
+      return false;
+    }
+    for (const dynamicObjectId of [...(target.dynamic_object_ids ?? [])]) {
+      destroyRuntimeEntity(simulation, createScriptRuntimeEntityRef("dynamic_object", dynamicObjectId), {
+        cause,
+        parentDestroyed: true,
+      });
+    }
+    for (const voxelId of [...(target.voxel_ids ?? [])]) {
+      destroyRuntimeEntity(simulation, createScriptRuntimeEntityRef("voxel", voxelId), {
+        cause,
+        parentDestroyed: true,
+      });
+    }
+    for (const triggerId of [...(target.trigger_zone_ids ?? [])]) {
+      destroyRuntimeEntity(simulation, createScriptRuntimeEntityRef("trigger", triggerId), {
+        cause,
+        parentDestroyed: true,
+      });
+    }
+    for (const soundId of [...(target.sound_ids ?? [])]) {
+      destroyRuntimeEntity(simulation, createScriptRuntimeEntityRef("sound", soundId), {
+        cause,
+        parentDestroyed: true,
+      });
+    }
+    removeArrayEntryById(simulation.prefabInstances, ref.id);
+    removeArrayEntryById(simulation.sceneDoc?.prefab_instances, ref.id);
+    runScriptRuntimeDestroyHooks(simulation, ref, { cause, parent_destroyed: options.parentDestroyed === true });
+    pushRuntimeEvent(simulation, { type: "destroy_entity", entity_id: ref.id, entity_kind: ref.kind, cause });
+    return true;
+  }
+  let removed = null;
+  if (ref.kind === "primitive" || ref.kind === "model" || ref.kind === "dynamic_object") {
+    removed = removeRuntimeDynamicObject(simulation, ref.id);
+  } else if (ref.kind === "voxel") {
+    removed = removeRuntimeVoxel(simulation, ref.id);
+  } else if (ref.kind === "trigger") {
+    removed = removeRuntimeTriggerZone(simulation, ref.id);
+  } else if (ref.kind === "particle") {
+    removed = removeRuntimeParticle(simulation, ref.id);
+  } else if (ref.kind === "sound") {
+    removed = removeRuntimeSound(simulation, ref.id);
+  } else if (ref.kind === "text") {
+    removed = removeRuntimeText(simulation, ref.id);
+  } else if (ref.kind === "screen") {
+    removed = removeRuntimeScreen(simulation, ref.id);
+  }
+  if (!removed) {
+    return false;
+  }
+  runScriptRuntimeDestroyHooks(simulation, ref, { cause, parent_destroyed: options.parentDestroyed === true });
+  pushRuntimeEvent(simulation, { type: "destroy_entity", entity_id: ref.id, entity_kind: ref.kind, cause });
+  return true;
+}
+
+function setScriptRuntimeEntityActive(simulation, ref = null, nextActive = true) {
+  if (!isScriptRuntimeEntityRef(ref)) {
+    return false;
+  }
+  const target = resolveScriptRuntimeEntityTarget(simulation, ref);
+  if (!target) {
+    return false;
+  }
+  const enabled = nextActive !== false;
+  target.active = enabled;
+  if (ref.kind === "prefab_instance") {
+    target.active = enabled;
+    target.visibility = enabled;
+    for (const dynamicObjectId of target.dynamic_object_ids ?? []) {
+      setScriptRuntimeEntityActive(simulation, createScriptRuntimeEntityRef("dynamic_object", dynamicObjectId), enabled);
+    }
+    for (const triggerId of target.trigger_zone_ids ?? []) {
+      setScriptRuntimeEntityActive(simulation, createScriptRuntimeEntityRef("trigger", triggerId), enabled);
+    }
+    for (const soundId of target.sound_ids ?? []) {
+      setScriptRuntimeEntityActive(simulation, createScriptRuntimeEntityRef("sound", soundId), enabled);
+    }
+    return true;
+  }
+  if (Object.hasOwn(target, "visibility")) {
+    target.visibility = enabled;
+  }
+  if (Object.hasOwn(target, "visible")) {
+    target.visible = enabled;
+  }
+  if (ref.kind === "particle") {
+    target.enabled = enabled;
+  }
+  if (ref.kind === "sound" && !enabled) {
+    setRuntimeSoundPlaying(simulation, ref.id, false, { restart: false });
+  }
+  if (ref.kind === "trigger") {
+    target.currentOccupants = new Set();
+  }
+  if (ref.kind === "player") {
+    const body = simulation.physics?.playerBodies?.get(ref.id) ?? null;
+    const collider = simulation.physics?.playerColliders?.get(ref.id) ?? null;
+    applyRuntimeRigidBodyEnabled(body, enabled);
+    applyRuntimeColliderEnabled(collider, enabled);
+    return true;
+  }
+  if (ref.kind === "primitive" || ref.kind === "model" || ref.kind === "dynamic_object") {
+    const body = simulation.physics?.objectBodies?.get(ref.id) ?? null;
+    const collider = simulation.physics?.objectColliders?.get(ref.id) ?? null;
+    applyRuntimeRigidBodyEnabled(body, enabled);
+    applyRuntimeColliderEnabled(collider, enabled);
+    if (!enabled) {
+      target.velocity = { x: 0, y: 0, z: 0 };
+    }
+    return true;
+  }
+  if (ref.kind === "voxel") {
+    applyRuntimeRigidBodyEnabled(simulation.physics?.voxelBodies?.get(ref.id) ?? null, enabled);
+    applyRuntimeColliderEnabled(
+      simulation.physics?.voxelColliders?.get(ref.id) ?? simulation.physics?.staticVoxelColliders?.get(ref.id) ?? null,
+      enabled,
+    );
+    return true;
+  }
+  return true;
+}
+
+function normalizeRuntimeSpawnLifetimeMs(value = null) {
+  const lifetimeMs = Math.max(0, mustFinite(value, 0));
+  if (lifetimeMs <= 0) {
+    return 0;
+  }
+  return Math.min(SCRIPT_RUNTIME_MAX_ENTITY_LIFETIME_MS, lifetimeMs);
+}
+
+function normalizeSpawnPhysics(input = {}) {
+  return {
+    rigid: input?.rigid !== false,
+    carry_riders: input?.carry_riders === true || input?.carryRiders === true,
+    ignore_gravity: input?.ignore_gravity === true || input?.ignoreGravity === true,
+    gravity_scale: clampNumber(mustFinite(input?.gravity_scale ?? input?.gravityScale, 1), 0, 4),
+    restitution: clampNumber(mustFinite(input?.restitution, 0.12), 0, 1.4),
+    friction: clampNumber(mustFinite(input?.friction, 0.72), 0, 2),
+    mass: clampNumber(mustFinite(input?.mass, 1), 0.05, 500),
+  };
+}
+
+function addRuntimeDynamicObject(simulation, entry = {}) {
+  simulation.dynamicObjects.push(entry);
+  if (entry.entity_kind === "model") {
+    simulation.sceneDoc.models.push({
+      id: entry.id,
+      instance_id: entry.instance_id ?? null,
+      asset_id: entry.asset_id ?? null,
+      label: entry.label ?? entry.id,
+      position: cloneJson(entry.position),
+      rotation: cloneJson(entry.rotation),
+      scale: cloneJson(entry.scale),
+      bounds: cloneJson(entry.bounds ?? { x: 1, y: 1, z: 1 }),
+      material: cloneJson(entry.material ?? {}),
+      physics: cloneJson(entry.physics ?? {}),
+      rigid_mode: entry.rigid_mode,
+      invisible: entry.visibility === false,
+      group_id: entry.group_id ?? null,
+      animation_clip: entry.animation_clip ?? null,
+      animation_autoplay: entry.animation_autoplay === true,
+      animation_loop: entry.animation_loop !== false,
+      animation_speed: mustFinite(entry.animation_speed, 1),
+    });
+  } else {
+    simulation.sceneDoc.primitives.push({
+      id: entry.id,
+      instance_id: entry.instance_id ?? null,
+      asset_id: entry.asset_id ?? null,
+      shape: entry.shape,
+      position: cloneJson(entry.position),
+      rotation: cloneJson(entry.rotation),
+      scale: cloneJson(entry.scale),
+      material: cloneJson(entry.material ?? {}),
+      physics: cloneJson(entry.physics ?? {}),
+      rigid_mode: entry.rigid_mode,
+      facing_mode: entry.facing_mode ?? "fixed",
+      invisible: entry.visibility === false,
+      group_id: entry.group_id ?? null,
+    });
+  }
+  createPrimitiveBody(simulation, entry);
+  applyDynamicObjectPose(simulation, entry, {
+    position: entry.position,
+    rotation: entry.rotation,
+    velocity: entry.velocity,
+    angularVelocity: entry.angular_velocity,
+  });
+  return createScriptRuntimeEntityRef(entry.entity_kind || "dynamic_object", entry.id);
+}
+
+function addRuntimeSound(simulation, entry = {}) {
+  simulation.soundState[entry.id] = entry;
+  simulation.sceneDoc.sounds.push({
+    id: entry.id,
+    instance_id: entry.instance_id ?? null,
+    label: entry.label ?? entry.id,
+    asset_id: entry.asset_id ?? null,
+    position: cloneJson(entry.position),
+    volume: entry.volume,
+    loop: entry.loop === true,
+    autoplay: entry.autoplay === true,
+    spatial: entry.spatial !== false,
+    max_distance: entry.max_distance,
+    group_id: entry.group_id ?? null,
+  });
+  return createScriptRuntimeEntityRef("sound", entry.id);
+}
+
+function addRuntimeParticle(simulation, entry = {}) {
+  simulation.particleState[entry.id] = entry;
+  simulation.sceneDoc.particles.push({
+    id: entry.id,
+    instance_id: entry.instance_id ?? null,
+    effect: entry.effect,
+    target_id: entry.target_id ?? null,
+    enabled: entry.enabled !== false,
+    color: entry.color,
+    position: cloneJson(entry.position ?? { x: 0, y: 0, z: 0 }),
+    rotation: cloneJson(entry.rotation ?? { x: 0, y: 0, z: 0 }),
+    scale: cloneJson(entry.scale ?? { x: 1, y: 1, z: 1 }),
+  });
+  return createScriptRuntimeEntityRef("particle", entry.id);
+}
+
+function spawnRuntimePrimitive(simulation, source = "", position = null, rotation = null, options = {}) {
+  const sourceText = String(source ?? "").trim();
+  const shapeOptions = new Set(["box", "sphere", "capsule", "cylinder", "cone", "plane", "panel"]);
+  const shape = shapeOptions.has(sourceText) ? sourceText : String(options.shape ?? "sphere").trim().toLowerCase() || "sphere";
+  const id = String(options.id ?? "").trim() || buildRuntimeSpawnId("primitive", simulation);
+  const lifetimeMs = normalizeRuntimeSpawnLifetimeMs(options.lifetime_ms ?? options.lifetimeMs);
+  const entry = {
+    kind: "dynamic_object",
+    id,
+    instance_id: String(options.instance_id ?? options.instanceId ?? "").trim() || null,
+    entity_kind: "primitive",
+    asset_id: shapeOptions.has(sourceText) ? (String(options.asset_id ?? options.assetId ?? "").trim() || null) : (sourceText || String(options.asset_id ?? options.assetId ?? "").trim() || null),
+    shape,
+    scale: runtimeScale3(options.scale ?? { x: 1, y: 1, z: 1 }),
+    collider_scale: runtimeScale3(options.scale ?? { x: 1, y: 1, z: 1 }),
+    position: vec3(position ?? options.position ?? { x: 0, y: 1, z: 0 }),
+    initialPosition: vec3(position ?? options.position ?? { x: 0, y: 1, z: 0 }),
+    rotation: vec3(rotation ?? options.rotation ?? { x: 0, y: 0, z: 0 }),
+    velocity: vec3(options.velocity ?? { x: 0, y: 0, z: 0 }),
+    angular_velocity: vec3(options.angular_velocity ?? options.angularVelocity ?? { x: 0, y: 0, z: 0 }),
+    sleeping: false,
+    authority_owner_profile_id: null,
+    authority_owner_username: null,
+    authority_lease_until_ms: 0,
+    last_client_interaction_seq: 0,
+    rigid_mode: String(options.rigid_mode ?? options.rigidMode ?? "rigid").trim().toLowerCase() === "ghost" ? "ghost" : "rigid",
+    physics: normalizeSpawnPhysics(options.physics ?? {}),
+    visibility: options.visible !== false,
+    active: options.active !== false,
+    material_override: null,
+    material: cloneScriptRuntimeValue(options.material ?? {}),
+    group_id: String(options.group_id ?? options.groupId ?? "").trim() || null,
+    expires_at_ms: lifetimeMs > 0 ? simulation.elapsedMs + lifetimeMs : 0,
+  };
+  const ref = addRuntimeDynamicObject(simulation, entry);
+  pushRuntimeEvent(simulation, { type: "spawn_entity", entity_id: ref.id, entity_kind: ref.kind });
+  return ref;
+}
+
+function spawnRuntimeModel(simulation, assetId = "", position = null, rotation = null, options = {}) {
+  const id = String(options.id ?? "").trim() || buildRuntimeSpawnId("model", simulation);
+  const lifetimeMs = normalizeRuntimeSpawnLifetimeMs(options.lifetime_ms ?? options.lifetimeMs);
+  const scale = runtimeScale3(options.scale ?? { x: 1, y: 1, z: 1 });
+  const bounds = runtimeScale3(options.bounds ?? { x: 1, y: 1, z: 1 });
+  const entry = {
+    kind: "dynamic_object",
+    id,
+    instance_id: String(options.instance_id ?? options.instanceId ?? "").trim() || null,
+    entity_kind: "model",
+    asset_id: String(assetId ?? options.asset_id ?? options.assetId ?? "").trim() || null,
+    shape: "box",
+    scale,
+    bounds,
+    collider_scale: {
+      x: scale.x * bounds.x,
+      y: scale.y * bounds.y,
+      z: scale.z * bounds.z,
+    },
+    position: vec3(position ?? options.position ?? { x: 0, y: 1, z: 0 }),
+    initialPosition: vec3(position ?? options.position ?? { x: 0, y: 1, z: 0 }),
+    rotation: vec3(rotation ?? options.rotation ?? { x: 0, y: 0, z: 0 }),
+    velocity: vec3(options.velocity ?? { x: 0, y: 0, z: 0 }),
+    angular_velocity: vec3(options.angular_velocity ?? options.angularVelocity ?? { x: 0, y: 0, z: 0 }),
+    sleeping: false,
+    authority_owner_profile_id: null,
+    authority_owner_username: null,
+    authority_lease_until_ms: 0,
+    last_client_interaction_seq: 0,
+    rigid_mode: String(options.rigid_mode ?? options.rigidMode ?? "rigid").trim().toLowerCase() === "ghost" ? "ghost" : "rigid",
+    physics: normalizeSpawnPhysics(options.physics ?? {}),
+    visibility: options.visible !== false,
+    active: options.active !== false,
+    material_override: null,
+    material: cloneScriptRuntimeValue(options.material ?? {}),
+    group_id: String(options.group_id ?? options.groupId ?? "").trim() || null,
+    animation_clip: String(options.animation_clip ?? options.animationClip ?? "").trim() || null,
+    animation_autoplay: options.animation_autoplay === true || options.animationAutoplay === true,
+    animation_loop: options.animation_loop !== false && options.animationLoop !== false,
+    animation_speed: clampNumber(mustFinite(options.animation_speed ?? options.animationSpeed, 1), 0, 4),
+    expires_at_ms: lifetimeMs > 0 ? simulation.elapsedMs + lifetimeMs : 0,
+  };
+  const ref = addRuntimeDynamicObject(simulation, entry);
+  pushRuntimeEvent(simulation, { type: "spawn_entity", entity_id: ref.id, entity_kind: ref.kind });
+  return ref;
+}
+
+function spawnRuntimeSound(simulation, assetId = "", position = null, options = {}) {
+  const id = String(options.id ?? "").trim() || buildRuntimeSpawnId("sound", simulation);
+  const lifetimeMs = normalizeRuntimeSpawnLifetimeMs(options.lifetime_ms ?? options.lifetimeMs);
+  const entry = {
+    id,
+    instance_id: String(options.instance_id ?? options.instanceId ?? "").trim() || null,
+    label: String(options.label ?? "Runtime Sound").trim() || "Runtime Sound",
+    asset_id: String(assetId ?? options.asset_id ?? options.assetId ?? "").trim() || null,
+    position: vec3(position ?? options.position ?? { x: 0, y: 1.5, z: 0 }),
+    volume: clampNumber(mustFinite(options.volume, 0.85), 0, 1),
+    loop: options.loop === true,
+    autoplay: options.autoplay === true || options.play === true,
+    spatial: options.spatial !== false,
+    max_distance: clampNumber(mustFinite(options.max_distance ?? options.maxDistance, 24), 1, 512),
+    playing: options.autoplay === true || options.play === true,
+    play_revision: options.autoplay === true || options.play === true ? 1 : 0,
+    active: options.active !== false,
+    group_id: String(options.group_id ?? options.groupId ?? "").trim() || null,
+    expires_at_ms: lifetimeMs > 0 ? simulation.elapsedMs + lifetimeMs : 0,
+  };
+  const ref = addRuntimeSound(simulation, entry);
+  if (entry.playing) {
+    setRuntimeSoundPlaying(simulation, id, true, { restart: true });
+  }
+  pushRuntimeEvent(simulation, { type: "spawn_entity", entity_id: ref.id, entity_kind: ref.kind });
+  return ref;
+}
+
+function emitRuntimeParticles(simulation, effect = "", targetLike = null, options = {}) {
+  const targetRef = isScriptRuntimeEntityRef(targetLike) ? targetLike : null;
+  const position = targetRef
+    ? vec3(options.position ?? options.offset ?? { x: 0, y: 0, z: 0 })
+    : vec3(targetLike ?? options.position ?? { x: 0, y: 0, z: 0 });
+  const id = String(options.id ?? "").trim() || buildRuntimeSpawnId("particle", simulation);
+  const lifetimeMs = normalizeRuntimeSpawnLifetimeMs(options.lifetime_ms ?? options.lifetimeMs ?? SCRIPT_RUNTIME_DEFAULT_PARTICLE_LIFETIME_MS);
+  const entry = {
+    id,
+    instance_id: String(options.instance_id ?? options.instanceId ?? "").trim() || null,
+    effect: String(effect ?? options.effect ?? "sparkles").trim().toLowerCase() || "sparkles",
+    target_id: targetRef?.id ?? (String(options.target_id ?? options.targetId ?? "").trim() || null),
+    enabled: options.enabled !== false,
+    active: options.active !== false,
+    color: String(options.color ?? "#ff5a7a").trim() || "#ff5a7a",
+    position,
+    rotation: vec3(options.rotation ?? { x: 0, y: 0, z: 0 }),
+    scale: runtimeScale3(options.scale ?? { x: 1, y: 1, z: 1 }),
+    expires_at_ms: lifetimeMs > 0 ? simulation.elapsedMs + lifetimeMs : 0,
+  };
+  const ref = addRuntimeParticle(simulation, entry);
+  pushRuntimeEvent(simulation, { type: "emit_particles", entity_id: ref.id, effect: entry.effect });
+  return ref;
+}
+
+function instantiateRuntimePrefabEntries(simulation, prefabDoc = {}, instance = {}) {
+  const doc = normalizeSceneDoc(prefabDoc, { preserveNormalizedIds: true });
+  const prefix = `${instance.id}__`;
+  const remapId = (id = "") => `${prefix}${id}`;
+  const aliasMap = new Map();
+  const registerId = (id = "") => {
+    const nextId = remapId(id);
+    aliasMap.set(id, nextId);
+    return nextId;
+  };
+  const applyTargetAlias = (value = "") => {
+    const raw = String(value ?? "").trim();
+    return aliasMap.get(raw) ?? (raw || null);
+  };
+  const common = (entry = {}) => ({
+    instance_id: instance.id,
+    group_id: instance.id,
+    active: true,
+    visibility: instance.visibility !== false,
+    material: instance.material_override
+      ? { ...(entry.material ?? {}), ...(instance.material_override ?? {}) }
+      : cloneScriptRuntimeValue(entry.material ?? {}),
+  });
+  const dynamicObjects = [
+    ...(doc.primitives ?? []).map((entry) => ({
+      kind: "dynamic_object",
+      id: registerId(entry.id),
+      entity_kind: "primitive",
+      asset_id: entry.asset_id ?? null,
+      shape: entry.shape,
+      scale: runtimeScale3(runtimeMultiplyScale3(entry.scale, instance.scale)),
+      collider_scale: runtimeScale3(runtimeMultiplyScale3(entry.scale, instance.scale)),
+      position: transformRuntimePosition(entry.position, instance),
+      initialPosition: transformRuntimePosition(entry.position, instance),
+      rotation: runtimeAddEuler3(entry.rotation, instance.rotation),
+      velocity: { x: 0, y: 0, z: 0 },
+      angular_velocity: { x: 0, y: 0, z: 0 },
+      sleeping: false,
+      authority_owner_profile_id: null,
+      authority_owner_username: null,
+      authority_lease_until_ms: 0,
+      last_client_interaction_seq: 0,
+      rigid_mode: entry.rigid_mode,
+      physics: cloneScriptRuntimeValue(entry.physics ?? {}),
+      material_override: null,
+      ...common(entry),
+    })),
+    ...(doc.models ?? []).map((entry) => {
+      const scale = runtimeScale3(runtimeMultiplyScale3(entry.scale, instance.scale));
+      const bounds = runtimeScale3(runtimeMultiplyScale3(entry.bounds ?? { x: 1, y: 1, z: 1 }, instance.scale));
+      return {
+        kind: "dynamic_object",
+        id: registerId(entry.id),
+        entity_kind: "model",
+        asset_id: entry.asset_id ?? null,
+        shape: "box",
+        scale,
+        bounds,
+        collider_scale: {
+          x: scale.x * bounds.x,
+          y: scale.y * bounds.y,
+          z: scale.z * bounds.z,
+        },
+        position: transformRuntimePosition(entry.position, instance),
+        initialPosition: transformRuntimePosition(entry.position, instance),
+        rotation: runtimeAddEuler3(entry.rotation, instance.rotation),
+        velocity: { x: 0, y: 0, z: 0 },
+        angular_velocity: { x: 0, y: 0, z: 0 },
+        sleeping: false,
+        authority_owner_profile_id: null,
+        authority_owner_username: null,
+        authority_lease_until_ms: 0,
+        last_client_interaction_seq: 0,
+        rigid_mode: entry.rigid_mode,
+        physics: cloneScriptRuntimeValue(entry.physics ?? {}),
+        material_override: null,
+        animation_clip: entry.animation_clip ?? null,
+        animation_autoplay: entry.animation_autoplay === true,
+        animation_loop: entry.animation_loop !== false,
+        animation_speed: mustFinite(entry.animation_speed, 1),
+        ...common(entry),
+      };
+    }),
+  ];
+  const voxels = (doc.voxels ?? []).map((entry) => ({
+    ...cloneScriptRuntimeValue(entry),
+    id: registerId(entry.id),
+    instance_id: instance.id,
+    group_id: instance.id,
+    position: transformRuntimePosition(entry.position, instance),
+    scale: runtimeScale3(runtimeMultiplyScale3(entry.scale, instance.scale)),
+    active: true,
+  }));
+  const triggers = (doc.trigger_zones ?? []).map((entry) => ({
+    id: registerId(entry.id),
+    instance_id: instance.id,
+    label: entry.label,
+    position: transformRuntimePosition(entry.position, instance),
+    halfExtents: {
+      x: Math.max(0.1, mustFinite(entry.scale?.x, 2) * mustFinite(instance.scale?.x, 1) / 2),
+      y: Math.max(0.1, mustFinite(entry.scale?.y, 2) * mustFinite(instance.scale?.y, 1) / 2),
+      z: Math.max(0.1, mustFinite(entry.scale?.z, 2) * mustFinite(instance.scale?.z, 1) / 2),
+    },
+    currentOccupants: new Set(),
+    active: true,
+  }));
+  const sounds = (doc.sounds ?? []).map((entry) => ({
+    id: registerId(entry.id),
+    instance_id: instance.id,
+    label: entry.label,
+    asset_id: entry.asset_id ?? null,
+    position: transformRuntimePosition(entry.position, instance),
+    volume: clampNumber(mustFinite(entry.volume, 0.85), 0, 1),
+    loop: entry.loop === true,
+    autoplay: entry.autoplay === true,
+    spatial: entry.spatial !== false,
+    max_distance: clampNumber(mustFinite(entry.max_distance, 24), 1, 512),
+    playing: entry.autoplay === true,
+    play_revision: entry.autoplay === true ? 1 : 0,
+    active: true,
+    group_id: instance.id,
+  }));
+  const particles = (doc.particles ?? []).map((entry) => ({
+    id: registerId(entry.id),
+    instance_id: instance.id,
+    effect: entry.effect,
+    target_id: applyTargetAlias(entry.target_id),
+    enabled: entry.enabled !== false,
+    active: true,
+    color: entry.color,
+    position: vec3(entry.position ?? { x: 0, y: 0, z: 0 }),
+    rotation: vec3(entry.rotation ?? { x: 0, y: 0, z: 0 }),
+    scale: runtimeScale3(entry.scale ?? { x: 1, y: 1, z: 1 }),
+  }));
+  return {
+    dynamicObjects,
+    voxels,
+    triggers,
+    sounds,
+    particles,
+  };
+}
+
+function spawnRuntimePrefab(simulation, prefabId = "", position = null, rotation = null, options = {}) {
+  const prefab = simulation.prefabsById?.get?.(String(prefabId ?? "").trim()) ?? null;
+  if (!prefab?.prefab_doc) {
+    throw new Error(`Prefab \`${String(prefabId ?? "").trim() || "(empty)"}\` was not found.`);
+  }
+  const instance = {
+    kind: "prefab_instance",
+    id: String(options.id ?? "").trim() || buildRuntimeSpawnId("prefabinst", simulation),
+    label: String(options.label ?? prefab.name ?? "Runtime Prefab").trim() || "Runtime Prefab",
+    prefab_id: String(prefab.id ?? prefabId).trim(),
+    position: vec3(position ?? options.position ?? { x: 0, y: 0, z: 0 }),
+    initialPosition: vec3(position ?? options.position ?? { x: 0, y: 0, z: 0 }),
+    rotation: vec3(rotation ?? options.rotation ?? { x: 0, y: 0, z: 0 }),
+    scale: runtimeScale3(options.scale ?? { x: 1, y: 1, z: 1 }),
+    velocity: vec3(options.velocity ?? { x: 0, y: 0, z: 0 }),
+    visibility: options.visible !== false,
+    active: options.active !== false,
+    material_override: cloneScriptRuntimeValue(options.material_override ?? options.materialOverride ?? null),
+    dynamic_object_ids: [],
+    voxel_ids: [],
+    trigger_zone_ids: [],
+    sound_ids: [],
+    expires_at_ms: (() => {
+      const lifetimeMs = normalizeRuntimeSpawnLifetimeMs(options.lifetime_ms ?? options.lifetimeMs);
+      return lifetimeMs > 0 ? simulation.elapsedMs + lifetimeMs : 0;
+    })(),
+  };
+  const instanced = instantiateRuntimePrefabEntries(simulation, prefab.prefab_doc, instance);
+  simulation.prefabInstances.push(instance);
+  simulation.sceneDoc.prefab_instances.push({
+    id: instance.id,
+    prefab_id: instance.prefab_id,
+    label: instance.label,
+    position: cloneJson(instance.position),
+    rotation: cloneJson(instance.rotation),
+    scale: cloneJson(instance.scale),
+    overrides: {
+      material: cloneJson(instance.material_override),
+      visible: instance.visibility !== false,
+    },
+  });
+  for (const entry of instanced.voxels) {
+    simulation.sceneDoc.voxels.push(entry);
+    simulation.staticSolids.push({
+      id: entry.id,
+      instance_id: instance.id,
+      position: cloneJson(entry.position),
+      halfExtents: getVoxelHalfExtents(entry),
+      active: true,
+    });
+    const half = getVoxelHalfExtents(entry);
+    if (simulation.physics?.world) {
+      const body = simulation.physics.world.createRigidBody(
+        RAPIER.RigidBodyDesc.kinematicPositionBased()
+          .setTranslation(entry.position.x, entry.position.y, entry.position.z)
+          .setGravityScale(0)
+          .setCanSleep(false),
+      );
+      const collider = simulation.physics.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
+          .setFriction(1)
+          .setRestitution(0),
+        body,
+      );
+      simulation.physics.voxelBodies.set(entry.id, body);
+      simulation.physics.voxelColliders.set(entry.id, collider);
+    }
+    instance.voxel_ids.push(entry.id);
+  }
+  for (const entry of instanced.dynamicObjects) {
+    addRuntimeDynamicObject(simulation, entry);
+    instance.dynamic_object_ids.push(entry.id);
+  }
+  for (const entry of instanced.triggers) {
+    simulation.triggerZones.push(entry);
+    simulation.sceneDoc.trigger_zones.push({
+      id: entry.id,
+      instance_id: instance.id,
+      label: entry.label,
+      position: cloneJson(entry.position),
+      scale: {
+        x: entry.halfExtents.x * 2,
+        y: entry.halfExtents.y * 2,
+        z: entry.halfExtents.z * 2,
+      },
+    });
+    instance.trigger_zone_ids.push(entry.id);
+  }
+  for (const entry of instanced.sounds) {
+    addRuntimeSound(simulation, entry);
+    instance.sound_ids.push(entry.id);
+  }
+  for (const entry of instanced.particles) {
+    addRuntimeParticle(simulation, entry);
+  }
+  pushRuntimeEvent(simulation, { type: "spawn_entity", entity_id: instance.id, entity_kind: "prefab_instance" });
+  return createScriptRuntimeEntityRef("prefab_instance", instance.id);
+}
+
+function normalizeScriptRuntimeSpawnKind(simulation, source = "", kind = "") {
+  const explicit = String(kind ?? "").trim().toLowerCase();
+  if (explicit) {
+    return explicit;
+  }
+  const normalizedSource = String(source ?? "").trim().toLowerCase();
+  if (simulation.prefabsById?.has?.(String(source ?? "").trim())) {
+    return "prefab";
+  }
+  if (["box", "sphere", "capsule", "cylinder", "cone", "plane", "panel", "primitive"].includes(normalizedSource)) {
+    return "primitive";
+  }
+  if (normalizedSource === "sound") {
+    return "sound";
+  }
+  if (normalizedSource === "particle") {
+    return "particle";
+  }
+  return "model";
+}
+
+function spawnRuntimeEntity(simulation, source = "", position = null, rotation = null, options = {}) {
+  const state = simulation?.scriptRuntimeState;
+  state.spawnCountThisTick = (state?.spawnCountThisTick ?? 0) + 1;
+  if ((state?.spawnCountThisTick ?? 0) > SCRIPT_RUNTIME_MAX_SPAWNS_PER_TICK) {
+    throw new Error(`script.runtime exceeded ${SCRIPT_RUNTIME_MAX_SPAWNS_PER_TICK} spawns in one tick.`);
+  }
+  const kind = normalizeScriptRuntimeSpawnKind(simulation, source, options.kind);
+  if (kind === "prefab") {
+    return spawnRuntimePrefab(simulation, source, position, rotation, options);
+  }
+  if (kind === "sound") {
+    return spawnRuntimeSound(simulation, source, position, options);
+  }
+  if (kind === "particle") {
+    return emitRuntimeParticles(simulation, source || options.effect, position, options);
+  }
+  if (kind === "primitive") {
+    return spawnRuntimePrimitive(simulation, source, position, rotation, options);
+  }
+  return spawnRuntimeModel(simulation, source, position, rotation, options);
+}
+
+function computeRayAabbIntersection(origin = null, direction = null, bounds = null, maxDistance = Infinity) {
+  if (!origin || !direction || !bounds?.position || !bounds?.halfExtents) {
+    return null;
+  }
+  const min = {
+    x: bounds.position.x - bounds.halfExtents.x,
+    y: bounds.position.y - bounds.halfExtents.y,
+    z: bounds.position.z - bounds.halfExtents.z,
+  };
+  const max = {
+    x: bounds.position.x + bounds.halfExtents.x,
+    y: bounds.position.y + bounds.halfExtents.y,
+    z: bounds.position.z + bounds.halfExtents.z,
+  };
+  let tMin = 0;
+  let tMax = Math.max(0, mustFinite(maxDistance, SCRIPT_RUNTIME_DEFAULT_RAYCAST_DISTANCE));
+  for (const axis of ["x", "y", "z"]) {
+    const dir = mustFinite(direction[axis], 0);
+    const start = mustFinite(origin[axis], 0);
+    if (Math.abs(dir) <= 0.000001) {
+      if (start < min[axis] || start > max[axis]) {
+        return null;
+      }
+      continue;
+    }
+    const inv = 1 / dir;
+    let near = (min[axis] - start) * inv;
+    let far = (max[axis] - start) * inv;
+    if (near > far) {
+      [near, far] = [far, near];
+    }
+    tMin = Math.max(tMin, near);
+    tMax = Math.min(tMax, far);
+    if (tMin > tMax) {
+      return null;
+    }
+  }
+  const distance = Math.max(0, tMin);
+  const point = {
+    x: origin.x + direction.x * distance,
+    y: origin.y + direction.y * distance,
+    z: origin.z + direction.z * distance,
+  };
+  const epsilon = 0.001;
+  const normal = { x: 0, y: 0, z: 0 };
+  if (Math.abs(point.x - min.x) <= epsilon) {
+    normal.x = -1;
+  } else if (Math.abs(point.x - max.x) <= epsilon) {
+    normal.x = 1;
+  } else if (Math.abs(point.y - min.y) <= epsilon) {
+    normal.y = -1;
+  } else if (Math.abs(point.y - max.y) <= epsilon) {
+    normal.y = 1;
+  } else if (Math.abs(point.z - min.z) <= epsilon) {
+    normal.z = -1;
+  } else if (Math.abs(point.z - max.z) <= epsilon) {
+    normal.z = 1;
+  }
+  return {
+    distance,
+    point,
+    normal,
+  };
+}
+
+function raycastScriptRuntime(simulation, originLike = null, directionLike = null, maxDistance = SCRIPT_RUNTIME_DEFAULT_RAYCAST_DISTANCE, options = {}) {
+  const origin = resolveScriptRuntimePositionLike(simulation, originLike);
+  const rawDirection = resolveScriptRuntimePositionLike(simulation, directionLike) ?? directionLike;
+  const directionVector = isScriptRuntimeVectorLike(rawDirection)
+    ? (() => {
+      const vector = toScriptRuntimeVector(rawDirection);
+      const length = Math.hypot(vector.x, vector.y, vector.z);
+      if (length <= 0.000001) {
+        return null;
+      }
+      return {
+        x: vector.x / length,
+        y: vector.y / length,
+        z: vector.z / length,
+      };
+    })()
+    : null;
+  if (!origin || !isScriptRuntimeVectorLike(directionVector)) {
+    return null;
+  }
+  const kindFilter = String(options.kind ?? "").trim().toLowerCase();
+  let bestHit = null;
+  for (const ref of listScriptRuntimeEntityRefs(simulation)) {
+    if (!isRuntimeRefActive(simulation, ref)) {
+      continue;
+    }
+    if (["trigger", "sound", "particle", "text", "screen"].includes(ref.kind)) {
+      continue;
+    }
+    if (kindFilter && ref.kind !== normalizeScriptRuntimeEntityKind(kindFilter)) {
+      continue;
+    }
+    const bounds = getScriptRuntimeRefBounds(simulation, ref);
+    const hit = computeRayAabbIntersection(origin, directionVector, bounds, maxDistance);
+    if (!hit) {
+      continue;
+    }
+    if (!bestHit || hit.distance < bestHit.distance) {
+      bestHit = {
+        ...hit,
+        entity: ref,
+      };
+    }
+  }
+  return bestHit ? cloneScriptRuntimeValue(bestHit) : null;
+}
+
+function findScriptRuntimeRefsByGroup(simulation, groupId = "") {
+  const normalizedGroupId = String(groupId ?? "").trim();
+  if (!normalizedGroupId) {
+    return [];
+  }
+  return listScriptRuntimeEntityRefs(simulation)
+    .filter((entry) => isRuntimeRefActive(simulation, entry))
+    .filter((entry) => findRuntimeGroupValue(resolveScriptRuntimeEntityTarget(simulation, entry)) === normalizedGroupId);
+}
+
+function getScriptRuntimeTimerIntervalMs(scriptEntry = {}) {
+  const constants = scriptEntry?.constants ?? {};
+  const timerMs = mustFinite(constants.timer_ms ?? constants.interval_ms, 0);
+  if (timerMs > 0) {
+    return Math.max(16, timerMs);
+  }
+  const timerSeconds = mustFinite(constants.timer_s ?? constants.interval_s, 0);
+  if (timerSeconds > 0) {
+    return Math.max(16, timerSeconds * 1000);
+  }
+  return SCRIPT_RUNTIME_DEFAULT_TIMER_MS;
+}
+
+function buildScriptRuntimeEventPayload(base = {}) {
+  return cloneScriptRuntimeValue(base ?? {});
+}
+
+function collectTargetOverlapIds(simulation, scriptEntry = {}, mode = "overlap") {
+  if (!scriptEntry?.target_id) {
+    return new Set();
+  }
+  const targetRef = findScriptRuntimeEntityRef(simulation, scriptEntry.target_id);
+  if (!targetRef || !isRuntimeRefActive(simulation, targetRef)) {
+    return new Set();
+  }
+  if (targetRef.kind === "trigger") {
+    const target = resolveScriptRuntimeEntityTarget(simulation, targetRef);
+    return new Set(
+      [...(target?.currentOccupants ?? new Set())]
+        .filter(Boolean),
+    );
+  }
+  const overlaps = collectScriptRuntimeOverlapRefs(simulation, targetRef)
+    .filter((entry) => entry.id !== targetRef.id);
+  if (mode === "hit") {
+    return new Set(overlaps
+      .filter((entry) => entry.kind !== "trigger" && entry.kind !== "sound" && entry.kind !== "particle")
+      .map((entry) => entry.id));
+  }
+  return new Set(overlaps.map((entry) => entry.id));
+}
+
+function runScriptRuntimeDestroyHooks(simulation, ref = null, metadata = {}) {
+  const scripts = Array.isArray(simulation?.scriptConfig?.runtime_scripts)
+    ? simulation.scriptConfig.runtime_scripts
+    : [];
+  if (!scripts.length || !ref?.id) {
+    return;
+  }
+  for (const scriptEntry of scripts) {
+    if ((scriptEntry?.run_mode ?? SCRIPT_RUNTIME_DEFAULT_RUN_MODE) !== "on_destroy") {
+      continue;
+    }
+    if (String(scriptEntry.target_id ?? "").trim() !== ref.id) {
+      continue;
+    }
+    try {
+      executeRuntimeScript(simulation, scriptEntry, 0, {
+        inheritedSelfRef: ref,
+        eventValue: buildScriptRuntimeEventPayload({
+          type: "destroy",
+          entity: ref,
+          cause: metadata.cause ?? "script",
+          parent_destroyed: metadata.parent_destroyed === true,
+        }),
+      });
+      simulation.scriptRuntimeState?.lastErrorByFunctionId?.delete?.(scriptEntry.function_id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown script.runtime execution error.";
+      simulation.scriptRuntimeState?.lastErrorByFunctionId?.set?.(scriptEntry.function_id, message);
+      pushRuntimeEvent(simulation, {
+        type: "script_runtime_error",
+        function_id: scriptEntry.function_id ?? null,
+        function_name: scriptEntry.function_name ?? null,
+        message,
+      });
+    }
+  }
+}
+
+function cleanupExpiredRuntimeEntities(simulation) {
+  const elapsedMs = Math.max(0, mustFinite(simulation?.elapsedMs, 0));
+  for (const entry of [...(simulation.prefabInstances ?? [])]) {
+    if (entry?.expires_at_ms > 0 && elapsedMs >= entry.expires_at_ms) {
+      destroyRuntimeEntity(simulation, createScriptRuntimeEntityRef("prefab_instance", entry.id), { cause: "lifetime" });
+    }
+  }
+  for (const entry of [...(simulation.dynamicObjects ?? [])]) {
+    if (entry?.expires_at_ms > 0 && elapsedMs >= entry.expires_at_ms) {
+      destroyRuntimeEntity(simulation, createScriptRuntimeEntityRef(entry.entity_kind || "dynamic_object", entry.id), { cause: "lifetime" });
+    }
+  }
+  for (const entry of Object.values(simulation.particleState ?? {})) {
+    if (entry?.expires_at_ms > 0 && elapsedMs >= entry.expires_at_ms) {
+      destroyRuntimeEntity(simulation, createScriptRuntimeEntityRef("particle", entry.id), { cause: "lifetime" });
+    }
+  }
+  for (const entry of Object.values(simulation.soundState ?? {})) {
+    if (entry?.expires_at_ms > 0 && elapsedMs >= entry.expires_at_ms) {
+      destroyRuntimeEntity(simulation, createScriptRuntimeEntityRef("sound", entry.id), { cause: "lifetime" });
+    }
+  }
+}
+
 function createScriptRuntimeBuiltins(simulation, sceneRef = createScriptRuntimeSceneRef()) {
   return new Map([
     ["entity", (id) => findScriptRuntimeEntityRef(simulation, id)],
-    ["entities", (kind = "") => listScriptRuntimeEntityRefs(simulation, kind)],
-    ["players", () => listScriptRuntimeEntityRefs(simulation, "player")],
+    ["entities", (kind = "") => listScriptRuntimeEntityRefs(simulation, kind).filter((entry) => isRuntimeRefActive(simulation, entry))],
+    ["players", () => listScriptRuntimeEntityRefs(simulation, "player").filter((entry) => isRuntimeRefActive(simulation, entry))],
     ["nearest", (list, from) => {
       const origin = resolveScriptRuntimePositionLike(simulation, from);
       if (!origin || !Array.isArray(list)) {
@@ -1853,6 +3137,29 @@ function createScriptRuntimeBuiltins(simulation, sceneRef = createScriptRuntimeS
     ["clamp", (value = 0, min = 0, max = 0) => clampNumber(mustFinite(value, 0), mustFinite(min, 0), mustFinite(max, 0))],
     ["min", (...values) => Math.min(...values.map((entry) => mustFinite(entry, 0)))],
     ["max", (...values) => Math.max(...values.map((entry) => mustFinite(entry, 0)))],
+    ["spawn", (source, position = null, rotation = null, options = {}) => spawnRuntimeEntity(simulation, source, position, rotation, options)],
+    ["destroy", (entityLike) => {
+      const ref = isScriptRuntimeEntityRef(entityLike)
+        ? entityLike
+        : findScriptRuntimeEntityRef(simulation, entityLike);
+      return Boolean(destroyRuntimeEntity(simulation, ref, { cause: "script" }));
+    }],
+    ["set_active", (entityLike, active = true) => {
+      const ref = isScriptRuntimeEntityRef(entityLike)
+        ? entityLike
+        : findScriptRuntimeEntityRef(simulation, entityLike);
+      return Boolean(setScriptRuntimeEntityActive(simulation, ref, active !== false));
+    }],
+    ["emit_particles", (effect, atOrOn = null, options = {}) => emitRuntimeParticles(simulation, effect, atOrOn, options)],
+    ["raycast", (origin, direction, maxDistance = SCRIPT_RUNTIME_DEFAULT_RAYCAST_DISTANCE, options = {}) => {
+      const resolvedOptions = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+      return raycastScriptRuntime(simulation, origin, direction, maxDistance, resolvedOptions);
+    }],
+    ["overlap", (subject, options = {}) => {
+      const resolvedOptions = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+      return collectScriptRuntimeOverlapRefs(simulation, subject, resolvedOptions);
+    }],
+    ["find_by_group", (groupId = "") => findScriptRuntimeRefsByGroup(simulation, groupId)],
     ["move_toward", (from, to, maxStep = 0, stopDistance = 0) => {
       const fromPosition = resolveScriptRuntimePositionLike(simulation, from);
       const toPosition = resolveScriptRuntimePositionLike(simulation, to);
@@ -1935,7 +3242,7 @@ function resolveScriptRuntimeSelfRef(simulation, scriptEntry = {}, sceneRef = cr
     return sceneRef;
   }
   if (scriptEntry?.target_id) {
-    return findScriptRuntimeEntityRef(simulation, scriptEntry.target_id);
+    return findScriptRuntimeEntityRef(simulation, scriptEntry.target_id) ?? inheritedSelfRef ?? null;
   }
   if (inheritedSelfRef) {
     return inheritedSelfRef;
@@ -1959,17 +3266,24 @@ function resolveScriptRuntimeReference(expression = null) {
     return null;
   }
   if (expression.type === "Identifier") {
-    return { type: "binding", name: expression.name };
+    return {
+      type: "binding",
+      name: expression.name,
+      rootExpression: expression,
+      path: [],
+    };
   }
   if (expression.type === "MemberExpression") {
-    const objectReference = resolveScriptRuntimeReference(expression.object);
-    if (!objectReference) {
-      return null;
+    const path = [];
+    let cursor = expression;
+    while (cursor?.type === "MemberExpression") {
+      path.unshift(cursor.property?.name ?? "");
+      cursor = cursor.object;
     }
     return {
-      type: "member",
-      object: objectReference,
-      property: expression.property?.name ?? "",
+      type: "path",
+      rootExpression: cursor ?? null,
+      path,
     };
   }
   return null;
@@ -1980,14 +3294,16 @@ function getScriptRuntimeReferenceValue(simulation, environment, reference) {
     return undefined;
   }
   if (reference.type === "binding") {
-    return environment.get(reference.name);
+    if (!(reference.path?.length > 0)) {
+      return environment.get(reference.name);
+    }
   }
-  if (reference.type === "member") {
-    return readScriptRuntimeProperty(
-      simulation,
-      getScriptRuntimeReferenceValue(simulation, environment, reference.object),
-      reference.property,
-    );
+  if (reference.type === "binding" || reference.type === "path") {
+    let value = evaluateScriptRuntimeExpression(simulation, environment, reference.rootExpression);
+    for (const property of reference.path ?? []) {
+      value = readScriptRuntimeProperty(simulation, value, property);
+    }
+    return value;
   }
   return undefined;
 }
@@ -1996,18 +3312,19 @@ function setScriptRuntimeReferenceValue(simulation, environment, reference, valu
   if (!reference) {
     throw new Error("Invalid script.runtime assignment target.");
   }
-  if (reference.type === "binding") {
+  if (reference.type === "binding" && !(reference.path?.length > 0)) {
     const updated = environment.set(reference.name, value);
     if (!updated) {
       throw new Error(`Unknown script.runtime variable \`${reference.name}\`.`);
     }
     return value;
   }
-  const { root, path } = unwrapScriptRuntimeReferencePath(reference);
-  if (!root || !path.length) {
+  const rootExpression = reference.rootExpression ?? null;
+  const path = reference.path ?? [];
+  if (!rootExpression || !path.length) {
     throw new Error("Invalid script.runtime assignment target.");
   }
-  const rootValue = getScriptRuntimeReferenceValue(simulation, environment, root);
+  const rootValue = evaluateScriptRuntimeExpression(simulation, environment, rootExpression);
   if (isScriptRuntimeEntityRef(rootValue)) {
     setScriptRuntimeEntityPath(simulation, rootValue, path, value);
     return value;
@@ -2016,14 +3333,14 @@ function setScriptRuntimeReferenceValue(simulation, environment, reference, valu
     setScriptRuntimeScenePath(simulation, path, value);
     return value;
   }
-  if (root.type !== "binding") {
+  if (rootExpression.type !== "Identifier") {
     throw new Error("Script.runtime can only assign through variables, `self`, or `scene`.");
   }
   const nextRootValue = cloneScriptRuntimeValue(rootValue);
   if (!setScriptRuntimePlainObjectPath(nextRootValue, path, value)) {
     throw new Error(`Property path \`${path.join(".")}\` is not writable in script.runtime.`);
   }
-  environment.set(root.name, nextRootValue);
+  environment.set(rootExpression.name, nextRootValue);
   return value;
 }
 
@@ -2033,6 +3350,17 @@ function evaluateScriptRuntimeExpression(simulation, environment, expression = n
   }
   if (expression.type === "Literal") {
     return cloneScriptRuntimeValue(expression.value);
+  }
+  if (expression.type === "ArrayExpression") {
+    return (expression.elements ?? []).map((entry) => evaluateScriptRuntimeExpression(simulation, environment, entry));
+  }
+  if (expression.type === "ObjectExpression") {
+    return Object.fromEntries(
+      (expression.properties ?? []).map((entry) => [
+        String(entry?.key ?? "").trim(),
+        evaluateScriptRuntimeExpression(simulation, environment, entry?.value),
+      ]),
+    );
   }
   if (expression.type === "Identifier") {
     if (!environment.has(expression.name)) {
@@ -2162,6 +3490,7 @@ function executeRuntimeScript(simulation, scriptEntry = {}, deltaSeconds = 0, op
     inputs: bindScriptRuntimeInputs(scriptEntry.inputs ?? [], options.args ?? []),
     selfRef,
     sceneRef,
+    eventValue: options.eventValue ?? null,
     dt: Math.max(0, mustFinite(deltaSeconds, 0)),
     time: Math.max(0, mustFinite(simulation.elapsedMs, 0)) / 1000,
     builtins,
@@ -2190,26 +3519,66 @@ function executeRuntimeScripts(simulation, deltaSeconds = 0) {
     return;
   }
   simulation.scriptRuntimeState.callCountThisTick = 0;
+  simulation.scriptRuntimeState.spawnCountThisTick = 0;
   for (const scriptEntry of scripts) {
-    if ((scriptEntry?.run_mode ?? SCRIPT_RUNTIME_DEFAULT_RUN_MODE) === "on_call") {
+    const runMode = scriptEntry?.run_mode ?? SCRIPT_RUNTIME_DEFAULT_RUN_MODE;
+    const runScriptSafely = (eventValue = null) => {
+      try {
+        executeRuntimeScript(simulation, scriptEntry, deltaSeconds, { eventValue });
+        simulation.scriptRuntimeState?.lastErrorByFunctionId?.delete?.(scriptEntry.function_id);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown script.runtime execution error.";
+        const previous = simulation.scriptRuntimeState?.lastErrorByFunctionId?.get?.(scriptEntry.function_id) ?? "";
+        if (previous === message) {
+          return;
+        }
+        simulation.scriptRuntimeState?.lastErrorByFunctionId?.set?.(scriptEntry.function_id, message);
+        pushRuntimeEvent(simulation, {
+          type: "script_runtime_error",
+          function_id: scriptEntry.function_id ?? null,
+          function_name: scriptEntry.function_name ?? null,
+          message,
+        });
+      }
+    };
+    if (runMode === "on_call" || runMode === "on_destroy") {
       continue;
     }
-    try {
-      executeRuntimeScript(simulation, scriptEntry, deltaSeconds);
-      simulation.scriptRuntimeState?.lastErrorByFunctionId?.delete?.(scriptEntry.function_id);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown script.runtime execution error.";
-      const previous = simulation.scriptRuntimeState?.lastErrorByFunctionId?.get?.(scriptEntry.function_id) ?? "";
-      if (previous === message) {
-        continue;
+    if (runMode === "every_tick") {
+      runScriptSafely();
+      continue;
+    }
+    if (runMode === "on_timer") {
+      const intervalMs = getScriptRuntimeTimerIntervalMs(scriptEntry);
+      const previousElapsed = Math.max(0, mustFinite(simulation.elapsedMs, 0) - Math.max(0, mustFinite(deltaSeconds, 0) * 1000));
+      const nextDueMs = simulation.scriptRuntimeState?.timersByFunctionId?.get?.(scriptEntry.function_id) ?? intervalMs;
+      if (simulation.elapsedMs >= nextDueMs && previousElapsed < nextDueMs + intervalMs) {
+        runScriptSafely(buildScriptRuntimeEventPayload({
+          type: "timer",
+          interval_ms: intervalMs,
+          due_at_ms: nextDueMs,
+        }));
+        simulation.scriptRuntimeState?.timersByFunctionId?.set?.(scriptEntry.function_id, nextDueMs + intervalMs);
+      } else if (!simulation.scriptRuntimeState?.timersByFunctionId?.has?.(scriptEntry.function_id)) {
+        simulation.scriptRuntimeState?.timersByFunctionId?.set?.(scriptEntry.function_id, intervalMs);
       }
-      simulation.scriptRuntimeState?.lastErrorByFunctionId?.set?.(scriptEntry.function_id, message);
-      pushRuntimeEvent(simulation, {
-        type: "script_runtime_error",
-        function_id: scriptEntry.function_id ?? null,
-        function_name: scriptEntry.function_name ?? null,
-        message,
-      });
+      continue;
+    }
+    if (runMode === "on_overlap" || runMode === "on_hit") {
+      const previousIds = simulation.scriptRuntimeState?.overlapIdsByFunctionId?.get?.(scriptEntry.function_id) ?? new Set();
+      const currentIds = collectTargetOverlapIds(simulation, scriptEntry, runMode === "on_hit" ? "hit" : "overlap");
+      for (const overlapId of currentIds) {
+        if (previousIds.has(overlapId)) {
+          continue;
+        }
+        const otherRef = findScriptRuntimeEntityRef(simulation, overlapId);
+        runScriptSafely(buildScriptRuntimeEventPayload({
+          type: runMode === "on_hit" ? "hit" : "overlap",
+          other: otherRef,
+          target: scriptEntry?.target_id ? findScriptRuntimeEntityRef(simulation, scriptEntry.target_id) : null,
+        }));
+      }
+      simulation.scriptRuntimeState?.overlapIdsByFunctionId?.set?.(scriptEntry.function_id, currentIds);
     }
   }
 }
@@ -3073,11 +4442,15 @@ function applyPlayerMovement(player, inputEdges = [], deltaSeconds, runtime) {
 
 function refreshTriggerOccupancy(runtime) {
   const activeBodies = [
-    ...runtime.players.filter((entry) => entry.occupied_by_profile_id),
-    ...runtime.dynamicObjects.filter((entry) => entry.visibility !== false),
+    ...runtime.players.filter((entry) => entry.occupied_by_profile_id && entry.active !== false),
+    ...runtime.dynamicObjects.filter((entry) => entry.visibility !== false && entry.active !== false),
   ];
 
   for (const zone of runtime.triggerZones) {
+    if (zone.active === false) {
+      zone.currentOccupants = new Set();
+      continue;
+    }
     const previous = new Set(zone.currentOccupants);
     const next = new Set();
 
@@ -3102,7 +4475,7 @@ function refreshTriggerOccupancy(runtime) {
   }
 }
 
-function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", runtimeState = {}, tick = 0, elapsedMs = 0 } = {}) {
+function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", runtimeState = {}, tick = 0, elapsedMs = 0, prefabs = [] } = {}) {
   const compiledResolvedSceneDoc = sceneRow?.compiled_doc?.runtime?.resolved_scene_doc ?? null;
   const resolvedSceneDoc = compiledResolvedSceneDoc ?? sceneRow?.scene_doc ?? {};
   const sceneDoc = normalizeSceneDoc(resolvedSceneDoc, {
@@ -3219,8 +4592,10 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     rigid_mode: entry.rigid_mode,
     physics: cloneJson(entry.physics ?? {}),
     visibility: true,
+    active: true,
     material_override: null,
     material: cloneJson(entry.material ?? {}),
+    group_id: entry.group_id ?? null,
   })).concat((sceneDoc.models ?? []).map((entry) => ({
     kind: "dynamic_object",
     instance_id: entry.instance_id ?? null,
@@ -3252,8 +4627,10 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     rigid_mode: entry.rigid_mode,
     physics: cloneJson(entry.physics ?? {}),
     visibility: true,
+    active: true,
     material_override: null,
     material: cloneJson(entry.material ?? {}),
+    group_id: entry.group_id ?? null,
   })));
   const triggerZones = (sceneDoc.trigger_zones ?? []).map((entry) => ({
     id: entry.id,
@@ -3266,6 +4643,8 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
       z: Math.max(0.1, mustFinite(entry.scale?.z, 2) / 2),
     },
     currentOccupants: new Set(),
+    active: true,
+    group_id: entry.group_id ?? null,
   }));
   const particleState = Object.fromEntries((sceneDoc.particles ?? []).map((entry) => [entry.id, {
     id: entry.id,
@@ -3274,6 +4653,11 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     target_id: entry.target_id,
     color: entry.color,
     enabled: entry.enabled !== false,
+    active: true,
+    position: vec3(entry.position ?? { x: 0, y: 0, z: 0 }),
+    rotation: vec3(entry.rotation ?? { x: 0, y: 0, z: 0 }),
+    scale: runtimeScale3(entry.scale ?? { x: 1, y: 1, z: 1 }),
+    group_id: entry.group_id ?? null,
   }]));
   const soundState = Object.fromEntries((sceneDoc.sounds ?? []).map((entry) => [entry.id, {
     id: entry.id,
@@ -3288,6 +4672,8 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     max_distance: clampNumber(entry.max_distance, 24, 1, 512),
     playing: entry.autoplay === true,
     play_revision: entry.autoplay === true ? 1 : 0,
+    active: true,
+    group_id: entry.group_id ?? null,
   }]));
   const screenState = Object.fromEntries((sceneDoc.screens ?? []).map((entry) => [entry.id, {
     id: entry.id,
@@ -3301,11 +4687,15 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     html_hash: entry.html_hash,
     state: cloneJson(entry.state ?? {}),
     assets: cloneJson(entry.assets ?? {}),
+    active: true,
+    group_id: entry.group_id ?? null,
   }]));
   const textState = Object.fromEntries((sceneDoc.texts ?? []).map((entry) => [entry.id, {
     id: entry.id,
     instance_id: entry.instance_id ?? null,
     value: entry.value,
+    active: true,
+    group_id: entry.group_id ?? null,
   }]));
   const prefabInstances = (sceneDoc.prefab_instances ?? []).map((entry) => ({
     kind: "prefab_instance",
@@ -3318,6 +4708,7 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     scale: cloneJson(entry.scale ?? { x: 1, y: 1, z: 1 }),
     velocity: { x: 0, y: 0, z: 0 },
     visibility: entry.overrides?.visible !== false,
+    active: true,
     material_override: cloneJson(entry.overrides?.material ?? null),
     dynamic_object_ids: dynamicObjects
       .filter((candidate) => candidate.instance_id === entry.id)
@@ -3365,10 +4756,19 @@ function seedSceneRuntime(sceneRow, { sceneStarted = false, status = "active", r
     recentEvents: [],
     commandQueue: [],
     scriptedPlatformMotions: new Map(),
+    prefabsById: new Map(
+      (Array.isArray(prefabs) ? prefabs : [])
+        .filter((entry) => entry?.id)
+        .map((entry) => [String(entry.id), cloneJson(entry)]),
+    ),
     scriptRuntimeState: {
       lastErrorByFunctionId: new Map(),
       ...buildScriptRuntimeFunctionIndex(scriptConfig?.runtime_scripts ?? []),
       callCountThisTick: 0,
+      spawnCountThisTick: 0,
+      serial: 0,
+      timersByFunctionId: new Map(),
+      overlapIdsByFunctionId: new Map(),
     },
     physics: null,
   };
@@ -3484,6 +4884,7 @@ export function createPrivateWorldSimulationState(input = {}) {
     runtimeState: input.runtimeState ?? {},
     tick: mustFinite(input.tick, 0),
     elapsedMs: mustFinite(input.elapsedMs, 0),
+    prefabs: input.prefabs ?? [],
   });
   const simulation = {
     worldId: String(input.worldId ?? "").trim(),
@@ -3912,8 +5313,10 @@ export function stepPrivateWorldSimulation(simulation, options = {}) {
     carryPlatformRiders(simulation, preStepBodyState, deltaSeconds);
   }
 
-  executeRuntimeScripts(simulation, deltaSeconds);
+  refreshTriggerOccupancy(simulation);
 
+  executeRuntimeScripts(simulation, deltaSeconds);
+  cleanupExpiredRuntimeEntities(simulation);
   refreshTriggerOccupancy(simulation);
 
   for (const rule of simulation.rules ?? []) {
@@ -3947,12 +5350,12 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     return null;
   }
   const runtime = simulation.runtime ?? simulation;
-  const publicDynamicObjects = runtime.dynamicObjects.filter((entry) => !entry.instance_id);
-  const publicTriggerZones = runtime.triggerZones.filter((entry) => !entry.instance_id);
-  const publicParticles = Object.values(runtime.particleState).filter((entry) => !entry.instance_id);
-  const publicSounds = Object.values(runtime.soundState ?? {});
-  const publicScreens = Object.values(runtime.screenState ?? {}).filter((entry) => !entry.instance_id);
-  const publicTexts = Object.values(runtime.textState).filter((entry) => !entry.instance_id);
+  const publicDynamicObjects = runtime.dynamicObjects.filter((entry) => !entry.instance_id && entry.active !== false);
+  const publicTriggerZones = runtime.triggerZones.filter((entry) => !entry.instance_id && entry.active !== false);
+  const publicParticles = Object.values(runtime.particleState).filter((entry) => !entry.instance_id && entry.active !== false);
+  const publicSounds = Object.values(runtime.soundState ?? {}).filter((entry) => entry.active !== false);
+  const publicScreens = Object.values(runtime.screenState ?? {}).filter((entry) => !entry.instance_id && entry.active !== false);
+  const publicTexts = Object.values(runtime.textState).filter((entry) => !entry.instance_id && entry.active !== false);
   return {
     instance_id: simulation.instanceId ?? null,
     active_scene_id: simulation.activeSceneId ?? null,
@@ -3965,7 +5368,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
     tick: runtime.tick,
     elapsed_ms: Number(runtime.elapsedMs.toFixed(0)),
     started_at: runtime.startedAt ?? null,
-    prefab_instances: runtime.prefabInstances.map((entry) => ({
+    prefab_instances: runtime.prefabInstances.filter((entry) => entry.active !== false).map((entry) => ({
       id: entry.id,
       label: entry.label,
       prefab_id: entry.prefab_id,
@@ -3974,6 +5377,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       scale: cloneJson(entry.scale),
       velocity: cloneJson(entry.velocity),
       visible: entry.visibility !== false,
+      active: entry.active !== false,
       material_override: cloneJson(entry.material_override),
     })),
     players: runtime.players.map((entry) => {
@@ -4008,6 +5412,7 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
         on_ground: entry.onGround === true,
         sleeping: entry.sleeping === true,
         visible: entry.visibility !== false,
+        active: entry.active !== false,
         material: cloneJson(entry.material),
         material_override: cloneJson(entry.material_override),
       };
@@ -4035,13 +5440,17 @@ export function buildPrivateWorldRuntimeSnapshot(simulation) {
       rigid_mode: entry.rigid_mode,
       carry_riders: entry.physics?.carry_riders === true,
       visible: entry.visibility !== false,
+      active: entry.active !== false,
       material: cloneJson(entry.material),
       material_override: cloneJson(entry.material_override),
+      group_id: entry.group_id ?? null,
     })),
     trigger_zones: publicTriggerZones.map((entry) => ({
       id: entry.id,
       label: entry.label,
       occupant_ids: [...entry.currentOccupants],
+      active: entry.active !== false,
+      group_id: entry.group_id ?? null,
     })),
     particles: publicParticles.map((entry) => cloneJson(entry)),
     sounds: publicSounds.map((entry) => cloneJson(entry)),
@@ -4099,6 +5508,10 @@ async function loadRuntimeWorldContext(store, worldId, creatorUsername) {
     store.serviceClient.from("private_world_scenes").select("*").eq("world_id", world.id).order("created_at", { ascending: true }),
     "Could not load private world runtime scenes",
   );
+  const prefabs = await must(
+    store.serviceClient.from("private_world_prefabs").select("*").eq("world_id", world.id).order("created_at", { ascending: true }),
+    "Could not load private world runtime prefabs",
+  );
   const participants = await must(
     store.serviceClient.from("private_world_participants").select("*").eq("instance_id", instance.id),
     "Could not load private world runtime participants",
@@ -4121,6 +5534,7 @@ async function loadRuntimeWorldContext(store, worldId, creatorUsername) {
     creator,
     instance,
     scenes,
+    prefabs,
     participants: participants.map((entry) => ({
       ...entry,
       profile: entry.profile_id ? profileById.get(entry.profile_id) ?? null : null,
@@ -4223,6 +5637,7 @@ export class PrivateWorldRuntime {
         activeSceneId: activeScene.id,
         sceneRow: activeScene,
         scenes: context.scenes,
+        prefabs: context.prefabs,
         participants: context.participants,
         sceneStarted: context.instance.status === "started" || runtimeState.scene_started === true,
         status: context.instance.status,
@@ -4247,6 +5662,7 @@ export class PrivateWorldRuntime {
           runtimeState,
           tick: mustFinite(runtimeState.tick, 0),
           elapsedMs: mustFinite(runtimeState.scene_elapsed_ms, 0),
+          prefabs: context.prefabs,
         });
         if (previousRuntime.sceneRowId === activeScene.id) {
           preserveRebuiltOccupiedPlayerState(simulation.runtime, previousRuntime);
@@ -4254,6 +5670,11 @@ export class PrivateWorldRuntime {
       } else {
         simulation.runtime.status = context.instance.status;
         simulation.runtime.sceneStarted = nextSceneStarted;
+        simulation.runtime.prefabsById = new Map(
+          (Array.isArray(context.prefabs) ? context.prefabs : [])
+            .filter((entry) => entry?.id)
+            .map((entry) => [String(entry.id), cloneJson(entry)]),
+        );
       }
       syncParticipantOccupancy(simulation.runtime, context.participants);
     }

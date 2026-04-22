@@ -5877,12 +5877,14 @@ function buildSceneLogicModuleContext() {
         `${moduleKind} [scope=scene|entity]`,
         "params: custom @set constants with literal values (number, boolean, string, vector3)",
         "bindings: (none)",
-        "directives: @run every_tick|on_call, @input name [default], @set constant value",
+        "directives: @run every_tick|on_call|on_timer|on_overlap|on_hit|on_destroy, @input name [default], @set constant value",
         "targeting: use @target scene or @target <entity_id>; @run on_call helpers may omit @target and inherit the caller self",
-        "program: line-based scripting statements; every_tick scripts auto-run, on_call scripts run through call(...)",
+        "program: line-based scripting statements; every_tick scripts auto-run, event scripts run from engine hooks, on_call scripts run through call(...)",
         "syntax: let name = expr · if (expr) return · if (expr) { ... } · assignment like self.position = expr",
-        "expressions: identifiers, property access, function calls, + - * /, comparisons, &&, ||, !",
-        "builtins: entity(id), entities(kind), players(), nearest(list, from), sort_by_distance(list, from), distance(a, b), normalize(v), length(v), vec(x,y,z), clamp(v,min,max), min(...), max(...), move_toward(from,to,max_step,stop_distance), call(function_id_or_name, ...args), play_sound(sound), stop_sound(sound)",
+        "expressions: identifiers, object literals, array literals, property access, function calls, + - * /, comparisons, &&, ||, !",
+        "events: event.type plus event.other / event.entity / event.cause depending on the run mode",
+        "timer constants: use @set timer_ms 1000 or @set interval_ms 1000 for @run on_timer scripts",
+        "builtins: entity(id), entities(kind), players(), nearest(list, from), sort_by_distance(list, from), distance(a, b), normalize(v), length(v), vec(x,y,z), clamp(v,min,max), min(...), max(...), move_toward(from,to,max_step,stop_distance), spawn(source, position, rotation, options), destroy(entity), set_active(entity, bool), emit_particles(effect, at_or_on, options), raycast(origin, direction, max_distance, options), overlap(subject, options), find_by_group(group_id), call(function_id_or_name, ...args), play_sound(sound), stop_sound(sound)",
         "returns: use return <expr>; called scripts can return values to the caller",
       ].join("\n"));
       continue;
@@ -10644,27 +10646,20 @@ const DEFAULT_LOGIC_SCRIPT_TEMPLATES = [
     `.trim(),
   },
   {
-    id: "starter_launch_bullet_placeholder",
-    name: "Starter · Launch Bullet Placeholder",
+    id: "starter_launch_bullet",
+    name: "Starter · Spawn Bullet With Script Runtime",
     body: `
-# Placeholder only: projectile spawning is not implemented yet.
-# Replace the item ids, prefab names, and timings once a real projectile action exists.
-# Parameter ideas to customize later:
-# projectile_prefab bullet_basic
-# spawn_offset (0,0,1)
-# speed 30
-# max_speed 42
-# gravity_scale 0
-# lifetime_ms 1600
-# cooldown_ms 200
-# burst_count 1
-# spread_deg 0
-# bounces 0
-# bounciness 0
-# friction 0
-# pierce_count 0
-# friendly_fire false
-# key_press key fire_key from player_1 -> launch_bullet to projectile_spawn
+# Replace the sphere id and the projectile values.
+# This spawns a real primitive bullet every timer tick.
+# Make sure the bullet target script below destroys it on hit or after lifetime.
+# Example editable constants:
+# @set timer_ms 1200
+# @set bullet_speed 32
+# @set bullet_lifetime_ms 1800
+# let target = nearest(players(), self.position)
+# if (!target) return
+# let direction = normalize(target.position - self.position)
+# spawn("sphere", self.position + direction, self.rotation, { kind: "primitive", shape: "sphere", scale: {x:0.35,y:0.35,z:0.35}, velocity: direction * bullet_speed, physics: { ignore_gravity: true, friction: 0, restitution: 0 }, lifetime_ms: bullet_lifetime_ms, group_id: "enemy_bullets" })
     `.trim(),
   },
 ];

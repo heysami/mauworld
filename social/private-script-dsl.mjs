@@ -52,7 +52,7 @@ const DEFAULT_WORLD_RESTITUTION = 0;
 const DEFAULT_WORLD_TERMINAL_VELOCITY = 120;
 const SCRIPT_RUNTIME_MODULE_KIND = "script.runtime";
 const DEFAULT_SCRIPT_RUNTIME_RUN_MODE = "every_tick";
-const SCRIPT_RUNTIME_RUN_MODES = new Set(["every_tick", "on_call"]);
+const SCRIPT_RUNTIME_RUN_MODES = new Set(["every_tick", "on_call", "on_timer", "on_overlap", "on_hit", "on_destroy"]);
 const SCRIPT_RUNTIME_RESERVED_IDENTIFIERS = new Set([
   "if",
   "let",
@@ -62,6 +62,7 @@ const SCRIPT_RUNTIME_RESERVED_IDENTIFIERS = new Set([
   "null",
   "self",
   "scene",
+  "event",
   "dt",
   "time",
   "entity",
@@ -76,6 +77,13 @@ const SCRIPT_RUNTIME_RESERVED_IDENTIFIERS = new Set([
   "clamp",
   "min",
   "max",
+  "spawn",
+  "destroy",
+  "set_active",
+  "emit_particles",
+  "raycast",
+  "overlap",
+  "find_by_group",
   "call",
   "play_sound",
   "stop_sound",
@@ -764,6 +772,18 @@ function normalizeScriptRuntimeRunMode(value = "") {
   if (normalized === "call") {
     return "on_call";
   }
+  if (normalized === "timer") {
+    return "on_timer";
+  }
+  if (normalized === "overlap") {
+    return "on_overlap";
+  }
+  if (normalized === "hit" || normalized === "contact") {
+    return "on_hit";
+  }
+  if (normalized === "destroy") {
+    return "on_destroy";
+  }
   return SCRIPT_RUNTIME_RUN_MODES.has(normalized) ? normalized : "";
 }
 
@@ -829,9 +849,9 @@ function tokenizeScriptRuntimeExpression(source = "", lineNumber = 0) {
       index += 2;
       continue;
     }
-    if (["+", "-", "*", "/", "!", "<", ">", "(", ")", ".", ","].includes(char)) {
+    if (["+", "-", "*", "/", "!", "<", ">", "(", ")", ".", ",", "[", "]", "{", "}", ":"].includes(char)) {
       tokens.push({
-        type: ["(", ")", ".", ","].includes(char) ? "punctuation" : "operator",
+        type: ["(", ")", ".", ",", "[", "]", "{", "}", ":"].includes(char) ? "punctuation" : "operator",
         value: char,
         line: lineNumber,
       });
@@ -954,6 +974,47 @@ function createScriptRuntimeExpressionParser(tokens = [], lineNumber = 0) {
       expectValue(")", "Missing closing `)` in script.runtime expression.");
       return expression;
     }
+    if (token.value === "[") {
+      const elements = [];
+      if (!matchValue("]")) {
+        do {
+          elements.push(parseExpression());
+        } while (matchValue(","));
+        expectValue("]", "Missing closing `]` in script.runtime array literal.");
+      }
+      return {
+        type: "ArrayExpression",
+        elements,
+        line: token.line,
+      };
+    }
+    if (token.value === "{") {
+      const properties = [];
+      if (!matchValue("}")) {
+        do {
+          const keyToken = advance();
+          let key = "";
+          if (keyToken.type === "identifier" || keyToken.type === "string") {
+            key = String(keyToken.value ?? "").trim();
+          }
+          if (!key) {
+            throw new Error("Expected an identifier or string key in script.runtime object literal.");
+          }
+          expectValue(":", "Expected `:` after an object literal key in script.runtime.");
+          properties.push({
+            key,
+            value: parseExpression(),
+            line: keyToken.line,
+          });
+        } while (matchValue(","));
+        expectValue("}", "Missing closing `}` in script.runtime object literal.");
+      }
+      return {
+        type: "ObjectExpression",
+        properties,
+        line: token.line,
+      };
+    }
     throw new Error(`Unexpected token \`${token.value || token.type}\` in script.runtime expression.`);
   };
   const parseCallMember = () => {
@@ -1061,6 +1122,8 @@ function parseScriptRuntimeExpression(source = "", lineNumber = 0) {
 function findTopLevelAssignmentIndex(source = "") {
   const text = String(source ?? "");
   let depth = 0;
+  let squareDepth = 0;
+  let braceDepth = 0;
   let quote = "";
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
@@ -1086,7 +1149,23 @@ function findTopLevelAssignmentIndex(source = "") {
       depth = Math.max(0, depth - 1);
       continue;
     }
-    if (char !== "=" || depth !== 0) {
+    if (char === "[") {
+      squareDepth += 1;
+      continue;
+    }
+    if (char === "]") {
+      squareDepth = Math.max(0, squareDepth - 1);
+      continue;
+    }
+    if (char === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (char === "}") {
+      braceDepth = Math.max(0, braceDepth - 1);
+      continue;
+    }
+    if (char !== "=" || depth !== 0 || squareDepth !== 0 || braceDepth !== 0) {
       continue;
     }
     const previous = text[index - 1] ?? "";
@@ -1106,10 +1185,7 @@ function isValidScriptRuntimeAssignmentTarget(expression = null) {
   if (expression.type === "Identifier") {
     return true;
   }
-  if (expression.type !== "MemberExpression") {
-    return false;
-  }
-  return isValidScriptRuntimeAssignmentTarget(expression.object);
+  return expression.type === "MemberExpression";
 }
 
 function isScriptRuntimeIfStatementText(text = "") {
@@ -1176,7 +1252,7 @@ function parseScriptRuntimeStatementFromText(text = "", lineNumber = 0, errors =
       return null;
     }
     if (leftParsed.expression && !isValidScriptRuntimeAssignmentTarget(leftParsed.expression)) {
-      errors.push({ line: lineNumber, message: "script.runtime assignments must be rooted at a variable, `self`, or `scene`." });
+      errors.push({ line: lineNumber, message: "script.runtime assignments must target a variable or property path." });
       return null;
     }
     return leftParsed.expression && rightParsed.expression

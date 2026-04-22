@@ -2886,3 +2886,206 @@ test("moving prefab instances carry descendant sounds in runtime snapshots", () 
   assert.ok(sound.position.x > 3.05);
   assert.equal(snapshot.prefab_instances[0].id, "prefabinst_platform-group");
 });
+
+test("script.runtime timer scripts can spawn, query, deactivate, destroy, and emit particles", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [{
+      id: "primitive_emitter",
+      shape: "sphere",
+      position: { x: 0, y: 1, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      rigid_mode: "ghost",
+    }],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 1, z: 6 },
+      scale: 1,
+      body_mode: "ghost",
+      camera_mode: "third_person",
+    }],
+    texts: [],
+    trigger_zones: [],
+    prefabs: [],
+    particles: [],
+    sounds: [{
+      id: "sound_alarm",
+      asset_id: "asset_alarm",
+      autoplay: false,
+    }],
+    script_dsl: `
+# function[spawn_bullet]: Spawn Bullet
+@module script.runtime
+@target primitive_emitter
+@run on_timer
+@set timer_ms 30
+
+let bullet = spawn("sphere", self.position + vec(0,0,1), self.rotation, { kind: "primitive", scale: { x: 0.35, y: 0.35, z: 0.35 }, velocity: { x: 0, y: 0, z: 8 }, physics: { ignore_gravity: true, friction: 0 }, lifetime_ms: 80, group_id: "enemy_bullets" })
+emit_particles("sparkles", bullet, { lifetime_ms: 40, color: "#ffaa00" })
+play_sound(entity("sound_alarm"))
+
+# function[cleanup_bullet]: Cleanup Bullet
+@module script.runtime
+@target scene
+@run on_timer
+@set timer_ms 45
+
+let bullet = nearest(find_by_group("enemy_bullets"), entity("primitive_emitter").position)
+if (!bullet) return
+set_active(bullet, false)
+destroy(bullet)
+    `,
+  };
+  const simulation = buildSimulation({
+    sceneDoc,
+    participants: [{
+      profile_id: "profile_one",
+      profile: { username: "maker", display_name: "Maker" },
+      join_role: "player",
+      player_entity_id: "player_one",
+      ready_state: { ready: true },
+    }],
+    sceneStarted: true,
+    status: "started",
+  });
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 35,
+    pendingInputs: [],
+  });
+
+  let snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  const spawnedBullet = snapshot.dynamic_objects.find((entry) => entry.group_id === "enemy_bullets") ?? null;
+  assert.ok(spawnedBullet);
+  assert.ok(snapshot.particles.some((entry) => entry.effect === "sparkles"));
+  assert.equal(snapshot.sounds[0].playing, true);
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 20,
+    pendingInputs: [],
+  });
+
+  snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  assert.equal(snapshot.dynamic_objects.some((entry) => entry.group_id === "enemy_bullets"), false);
+});
+
+test("script.runtime raycast, overlap, hit, and destroy hooks use event data", () => {
+  const sceneDoc = {
+    settings: { gravity: { x: 0, y: -9.8, z: 0 } },
+    voxels: [],
+    primitives: [{
+      id: "primitive_hit_box",
+      shape: "box",
+      position: { x: 0, y: 1, z: 2 },
+      scale: { x: 1, y: 1, z: 1 },
+      rigid_mode: "ghost",
+    }, {
+      id: "primitive_crate",
+      shape: "box",
+      position: { x: 2, y: 1, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      rigid_mode: "ghost",
+    }],
+    screens: [],
+    players: [{
+      id: "player_one",
+      label: "Player One",
+      position: { x: 0, y: 1, z: 2 },
+      scale: 1,
+      body_mode: "ghost",
+      camera_mode: "third_person",
+    }],
+    texts: [{
+      id: "text3d_ray",
+      value: "none",
+      position: { x: 0, y: 2, z: 0 },
+    }, {
+      id: "text3d_overlap",
+      value: "none",
+      position: { x: 0, y: 2, z: 1 },
+    }, {
+      id: "text3d_hit",
+      value: "none",
+      position: { x: 0, y: 2, z: 2 },
+    }, {
+      id: "text3d_destroy",
+      value: "none",
+      position: { x: 0, y: 2, z: 3 },
+    }],
+    trigger_zones: [{
+      id: "trigger_zone_test",
+      label: "Overlap Zone",
+      position: { x: 2, y: 1, z: 0 },
+      scale: { x: 2, y: 2, z: 2 },
+    }],
+    prefabs: [],
+    particles: [],
+    rules: [],
+    script_dsl: `
+# function[raycast_logic]: Raycast Logic
+@module script.runtime
+@target scene
+
+let hit = raycast(vec(0,1,5), vec(0,0,-1), 10)
+if (!hit) return
+entity("text3d_ray").value = hit.entity.id
+
+# function[overlap_logic]: Overlap Logic
+@module script.runtime
+@target trigger_zone_test
+@run on_overlap
+
+entity("text3d_overlap").value = event.other.id
+
+# function[hit_logic]: Hit Logic
+@module script.runtime
+@target primitive_hit_box
+@run on_hit
+
+entity("text3d_hit").value = event.other.id
+
+# function[destroy_crate]: Destroy Crate
+@module script.runtime
+@target scene
+@run on_timer
+@set timer_ms 20
+
+destroy(entity("primitive_crate"))
+
+# function[destroy_hook]: Destroy Hook
+@module script.runtime
+@target primitive_crate
+@run on_destroy
+
+entity("text3d_destroy").value = event.cause
+    `,
+  };
+  const simulation = buildSimulation({
+    sceneDoc,
+    participants: [{
+      profile_id: "profile_one",
+      profile: { username: "maker", display_name: "Maker" },
+      join_role: "player",
+      player_entity_id: "player_one",
+      ready_state: { ready: true },
+    }],
+    sceneStarted: true,
+    status: "started",
+  });
+
+  stepPrivateWorldSimulation(simulation.runtime, {
+    deltaMs: 25,
+    pendingInputs: [],
+  });
+
+  const snapshot = buildPrivateWorldRuntimeSnapshot(simulation);
+  const textById = new Map(snapshot.texts.map((entry) => [entry.id, entry.value]));
+  assert.equal(textById.get("text3d_ray"), "primitive_hit-box");
+  assert.equal(textById.get("text3d_overlap"), "primitive_crate");
+  assert.equal(textById.get("text3d_hit"), "player_one");
+  assert.equal(textById.get("text3d_destroy"), "script");
+  assert.equal(snapshot.dynamic_objects.some((entry) => entry.id === "primitive_crate"), false);
+});

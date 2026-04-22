@@ -71,6 +71,7 @@ test("world-script generation prompt includes repair draft and validator diagnos
   assert.match(prompt, /validator diagnostics to fix:/i);
   assert.match(prompt, /set_screen_state/i);
   assert.match(prompt, /do not invent syntax or misuse physics\.world/i);
-  assert.match(prompt, /@run <every_tick\|on_call>/i);
+  assert.match(prompt, /@run <every_tick\|on_call\|on_timer\|on_overlap\|on_hit\|on_destroy>/i);
   assert.match(prompt, /call\(function_id_or_name, \.\.\.args\)/i);
+  assert.match(prompt, /spawn\(source, position, rotation, options\)/i);
 });

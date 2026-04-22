@@ -377,3 +377,28 @@ call("chase_step", target)
 
   assert.match(compiled.errors[0]?.message ?? "", /expects at least 2 arguments/i);
 });
+
+test("script.runtime supports event run modes and structured literals", () => {
+  const compiled = compilePrivateWorldScriptDsl(`
+# function[timer_logic]: Timer Logic
+@module script.runtime
+@target scene
+@run on_timer
+@set timer_ms 250
+
+let config = { speed: 12, offsets: [1, 2, 3] }
+return config
+  `, {
+    sceneDoc: {
+      players: [{ id: "player_one" }],
+    },
+    entityAliases: new Map([
+      ["player_one", "player_one"],
+    ]),
+  });
+
+  assert.equal(compiled.errors.length, 0);
+  assert.equal(compiled.functions[0].run_mode, "on_timer");
+  assert.equal(compiled.functions[0].programAst.body[0].init.type, "ObjectExpression");
+  assert.equal(compiled.functions[0].programAst.body[0].init.properties[1].value.type, "ArrayExpression");
+});
