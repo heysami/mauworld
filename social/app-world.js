@@ -104,6 +104,7 @@ const elements = {
   privateLaunch: document.querySelector("[data-world-private-launch]"),
   sessionLabel: document.querySelector("[data-world-session-label]"),
   openAccountButton: document.querySelector("[data-world-open-account]"),
+  openAccountButtonLabel: document.querySelector("[data-world-open-account-label]"),
   privateGate: document.querySelector("[data-world-private-gate]"),
   privateGateBackdrop: document.querySelector("[data-world-private-gate-backdrop]"),
   privateGateClose: document.querySelector("[data-world-private-gate-close]"),
@@ -111,10 +112,18 @@ const elements = {
   privateGateTitle: document.querySelector("[data-world-private-gate-title]"),
   privateGateCopy: document.querySelector("[data-world-private-gate-copy]"),
   privateGateAuthForm: document.querySelector("[data-world-private-gate-auth]"),
+  privateGateProfileShell: document.querySelector("[data-world-private-gate-profile-shell]"),
   privateGateProfileForm: document.querySelector("[data-world-private-gate-profile]"),
   privateGateAccountActions: document.querySelector("[data-world-private-gate-account-actions]"),
-  privateGateWorlds: document.querySelector("[data-world-private-gate-worlds]"),
+  privateGateProfileWorldSearch: document.querySelector("[data-world-private-gate-world-search]"),
   privateGateList: document.querySelector("[data-world-private-gate-list]"),
+  privateGateGamesSummary: document.querySelector("[data-world-private-gate-games-summary]"),
+  privateGateOpenGameLibrary: document.querySelector("[data-world-private-gate-open-game-library]"),
+  privateGateRefreshGames: document.querySelector("[data-world-private-gate-refresh-games]"),
+  privateGateResourceSearch: document.querySelector("[data-world-private-gate-resource-search]"),
+  privateGateResourceStatus: document.querySelector("[data-world-private-gate-resource-status]"),
+  privateGateResourceList: document.querySelector("[data-world-private-gate-resource-list]"),
+  privateGateRefreshResources: document.querySelector("[data-world-private-gate-refresh-resources]"),
   privateGateStatus: document.querySelector("[data-world-private-gate-status]"),
   privateGateRefresh: document.querySelector("[data-world-private-gate-refresh]"),
   privateGateCreate: document.querySelector("[data-world-private-gate-create]"),
@@ -135,6 +144,8 @@ elements.panelTabPanels = [...document.querySelectorAll("[data-world-panel-tab-p
 elements.browserShareModes = [...document.querySelectorAll("[data-world-browser-share-mode]")];
 elements.chatReactionButtons = [...document.querySelectorAll("[data-world-chat-reaction]")];
 elements.searchModeButtons = [...document.querySelectorAll("[data-world-search-mode]")];
+elements.privateGateProfileTabs = [...document.querySelectorAll("[data-world-private-gate-tab]")];
+elements.privateGateProfilePanes = [...document.querySelectorAll("[data-world-private-gate-pane]")];
 syncWorldPanelTabLabels(elements.panelTabs, "data-world-panel-tab");
 
 elements.focusPieces = {
@@ -236,11 +247,18 @@ function createEmptyPrivateWorldGateState() {
     open: false,
     ready: false,
     context: "worlds",
+    profileTab: "account",
     authConfig: null,
     supabase: null,
     session: null,
     profile: null,
     worlds: [],
+    worldQuery: "",
+    games: [],
+    loadingGames: false,
+    resourceQuery: "",
+    resources: [],
+    loadingResources: false,
     busy: false,
     loadingWorlds: false,
     status: "",
@@ -1051,17 +1069,49 @@ function getPublicAuthModeKey() {
 
 function renderPublicSessionSummary() {
   const gate = state.privateWorldGate;
-  renderAuthSessionSummary({
-    ready: gate.ready,
-    session: gate.session,
-    profile: gate.profile,
-    labelElement: elements.sessionLabel,
-    actionButton: elements.openAccountButton,
-    copy: {
-      signedOutLabel: "Guest mode. Bubble chat is on. Log in to share nearby and use persistent voice chat.",
-      signedOutAction: "Log In",
-    },
-  });
+  if (!elements.sessionLabel || !elements.openAccountButton) {
+    return;
+  }
+  const label = elements.openAccountButtonLabel;
+  const signedIn = Boolean(gate.session);
+  const username = String(gate.profile?.username ?? "").trim();
+  if (!gate.ready) {
+    elements.sessionLabel.textContent = "Checking your account...";
+    elements.openAccountButton.disabled = true;
+    elements.openAccountButton.classList.remove("is-profile-icon");
+    elements.openAccountButton.setAttribute("aria-label", "Checking account");
+    if (label) {
+      label.textContent = "Loading";
+      label.classList.remove("world-visually-hidden");
+    } else {
+      elements.openAccountButton.textContent = "Loading";
+    }
+    return;
+  }
+  elements.openAccountButton.disabled = false;
+  if (signedIn) {
+    elements.sessionLabel.textContent = username
+      ? `Signed in as @${username}.`
+      : "Signed in.";
+    elements.openAccountButton.classList.add("is-profile-icon");
+    elements.openAccountButton.setAttribute("aria-label", "Open my profile");
+    if (label) {
+      label.textContent = "My profile";
+      label.classList.add("world-visually-hidden");
+    } else {
+      elements.openAccountButton.textContent = "";
+    }
+    return;
+  }
+  elements.sessionLabel.textContent = "Guest mode. Bubble chat is on. Log in to share nearby and use persistent voice chat.";
+  elements.openAccountButton.classList.remove("is-profile-icon");
+  elements.openAccountButton.setAttribute("aria-label", "Log in");
+  if (label) {
+    label.textContent = "Log In";
+    label.classList.remove("world-visually-hidden");
+  } else {
+    elements.openAccountButton.textContent = "Log In";
+  }
 }
 
 function renderPublicInteractionAccess() {
@@ -1206,6 +1256,12 @@ function normalizePublicAccessContext(context = "account") {
   return context === "worlds" ? "worlds" : "account";
 }
 
+function normalizePublicProfileTab(tab = "account") {
+  return ["account", "worlds", "games", "resources"].includes(String(tab ?? "").trim())
+    ? String(tab ?? "").trim()
+    : "account";
+}
+
 function getOwnedPrivateWorlds(worlds = [], profile = null) {
   const username = String(profile?.username ?? "").trim().toLowerCase();
   if (!username) {
@@ -1213,6 +1269,20 @@ function getOwnedPrivateWorlds(worlds = [], profile = null) {
   }
   return (Array.isArray(worlds) ? worlds : []).filter((world) =>
     String(world?.creator?.username ?? "").trim().toLowerCase() === username);
+}
+
+function renderPrivateWorldGateProfileTabs() {
+  const gate = state.privateWorldGate;
+  const activeTab = normalizePublicProfileTab(gate.profileTab);
+  gate.profileTab = activeTab;
+  for (const button of elements.privateGateProfileTabs ?? []) {
+    const isActive = button.getAttribute("data-world-private-gate-tab") === activeTab;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  }
+  for (const pane of elements.privateGateProfilePanes ?? []) {
+    pane.hidden = pane.getAttribute("data-world-private-gate-pane") !== activeTab;
+  }
 }
 
 function renderPrivateWorldGateList() {
@@ -1232,16 +1302,26 @@ function renderPrivateWorldGateList() {
     ].join("");
     return;
   }
-  if (!gate.worlds.length) {
+  if (elements.privateGateProfileWorldSearch && elements.privateGateProfileWorldSearch.value !== gate.worldQuery) {
+    elements.privateGateProfileWorldSearch.value = gate.worldQuery;
+  }
+  const query = String(gate.worldQuery ?? "").trim().toLowerCase();
+  const worlds = query
+    ? gate.worlds.filter((world) => {
+      const haystack = `${world?.name ?? ""} ${world?.about ?? ""} ${world?.world_type ?? ""}`.toLowerCase();
+      return haystack.includes(query);
+    })
+    : gate.worlds;
+  if (!worlds.length) {
     elements.privateGateList.innerHTML = `
       <div class="world-private-gate__empty">
-        <strong>No private worlds yet</strong>
-        <p>Start a new one, then the scene will open from there.</p>
+        <strong>${query ? "No private worlds match that search" : "No private worlds yet"}</strong>
+        <p>${query ? "Try another search, or create a new world." : "Start a new one, then the scene will open from there."}</p>
       </div>
     `;
     return;
   }
-  elements.privateGateList.innerHTML = gate.worlds.map((world) => `
+  elements.privateGateList.innerHTML = worlds.map((world) => `
     <button
       type="button"
       class="world-private-gate__world"
@@ -1255,11 +1335,131 @@ function renderPrivateWorldGateList() {
   `).join("");
 }
 
+function getPublicGateGameSummaryMarkup() {
+  const gate = state.privateWorldGate;
+  if (!gate.session) {
+    return `
+      <div class="world-private-gate__empty">
+        <strong>Sign in to load your game library</strong>
+        <p>Open your saved games and nearby-share packages from here.</p>
+      </div>
+    `;
+  }
+  if (gate.loadingGames) {
+    return '<div class="world-private-gate__placeholder" aria-hidden="true"></div>';
+  }
+  const selectedGame = getSelectedWorldGame();
+  const games = gate.games ?? [];
+  const fallbackGame = selectedGame || games[0] || null;
+  if (!fallbackGame) {
+    return `
+      <div class="world-private-gate__empty">
+        <strong>No saved games yet</strong>
+        <p>Open the game library to generate new games, import packages, or pick one for nearby sharing.</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="world-private-gate__card">
+      <strong>${htmlEscape(String(fallbackGame?.title ?? fallbackGame?.manifest?.title ?? "Saved game").trim() || "Saved game")}</strong>
+      <p>${htmlEscape(
+        String(
+          fallbackGame?.manifest?.summary
+          ?? fallbackGame?.prompt
+          ?? "Open the game library to refine, export, or share this game nearby.",
+        ).trim() || "Open the game library to refine, export, or share this game nearby.",
+      )}</p>
+    </div>
+  `;
+}
+
+function renderPrivateWorldGateGames() {
+  if (!elements.privateGateGamesSummary) {
+    return;
+  }
+  elements.privateGateGamesSummary.innerHTML = getPublicGateGameSummaryMarkup();
+}
+
+function describePublicGateResourceType(asset = {}) {
+  const assetType = String(asset?.asset_type ?? "").trim().toLowerCase();
+  if (assetType === "sound") {
+    return "sound";
+  }
+  if (assetType === "model") {
+    return "model";
+  }
+  const files = Array.isArray(asset?.files) ? asset.files : [];
+  if (files.some((file) => String(file?.mime_type ?? "").trim().toLowerCase().startsWith("video/"))) {
+    return "video texture";
+  }
+  return "texture";
+}
+
+function renderPrivateWorldGateResources() {
+  if (!elements.privateGateResourceList) {
+    return;
+  }
+  const gate = state.privateWorldGate;
+  if (elements.privateGateResourceSearch && elements.privateGateResourceSearch.value !== gate.resourceQuery) {
+    elements.privateGateResourceSearch.value = gate.resourceQuery;
+  }
+  if (!gate.session) {
+    elements.privateGateResourceList.innerHTML = `
+      <div class="world-private-gate__empty">
+        <strong>Sign in to load shared resources</strong>
+        <p>Browse textures, models, sounds, and video textures you can reuse across your private worlds.</p>
+      </div>
+    `;
+    if (elements.privateGateResourceStatus) {
+      elements.privateGateResourceStatus.textContent = "";
+    }
+    return;
+  }
+  if (gate.loadingResources) {
+    elements.privateGateResourceList.innerHTML = [
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+      '<div class="world-private-gate__placeholder" aria-hidden="true"></div>',
+    ].join("");
+    if (elements.privateGateResourceStatus) {
+      elements.privateGateResourceStatus.textContent = "Loading shared resources...";
+    }
+    return;
+  }
+  const query = String(gate.resourceQuery ?? "").trim().toLowerCase();
+  const assets = query
+    ? gate.resources.filter((asset) => {
+      const haystack = `${asset?.name ?? ""} ${asset?.intended_use ?? ""} ${asset?.world_context_summary ?? ""}`.toLowerCase();
+      return haystack.includes(query);
+    })
+    : gate.resources;
+  if (elements.privateGateResourceStatus) {
+    elements.privateGateResourceStatus.textContent = assets.length
+      ? `${assets.length} shared resource${assets.length === 1 ? "" : "s"} shown.`
+      : "";
+  }
+  if (!assets.length) {
+    elements.privateGateResourceList.innerHTML = `
+      <div class="world-private-gate__empty">
+        <strong>${query ? "No shared resources match that search" : "No shared resources yet"}</strong>
+        <p>${query ? "Try another search term." : "Generate or upload assets from a private world first."}</p>
+      </div>
+    `;
+    return;
+  }
+  elements.privateGateResourceList.innerHTML = assets.map((asset) => `
+    <article class="world-private-gate__card">
+      <strong>${htmlEscape(asset?.name || "Shared resource")}</strong>
+      <p>${htmlEscape(asset?.intended_use || asset?.world_context_summary || "Ready across your private worlds.")}</p>
+      <small>${htmlEscape(describePublicGateResourceType(asset))}${asset?.provider ? ` · ${htmlEscape(String(asset.provider))}` : ""}</small>
+    </article>
+  `).join("");
+}
+
 function renderPrivateWorldGate() {
   const gate = state.privateWorldGate;
   const open = gate.open === true;
   const signedIn = Boolean(gate.session);
-  const accountMode = gate.context === "account";
+  const signedInProfile = gate.ready === true && signedIn;
   document.body.classList.toggle("is-private-gate-open", open);
   setPrivateGateSectionVisibility(elements.privateGate, open, "grid");
   setPrivateGateSectionVisibility(elements.privateGateBackdrop, open);
@@ -1268,43 +1468,32 @@ function renderPrivateWorldGate() {
   }
 
   if (elements.privateGateEyebrow) {
-    elements.privateGateEyebrow.textContent = accountMode ? "Account" : "Private worlds";
+    elements.privateGateEyebrow.textContent = signedInProfile ? "My Profile" : "Account";
   }
-  if (accountMode) {
-    renderAuthAccessSection({
-      ready: gate.ready,
-      session: gate.session,
-      profile: gate.profile,
-      headingElement: elements.privateGateTitle,
-      noteElement: elements.privateGateCopy,
-      authForm: elements.privateGateAuthForm,
-      profileForm: elements.privateGateProfileForm,
-      accountActions: elements.privateGateAccountActions,
-    });
-    setPrivateGateSectionVisibility(elements.privateGateWorlds, false);
-  } else {
-    if (elements.privateGateTitle) {
-      elements.privateGateTitle.textContent = gate.ready !== true
-        ? "Checking your account"
-        : (signedIn ? "Choose a private world" : "Sign in to continue");
+  if (elements.privateGateTitle) {
+    elements.privateGateTitle.textContent = gate.ready !== true
+      ? "Checking your account"
+      : (signedInProfile ? "My Profile" : "Sign in to continue");
+  }
+  if (elements.privateGateCopy) {
+    elements.privateGateCopy.textContent = gate.ready !== true
+      ? "Looking for your current session."
+      : (
+        signedInProfile
+          ? "Manage your account, private worlds, game library, and shared resources here."
+          : "Sign in here first. Then you can open your profile, private worlds, and nearby game library."
+      );
+  }
+  setPrivateGateSectionVisibility(elements.privateGateAuthForm, gate.ready === true && !signedIn, "grid");
+  setPrivateGateSectionVisibility(elements.privateGateProfileShell, signedInProfile, "grid");
+  renderPrivateWorldGateProfileTabs();
+  if (elements.privateGateProfileForm) {
+    if (elements.privateGateProfileForm.elements?.username) {
+      elements.privateGateProfileForm.elements.username.value = gate.profile?.username || "";
     }
-    if (elements.privateGateCopy) {
-      elements.privateGateCopy.textContent = gate.ready !== true
-        ? "Looking for your current session."
-        : (
-          signedIn
-            ? "Open one of your worlds or start a new one. The scene loads after you choose."
-            : "Sign in here first. Then you can choose one of your private worlds or start a new one."
-        );
+    if (elements.privateGateProfileForm.elements?.displayName) {
+      elements.privateGateProfileForm.elements.displayName.value = gate.profile?.display_name || "";
     }
-    setPrivateGateSectionVisibility(elements.privateGateAuthForm, gate.ready === true && !signedIn, "grid");
-    if (elements.privateGateProfileForm) {
-      elements.privateGateProfileForm.hidden = true;
-    }
-    if (elements.privateGateAccountActions) {
-      elements.privateGateAccountActions.hidden = true;
-    }
-    setPrivateGateSectionVisibility(elements.privateGateWorlds, gate.ready === true && signedIn, "grid");
   }
   if (elements.privateGateAuthForm) {
     for (const field of elements.privateGateAuthForm.querySelectorAll("input, button")) {
@@ -1317,7 +1506,7 @@ function renderPrivateWorldGate() {
     }
   }
   if (elements.privateGateRefresh) {
-    elements.privateGateRefresh.disabled = gate.busy;
+    elements.privateGateRefresh.disabled = gate.busy || gate.loadingWorlds;
   }
   if (elements.privateGateCreate) {
     elements.privateGateCreate.disabled = gate.busy;
@@ -1325,7 +1514,18 @@ function renderPrivateWorldGate() {
   if (elements.privateGateSignout) {
     elements.privateGateSignout.disabled = gate.busy;
   }
+  if (elements.privateGateRefreshGames) {
+    elements.privateGateRefreshGames.disabled = gate.busy || gate.loadingGames;
+  }
+  if (elements.privateGateOpenGameLibrary) {
+    elements.privateGateOpenGameLibrary.disabled = gate.busy || !signedIn;
+  }
+  if (elements.privateGateRefreshResources) {
+    elements.privateGateRefreshResources.disabled = gate.busy || gate.loadingResources;
+  }
   renderPrivateWorldGateList();
+  renderPrivateWorldGateGames();
+  renderPrivateWorldGateResources();
   setPrivateWorldGateStatus(gate.status);
 }
 
@@ -1372,7 +1572,11 @@ async function ensurePrivateWorldGateClient() {
       if (!session) {
         gate.profile = null;
         gate.worlds = [];
+        gate.games = [];
+        gate.resources = [];
         gate.loadingWorlds = false;
+        gate.loadingGames = false;
+        gate.loadingResources = false;
         gate.busy = false;
         gate.ready = true;
         applyPublicAuthState();
@@ -1393,14 +1597,91 @@ async function ensurePrivateWorldGateClient() {
   }
 }
 
+async function loadPrivateWorldGateGames(options = {}) {
+  const gate = state.privateWorldGate;
+  if (!gate.session) {
+    gate.games = [];
+    gate.loadingGames = false;
+    renderPrivateWorldGateGames();
+    return;
+  }
+  if (gate.loadingGames && options.force !== true) {
+    return;
+  }
+  gate.loadingGames = true;
+  renderPrivateWorldGateGames();
+  try {
+    const payload = await publicWorldGamesApi.listGames(24);
+    gate.games = Array.isArray(payload?.games) ? payload.games : [];
+  } catch (_error) {
+    gate.games = [];
+  } finally {
+    gate.loadingGames = false;
+    renderPrivateWorldGateGames();
+  }
+}
+
+async function loadPrivateWorldGateResources(options = {}) {
+  const gate = state.privateWorldGate;
+  if (!gate.session) {
+    gate.resources = [];
+    gate.loadingResources = false;
+    renderPrivateWorldGateResources();
+    return;
+  }
+  if (gate.loadingResources && options.force !== true) {
+    return;
+  }
+  gate.loadingResources = true;
+  renderPrivateWorldGateResources();
+  try {
+    const payload = await privateWorldGateApiFetch("/private/assets", {
+      search: {
+        q: gate.resourceQuery || "",
+      },
+    });
+    gate.resources = Array.isArray(payload?.assets) ? payload.assets : [];
+  } catch (_error) {
+    gate.resources = [];
+  } finally {
+    gate.loadingResources = false;
+    renderPrivateWorldGateResources();
+  }
+}
+
+function loadPrivateWorldGateProfileTabData(tab = state.privateWorldGate.profileTab, options = {}) {
+  const activeTab = normalizePublicProfileTab(tab);
+  if (activeTab === "games") {
+    void loadPrivateWorldGateGames(options);
+    return;
+  }
+  if (activeTab === "resources") {
+    void loadPrivateWorldGateResources(options);
+  }
+}
+
+function setPrivateWorldGateProfileTab(tab = "account", options = {}) {
+  state.privateWorldGate.profileTab = normalizePublicProfileTab(tab);
+  renderPrivateWorldGate();
+  if (options.load === false) {
+    return;
+  }
+  loadPrivateWorldGateProfileTabData(state.privateWorldGate.profileTab, options);
+}
+
 async function refreshPrivateWorldGateState(options = {}) {
   const gate = state.privateWorldGate;
   const nextContext = normalizePublicAccessContext(options.context || gate.context);
-  const accountOnly = nextContext === "account";
+  gate.context = nextContext;
+  gate.profileTab = normalizePublicProfileTab(options.profileTab || gate.profileTab || (nextContext === "worlds" ? "worlds" : "account"));
   if (!gate.session) {
     gate.profile = null;
     gate.worlds = [];
+    gate.games = [];
+    gate.resources = [];
     gate.loadingWorlds = false;
+    gate.loadingGames = false;
+    gate.loadingResources = false;
     gate.busy = false;
     applyPublicAuthState(options);
     renderPrivateWorldGate();
@@ -1408,8 +1689,8 @@ async function refreshPrivateWorldGateState(options = {}) {
   }
   const requestId = gate.requestId + 1;
   gate.requestId = requestId;
-  gate.loadingWorlds = !accountOnly;
-  gate.busy = accountOnly ? !gate.profile : true;
+  gate.loadingWorlds = true;
+  gate.busy = !gate.profile;
   if (options.preserveStatus !== true) {
     setPrivateWorldGateStatus("");
   }
@@ -1419,27 +1700,26 @@ async function refreshPrivateWorldGateState(options = {}) {
   try {
     const [profilePayload, worldsPayload] = await Promise.all([
       privateWorldGateApiFetch("/private/profile"),
-      accountOnly ? Promise.resolve(null) : privateWorldGateApiFetch("/private/worlds"),
+      privateWorldGateApiFetch("/private/worlds"),
     ]);
     if (gate.requestId !== requestId) {
       return;
     }
     gate.profile = profilePayload.profile ?? null;
-    if (!accountOnly && worldsPayload) {
-      gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
-    }
+    gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
     applyPublicAuthState(options);
   } catch (error) {
     if (gate.requestId !== requestId) {
       return;
     }
-    setPrivateWorldGateStatus(error.message || (accountOnly ? "Could not load your account." : "Could not load private worlds."));
+    setPrivateWorldGateStatus(error.message || "Could not load your profile.");
   } finally {
     if (gate.requestId === requestId) {
       gate.busy = false;
       gate.loadingWorlds = false;
       renderPublicSessionSummary();
       renderPrivateWorldGate();
+      loadPrivateWorldGateProfileTabData(gate.profileTab, options);
     }
   }
 }
@@ -1447,15 +1727,20 @@ async function refreshPrivateWorldGateState(options = {}) {
 async function openPrivateWorldGate(context = "worlds") {
   const nextContext = normalizePublicAccessContext(context);
   state.privateWorldGate.context = nextContext;
+  state.privateWorldGate.profileTab = nextContext === "worlds" ? "worlds" : "account";
   state.privateWorldGate.open = true;
   renderPrivateWorldGate();
   try {
     await ensurePrivateWorldGateClient();
-    await refreshPrivateWorldGateState({ preserveStatus: true, context: nextContext });
+    await refreshPrivateWorldGateState({
+      preserveStatus: true,
+      context: nextContext,
+      profileTab: state.privateWorldGate.profileTab,
+    });
   } catch (error) {
     state.privateWorldGate.busy = false;
     state.privateWorldGate.ready = true;
-    setPrivateWorldGateStatus(error.message || (nextContext === "account" ? "Could not open account." : "Could not open private worlds."));
+    setPrivateWorldGateStatus(error.message || "Could not open your profile.");
     renderPublicSessionSummary();
     renderPrivateWorldGate();
   }
@@ -1527,6 +1812,9 @@ async function signOutPrivateWorldGate() {
       throw error;
     }
     gate.busy = false;
+    gate.profileTab = "account";
+    gate.worldQuery = "";
+    gate.resourceQuery = "";
     setPrivateWorldGateStatus("Signed out.");
     applyPublicAuthState();
     renderPublicSessionSummary();
@@ -1558,7 +1846,7 @@ async function savePrivateWorldGateProfile(event) {
       },
     });
     gate.profile = payload.profile ?? null;
-    if (normalizePublicAccessContext(gate.context) === "worlds") {
+    if (normalizePublicProfileTab(gate.profileTab) === "worlds") {
       const worldsPayload = await privateWorldGateApiFetch("/private/worlds");
       gate.worlds = getOwnedPrivateWorlds(worldsPayload.worlds ?? [], gate.profile);
     }
@@ -13407,14 +13695,37 @@ function registerInput() {
   elements.privateGateAuthForm?.querySelector('[data-world-private-gate-auth-action="signup"]')?.addEventListener("click", () => {
     void signUpPrivateWorldGate();
   });
+  for (const button of elements.privateGateProfileTabs ?? []) {
+    button.addEventListener("click", () => {
+      setPrivateWorldGateProfileTab(button.getAttribute("data-world-private-gate-tab") || "account");
+    });
+  }
+  elements.privateGateProfileWorldSearch?.addEventListener("input", () => {
+    state.privateWorldGate.worldQuery = String(elements.privateGateProfileWorldSearch?.value ?? "");
+    renderPrivateWorldGateList();
+  });
   elements.privateGateRefresh?.addEventListener("click", () => {
-    void refreshPrivateWorldGateState({ context: "worlds" });
+    void refreshPrivateWorldGateState({ context: "worlds", profileTab: "worlds" });
   });
   elements.privateGateCreate?.addEventListener("click", () => {
     navigateToPrivateWorld({ intent: "create" });
   });
   elements.privateGateSignout?.addEventListener("click", () => {
     void signOutPrivateWorldGate();
+  });
+  elements.privateGateOpenGameLibrary?.addEventListener("click", () => {
+    closePrivateWorldGate();
+    void openWorldGameLibrary({ forceRefresh: true });
+  });
+  elements.privateGateRefreshGames?.addEventListener("click", () => {
+    void loadPrivateWorldGateGames({ force: true });
+  });
+  elements.privateGateResourceSearch?.addEventListener("input", () => {
+    state.privateWorldGate.resourceQuery = String(elements.privateGateResourceSearch?.value ?? "");
+    void loadPrivateWorldGateResources({ force: true });
+  });
+  elements.privateGateRefreshResources?.addEventListener("click", () => {
+    void loadPrivateWorldGateResources({ force: true });
   });
   elements.privateGateList?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-world-private-gate-world-id]");

@@ -13,7 +13,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/social/styles.css" />
-    <link rel="stylesheet" href="/social/world.css?v=20260422fullrelease1" />
+    <link rel="stylesheet" href="/social/world.css?v=20260422publicprofile1" />
   </head>
   <body class="world-body is-world-loading">
     <main class="world-page">
@@ -88,7 +88,9 @@
 
           <div class="world-panel__session">
             <span data-world-session-label>Guest mode. Bubble chat is on. Log in to share nearby and use persistent voice chat.</span>
-            <button type="button" class="world-panel__session-button" data-world-open-account>Log In</button>
+            <button type="button" class="world-panel__session-button" data-world-open-account aria-label="Log in">
+              <span data-world-open-account-label>Log In</span>
+            </button>
           </div>
 
           <div class="world-panel__tabs" role="tablist" aria-label="World tools">
@@ -393,28 +395,61 @@
             </div>
           </form>
 
-          <form class="world-private-gate__profile pw-profile-form" data-world-private-gate-profile hidden>
-            <label>
-              <span>Username</span>
-              <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
-            </label>
-            <label>
-              <span>Display Name</span>
-              <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
-            </label>
-            <button type="submit">Save Profile</button>
-          </form>
-
-          <div class="world-private-gate__account-actions pw-inline-actions pw-account-actions" data-world-private-gate-account-actions hidden>
-            <button type="button" class="world-private-gate__ghost is-muted" data-world-private-gate-signout>Sign Out</button>
-          </div>
-
-          <section class="world-private-gate__worlds" data-world-private-gate-worlds hidden>
-            <div class="world-private-gate__actions world-private-gate__actions--top">
-              <button type="button" data-world-private-gate-create>New World</button>
-              <button type="button" class="world-private-gate__ghost" data-world-private-gate-refresh>Refresh</button>
+          <section class="world-private-gate__profile-shell" data-world-private-gate-profile-shell hidden>
+            <div class="world-private-gate__tabs" role="tablist" aria-label="My profile sections">
+              <button type="button" class="world-panel__tab is-active" data-world-private-gate-tab="account" role="tab" aria-selected="true">Account</button>
+              <button type="button" class="world-panel__tab" data-world-private-gate-tab="worlds" role="tab" aria-selected="false">Private Worlds</button>
+              <button type="button" class="world-panel__tab" data-world-private-gate-tab="games" role="tab" aria-selected="false">Game Library</button>
+              <button type="button" class="world-panel__tab" data-world-private-gate-tab="resources" role="tab" aria-selected="false">Shared Resources</button>
             </div>
-            <div class="world-private-gate__list" data-world-private-gate-list></div>
+
+            <section class="world-private-gate__pane" data-world-private-gate-pane="account" role="tabpanel">
+              <form class="world-private-gate__profile pw-profile-form" data-world-private-gate-profile>
+                <label>
+                  <span>Username</span>
+                  <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
+                </label>
+                <label>
+                  <span>Display Name</span>
+                  <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
+                </label>
+                <button type="submit">Save Profile</button>
+              </form>
+
+              <div class="world-private-gate__account-actions pw-inline-actions pw-account-actions" data-world-private-gate-account-actions>
+                <button type="button" class="world-private-gate__ghost is-muted" data-world-private-gate-signout>Sign Out</button>
+              </div>
+            </section>
+
+            <section class="world-private-gate__pane" data-world-private-gate-pane="worlds" role="tabpanel" hidden>
+              <div class="world-private-gate__actions world-private-gate__actions--top">
+                <label class="world-search-field world-private-gate__search">
+                  <input type="search" data-world-private-gate-world-search placeholder="Search your private worlds" />
+                </label>
+                <button type="button" data-world-private-gate-create>New World</button>
+                <button type="button" class="world-private-gate__ghost" data-world-private-gate-refresh>Refresh</button>
+              </div>
+              <div class="world-private-gate__list" data-world-private-gate-list></div>
+            </section>
+
+            <section class="world-private-gate__pane" data-world-private-gate-pane="games" role="tabpanel" hidden>
+              <div class="world-private-gate__summary" data-world-private-gate-games-summary></div>
+              <div class="world-private-gate__actions world-private-gate__actions--top">
+                <button type="button" data-world-private-gate-open-game-library>Open Game Library</button>
+                <button type="button" class="world-private-gate__ghost" data-world-private-gate-refresh-games>Refresh</button>
+              </div>
+            </section>
+
+            <section class="world-private-gate__pane" data-world-private-gate-pane="resources" role="tabpanel" hidden>
+              <div class="world-private-gate__actions world-private-gate__actions--top">
+                <label class="world-search-field world-private-gate__search">
+                  <input type="search" data-world-private-gate-resource-search placeholder="Search shared resources" />
+                </label>
+                <button type="button" class="world-private-gate__ghost" data-world-private-gate-refresh-resources>Refresh</button>
+              </div>
+              <p class="world-private-gate__resource-status" data-world-private-gate-resource-status aria-live="polite"></p>
+              <div class="world-private-gate__list world-private-gate__resource-list" data-world-private-gate-resource-list></div>
+            </section>
           </section>
 
           <p class="world-private-gate__status" data-world-private-gate-status aria-live="polite"></p>
@@ -437,6 +472,6 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/app-world.js?v=20260422fullrelease1"></script>
+    <script type="module" src="/social/app-world.js?v=20260422publicprofile1"></script>
   </body>
 </html>
