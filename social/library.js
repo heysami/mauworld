@@ -19,6 +19,7 @@ const elements = {
   search: document.querySelector("[data-library-search]"),
   sort: document.querySelector("[data-library-sort]"),
   refresh: document.querySelector("[data-library-refresh]"),
+  appliedFilters: document.querySelector("[data-library-applied-filters]"),
   tabButtons: [...document.querySelectorAll("[data-library-tab]")],
   resourceFilterBar: document.querySelector("[data-library-resource-filters]"),
   resourceFilterButtons: [...document.querySelectorAll("[data-library-resource-kind]")],
@@ -153,7 +154,7 @@ async function apiFetch(path, {
 
 function setAuthState({
   badge = "Guest mode",
-  text = "Sign in to publish and review public listings.",
+  text = "Browse now. Sign in to publish or review.",
   authFormOpen = false,
 } = {}) {
   if (elements.authBadge) {
@@ -174,7 +175,7 @@ function setAuthState({
   }
   if (elements.authToggle) {
     elements.authToggle.textContent = state.session
-      ? (authFormOpen ? "Hide Account" : "Account Settings")
+      ? (authFormOpen ? "Hide Account" : "Account")
       : (authFormOpen ? "Hide Sign In" : "Sign In");
     elements.authToggle.setAttribute("aria-expanded", authFormOpen ? "true" : "false");
   }
@@ -207,6 +208,22 @@ function getKindLabel(kind = "", resourceKind = "") {
     return "Texture";
   }
   return "Listing";
+}
+
+function getTabLabel(tab = "") {
+  if (tab === "world_package") {
+    return "World Packages";
+  }
+  if (tab === "game") {
+    return "Games";
+  }
+  if (tab === "resource") {
+    return "Resources";
+  }
+  if (tab === "creators") {
+    return "Creators";
+  }
+  return "All";
 }
 
 function getActionLabel(listing = {}) {
@@ -351,13 +368,78 @@ function renderResults() {
   elements.results.innerHTML = state.listings.map((listing) => renderListingCard(listing)).join("");
 }
 
+function updateBrowserUrl() {
+  const url = new URL(window.location.href);
+  if (state.tab && state.tab !== "all") {
+    url.searchParams.set("tab", state.tab);
+  } else {
+    url.searchParams.delete("tab");
+  }
+  if (state.query) {
+    url.searchParams.set("q", state.query);
+  } else {
+    url.searchParams.delete("q");
+  }
+  if (state.sort === "top-rated") {
+    url.searchParams.set("sort", state.sort);
+  } else {
+    url.searchParams.delete("sort");
+  }
+  if (state.resourceKind) {
+    url.searchParams.set("resourceKind", state.resourceKind);
+  } else {
+    url.searchParams.delete("resourceKind");
+  }
+  window.history.replaceState(null, "", url);
+}
+
+function renderAppliedFilters() {
+  if (!elements.appliedFilters) {
+    return;
+  }
+  const filters = [];
+  if (state.query) {
+    filters.push({
+      key: "query",
+      label: `Search: ${state.query}`,
+    });
+  }
+  if (state.tab !== "all") {
+    filters.push({
+      key: "tab",
+      label: getTabLabel(state.tab),
+    });
+  }
+  if (state.resourceKind) {
+    filters.push({
+      key: "resourceKind",
+      label: getKindLabel("resource", state.resourceKind),
+    });
+  }
+  if (state.sort === "top-rated") {
+    filters.push({
+      key: "sort",
+      label: "Top Rated",
+    });
+  }
+  elements.appliedFilters.hidden = filters.length === 0;
+  elements.appliedFilters.innerHTML = filters.length
+    ? `${filters.map((filter) => `
+        <button type="button" data-library-clear-filter="${escapeHtml(filter.key)}">
+          ${escapeHtml(filter.label)} <span aria-hidden="true">x</span>
+        </button>
+      `).join("")}
+      <button type="button" data-library-clear-filter="all">Clear all</button>`
+    : "";
+}
+
 function updateFilterButtons() {
   for (const button of elements.tabButtons) {
     const active = button.getAttribute("data-library-tab") === state.tab;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", active ? "true" : "false");
   }
-  const showResourceFilters = state.tab === "all" || state.tab === "resource";
+  const showResourceFilters = state.tab === "resource";
   if (elements.resourceFilterBar) {
     elements.resourceFilterBar.hidden = !showResourceFilters;
   }
@@ -372,6 +454,7 @@ function updateFilterButtons() {
   if (elements.search && elements.search.value !== state.query) {
     elements.search.value = state.query;
   }
+  renderAppliedFilters();
 }
 
 async function loadListings() {
@@ -385,7 +468,7 @@ async function loadListings() {
   if (state.tab === "world_package" || state.tab === "game" || state.tab === "resource") {
     search.kind = state.tab;
   }
-  if ((state.tab === "all" || state.tab === "resource") && state.resourceKind) {
+  if (state.tab === "resource" && state.resourceKind) {
     search.resourceKind = state.resourceKind;
   }
   if (state.tab === "creators") {
@@ -1019,7 +1102,7 @@ async function saveProfile(event) {
   setBrowserStatus("Profile saved.");
   setAuthState({
     badge: state.profile?.username ? `Signed in as @${state.profile.username}` : "Signed in",
-    text: "You can publish and review public library listings from this page.",
+    text: "Creator tools are ready.",
     authFormOpen: false,
   });
   await loadSources();
@@ -1034,7 +1117,7 @@ async function syncSession(session = null) {
     state.sources = { worlds: [], games: [], assets: [] };
     setAuthState({
       badge: "Guest mode",
-      text: "Browse public listings now. Sign in if you want to publish or review.",
+      text: "Browse now. Sign in to publish or review.",
       authFormOpen: state.authFormOpen,
     });
     await loadListings();
@@ -1045,7 +1128,7 @@ async function syncSession(session = null) {
     await loadSources();
     setAuthState({
       badge: state.profile?.username ? `Signed in as @${state.profile.username}` : "Signed in",
-      text: "You can publish and review public library listings from this page.",
+      text: "Creator tools are ready.",
       authFormOpen: false,
     });
     await loadListings();
@@ -1445,7 +1528,7 @@ function bindEvents() {
         : "Guest mode",
       text: state.session
         ? "Manage the creator identity shown on your public listings and reviews."
-        : "Sign in to publish and review public listings.",
+        : "Sign in to publish or review.",
       authFormOpen: !state.authFormOpen,
     });
   });
@@ -1478,21 +1561,26 @@ function bindEvents() {
   elements.search?.addEventListener("input", () => {
     window.clearTimeout(state.searchTimer);
     state.query = String(elements.search?.value ?? "").trim();
+    updateFilterButtons();
     state.searchTimer = window.setTimeout(() => {
+      updateBrowserUrl();
       void loadListings();
     }, 180);
   });
   elements.sort?.addEventListener("change", () => {
     state.sort = String(elements.sort?.value ?? "newest");
+    updateFilterButtons();
+    updateBrowserUrl();
     void loadListings();
   });
   for (const button of elements.tabButtons) {
     button.addEventListener("click", () => {
       state.tab = button.getAttribute("data-library-tab") || "all";
-      if (state.tab === "creators") {
+      if (state.tab !== "resource") {
         state.resourceKind = "";
       }
       updateFilterButtons();
+      updateBrowserUrl();
       void loadListings();
     });
   }
@@ -1500,9 +1588,35 @@ function bindEvents() {
     button.addEventListener("click", () => {
       state.resourceKind = button.getAttribute("data-library-resource-kind") || "";
       updateFilterButtons();
+      updateBrowserUrl();
       void loadListings();
     });
   }
+  elements.appliedFilters?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-library-clear-filter]");
+    if (!button) {
+      return;
+    }
+    const key = button.getAttribute("data-library-clear-filter") || "";
+    if (key === "all") {
+      state.query = "";
+      state.tab = "all";
+      state.resourceKind = "";
+      state.sort = "newest";
+    } else if (key === "query") {
+      state.query = "";
+    } else if (key === "tab") {
+      state.tab = "all";
+      state.resourceKind = "";
+    } else if (key === "resourceKind") {
+      state.resourceKind = "";
+    } else if (key === "sort") {
+      state.sort = "newest";
+    }
+    updateFilterButtons();
+    updateBrowserUrl();
+    void loadListings();
+  });
   elements.results?.addEventListener("click", handleResultsClick);
   for (const button of elements.closeDetailButtons) {
     button.addEventListener("click", () => setDetailOpen(false));
@@ -1562,6 +1676,7 @@ function initFromUrl() {
   const resourceKind = params.get("resourceKind");
   if (resourceKind) {
     state.resourceKind = resourceKind;
+    state.tab = "resource";
   }
   updateFilterButtons();
 }

@@ -55,7 +55,10 @@
 }
 
 .library-hero {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 390px);
+  gap: clamp(24px, 4vw, 56px);
+  align-items: start;
   padding: clamp(24px, 3.4vw, 42px);
   border-radius: 34px;
   background:
@@ -92,8 +95,6 @@
 }
 
 .library-toolbar,
-.library-tabs,
-.library-resource-filters,
 .library-chip-row,
 .library-account__actions,
 .library-auth-form__actions,
@@ -104,7 +105,6 @@
   gap: 10px;
 }
 
-.library-account,
 .library-browser,
 .library-card,
 .library-drawer__content,
@@ -116,18 +116,20 @@
 }
 
 .library-account {
-  padding: 16px;
+  justify-self: end;
+  width: min(100%, 390px);
+  padding: 2px 0 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: center;
+  gap: 12px;
+  align-items: start;
 }
 
 .library-account__head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
+  display: grid;
+  justify-items: end;
+  gap: 8px;
   min-width: 0;
+  text-align: right;
 }
 
 .library-account__badge {
@@ -147,10 +149,17 @@
 .library-account__text {
   margin: 0;
   min-width: 0;
+  max-width: 26rem;
+  font-size: 0.95rem;
 }
 
 .library-account__forms {
-  grid-column: 1 / -1;
+  justify-self: end;
+  width: min(100%, 390px);
+}
+
+.library-account__actions {
+  justify-content: flex-end;
 }
 
 .library-form-copy {
@@ -311,14 +320,11 @@
 .library-browser {
   padding: clamp(16px, 2.8vw, 30px);
   display: grid;
-  gap: 18px;
+  gap: 24px;
 }
 
 .library-browser__head {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: end;
+  display: block;
 }
 
 .library-browser__head h2 {
@@ -335,7 +341,54 @@
   margin: 10px 0 0;
 }
 
+.library-marketplace-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 250px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.library-filter-panel {
+  position: sticky;
+  top: 18px;
+  display: grid;
+  gap: 18px;
+  padding: 16px;
+  border: 1px solid rgba(36, 40, 52, 0.1);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.library-filter-group {
+  display: grid;
+  gap: 10px;
+}
+
+.library-filter-label {
+  margin: 0;
+  color: var(--lib-muted);
+  font-size: 0.74rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.library-tabs,
+.library-resource-filters {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+}
+
+.library-results-panel {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
 .library-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 210px) auto;
   align-items: end;
   padding: 10px;
   border-radius: 22px;
@@ -351,13 +404,31 @@
   min-width: 190px;
 }
 
-.library-tabs,
-.library-resource-filters {
-  padding: 4px 0;
+.library-tabs button,
+.library-resource-filters button {
+  appearance: none;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 13px;
+  border-radius: 12px;
+  border: 1px solid rgba(36, 40, 52, 0.1);
+  background: rgba(255, 255, 255, 0.54);
+  color: var(--lib-ink);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 850;
+  cursor: pointer;
+  transition:
+    transform 240ms var(--lib-ease),
+    border-color 240ms var(--lib-ease),
+    background-color 240ms var(--lib-ease),
+    color 240ms var(--lib-ease);
 }
 
-.library-tabs button,
-.library-resource-filters button,
 .library-chip {
   appearance: none;
   min-height: 42px;
@@ -394,6 +465,38 @@
   border-color: rgba(47, 125, 109, 0.28);
   background: var(--lib-accent);
   color: #ffffff;
+}
+
+.library-applied-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.library-applied-filters button {
+  appearance: none;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(36, 40, 52, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.66);
+  color: var(--lib-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 850;
+  cursor: pointer;
+  transition:
+    transform 220ms var(--lib-ease),
+    border-color 220ms var(--lib-ease),
+    background-color 220ms var(--lib-ease);
+}
+
+.library-applied-filters button:hover,
+.library-applied-filters button:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(47, 125, 109, 0.28);
+  background: #ffffff;
 }
 
 .library-status {
@@ -665,6 +768,48 @@
   gap: 14px;
 }
 
+.library-publish-steps {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid rgba(36, 40, 52, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.56);
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  list-style: none;
+  counter-reset: publish-step;
+}
+
+.library-publish-steps li {
+  counter-increment: publish-step;
+  min-height: 42px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(244, 241, 234, 0.74);
+  color: var(--lib-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.library-publish-steps li::before {
+  content: counter(publish-step);
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(47, 125, 109, 0.14);
+  color: var(--lib-accent-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
 .library-form-step > div:first-child {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -733,19 +878,31 @@
     max-width: 15ch;
   }
 
-  .library-account,
-  .library-browser__head {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-  }
-
   .library-account {
-    display: grid;
+    justify-self: stretch;
+    width: 100%;
   }
 
-  .library-account__head,
-  .library-browser__head {
-    display: grid;
+  .library-account__head {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .library-account__actions {
+    justify-content: flex-start;
+  }
+
+  .library-account__forms {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .library-marketplace-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .library-filter-panel {
+    position: static;
   }
 
   .library-preview-card__grid {
@@ -776,6 +933,7 @@
   }
 
   .library-toolbar {
+    grid-template-columns: 1fr;
     align-items: stretch;
   }
 
@@ -790,6 +948,10 @@
 
   .library-account__head {
     align-items: start;
+  }
+
+  .library-publish-steps {
+    grid-template-columns: 1fr;
   }
 
   .library-drawer,
