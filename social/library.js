@@ -14,6 +14,9 @@ const elements = {
   authForm: document.querySelector("[data-library-auth-form]"),
   profileForm: document.querySelector("[data-library-profile-form]"),
   openPublishButtons: [...document.querySelectorAll("[data-library-open-publish]")],
+  quickFilters: [...document.querySelectorAll("[data-library-quick-tab]")],
+  passwordInput: document.querySelector("[data-library-password-input]"),
+  passwordToggle: document.querySelector("[data-library-password-toggle]"),
   heroSearchForm: document.querySelector("[data-library-hero-search-form]"),
   heroSearch: document.querySelector("[data-library-hero-search]"),
   search: document.querySelector("[data-library-search]"),
@@ -375,6 +378,10 @@ function updateFilterButtons() {
   if (elements.heroSearch && elements.heroSearch.value !== state.query) {
     elements.heroSearch.value = state.query;
   }
+}
+
+function scrollToMarketplace() {
+  document.querySelector("#library-marketplace")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function loadListings() {
@@ -978,6 +985,8 @@ async function handleAuthSubmit(event) {
     }
   } catch (error) {
     setBrowserStatus(error.message || "Could not sign in.");
+  } finally {
+    setPasswordVisibility(false);
   }
 }
 
@@ -993,6 +1002,7 @@ async function signUp() {
     throw error;
   }
   setBrowserStatus("Account created. If email confirmation is enabled, confirm it before signing in.");
+  setPasswordVisibility(false);
 }
 
 async function signOut() {
@@ -1433,8 +1443,29 @@ function handleHeroSearch(event) {
   state.tab = "all";
   state.resourceKind = "";
   updateFilterButtons();
-  document.querySelector("#library-marketplace")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollToMarketplace();
   void loadListings();
+}
+
+function handleQuickFilter(event) {
+  const link = event.currentTarget;
+  event.preventDefault();
+  state.query = "";
+  state.tab = link.getAttribute("data-library-quick-tab") || "all";
+  state.resourceKind = link.getAttribute("data-library-quick-resource") || "";
+  updateFilterButtons();
+  scrollToMarketplace();
+  void loadListings();
+}
+
+function setPasswordVisibility(isVisible) {
+  if (!elements.passwordInput || !elements.passwordToggle) {
+    return;
+  }
+  elements.passwordInput.type = isVisible ? "text" : "password";
+  elements.passwordToggle.textContent = isVisible ? "Hide" : "Show";
+  elements.passwordToggle.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
+  elements.passwordToggle.setAttribute("aria-pressed", isVisible ? "true" : "false");
 }
 
 function bindEvents() {
@@ -1471,6 +1502,12 @@ function bindEvents() {
     state.query = String(elements.heroSearch?.value ?? "").trim();
     updateFilterButtons();
   });
+  elements.passwordToggle?.addEventListener("click", () => {
+    setPasswordVisibility(elements.passwordInput?.type !== "text");
+  });
+  for (const link of elements.quickFilters) {
+    link.addEventListener("click", handleQuickFilter);
+  }
   for (const button of elements.openPublishButtons) {
     button.addEventListener("click", () => openPublish());
   }

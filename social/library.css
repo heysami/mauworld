@@ -400,6 +400,42 @@
   background: #ffffff;
 }
 
+.library-password-field {
+  position: relative;
+  display: grid;
+}
+
+.library-password-field input {
+  padding-right: 84px;
+}
+
+.library-password-toggle {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  bottom: 6px;
+  min-width: 66px;
+  border: 1px solid rgba(36, 40, 52, 0.12);
+  border-radius: 12px;
+  background: rgba(244, 241, 234, 0.9);
+  color: var(--lib-ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 900;
+  cursor: pointer;
+  transition:
+    background-color 220ms var(--lib-ease),
+    border-color 220ms var(--lib-ease),
+    transform 220ms var(--lib-ease);
+}
+
+.library-password-toggle:hover,
+.library-password-toggle:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(47, 125, 109, 0.3);
+  background: #ffffff;
+}
+
 .library-publish-form textarea,
 .library-owner-form textarea,
 .library-review-form textarea {

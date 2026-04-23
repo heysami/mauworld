@@ -18,7 +18,7 @@
     />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/social/mauworld.css?v=20260422overview3" />
-    <link rel="stylesheet" href="/social/library.css?v=20260423marketux1" />
+    <link rel="stylesheet" href="/social/library.css?v=20260423marketux2" />
   </head>
   <body class="mauworld-overview-body library-body">
     <a class="skip-link" href="#content">Skip to content</a>
@@ -63,12 +63,12 @@
                 <button type="submit" class="button button--primary">Search</button>
               </form>
               <div class="library-hero__categories" aria-label="Library categories">
-                <a href="#library-marketplace">World packages</a>
-                <a href="#library-marketplace">Games</a>
-                <a href="#library-marketplace">Textures</a>
-                <a href="#library-marketplace">Animations</a>
-                <a href="#library-marketplace">Sound</a>
-                <a href="#library-marketplace">3D models</a>
+                <a href="#library-marketplace" data-library-quick-tab="world_package">World packages</a>
+                <a href="#library-marketplace" data-library-quick-tab="game">Games</a>
+                <a href="#library-marketplace" data-library-quick-tab="resource" data-library-quick-resource="texture">Textures</a>
+                <a href="#library-marketplace" data-library-quick-tab="resource" data-library-quick-resource="animation">Animations</a>
+                <a href="#library-marketplace" data-library-quick-tab="resource" data-library-quick-resource="sound">Sound</a>
+                <a href="#library-marketplace" data-library-quick-tab="resource" data-library-quick-resource="model">3D models</a>
               </div>
               <div class="library-hero__actions hero__actions">
                 <a class="button button--primary" href="#library-marketplace">Browse Library</a>
@@ -130,7 +130,25 @@
                 </label>
                 <label>
                   <span>Password</span>
-                  <input type="password" name="password" autocomplete="current-password" placeholder="Password" required />
+                  <div class="library-password-field">
+                    <input
+                      type="password"
+                      name="password"
+                      autocomplete="current-password"
+                      placeholder="Password"
+                      required
+                      data-library-password-input
+                    />
+                    <button
+                      type="button"
+                      class="library-password-toggle"
+                      data-library-password-toggle
+                      aria-label="Show password"
+                      aria-pressed="false"
+                    >
+                      Show
+                    </button>
+                  </div>
                 </label>
                 <div class="library-auth-form__actions">
                   <button type="submit" class="button button--primary" data-auth-action="signin">Sign In</button>
@@ -327,7 +345,7 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/library.js?v=20260423marketux1"></script>
+    <script type="module" src="/social/library.js?v=20260423marketux2"></script>
     <script src="/script.js" defer></script>
   </body>
 </html>
