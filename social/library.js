@@ -14,6 +14,8 @@ const elements = {
   authForm: document.querySelector("[data-library-auth-form]"),
   profileForm: document.querySelector("[data-library-profile-form]"),
   openPublishButtons: [...document.querySelectorAll("[data-library-open-publish]")],
+  heroSearchForm: document.querySelector("[data-library-hero-search-form]"),
+  heroSearch: document.querySelector("[data-library-hero-search]"),
   search: document.querySelector("[data-library-search]"),
   sort: document.querySelector("[data-library-sort]"),
   refresh: document.querySelector("[data-library-refresh]"),
@@ -165,13 +167,16 @@ function setAuthState({
     elements.authForm.hidden = !authFormOpen || Boolean(state.session);
   }
   if (elements.profileForm) {
-    elements.profileForm.hidden = !(state.session && state.profile);
+    elements.profileForm.hidden = !(authFormOpen && state.session && state.profile);
   }
   if (elements.signout) {
     elements.signout.hidden = !state.session;
   }
   if (elements.authToggle) {
-    elements.authToggle.textContent = state.session ? "Publish" : (authFormOpen ? "Hide Sign In" : "Sign In");
+    elements.authToggle.textContent = state.session
+      ? (authFormOpen ? "Hide Account" : "Account Settings")
+      : (authFormOpen ? "Hide Sign In" : "Sign In");
+    elements.authToggle.setAttribute("aria-expanded", authFormOpen ? "true" : "false");
   }
   if (elements.profileForm && state.profile) {
     elements.profileForm.elements.username.value = state.profile.username || "";
@@ -366,6 +371,9 @@ function updateFilterButtons() {
   }
   if (elements.search && elements.search.value !== state.query) {
     elements.search.value = state.query;
+  }
+  if (elements.heroSearch && elements.heroSearch.value !== state.query) {
+    elements.heroSearch.value = state.query;
   }
 }
 
@@ -1419,15 +1427,25 @@ function handlePublishMediaChange() {
   renderPublishForm();
 }
 
+function handleHeroSearch(event) {
+  event.preventDefault();
+  state.query = String(elements.heroSearch?.value ?? "").trim();
+  state.tab = "all";
+  state.resourceKind = "";
+  updateFilterButtons();
+  document.querySelector("#library-marketplace")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  void loadListings();
+}
+
 function bindEvents() {
   elements.authToggle?.addEventListener("click", () => {
-    if (state.session) {
-      openPublish();
-      return;
-    }
     setAuthState({
-      badge: "Guest mode",
-      text: "Sign in to publish and review public listings.",
+      badge: state.session && state.profile?.username
+        ? `Signed in as @${state.profile.username}`
+        : "Guest mode",
+      text: state.session
+        ? "Manage the creator identity shown on your public listings and reviews."
+        : "Sign in to publish and review public listings.",
       authFormOpen: !state.authFormOpen,
     });
   });
@@ -1448,6 +1466,11 @@ function bindEvents() {
     }
   });
   elements.profileForm?.addEventListener("submit", saveProfile);
+  elements.heroSearchForm?.addEventListener("submit", handleHeroSearch);
+  elements.heroSearch?.addEventListener("input", () => {
+    state.query = String(elements.heroSearch?.value ?? "").trim();
+    updateFilterButtons();
+  });
   for (const button of elements.openPublishButtons) {
     button.addEventListener("click", () => openPublish());
   }

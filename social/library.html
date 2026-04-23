@@ -18,7 +18,7 @@
     />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/social/mauworld.css?v=20260422overview3" />
-    <link rel="stylesheet" href="/social/library.css?v=20260422publiclibrary1" />
+    <link rel="stylesheet" href="/social/library.css?v=20260423marketux1" />
   </head>
   <body class="mauworld-overview-body library-body">
     <a class="skip-link" href="#content">Skip to content</a>
@@ -47,16 +47,32 @@
     <main class="page-main library-page" id="content">
       <section class="mauworld-shell library-shell">
         <div class="mauworld-core library-core">
-          <section class="library-hero">
+          <section class="library-hero" aria-label="Public library overview">
             <div class="library-hero__copy">
               <p class="section-kicker">Mauworld Public Library</p>
-              <h1>Publish reusable worlds, games, and resources.</h1>
+              <h1>Find worlds, games, and resources worth building with.</h1>
               <p class="library-hero__lede">
-                Guests can browse everything here. Signed-in creators can publish snapshot-based listings from their
-                existing Mauworld library, choose download or contact delivery, and collect star ratings with required comments.
+                Browse snapshot-ready world packages, playable games, textures, animations, sounds, videos, and 3D models
+                from Mauworld creators. Every review needs a written comment, so ratings carry context instead of noise.
               </p>
+              <form class="library-hero-search" data-library-hero-search-form>
+                <label>
+                  <span>Search the library</span>
+                  <input type="search" data-library-hero-search placeholder="Try textures, game templates, ambient sound, creator names" />
+                </label>
+                <button type="submit" class="button button--primary">Search</button>
+              </form>
+              <div class="library-hero__categories" aria-label="Library categories">
+                <a href="#library-marketplace">World packages</a>
+                <a href="#library-marketplace">Games</a>
+                <a href="#library-marketplace">Textures</a>
+                <a href="#library-marketplace">Animations</a>
+                <a href="#library-marketplace">Sound</a>
+                <a href="#library-marketplace">3D models</a>
+              </div>
               <div class="library-hero__actions hero__actions">
-                <button type="button" class="button button--primary" data-library-open-publish>Publish Something</button>
+                <a class="button button--primary" href="#library-marketplace">Browse Library</a>
+                <button type="button" class="button button--soft" data-library-open-publish>Publish a Listing</button>
                 <a class="button button--soft" href="/social/private-worlds.html">
                   <span>Open Private Worlds</span>
                   <span class="button__tail" aria-hidden="true">
@@ -69,20 +85,45 @@
               </div>
             </div>
 
-            <aside class="library-account" aria-label="Account">
-              <div class="library-account__head">
-                <span class="library-account__badge" data-library-auth-badge>Checking account</span>
-                <p class="library-account__text" data-library-auth-text>
-                  Looking for your Mauworld session.
-                </p>
+            <aside class="library-hero__panel" aria-label="How publishing works">
+              <div class="library-process-card is-wide">
+                <span>01</span>
+                <strong>Publish from your saved work</strong>
+                <p>Choose a private world, saved game, or asset. Mauworld stores a public snapshot so later edits do not unexpectedly change the listing.</p>
               </div>
-
-              <div class="library-account__actions">
-                <button type="button" class="button button--soft" data-library-auth-toggle>Sign In</button>
-                <button type="button" class="button button--soft" data-library-signout hidden>Sign Out</button>
+              <div class="library-process-card">
+                <span>02</span>
+                <strong>Show the resource first</strong>
+                <p>Add image or video previews before people open the detail page.</p>
               </div>
+              <div class="library-process-card">
+                <span>03</span>
+                <strong>Pick the next step</strong>
+                <p>Offer a download, or show clear contact instructions.</p>
+              </div>
+            </aside>
+          </section>
 
+          <section class="library-account" aria-label="Creator account">
+            <div class="library-account__head">
+              <span class="library-account__badge" data-library-auth-badge>Checking account</span>
+              <p class="library-account__text" data-library-auth-text>
+                Looking for your Mauworld session.
+              </p>
+            </div>
+
+            <div class="library-account__actions">
+              <button type="button" class="button button--primary" data-library-open-publish>Publish</button>
+              <button type="button" class="button button--soft" data-library-auth-toggle aria-expanded="false">Sign In</button>
+              <button type="button" class="button button--soft" data-library-signout hidden>Sign Out</button>
+            </div>
+
+            <div class="library-account__forms">
               <form class="library-auth-form" data-library-auth-form hidden>
+                <div class="library-form-copy">
+                  <h2>Sign in to publish or review</h2>
+                  <p>Browsing stays public. Sign in only when you want to publish, rate, or manage your creator profile.</p>
+                </div>
                 <label>
                   <span>Email</span>
                   <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
@@ -98,6 +139,10 @@
               </form>
 
               <form class="library-profile-form" data-library-profile-form hidden>
+                <div class="library-form-copy">
+                  <h2>Creator profile</h2>
+                  <p>This is the public identity shown next to listings and creator reviews.</p>
+                </div>
                 <label>
                   <span>Username</span>
                   <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
@@ -108,14 +153,23 @@
                 </label>
                 <button type="submit" class="button button--soft">Save Profile</button>
               </form>
-            </aside>
+            </div>
           </section>
 
-          <section class="library-browser" aria-label="Public library browser">
+          <section class="library-browser" id="library-marketplace" aria-label="Public library browser">
+            <div class="library-browser__head">
+              <div>
+                <p class="section-kicker">Marketplace</p>
+                <h2>Browse public Mauworld resources</h2>
+                <p>Search by title, creator, or resource type. Open a listing to see previews, comments, and whether it is downloadable or contact-only.</p>
+              </div>
+              <button type="button" class="button button--soft" data-library-refresh>Refresh</button>
+            </div>
+
             <div class="library-toolbar">
               <label class="library-search">
-                <span>Search</span>
-                <input type="search" data-library-search placeholder="Search listings, creators, games, and resources" />
+                <span>Search library</span>
+                <input type="search" data-library-search placeholder="Search worlds, games, sounds, models, creators" />
               </label>
               <label class="library-select">
                 <span>Sort</span>
@@ -124,7 +178,6 @@
                   <option value="top-rated">Top Rated</option>
                 </select>
               </label>
-              <button type="button" class="button button--soft" data-library-refresh>Refresh</button>
             </div>
 
             <div class="library-tabs" role="tablist" aria-label="Library surfaces">
@@ -274,7 +327,7 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/library.js?v=20260422publiclibrary1"></script>
+    <script type="module" src="/social/library.js?v=20260423marketux1"></script>
     <script src="/script.js" defer></script>
   </body>
 </html>
