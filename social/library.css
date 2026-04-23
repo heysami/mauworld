@@ -55,10 +55,7 @@
 }
 
 .library-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 390px);
-  gap: clamp(24px, 4vw, 56px);
-  align-items: start;
+  display: block;
   padding: clamp(24px, 3.4vw, 42px);
   border-radius: 34px;
   background:
@@ -324,7 +321,10 @@
 }
 
 .library-browser__head {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: start;
 }
 
 .library-browser__head h2 {
@@ -870,7 +870,6 @@
 
 @media (max-width: 1020px) {
   .library-hero {
-    grid-template-columns: 1fr;
     min-height: auto;
   }
 
@@ -898,6 +897,10 @@
   }
 
   .library-marketplace-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .library-browser__head {
     grid-template-columns: 1fr;
   }
 

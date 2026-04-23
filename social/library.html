@@ -18,7 +18,7 @@
     />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/social/mauworld.css?v=20260422overview3" />
-    <link rel="stylesheet" href="/social/library.css?v=20260423marketux4" />
+    <link rel="stylesheet" href="/social/library.css?v=20260423marketux5" />
   </head>
   <body class="mauworld-overview-body library-body">
     <a class="skip-link" href="#content">Skip to content</a>
@@ -57,75 +57,6 @@
               </p>
             </div>
 
-            <aside class="library-account" aria-label="Creator account">
-              <div class="library-account__head">
-                <span class="library-account__badge" data-library-auth-badge>Checking account</span>
-                <p class="library-account__text" data-library-auth-text>
-                  Looking for your Mauworld session.
-                </p>
-              </div>
-
-              <div class="library-account__actions">
-                <button type="button" class="button button--primary" data-library-open-publish>Publish</button>
-                <button type="button" class="button button--soft" data-library-auth-toggle aria-expanded="false">Sign In</button>
-                <button type="button" class="button button--soft" data-library-signout hidden>Sign Out</button>
-              </div>
-
-              <div class="library-account__forms">
-                <form class="library-auth-form" data-library-auth-form hidden>
-                  <div class="library-form-copy">
-                    <h2>Sign in to publish or review</h2>
-                    <p>Browsing stays public. Sign in only when you want to publish, rate, or manage your creator profile.</p>
-                  </div>
-                  <label>
-                    <span>Email</span>
-                    <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
-                  </label>
-                  <label>
-                    <span>Password</span>
-                    <div class="library-password-field">
-                      <input
-                        type="password"
-                        name="password"
-                        autocomplete="current-password"
-                        placeholder="Password"
-                        required
-                        data-library-password-input
-                      />
-                      <button
-                        type="button"
-                        class="library-password-toggle"
-                        data-library-password-toggle
-                        aria-label="Show password"
-                        aria-pressed="false"
-                      >
-                        Show
-                      </button>
-                    </div>
-                  </label>
-                  <div class="library-auth-form__actions">
-                    <button type="submit" class="button button--primary" data-auth-action="signin">Sign In</button>
-                    <button type="button" class="button button--soft" data-auth-action="signup">Create Account</button>
-                  </div>
-                </form>
-
-                <form class="library-profile-form" data-library-profile-form hidden>
-                  <div class="library-form-copy">
-                    <h2>Creator profile</h2>
-                    <p>This is the public identity shown next to listings and creator reviews.</p>
-                  </div>
-                  <label>
-                    <span>Username</span>
-                    <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
-                  </label>
-                  <label>
-                    <span>Display Name</span>
-                    <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
-                  </label>
-                  <button type="submit" class="button button--soft">Save Profile</button>
-                </form>
-              </div>
-            </aside>
           </section>
 
           <section class="library-browser" id="library-marketplace" aria-label="Public library browser">
@@ -135,6 +66,76 @@
                 <h2>Browse public Mauworld resources</h2>
                 <p>Search by title, creator, or resource type. Open a listing to see previews, comments, and whether it is downloadable or contact-only.</p>
               </div>
+
+              <aside class="library-account" aria-label="Creator account">
+                <div class="library-account__head">
+                  <span class="library-account__badge" data-library-auth-badge>Checking account</span>
+                  <p class="library-account__text" data-library-auth-text>
+                    Looking for your Mauworld session.
+                  </p>
+                </div>
+
+                <div class="library-account__actions">
+                  <button type="button" class="button button--primary" data-library-open-publish>Publish</button>
+                  <button type="button" class="button button--soft" data-library-auth-toggle aria-expanded="false">Sign In</button>
+                  <button type="button" class="button button--soft" data-library-signout hidden>Sign Out</button>
+                </div>
+
+                <div class="library-account__forms">
+                  <form class="library-auth-form" data-library-auth-form hidden>
+                    <div class="library-form-copy">
+                      <h2>Sign in to publish or review</h2>
+                      <p>Browsing stays public. Sign in only when you want to publish, rate, or manage your creator profile.</p>
+                    </div>
+                    <label>
+                      <span>Email</span>
+                      <input type="email" name="email" autocomplete="email" placeholder="you@example.com" required />
+                    </label>
+                    <label>
+                      <span>Password</span>
+                      <div class="library-password-field">
+                        <input
+                          type="password"
+                          name="password"
+                          autocomplete="current-password"
+                          placeholder="Password"
+                          required
+                          data-library-password-input
+                        />
+                        <button
+                          type="button"
+                          class="library-password-toggle"
+                          data-library-password-toggle
+                          aria-label="Show password"
+                          aria-pressed="false"
+                        >
+                          Show
+                        </button>
+                      </div>
+                    </label>
+                    <div class="library-auth-form__actions">
+                      <button type="submit" class="button button--primary" data-auth-action="signin">Sign In</button>
+                      <button type="button" class="button button--soft" data-auth-action="signup">Create Account</button>
+                    </div>
+                  </form>
+
+                  <form class="library-profile-form" data-library-profile-form hidden>
+                    <div class="library-form-copy">
+                      <h2>Creator profile</h2>
+                      <p>This is the public identity shown next to listings and creator reviews.</p>
+                    </div>
+                    <label>
+                      <span>Username</span>
+                      <input type="text" name="username" maxlength="24" placeholder="worldmaker" />
+                    </label>
+                    <label>
+                      <span>Display Name</span>
+                      <input type="text" name="displayName" maxlength="80" placeholder="World Maker" />
+                    </label>
+                    <button type="submit" class="button button--soft">Save Profile</button>
+                  </form>
+                </div>
+              </aside>
             </div>
 
             <div class="library-toolbar">
@@ -318,7 +319,7 @@
 
     <script src="/social/runtime-config.js"></script>
     <script src="/social/common.js"></script>
-    <script type="module" src="/social/library.js?v=20260423marketux4"></script>
+    <script type="module" src="/social/library.js?v=20260423marketux5"></script>
     <script src="/script.js" defer></script>
   </body>
 </html>
