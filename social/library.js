@@ -14,11 +14,8 @@ const elements = {
   authForm: document.querySelector("[data-library-auth-form]"),
   profileForm: document.querySelector("[data-library-profile-form]"),
   openPublishButtons: [...document.querySelectorAll("[data-library-open-publish]")],
-  quickFilters: [...document.querySelectorAll("[data-library-quick-tab]")],
   passwordInput: document.querySelector("[data-library-password-input]"),
   passwordToggle: document.querySelector("[data-library-password-toggle]"),
-  heroSearchForm: document.querySelector("[data-library-hero-search-form]"),
-  heroSearch: document.querySelector("[data-library-hero-search]"),
   search: document.querySelector("[data-library-search]"),
   sort: document.querySelector("[data-library-sort]"),
   refresh: document.querySelector("[data-library-refresh]"),
@@ -375,13 +372,6 @@ function updateFilterButtons() {
   if (elements.search && elements.search.value !== state.query) {
     elements.search.value = state.query;
   }
-  if (elements.heroSearch && elements.heroSearch.value !== state.query) {
-    elements.heroSearch.value = state.query;
-  }
-}
-
-function scrollToMarketplace() {
-  document.querySelector("#library-marketplace")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function loadListings() {
@@ -1437,27 +1427,6 @@ function handlePublishMediaChange() {
   renderPublishForm();
 }
 
-function handleHeroSearch(event) {
-  event.preventDefault();
-  state.query = String(elements.heroSearch?.value ?? "").trim();
-  state.tab = "all";
-  state.resourceKind = "";
-  updateFilterButtons();
-  scrollToMarketplace();
-  void loadListings();
-}
-
-function handleQuickFilter(event) {
-  const link = event.currentTarget;
-  event.preventDefault();
-  state.query = "";
-  state.tab = link.getAttribute("data-library-quick-tab") || "all";
-  state.resourceKind = link.getAttribute("data-library-quick-resource") || "";
-  updateFilterButtons();
-  scrollToMarketplace();
-  void loadListings();
-}
-
 function setPasswordVisibility(isVisible) {
   if (!elements.passwordInput || !elements.passwordToggle) {
     return;
@@ -1497,17 +1466,9 @@ function bindEvents() {
     }
   });
   elements.profileForm?.addEventListener("submit", saveProfile);
-  elements.heroSearchForm?.addEventListener("submit", handleHeroSearch);
-  elements.heroSearch?.addEventListener("input", () => {
-    state.query = String(elements.heroSearch?.value ?? "").trim();
-    updateFilterButtons();
-  });
   elements.passwordToggle?.addEventListener("click", () => {
     setPasswordVisibility(elements.passwordInput?.type !== "text");
   });
-  for (const link of elements.quickFilters) {
-    link.addEventListener("click", handleQuickFilter);
-  }
   for (const button of elements.openPublishButtons) {
     button.addEventListener("click", () => openPublish());
   }
