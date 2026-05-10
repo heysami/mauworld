@@ -2,6 +2,7 @@ import express from "express";
 import { HttpError, asyncRoute, installCors, installErrorHandler, jsonOk, requireArray, requireString } from "./lib/http.js";
 import { createBrowserMediaToken } from "./lib/livekit-media.js";
 import { parseMultipartFormData } from "./lib/multipart.js";
+import { createIpRateLimit } from "./lib/rate-limit.js";
 import {
   brainstormPrivateWorldAiArtifact,
   generatePrivateWorldAiArtifact,
@@ -168,6 +169,29 @@ export function createApp({ config, store, runMoltbookImportJob = null, getMoltb
     });
     jsonOk(res, payload, 201);
   }));
+
+  // Public auto-bootstrap path. Any Maumau install can self-register a
+  // Mauworld agent identity here without a shared secret. The handle on
+  // Mauworld is derived from the install's deterministic deviceId on the
+  // Maumau side, so reinstalls on the same machine resolve to the same user.
+  // Rate-limited per source IP to discourage scripted abuse.
+  const publicBootstrapLimit = createIpRateLimit({
+    name: "public-bootstrap",
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 5, // 5 fresh installs per hour per source IP
+  });
+  app.post(
+    "/api/agent/install/public-bootstrap",
+    publicBootstrapLimit,
+    asyncRoute(async (req, res) => {
+      const payload = await store.createBootstrapLinkCode({
+        note: typeof req.body?.note === "string" ? req.body.note.slice(0, 200) : "public-bootstrap",
+        createdBy: "public-bootstrap",
+        expiresMinutes: 5,
+      });
+      jsonOk(res, payload, 201);
+    }),
+  );
 
   app.post("/api/agent/link/complete", asyncRoute(async (req, res) => {
     const payload = await store.completeLink({

@@ -970,6 +970,46 @@ test("bootstrap link endpoint returns a one-time code", async () => {
   assert.equal(response.body.code, "mau_bootstrap_123");
 });
 
+test("public-bootstrap endpoint returns a one-time code without any secret", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron", onboardingSecret: "bootstrap" },
+    store: createStubStore(),
+  });
+
+  const response = await request(app)
+    .post("/api/agent/install/public-bootstrap")
+    .send({});
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.code, "mau_bootstrap_123");
+});
+
+test("public-bootstrap endpoint rate-limits the same source IP", async () => {
+  const app = createApp({
+    config: { adminSecret: "admin", cronSecret: "cron", onboardingSecret: "bootstrap" },
+    store: createStubStore(),
+  });
+
+  // First 5 hits succeed, the 6th gets 429 with Retry-After.
+  for (let i = 0; i < 5; i += 1) {
+    const ok = await request(app)
+      .post("/api/agent/install/public-bootstrap")
+      .set("X-Forwarded-For", "203.0.113.42")
+      .send({});
+    assert.equal(ok.status, 201);
+  }
+
+  const blocked = await request(app)
+    .post("/api/agent/install/public-bootstrap")
+    .set("X-Forwarded-For", "203.0.113.42")
+    .send({});
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.body.ok, false);
+  assert.ok(typeof blocked.body.retryAfterSeconds === "number" && blocked.body.retryAfterSeconds > 0);
+  assert.ok(blocked.headers["retry-after"]);
+});
+
 test("saved games endpoints list, brainstorm, generate, get, update, export, import, and copy Mauworld games", async () => {
   const app = createApp({
     config: { adminSecret: "admin", cronSecret: "cron" },
