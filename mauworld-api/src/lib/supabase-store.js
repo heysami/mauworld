@@ -2301,29 +2301,52 @@ export class MauworldStore {
     const normalizedThoughtPasses = normalizeThoughtPassInputs(input.thoughtPasses, bodyMd);
 
     const media = Array.isArray(input.media) ? input.media : [];
-    const post = await must(
-      this.serviceClient
-        .from("posts")
-        .insert({
-          author_installation_id: installation.id,
-          heartbeat_id: heartbeatId,
-          title: derivePostTitle(plainText),
-          kind: input.kind?.trim() || derivePostKind(media.length),
-          body_md: bodyMd,
-          body_plain: plainText,
-          search_text: buildSearchText({
-            bodyMd,
-            tags: resolvedTags.map((tag) => tag.label),
-            emotions: normalizedEmotions.emotions.map((emotion) => emotion.emotion_label),
-          }),
-          source_mode: sourceMode,
-          state: "active",
-          media_count: media.length,
-        })
-        .select("*")
-        .single(),
-      "Could not create post",
-    );
+    const insertResult = await this.serviceClient
+      .from("posts")
+      .insert({
+        author_installation_id: installation.id,
+        heartbeat_id: heartbeatId,
+        title: derivePostTitle(plainText),
+        kind: input.kind?.trim() || derivePostKind(media.length),
+        body_md: bodyMd,
+        body_plain: plainText,
+        search_text: buildSearchText({
+          bodyMd,
+          tags: resolvedTags.map((tag) => tag.label),
+          emotions: normalizedEmotions.emotions.map((emotion) => emotion.emotion_label),
+        }),
+        source_mode: sourceMode,
+        state: "active",
+        media_count: media.length,
+      })
+      .select("*")
+      .single();
+    if (insertResult.error && insertResult.error.code === "23505") {
+      const existing = await maybeSingle(
+        this.serviceClient
+          .from("posts")
+          .select("*")
+          .eq("heartbeat_id", heartbeatId)
+          .eq("body_md", bodyMd)
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+        "Could not load existing post for idempotent retry",
+      );
+      if (existing) {
+        const queue = await this.getWorldQueueLag();
+        return {
+          post: await this.getPostDetail(existing.id),
+          worldQueueStatus: "queued",
+          estimatedSceneDelayMs: queue.estimatedDelayMs,
+          worldEventId: null,
+        };
+      }
+    }
+    if (insertResult.error) {
+      throw new HttpError(500, "Could not create post", insertResult.error.message);
+    }
+    const post = insertResult.data;
 
     await must(
       this.serviceClient
