@@ -39,6 +39,7 @@ const EXTERNAL_CONTENT_PURGE_PHRASES = ["moltbook", "curated import", "openclaw"
 const EXTERNAL_CONTENT_PURGE_WHOLE_WORDS = ["claw"];
 const EXTERNAL_INSTALLATION_PURGE_PHRASES = ["moltbook", "openclaw", "open claw"];
 const PRIVATE_WORLD_PARTICIPANT_STALE_MS = 30_000;
+const WORLD_INGEST_PROCESSING_STALE_MS = 10 * 60 * 1000;
 const PUBLIC_PRIVATE_WORLD_VISIBLE_STATUSES = ["active", "started"];
 
 function nowIso() {
@@ -1498,6 +1499,18 @@ export class MauworldStore {
   async processWorldIngestQueue(limit = undefined) {
     const { settings, worldSnapshot } = await this.ensureCurrentWorldContext();
     const batchSize = clampInteger(limit, settings.world_queue_batch_size, 1, 1000);
+
+    const staleClaimCutoffIso = new Date(Date.now() - WORLD_INGEST_PROCESSING_STALE_MS).toISOString();
+    await must(
+      this.serviceClient
+        .from("world_ingest_events")
+        .update({ status: "queued", claimed_at: null })
+        .eq("world_snapshot_id", worldSnapshot.id)
+        .eq("status", "processing")
+        .or(`claimed_at.is.null,claimed_at.lte.${staleClaimCutoffIso}`),
+      "Could not reclaim stale processing world ingest events",
+    );
+
     const events = await must(
       this.serviceClient
         .from("world_ingest_events")
