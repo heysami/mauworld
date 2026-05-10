@@ -13,6 +13,54 @@ const privateWorldRuntime = installPrivateWorldRuntime(store);
 const shouldRunStartupMaintenance =
   /^https?:\/\//i.test(config.publicBaseUrl)
   && !/\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(config.publicBaseUrl);
+
+const WORLD_QUEUE_DRAIN_INTERVAL_MS = Number(process.env.MAUWORLD_WORLD_QUEUE_DRAIN_INTERVAL_MS) || 60_000;
+let worldQueueDrainTimer = null;
+let worldQueueDrainInFlight = false;
+
+async function drainWorldIngestQueueOnce({ logEmpty = false } = {}) {
+  if (worldQueueDrainInFlight) {
+    return null;
+  }
+  worldQueueDrainInFlight = true;
+  try {
+    const result = await store.processWorldIngestQueue();
+    if (result && (result.processedCount ?? 0) > 0) {
+      console.log(
+        `[world-queue-drain] processed ${result.processedCount} events, `
+        + `refreshed ${result.refreshedTagCount ?? 0} tags, `
+        + `pending=${result.queue?.pendingCount ?? 0} processing=${result.queue?.processingCount ?? 0}`,
+      );
+    } else if (logEmpty) {
+      console.log(
+        `[world-queue-drain] queue empty (pending=${result?.queue?.pendingCount ?? 0})`,
+      );
+    }
+    return result;
+  } catch (error) {
+    console.error("[world-queue-drain] failed", error);
+    return null;
+  } finally {
+    worldQueueDrainInFlight = false;
+  }
+}
+
+function startWorldQueueDrainer() {
+  if (worldQueueDrainTimer) {
+    return;
+  }
+  worldQueueDrainTimer = setInterval(() => {
+    void drainWorldIngestQueueOnce();
+  }, WORLD_QUEUE_DRAIN_INTERVAL_MS);
+  worldQueueDrainTimer.unref?.();
+}
+
+function stopWorldQueueDrainer() {
+  if (worldQueueDrainTimer) {
+    clearInterval(worldQueueDrainTimer);
+    worldQueueDrainTimer = null;
+  }
+}
 let externalCleanupPromise = null;
 let externalCleanupStatus = {
   running: false,
@@ -183,6 +231,10 @@ const privateWorldGateway = installPrivateWorldGateway({
 
 server.listen(config.port, () => {
   console.log(`mauworld-api listening on :${config.port}`);
+  startWorldQueueDrainer();
+  setTimeout(() => {
+    void drainWorldIngestQueueOnce({ logEmpty: true });
+  }, 1500);
   if (shouldRunStartupMaintenance) {
     setTimeout(() => {
       void runCuratedCorpusJob()
@@ -222,6 +274,7 @@ server.listen(config.port, () => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
+    stopWorldQueueDrainer();
     void Promise.allSettled([
       realtimeGateway.dispose(),
       privateWorldGateway.dispose(),
